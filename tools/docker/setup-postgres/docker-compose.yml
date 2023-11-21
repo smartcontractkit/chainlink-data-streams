@@ -1,0 +1,16 @@
+version: '3.8'
+services:
+  postgres:
+    image: 'postgres:15.2-alpine'
+    restart: always
+    environment:
+      - POSTGRES_USER=llo
+      - POSTGRES_PASSWORD=llo
+      - POSTGRES_DB=llo_development
+    ports:
+      - '5432:5432'
+    healthcheck:
+      test: 'pg_isready -U llo -d llo_development -p 5432'
+      interval: 2s
+      timeout: 5s
+      retries: 5

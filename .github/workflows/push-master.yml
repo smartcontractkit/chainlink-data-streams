@@ -1,0 +1,167 @@
+name: push-master
+
+on:
+  push:
+    branches:
+      - master
+
+env:
+  PACKAGES: "median"
+
+jobs:
+  init:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix_packages: ${{ steps.set-matrix-packages.outputs.matrix_packages }}
+      lint_args_packages: ${{ steps.set-matrix-packages.outputs.lint_args_packages }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+      - name: Set matrix packages
+        id: set-matrix-packages
+        shell: bash
+        env:
+          PACKAGES: ${{ env.PACKAGES }}
+        run: |
+          matrix_packages=$(echo "${PACKAGES}" | jq -R 'split(",")' | tr -d "\n\t")
+          echo "matrix_packages=${matrix_packages}" | tee -a "${GITHUB_OUTPUT}"
+      - name: Set lint args packages
+        id: set-lint-args-packages
+        shell: bash
+        env:
+          PACKAGES: ${{ env.PACKAGES }}
+        run: echo "lint_args_packages=$(echo "./$(echo $PACKAGES | sed 's/,/\/... .\//g;s/$/\/.../')")" | tee -a "${GITHUB_OUTPUT}"
+
+  ci-lint:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+      actions: read
+    steps:
+      - name: ci-lint
+        uses: smartcontractkit/.github/actions/ci-lint-go@main
+        with:
+          # grafana inputs
+          metrics-job-name: ci-lint
+          gc-basic-auth: ${{ secrets.GRAFANA_CLOUD_BASIC_AUTH }}
+          gc-host: ${{ secrets.GRAFANA_CLOUD_HOST }}
+          # env inputs
+          use-env-files: "true"
+          env-files: ./tools/env/ci.env
+          # go inputs
+          use-go-cache: true
+          go-cache-dep-path: "**/go.sum"
+          go-version-file: go.mod
+          golangci-lint-version: "v1.53.2"
+          golangci-lint-args: --out-format colored-line-number,checkstyle:golangci-lint-report.xml
+
+  ci-test:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+      actions: read
+    steps:
+      - name: ci-test
+        uses: smartcontractkit/.github/actions/ci-test-go@main
+        with:
+          # grafana inputs
+          metrics-job-name: ci-test
+          gc-basic-auth: ${{ secrets.GRAFANA_CLOUD_BASIC_AUTH }}
+          gc-host: ${{ secrets.GRAFANA_CLOUD_HOST }}
+          # docker inputs
+          use-docker-compose: "true"
+          docker-compose-workdir: ./tools/docker/setup-postgres
+          # env inputs
+          use-env-files: "true"
+          env-files: ./tools/env/ci.env
+          # go inputs
+          use-go-cache: "true"
+          go-cache-dep-path: "**/go.sum"
+          go-version-file: go.mod
+          go-test-cmd: make test-ci
+
+  cicd-build-publish-artifacts-dev-matrix:
+    needs: [init]
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        package: ${{ fromJson(needs.init.outputs.matrix_packages) }}
+    permissions:
+      id-token: write
+      contents: write
+      actions: read
+    steps:
+      - name: cicd-build-publish-artifacts-dev-matrix (${{ matrix.package }})
+        uses: smartcontractkit/.github/actions/cicd-build-publish-artifacts-go@main
+        with:
+          # general inputs
+          app-name: chainlink-llo-${{ matrix.package }}
+          publish: "true"
+          # grafana inputs
+          metrics-job-name: cicd-build-publish-artifacts-dev-matrix (${{ matrix.package }})
+          gc-basic-auth: ${{ secrets.GRAFANA_CLOUD_BASIC_AUTH }}
+          gc-host: ${{ secrets.GRAFANA_CLOUD_HOST }}
+          # aws inputs
+          aws-region: ${{ secrets.AWS_REGION }}
+          aws-role-arn: ${{ secrets.AWS_OIDC_IAM_ROLE_ARN }}
+          aws-account-number: ${{ secrets.AWS_ACCOUNT_NUMBER_PROD }}
+          # gati inputs
+          use-gati: "true"
+          aws-role-arn-gati: ${{ secrets.AWS_OIDC_IAM_ROLE_ARN_GATI }}
+          aws-lambda-url-gati: ${{ secrets.AWS_LAMBDA_URL_GATI }}
+          # golang inputs
+          go-version-file: go.mod
+          # goreleaser inputs
+          goreleaser-args: "--nightly --config ./.goreleaser.ci.yaml"
+          goreleaser-dist: goreleaser-pro
+          goreleaser-key: ${{ secrets.GORELEASER_KEY }}
+          # zig inputs
+          use-zig: "true"
+          zig-version: "0.11.0"
+          # docker inputs
+          docker-registry: aws
+          docker-image-tag: devel
+      - name: Save GoReleaser artifacts/metadata
+        uses: actions/upload-artifact@v3
+        with:
+          name: goreleaser_${{ matrix.package }}
+          path: |
+            dist/artifacts.json
+            dist/metadata.json
+
+  cicd-build-publish-artifacts-dev:
+    runs-on: ubuntu-latest
+    needs: [cicd-build-publish-artifacts-dev-matrix]
+    if: always()
+    steps:
+      - name: Check results
+        if: needs.cicd-build-publish-artifacts-dev-matrix.result != 'success'
+        run: exit 1
+      - name: Collect metrics
+        if: always()
+        id: collect-gha-metrics
+        uses: smartcontractkit/push-gha-metrics-action@d1618b772a97fd87e6505de97b872ee0b1f1729a # v2.0.2
+        with:
+          basic-auth: ${{ secrets.GRAFANA_CLOUD_BASIC_AUTH }}
+          hostname: ${{ secrets.GRAFANA_CLOUD_HOST }}
+          this-job-name: cicd-build-publish-artifacts-dev
+        continue-on-error: true
+
+  ci-sonarqube:
+    needs: [ci-lint, ci-test]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: ci-sonarqube
+        uses: smartcontractkit/.github/actions/ci-sonarqube@main
+        with:
+          # grafana inputs
+          metrics-job-name: ci-sonarqube
+          gc-basic-auth: ${{ secrets.GRAFANA_CLOUD_BASIC_AUTH }}
+          gc-host: ${{ secrets.GRAFANA_CLOUD_HOST }}
+          # sonarqube inputs
+          sonar-token: ${{ secrets.SONAR_TOKEN }}
+          sonar-host-url: ${{ secrets.SONAR_HOST_URL }}

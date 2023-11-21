@@ -1,0 +1,10 @@
+# Requires GoReleaser Pro
+includes:
+  - from_file:
+      path: ./.goreleaser-template.yaml
+
+project_name: chainlink-llo
+
+monorepo:
+  tag_prefix: chainlink-llo@
+  dir: chainlink-llo
