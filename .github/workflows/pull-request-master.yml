@@ -61,7 +61,7 @@ jobs:
           use-go-cache: true
           go-cache-dep-path: "**/go.sum"
           go-version-file: go.mod
-          golangci-lint-version: "v1.53.2"
+          golangci-lint-version: "v1.55.2"
           golangci-lint-args: --out-format colored-line-number,checkstyle:golangci-lint-report.xml ${{ needs.init.outputs.lint_args_packages }}
 
   ci-lint-misc:
