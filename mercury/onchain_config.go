@@ -7,7 +7,7 @@ import (
 
 	"github.com/smartcontractkit/libocr/bigbigendian"
 
-	"github.com/smartcontractkit/chainlink-relay/pkg/types/mercury"
+	"github.com/smartcontractkit/chainlink-common/pkg/types/mercury"
 )
 
 const onchainConfigVersion = 1
@@ -53,7 +53,7 @@ func (StandardOnchainConfigCodec) Decode(b []byte) (mercury.OnchainConfig, error
 		return mercury.OnchainConfig{}, pkgerrors.Errorf("OnchainConfig min (%v) should not be greater than max(%v)", min, max)
 	}
 
-	return mercury.OnchainConfig{min, max}, nil
+	return mercury.OnchainConfig{Min: min, Max: max}, nil
 }
 
 func (StandardOnchainConfigCodec) Encode(c mercury.OnchainConfig) ([]byte, error) {

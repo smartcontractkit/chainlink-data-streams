@@ -5,11 +5,11 @@ import (
 	"math/big"
 	"testing"
 
-	"github.com/smartcontractkit/chainlink-relay/pkg/types/mercury"
+	"github.com/smartcontractkit/chainlink-common/pkg/types/mercury"
 )
 
 func FuzzDecodeOnchainConfig(f *testing.F) {
-	valid, err := StandardOnchainConfigCodec{}.Encode(mercury.OnchainConfig{big.NewInt(1), big.NewInt(1000)})
+	valid, err := StandardOnchainConfigCodec{}.Encode(mercury.OnchainConfig{Min: big.NewInt(1), Max: big.NewInt(1000)})
 	if err != nil {
 		f.Fatalf("failed to construct valid OnchainConfig: %s", err)
 	}

@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"sort"
 
-	v1 "github.com/smartcontractkit/chainlink-relay/pkg/types/mercury/v1"
+	v1 "github.com/smartcontractkit/chainlink-common/pkg/types/mercury/v1"
 )
 
 // GetConsensusLatestBlock gets the latest block that has at least f+1 votes
