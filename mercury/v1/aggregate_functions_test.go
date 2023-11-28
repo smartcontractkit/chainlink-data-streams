@@ -9,7 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	v1 "github.com/smartcontractkit/chainlink-relay/pkg/types/mercury/v1"
+	v1 "github.com/smartcontractkit/chainlink-common/pkg/types/mercury/v1"
 )
 
 func mustDecodeHex(s string) []byte {

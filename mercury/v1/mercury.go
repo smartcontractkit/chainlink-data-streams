@@ -13,10 +13,10 @@ import (
 	"github.com/smartcontractkit/libocr/offchainreporting2plus/ocr3types"
 	"github.com/smartcontractkit/libocr/offchainreporting2plus/types"
 
+	"github.com/smartcontractkit/chainlink-common/pkg/logger"
+	mercurytypes "github.com/smartcontractkit/chainlink-common/pkg/types/mercury"
+	v1 "github.com/smartcontractkit/chainlink-common/pkg/types/mercury/v1"
 	"github.com/smartcontractkit/chainlink-llo/mercury"
-	"github.com/smartcontractkit/chainlink-relay/pkg/logger"
-	mercurytypes "github.com/smartcontractkit/chainlink-relay/pkg/types/mercury"
-	v1 "github.com/smartcontractkit/chainlink-relay/pkg/types/mercury/v1"
 )
 
 // MaxAllowedBlocks indicates the maximum len of LatestBlocks in any given observation.

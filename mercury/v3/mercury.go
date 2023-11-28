@@ -11,9 +11,9 @@ import (
 	pkgerrors "github.com/pkg/errors"
 	"google.golang.org/protobuf/proto"
 
-	"github.com/smartcontractkit/chainlink-relay/pkg/logger"
-	mercurytypes "github.com/smartcontractkit/chainlink-relay/pkg/types/mercury"
-	v3 "github.com/smartcontractkit/chainlink-relay/pkg/types/mercury/v3"
+	"github.com/smartcontractkit/chainlink-common/pkg/logger"
+	mercurytypes "github.com/smartcontractkit/chainlink-common/pkg/types/mercury"
+	v3 "github.com/smartcontractkit/chainlink-common/pkg/types/mercury/v3"
 
 	"github.com/smartcontractkit/libocr/offchainreporting2plus/ocr3types"
 	"github.com/smartcontractkit/libocr/offchainreporting2plus/types"

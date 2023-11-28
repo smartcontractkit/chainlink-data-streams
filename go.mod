@@ -5,7 +5,7 @@ go 1.21.3
 require (
 	github.com/pkg/errors v0.9.1
 	github.com/shopspring/decimal v1.3.1
-	github.com/smartcontractkit/chainlink-relay v0.1.7-0.20231115153227-c2e71a404d2f
+	github.com/smartcontractkit/chainlink-common v0.1.7-0.20231128124224-c22255d96b69
 	github.com/smartcontractkit/libocr v0.0.0-20231107151413-13e0202ae8d7
 	github.com/stretchr/testify v1.8.4
 	google.golang.org/protobuf v1.31.0
