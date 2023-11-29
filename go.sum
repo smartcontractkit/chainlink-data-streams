@@ -18,8 +18,8 @@ github.com/rogpeppe/go-internal v1.11.0 h1:cWPaGQEPrBb5/AsnsZesgZZ9yb1OQ+GOISoDN
 github.com/rogpeppe/go-internal v1.11.0/go.mod h1:ddIwULY96R17DhadqLgMfk9H9tvdUzkipdSkR5nkCZA=
 github.com/shopspring/decimal v1.3.1 h1:2Usl1nmF/WZucqkFZhnfFYxxxu8LG21F6nPQBE5gKV8=
 github.com/shopspring/decimal v1.3.1/go.mod h1:DKyhrW/HYNuLGql+MJL6WCR6knT2jwCFRcu2hWCYk4o=
-github.com/smartcontractkit/chainlink-common v0.1.7-0.20231128124224-c22255d96b69 h1:/KdjURr56F/ezic6aBxAUIohQvP8CorzVYoRkFPSPlQ=
-github.com/smartcontractkit/chainlink-common v0.1.7-0.20231128124224-c22255d96b69/go.mod h1:Hrru9i7n+WEYyW2aIt3/YGPhxLX+HEGWnhk3yVXeDF8=
+github.com/smartcontractkit/chainlink-common v0.1.7-0.20231129233646-14b11bca4d96 h1:Mj1lA/RkBnQ8EUA6uObsg5ehYC8DXn/dRTWj4muSNtA=
+github.com/smartcontractkit/chainlink-common v0.1.7-0.20231129233646-14b11bca4d96/go.mod h1:Hrru9i7n+WEYyW2aIt3/YGPhxLX+HEGWnhk3yVXeDF8=
 github.com/smartcontractkit/libocr v0.0.0-20231107151413-13e0202ae8d7 h1:21V61XOYSxpFmFqlhr5IaEh1uQ1F6CewJ30D/U/P34c=
 github.com/smartcontractkit/libocr v0.0.0-20231107151413-13e0202ae8d7/go.mod h1:2lyRkw/qLQgUWlrWWmq5nj0y90rWeO6Y+v+fCakRgb0=
 github.com/stretchr/testify v1.8.4 h1:CcVxjf3Q8PM0mHUKJCdn+eZZtm5yQwehR5yeSVQQcUk=

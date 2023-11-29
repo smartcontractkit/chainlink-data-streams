@@ -22,7 +22,7 @@ import (
 
 // MaxAllowedBlocks indicates the maximum len of LatestBlocks in any given observation.
 // observations that violate this will be discarded
-const MaxAllowedBlocks = 5
+const MaxAllowedBlocks = 10
 
 // DataSource implementations must be thread-safe. Observe may be called by many
 // different threads concurrently.
