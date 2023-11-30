@@ -1,3 +1,3 @@
-# Chainlink LLO
+# Chainlink Data Streams
 
-This module contains the Chainlink Low Latency Oracle plugins.
+This module contains the Chainlink Data Streams plugins.

@@ -18,7 +18,7 @@ import (
 	"github.com/smartcontractkit/libocr/offchainreporting2plus/ocr3types"
 	"github.com/smartcontractkit/libocr/offchainreporting2plus/types"
 
-	"github.com/smartcontractkit/chainlink-llo/mercury"
+	"github.com/smartcontractkit/chainlink-data-streams/mercury"
 )
 
 // DataSource implementations must be thread-safe. Observe may be called by many

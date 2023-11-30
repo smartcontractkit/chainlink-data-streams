@@ -96,7 +96,7 @@ changelog:
 release:
   github:
     owner: smartcontractkit
-    name: chainlink-llo
+    name: chainlink-data-streams
   # If there is a prerelease suffix on the version tag (e.g. v1.0.0-rc1), then
   # the GitHub Release will be created as a "prerelease".
   # Default is false.

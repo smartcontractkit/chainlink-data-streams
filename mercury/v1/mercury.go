@@ -17,7 +17,7 @@ import (
 	mercurytypes "github.com/smartcontractkit/chainlink-common/pkg/types/mercury"
 	v1 "github.com/smartcontractkit/chainlink-common/pkg/types/mercury/v1"
 
-	"github.com/smartcontractkit/chainlink-llo/mercury"
+	"github.com/smartcontractkit/chainlink-data-streams/mercury"
 )
 
 // MaxAllowedBlocks indicates the maximum len of LatestBlocks in any given observation.

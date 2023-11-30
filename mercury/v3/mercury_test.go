@@ -22,7 +22,7 @@ import (
 	mercurytypes "github.com/smartcontractkit/chainlink-common/pkg/types/mercury"
 	v3 "github.com/smartcontractkit/chainlink-common/pkg/types/mercury/v3"
 
-	"github.com/smartcontractkit/chainlink-llo/mercury"
+	"github.com/smartcontractkit/chainlink-data-streams/mercury"
 )
 
 type testDataSource struct {

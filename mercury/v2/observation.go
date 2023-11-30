@@ -5,7 +5,7 @@ import (
 
 	"github.com/smartcontractkit/libocr/commontypes"
 
-	"github.com/smartcontractkit/chainlink-llo/mercury"
+	"github.com/smartcontractkit/chainlink-data-streams/mercury"
 )
 
 type PAO interface {

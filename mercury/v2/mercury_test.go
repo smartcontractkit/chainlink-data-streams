@@ -22,7 +22,7 @@ import (
 	"github.com/smartcontractkit/libocr/commontypes"
 	"github.com/smartcontractkit/libocr/offchainreporting2plus/types"
 
-	"github.com/smartcontractkit/chainlink-llo/mercury"
+	"github.com/smartcontractkit/chainlink-data-streams/mercury"
 )
 
 type testDataSource struct {

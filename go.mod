@@ -1,4 +1,4 @@
-module github.com/smartcontractkit/chainlink-llo
+module github.com/smartcontractkit/chainlink-data-streams
 
 go 1.21.3
 

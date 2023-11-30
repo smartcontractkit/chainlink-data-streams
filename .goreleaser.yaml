@@ -3,8 +3,8 @@ includes:
   - from_file:
       path: ./.goreleaser-template.yaml
 
-project_name: chainlink-llo
+project_name: chainlink-data-streams
 
 monorepo:
-  tag_prefix: chainlink-llo@
-  dir: chainlink-llo
+  tag_prefix: chainlink-data-streams@
+  dir: chainlink-data-streams
