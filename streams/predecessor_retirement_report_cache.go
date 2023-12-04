@@ -1,15 +1,14 @@
-package llo
+package streams
 
 import (
-	relayllo "github.com/smartcontractkit/chainlink-common/pkg/reportingplugins/llo"
 	"github.com/smartcontractkit/libocr/offchainreporting2/types"
 )
 
-var _ relayllo.PredecessorRetirementReportCache = &predecessorRetirementReportCache{}
+var _ PredecessorRetirementReportCache = &predecessorRetirementReportCache{}
 
 type predecessorRetirementReportCache struct{}
 
-func NewPredecessorRetirementReportCache() relayllo.PredecessorRetirementReportCache {
+func NewPredecessorRetirementReportCache() PredecessorRetirementReportCache {
 	return newPredecessorRetirementReportCache()
 }
 
@@ -21,6 +20,6 @@ func (c *predecessorRetirementReportCache) AttestedRetirementReport(predecessorC
 	panic("TODO")
 }
 
-func (c *predecessorRetirementReportCache) CheckAttestedRetirementReport(predecessorConfigDigest types.ConfigDigest, attestedRetirementReport []byte) (relayllo.RetirementReport, error) {
+func (c *predecessorRetirementReportCache) CheckAttestedRetirementReport(predecessorConfigDigest types.ConfigDigest, attestedRetirementReport []byte) (RetirementReport, error) {
 	panic("TODO")
 }

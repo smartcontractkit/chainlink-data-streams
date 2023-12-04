@@ -1,14 +1,10 @@
-package llo
+package streams
 
-import (
-	relayllo "github.com/smartcontractkit/chainlink-common/pkg/reportingplugins/llo"
-)
-
-var _ relayllo.ShouldRetireCache = &shouldRetireCache{}
+var _ ShouldRetireCache = &shouldRetireCache{}
 
 type shouldRetireCache struct{}
 
-func NewShouldRetireCache() relayllo.ShouldRetireCache {
+func NewShouldRetireCache() ShouldRetireCache {
 	return newShouldRetireCache()
 }
 

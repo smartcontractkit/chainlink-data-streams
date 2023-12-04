@@ -1,16 +1,17 @@
-package llo
+package streams
 
 import (
 	"context"
 	"maps"
 
-	relayllo "github.com/smartcontractkit/chainlink-common/pkg/reportingplugins/llo"
+	"github.com/smartcontractkit/chainlink-common/pkg/logger"
 	"github.com/smartcontractkit/chainlink-common/pkg/services"
-	"github.com/smartcontractkit/chainlink/v2/core/logger"
 )
 
+// TODO: needs to be populated asynchronously from onchain ConfigurationStore
 type ChannelDefinitionCache interface {
-	relayllo.ChannelDefinitionCache
+	// TODO: Would this necessarily need to be scoped by contract address?
+	Definitions() ChannelDefinitions
 	services.Service
 }
 
@@ -20,7 +21,7 @@ type channelDefinitionCache struct {
 	services.StateMachine
 
 	lggr        logger.Logger
-	definitions relayllo.ChannelDefinitions
+	definitions ChannelDefinitions
 }
 
 func NewChannelDefinitionCache() ChannelDefinitionCache {
@@ -47,7 +48,7 @@ func (c *channelDefinitionCache) HealthReport() map[string]error {
 
 func (c *channelDefinitionCache) Name() string { return c.lggr.Name() }
 
-func (c *channelDefinitionCache) Definitions() relayllo.ChannelDefinitions {
+func (c *channelDefinitionCache) Definitions() ChannelDefinitions {
 	c.StateMachine.RLock()
 	defer c.StateMachine.RUnlock()
 	return maps.Clone(c.definitions)

@@ -1,4 +1,4 @@
-package llo
+package streams
 
 import "testing"
 

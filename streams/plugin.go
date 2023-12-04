@@ -1,4 +1,4 @@
-package llo
+package streams
 
 import (
 	"context"
@@ -11,10 +11,12 @@ import (
 	"time"
 
 	"github.com/smartcontractkit/chainlink-common/pkg/logger"
+	commontypes "github.com/smartcontractkit/chainlink-common/pkg/types"
 
 	chainselectors "github.com/smartcontractkit/chain-selectors"
 	"github.com/smartcontractkit/libocr/offchainreporting2/types"
-	"github.com/smartcontractkit/libocr/offchainreporting2plus/ocr3types"
+	ocr2types "github.com/smartcontractkit/libocr/offchainreporting2/types"
+	ocr3types "github.com/smartcontractkit/libocr/offchainreporting2plus/ocr3types"
 )
 
 // Notes:
@@ -82,22 +84,20 @@ type ShouldRetireCache interface { // reads asynchronously from onchain Configur
 // The sketch envisions it being implemented as a single object that is shared
 // between different protocol instances.
 type PredecessorRetirementReportCache interface {
-	AttestedRetirementReport(predecessorConfigDigest types.ConfigDigest) ([]byte, error)
-	CheckAttestedRetirementReport(predecessorConfigDigest types.ConfigDigest, attestedRetirementReport []byte) (RetirementReport, error)
+	AttestedRetirementReport(predecessorConfigDigest ocr2types.ConfigDigest) ([]byte, error)
+	CheckAttestedRetirementReport(predecessorConfigDigest ocr2types.ConfigDigest, attestedRetirementReport []byte) (RetirementReport, error)
 }
 
-type ReportFormat string
-
 const (
-	ReportFormatEVM  ReportFormat = "evm"
-	ReportFormatJSON ReportFormat = "json"
+	ReportFormatEVM  commontypes.StreamsReportFormat = "evm"
+	ReportFormatJSON commontypes.StreamsReportFormat = "json"
 	// Solana, CosmWasm, kalechain, etc... all go here
 )
 
 // QUESTION: Do we also want to include an (optional) designated verifier
 // address, i.e. the only address allowed to verify reports from this channel
 type ChannelDefinition struct {
-	ReportFormat ReportFormat
+	ReportFormat commontypes.StreamsReportFormat
 	// Specifies the chain on which this channel can be verified. Currently uses
 	// CCIP chain selectors.
 	ChainSelector uint64
@@ -131,14 +131,6 @@ func MakeChannelHash(cd ChannelDefinitionWithID) ChannelHash {
 	h.Sum(result[:0])
 	return result
 }
-
-// TODO: needs to be populated asynchronously from onchain ConfigurationStore
-type ChannelDefinitionCache interface {
-	// TODO: Would this necessarily need to be scoped by contract address?
-	Definitions() ChannelDefinitions
-}
-
-type ReportInfo types.LLOReportInfo
 
 // An ReportingPlugin allows plugging custom logic into the OCR3 protocol. The OCR
 // protocol handles cryptography, networking, ensuring that a sufficient number
@@ -193,24 +185,24 @@ type ReportInfo types.LLOReportInfo
 // of an ReportingPlugin, e.g. due to software restarts. If you need ReportingPlugin state
 // to survive across restarts, you should store it in the Outcome or persist it.
 // An ReportingPlugin instance will only ever serve a single protocol instance.
-var _ ocr3types.ReportingPluginFactory[ReportInfo] = &LLOPluginFactory{}
+var _ ocr3types.ReportingPluginFactory[commontypes.StreamsReportInfo] = &StreamsPluginFactory{}
 
-func NewLLOPluginFactory(prrc PredecessorRetirementReportCache, src ShouldRetireCache, cdc ChannelDefinitionCache, ds DataSource, lggr logger.Logger, codecs map[ReportFormat]ReportCodec) *LLOPluginFactory {
-	return &LLOPluginFactory{
+func NewStreamsPluginFactory(prrc PredecessorRetirementReportCache, src ShouldRetireCache, cdc ChannelDefinitionCache, ds DataSource, lggr logger.Logger, codecs map[commontypes.StreamsReportFormat]ReportCodec) *StreamsPluginFactory {
+	return &StreamsPluginFactory{
 		prrc, src, cdc, ds, lggr, codecs,
 	}
 }
 
-type LLOPluginFactory struct {
+type StreamsPluginFactory struct {
 	PredecessorRetirementReportCache PredecessorRetirementReportCache
 	ShouldRetireCache                ShouldRetireCache
 	ChannelDefinitionCache           ChannelDefinitionCache
 	DataSource                       DataSource
 	Logger                           logger.Logger
-	Codecs                           map[ReportFormat]ReportCodec
+	Codecs                           map[commontypes.StreamsReportFormat]ReportCodec
 }
 
-func (f *LLOPluginFactory) NewReportingPlugin(cfg ocr3types.ReportingPluginConfig) (ocr3types.ReportingPlugin[ReportInfo], ocr3types.ReportingPluginInfo, error) {
+func (f *StreamsPluginFactory) NewReportingPlugin(cfg ocr3types.ReportingPluginConfig) (ocr3types.ReportingPlugin[commontypes.StreamsReportInfo], ocr3types.ReportingPluginInfo, error) {
 	var predecessorConfigDigest *types.ConfigDigest
 	if len(cfg.OffchainConfig) == 0 {
 		predecessorConfigDigest = nil
@@ -229,7 +221,7 @@ func (f *LLOPluginFactory) NewReportingPlugin(cfg ocr3types.ReportingPluginConfi
 		return nil, ocr3types.ReportingPluginInfo{}, fmt.Errorf("invalid OffchainConfig")
 	}
 
-	return &LLOPlugin{
+	return &StreamsPlugin{
 			predecessorConfigDigest,
 			cfg.ConfigDigest,
 			f.PredecessorRetirementReportCache,
@@ -240,7 +232,7 @@ func (f *LLOPluginFactory) NewReportingPlugin(cfg ocr3types.ReportingPluginConfi
 			cfg.F,
 			f.Codecs,
 		}, ocr3types.ReportingPluginInfo{
-			Name: "LLO",
+			Name: "Streams",
 			Limits: ocr3types.ReportingPluginLimits{
 				MaxQueryLength:       0,
 				MaxObservationLength: ocr3types.MaxMaxObservationLength, // TODO: use tighter bound
@@ -251,13 +243,13 @@ func (f *LLOPluginFactory) NewReportingPlugin(cfg ocr3types.ReportingPluginConfi
 		}, nil
 }
 
-var _ ocr3types.ReportingPlugin[ReportInfo] = &LLOPlugin{}
+var _ ocr3types.ReportingPlugin[commontypes.StreamsReportInfo] = &StreamsPlugin{}
 
 type ReportCodec interface {
 	Encode(Report) ([]byte, error)
 }
 
-type LLOPlugin struct {
+type StreamsPlugin struct {
 	PredecessorConfigDigest          *types.ConfigDigest
 	ConfigDigest                     types.ConfigDigest
 	PredecessorRetirementReportCache PredecessorRetirementReportCache
@@ -266,7 +258,7 @@ type LLOPlugin struct {
 	DataSource                       DataSource
 	Logger                           logger.Logger
 	F                                int
-	Codecs                           map[ReportFormat]ReportCodec
+	Codecs                           map[commontypes.StreamsReportFormat]ReportCodec
 }
 
 // Query creates a Query that is sent from the leader to all follower nodes
@@ -282,7 +274,7 @@ type LLOPlugin struct {
 // *not* strictly) across the lifetime of a protocol instance and that
 // outctx.previousOutcome contains the consensus outcome with sequence
 // number (outctx.SeqNr-1).
-func (p *LLOPlugin) Query(ctx context.Context, outctx ocr3types.OutcomeContext) (types.Query, error) {
+func (p *StreamsPlugin) Query(ctx context.Context, outctx ocr3types.OutcomeContext) (types.Query, error) {
 	return nil, nil
 }
 
@@ -309,7 +301,7 @@ type Observation struct {
 // *not* strictly) across the lifetime of a protocol instance and that
 // outctx.previousOutcome contains the consensus outcome with sequence
 // number (outctx.SeqNr-1).
-func (p *LLOPlugin) Observation(ctx context.Context, outctx ocr3types.OutcomeContext, query types.Query) (types.Observation, error) {
+func (p *StreamsPlugin) Observation(ctx context.Context, outctx ocr3types.OutcomeContext, query types.Query) (types.Observation, error) {
 	// send empty observation in initial round
 	// NOTE: First sequence number is always 1
 	if outctx.SeqNr < 1 {
@@ -413,7 +405,7 @@ func (p *LLOPlugin) Observation(ctx context.Context, outctx ocr3types.OutcomeCon
 // *not* strictly) across the lifetime of a protocol instance and that
 // outctx.previousOutcome contains the consensus outcome with sequence
 // number (outctx.SeqNr-1).
-func (p *LLOPlugin) ValidateObservation(outctx ocr3types.OutcomeContext, query types.Query, ao types.AttributedObservation) error {
+func (p *StreamsPlugin) ValidateObservation(outctx ocr3types.OutcomeContext, query types.Query, ao types.AttributedObservation) error {
 	if outctx.SeqNr <= 1 {
 		if len(ao.Observation) != 0 {
 			return fmt.Errorf("Observation is not empty")
@@ -454,7 +446,7 @@ func (p *LLOPlugin) ValidateObservation(outctx ocr3types.OutcomeContext, query t
 
 type Outcome struct {
 	// LifeCycleStage the protocol is in
-	LifeCycleStage LifeCycleStage
+	LifeCycleStage commontypes.StreamsLifeCycleStage
 	// ObservationsTimestampNanoseconds is the median timestamp from the
 	// latest set of observations
 	ObservationsTimestampNanoseconds int64
@@ -549,10 +541,10 @@ func (out *Outcome) ReportableChannels() []ChannelID {
 // *not* strictly) across the lifetime of a protocol instance and that
 // outctx.previousOutcome contains the consensus outcome with sequence
 // number (outctx.SeqNr-1).
-func (p *LLOPlugin) Outcome(outctx ocr3types.OutcomeContext, query types.Query, aos []types.AttributedObservation) (ocr3types.Outcome, error) {
+func (p *StreamsPlugin) Outcome(outctx ocr3types.OutcomeContext, query types.Query, aos []types.AttributedObservation) (ocr3types.Outcome, error) {
 	if outctx.SeqNr <= 1 {
 		// Initial Outcome
-		var lifeCycleStage LifeCycleStage
+		var lifeCycleStage commontypes.StreamsLifeCycleStage
 		if p.PredecessorConfigDigest == nil {
 			// Start straight in production if we have no predecessor
 			lifeCycleStage = LifeCycleStageProduction
@@ -817,7 +809,7 @@ type Report struct {
 //     })
 // }
 
-func (p *LLOPlugin) encodeReport(r Report, format ReportFormat) (types.Report, error) {
+func (p *StreamsPlugin) encodeReport(r Report, format commontypes.StreamsReportFormat) (types.Report, error) {
 	codec, exists := p.Codecs[format]
 	if !exists {
 		return nil, fmt.Errorf("codec for ReportFormat=%s missing", format)
@@ -838,7 +830,7 @@ func (p *LLOPlugin) encodeReport(r Report, format ReportFormat) (types.Report, e
 // *not* strictly) across the lifetime of a protocol instance and that
 // outctx.previousOutcome contains the consensus outcome with sequence
 // number (outctx.SeqNr-1).
-func (p *LLOPlugin) Reports(seqNr uint64, rawOutcome ocr3types.Outcome) ([]ocr3types.ReportWithInfo[ReportInfo], error) {
+func (p *StreamsPlugin) Reports(seqNr uint64, rawOutcome ocr3types.Outcome) ([]ocr3types.ReportWithInfo[commontypes.StreamsReportInfo], error) {
 	if seqNr <= 1 {
 		// no reports for initial round
 		return nil, nil
@@ -854,7 +846,7 @@ func (p *LLOPlugin) Reports(seqNr uint64, rawOutcome ocr3types.Outcome) ([]ocr3t
 		return nil, fmt.Errorf("error getting observations timestamp: %w", err)
 	}
 
-	rwis := []ocr3types.ReportWithInfo[ReportInfo]{}
+	rwis := []ocr3types.ReportWithInfo[commontypes.StreamsReportInfo]{}
 
 	if outcome.LifeCycleStage == LifeCycleStageRetired {
 		// if we're retired, emit special retirement report to transfer
@@ -864,11 +856,11 @@ func (p *LLOPlugin) Reports(seqNr uint64, rawOutcome ocr3types.Outcome) ([]ocr3t
 			outcome.ValidAfterSeconds,
 		}
 
-		rwis = append(rwis, ocr3types.ReportWithInfo[ReportInfo]{
+		rwis = append(rwis, ocr3types.ReportWithInfo[commontypes.StreamsReportInfo]{
 			Report: must(json.Marshal(retirementReport)),
-			Info: ReportInfo{
-				outcome.LifeCycleStage,
-				ReportFormatJSON,
+			Info: commontypes.StreamsReportInfo{
+				LifeCycleStage: outcome.LifeCycleStage,
+				ReportFormat:   ReportFormatJSON,
 			},
 		})
 	}
@@ -894,11 +886,11 @@ func (p *LLOPlugin) Reports(seqNr uint64, rawOutcome ocr3types.Outcome) ([]ocr3t
 		if encoded, err := p.encodeReport(report, channelDefinition.ReportFormat); err != nil {
 			return nil, err
 		} else {
-			rwis = append(rwis, ocr3types.ReportWithInfo[ReportInfo]{
+			rwis = append(rwis, ocr3types.ReportWithInfo[commontypes.StreamsReportInfo]{
 				Report: encoded,
-				Info: ReportInfo{
-					outcome.LifeCycleStage,
-					channelDefinition.ReportFormat,
+				Info: commontypes.StreamsReportInfo{
+					LifeCycleStage: outcome.LifeCycleStage,
+					ReportFormat:   channelDefinition.ReportFormat,
 				},
 			})
 		}
@@ -907,12 +899,12 @@ func (p *LLOPlugin) Reports(seqNr uint64, rawOutcome ocr3types.Outcome) ([]ocr3t
 	return rwis, nil
 }
 
-func (p *LLOPlugin) ShouldAcceptAttestedReport(context.Context, uint64, ocr3types.ReportWithInfo[ReportInfo]) (bool, error) {
+func (p *StreamsPlugin) ShouldAcceptAttestedReport(context.Context, uint64, ocr3types.ReportWithInfo[commontypes.StreamsReportInfo]) (bool, error) {
 	// Transmit it all to the Mercury server
 	return true, nil
 }
 
-func (p *LLOPlugin) ShouldTransmitAcceptedReport(context.Context, uint64, ocr3types.ReportWithInfo[ReportInfo]) (bool, error) {
+func (p *StreamsPlugin) ShouldTransmitAcceptedReport(context.Context, uint64, ocr3types.ReportWithInfo[commontypes.StreamsReportInfo]) (bool, error) {
 	// Transmit it all to the Mercury server
 	return true, nil
 }
@@ -925,11 +917,11 @@ func (p *LLOPlugin) ShouldTransmitAcceptedReport(context.Context, uint64, ocr3ty
 // This is an advanced feature. The "default" approach (what OCR1 & OCR2
 // did) is to have an empty ValidateObservation function and return
 // QuorumTwoFPlusOne from this function.
-func (p *LLOPlugin) ObservationQuorum(outctx ocr3types.OutcomeContext, query types.Query) (ocr3types.Quorum, error) {
+func (p *StreamsPlugin) ObservationQuorum(outctx ocr3types.OutcomeContext, query types.Query) (ocr3types.Quorum, error) {
 	return ocr3types.QuorumTwoFPlusOne, nil
 }
 
-func (p *LLOPlugin) Close() error {
+func (p *StreamsPlugin) Close() error {
 	return nil
 }
 

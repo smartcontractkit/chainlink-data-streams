@@ -1,10 +1,11 @@
-package llo
+package streams
 
 import (
 	"bytes"
 	"encoding/hex"
 	"fmt"
 
+	commontypes "github.com/smartcontractkit/chainlink-common/pkg/types"
 	"github.com/smartcontractkit/libocr/offchainreporting2plus/ocr3types"
 )
 
@@ -54,7 +55,7 @@ type Transmitter interface {
 	// "contract" involved with the transmitter.
 	// - Transmit should be implemented and send to Mercury server
 	// - FromAccount() should return CSA public key
-	ocr3types.ContractTransmitter[ReportInfo]
+	ocr3types.ContractTransmitter[commontypes.StreamsReportInfo]
 }
 
 type ObsResult[T any] struct {
