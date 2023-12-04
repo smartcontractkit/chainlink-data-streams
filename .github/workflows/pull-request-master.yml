@@ -1,0 +1,118 @@
+name: pull-request-master
+
+on:
+  merge_group:
+  pull_request:
+    branches:
+      - master
+# Only run 1 of this workflow at a time per PR
+concurrency:
+  group: chainlink-data-streams-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PACKAGES: "mercury"
+
+jobs:
+  init:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix_packages: ${{ steps.set-matrix-packages.outputs.matrix_packages }}
+      lint_args_packages: ${{ steps.set-matrix-packages.outputs.lint_args_packages }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+        with:
+          fetch-depth: 0
+      - name: Set matrix packages
+        id: set-matrix-packages
+        shell: bash
+        env:
+          PACKAGES: ${{ env.PACKAGES }}
+        run: |
+          matrix_packages=$(echo "${PACKAGES}" | jq -R 'split(",")' | tr -d "\n\t")
+          echo "matrix_packages=${matrix_packages}" | tee -a "${GITHUB_OUTPUT}"
+      - name: Set lint args packages
+        id: set-lint-args-packages
+        shell: bash
+        env:
+          PACKAGES: ${{ env.PACKAGES }}
+        run: echo "lint_args_packages=$(echo "./$(echo $PACKAGES | sed 's/,/\/... .\//g;s/$/\/.../')")" | tee -a "${GITHUB_OUTPUT}"
+
+  ci-lint:
+    runs-on: ubuntu-latest
+    needs: [init]
+    permissions:
+      id-token: write
+      contents: read
+      actions: read
+    steps:
+      - name: ci-lint
+        uses: smartcontractkit/.github/actions/ci-lint-go@9e7cc0779934cae4a9028b8588c9adb64d8ce68c # ci-lint-go@0.1.0
+        with:
+          # grafana inputs
+          metrics-job-name: ci-lint
+          gc-basic-auth: ${{ secrets.GRAFANA_CLOUD_BASIC_AUTH }}
+          gc-host: ${{ secrets.GRAFANA_CLOUD_HOST }}
+          # env inputs
+          use-env-files: "true"
+          env-files: ./tools/env/ci.env
+          # go inputs
+          use-go-cache: true
+          go-cache-dep-path: "**/go.sum"
+          go-version-file: go.mod
+          golangci-lint-version: "v1.55.2"
+          golangci-lint-args: --out-format colored-line-number,checkstyle:golangci-lint-report.xml ${{ needs.init.outputs.lint_args_packages }}
+
+  ci-lint-misc:
+    runs-on: ubuntu-latest
+    steps:
+      - name: ci-lint-misc
+        uses: smartcontractkit/.github/actions/ci-lint-misc@9e7cc0779934cae4a9028b8588c9adb64d8ce68c # ci-lint-misc@0.1.0
+        with:
+          # grafana inputs
+          metrics-job-name: ci-lint-misc
+          gc-basic-auth: ${{ secrets.GRAFANA_CLOUD_BASIC_AUTH }}
+          gc-host: ${{ secrets.GRAFANA_CLOUD_HOST }}
+
+  ci-test:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+      actions: read
+    steps:
+      - name: ci-test
+        uses: smartcontractkit/.github/actions/ci-test-go@9e7cc0779934cae4a9028b8588c9adb64d8ce68c # ci-test-go@0.1.0
+        with:
+          # grafana inputs
+          metrics-job-name: ci-test
+          gc-basic-auth: ${{ secrets.GRAFANA_CLOUD_BASIC_AUTH }}
+          gc-host: ${{ secrets.GRAFANA_CLOUD_HOST }}
+          # docker inputs
+          use-docker-compose: "true"
+          docker-compose-workdir: ./tools/docker/setup-postgres
+          # env inputs
+          use-env-files: "true"
+          env-files: ./tools/env/ci.env
+          # go inputs
+          use-go-cache: "true"
+          go-cache-dep-path: "**/go.sum"
+          go-version-file: go.mod
+          go-test-cmd: make test-ci
+
+  ci-sonarqube:
+    needs: [ci-lint, ci-test]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: ci-sonarqube
+        uses: smartcontractkit/.github/actions/ci-sonarqube@cc4cbbd6d39a8e84915b356379a4ef6a16dceaf9 # ci-sonarqube@0.2.0
+        with:
+          # grafana inputs
+          metrics-job-name: ci-sonarqube
+          gc-basic-auth: ${{ secrets.GRAFANA_CLOUD_BASIC_AUTH }}
+          gc-host: ${{ secrets.GRAFANA_CLOUD_HOST }}
+          # sonarqube inputs
+          sonar-token: ${{ secrets.SONAR_TOKEN }}
+          sonar-host-url: ${{ secrets.SONAR_HOST_URL }}
