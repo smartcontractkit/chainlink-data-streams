@@ -19,6 +19,8 @@ import (
 	ocr3types "github.com/smartcontractkit/libocr/offchainreporting2plus/ocr3types"
 )
 
+// TODO: Split out this file
+
 // Notes:
 //
 // This is a sketch, there are many improvements to be made for this to be
@@ -55,9 +57,9 @@ type DataSource interface {
 // may later be retired and "hand over" their work to another protocol instance
 // that will move from the staging to the production stage.
 const (
-	LifeCycleStageStaging    = "staging"
-	LifeCycleStageProduction = "production"
-	LifeCycleStageRetired    = "retired"
+	LifeCycleStageStaging    commontypes.StreamsLifeCycleStage = "staging"
+	LifeCycleStageProduction commontypes.StreamsLifeCycleStage = "production"
+	LifeCycleStageRetired    commontypes.StreamsLifeCycleStage = "retired"
 )
 
 type RetirementReport struct {
@@ -185,15 +187,15 @@ func MakeChannelHash(cd ChannelDefinitionWithID) ChannelHash {
 // of an ReportingPlugin, e.g. due to software restarts. If you need ReportingPlugin state
 // to survive across restarts, you should store it in the Outcome or persist it.
 // An ReportingPlugin instance will only ever serve a single protocol instance.
-var _ ocr3types.ReportingPluginFactory[commontypes.StreamsReportInfo] = &StreamsPluginFactory{}
+var _ ocr3types.ReportingPluginFactory[commontypes.StreamsReportInfo] = &PluginFactory{}
 
-func NewStreamsPluginFactory(prrc PredecessorRetirementReportCache, src ShouldRetireCache, cdc ChannelDefinitionCache, ds DataSource, lggr logger.Logger, codecs map[commontypes.StreamsReportFormat]ReportCodec) *StreamsPluginFactory {
-	return &StreamsPluginFactory{
+func NewPluginFactory(prrc PredecessorRetirementReportCache, src ShouldRetireCache, cdc ChannelDefinitionCache, ds DataSource, lggr logger.Logger, codecs map[commontypes.StreamsReportFormat]ReportCodec) *PluginFactory {
+	return &PluginFactory{
 		prrc, src, cdc, ds, lggr, codecs,
 	}
 }
 
-type StreamsPluginFactory struct {
+type PluginFactory struct {
 	PredecessorRetirementReportCache PredecessorRetirementReportCache
 	ShouldRetireCache                ShouldRetireCache
 	ChannelDefinitionCache           ChannelDefinitionCache
@@ -202,7 +204,7 @@ type StreamsPluginFactory struct {
 	Codecs                           map[commontypes.StreamsReportFormat]ReportCodec
 }
 
-func (f *StreamsPluginFactory) NewReportingPlugin(cfg ocr3types.ReportingPluginConfig) (ocr3types.ReportingPlugin[commontypes.StreamsReportInfo], ocr3types.ReportingPluginInfo, error) {
+func (f *PluginFactory) NewReportingPlugin(cfg ocr3types.ReportingPluginConfig) (ocr3types.ReportingPlugin[commontypes.StreamsReportInfo], ocr3types.ReportingPluginInfo, error) {
 	var predecessorConfigDigest *types.ConfigDigest
 	if len(cfg.OffchainConfig) == 0 {
 		predecessorConfigDigest = nil
