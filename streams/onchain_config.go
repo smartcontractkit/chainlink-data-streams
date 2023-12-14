@@ -8,6 +8,7 @@ type OnchainConfig struct {
 
 var _ OnchainConfigCodec = &JSONOnchainConfigCodec{}
 
+// TODO: Replace this with protobuf
 type JSONOnchainConfigCodec struct{}
 
 func (c *JSONOnchainConfigCodec) Encode(OnchainConfig) ([]byte, error) {

@@ -43,12 +43,12 @@ const MAX_OUTCOME_CHANNEL_DEFINITIONS_LENGTH = 500
 // TODO: generalize from *big.Int to anything
 // TODO: Consider renaming to StreamDataPoints?
 // FIXME: error vs. valid
-type StreamValues map[StreamID]ObsResult[*big.Int]
+type StreamValues map[commontypes.StreamID]ObsResult[*big.Int]
 
 type DataSource interface {
 	// For each known streamID, Observe should return a non-nil entry in
 	// StreamValues. Observe should ignore unknown streamIDs.
-	Observe(ctx context.Context, streamIDs map[StreamID]struct{}) (StreamValues, error)
+	Observe(ctx context.Context, streamIDs map[commontypes.StreamID]struct{}) (StreamValues, error)
 }
 
 // type LifeCycleStage string
@@ -65,7 +65,7 @@ const (
 type RetirementReport struct {
 	// Carries validity time stamps between protocol instances to ensure there
 	// are no gaps
-	ValidAfterSeconds map[ChannelID]uint32
+	ValidAfterSeconds map[commontypes.ChannelID]uint32
 }
 
 type ShouldRetireCache interface { // reads asynchronously from onchain ConfigurationStore
@@ -95,28 +95,6 @@ const (
 	ReportFormatJSON commontypes.StreamsReportFormat = "json"
 	// Solana, CosmWasm, kalechain, etc... all go here
 )
-
-// QUESTION: Do we also want to include an (optional) designated verifier
-// address, i.e. the only address allowed to verify reports from this channel
-type ChannelDefinition struct {
-	ReportFormat commontypes.StreamsReportFormat
-	// Specifies the chain on which this channel can be verified. Currently uses
-	// CCIP chain selectors.
-	ChainSelector uint64
-	// We assume that StreamIDs is always non-empty and that the 0-th stream
-	// contains the verification price in LINK and the 1-st stream contains the
-	// verification price in the native coin.
-	StreamIDs []StreamID
-}
-
-type ChannelDefinitionWithID struct {
-	ChannelDefinition
-	ChannelID ChannelID
-}
-
-type ChannelDefinitions map[ChannelID]ChannelDefinition
-
-type ChannelHash [32]byte
 
 func MakeChannelHash(cd ChannelDefinitionWithID) ChannelHash {
 	h := sha256.New()
@@ -189,7 +167,7 @@ func MakeChannelHash(cd ChannelDefinitionWithID) ChannelHash {
 // An ReportingPlugin instance will only ever serve a single protocol instance.
 var _ ocr3types.ReportingPluginFactory[commontypes.StreamsReportInfo] = &PluginFactory{}
 
-func NewPluginFactory(prrc PredecessorRetirementReportCache, src ShouldRetireCache, cdc ChannelDefinitionCache, ds DataSource, lggr logger.Logger, codecs map[commontypes.StreamsReportFormat]ReportCodec) *PluginFactory {
+func NewPluginFactory(prrc PredecessorRetirementReportCache, src ShouldRetireCache, cdc commontypes.ChannelDefinitionCache, ds DataSource, lggr logger.Logger, codecs map[commontypes.StreamsReportFormat]ReportCodec) *PluginFactory {
 	return &PluginFactory{
 		prrc, src, cdc, ds, lggr, codecs,
 	}
@@ -198,7 +176,7 @@ func NewPluginFactory(prrc PredecessorRetirementReportCache, src ShouldRetireCac
 type PluginFactory struct {
 	PredecessorRetirementReportCache PredecessorRetirementReportCache
 	ShouldRetireCache                ShouldRetireCache
-	ChannelDefinitionCache           ChannelDefinitionCache
+	ChannelDefinitionCache           commontypes.ChannelDefinitionCache
 	DataSource                       DataSource
 	Logger                           logger.Logger
 	Codecs                           map[commontypes.StreamsReportFormat]ReportCodec
@@ -256,7 +234,7 @@ type StreamsPlugin struct {
 	ConfigDigest                     types.ConfigDigest
 	PredecessorRetirementReportCache PredecessorRetirementReportCache
 	ShouldRetireCache                ShouldRetireCache
-	ChannelDefinitionCache           ChannelDefinitionCache
+	ChannelDefinitionCache           commontypes.ChannelDefinitionCache
 	DataSource                       DataSource
 	Logger                           logger.Logger
 	F                                int
@@ -289,8 +267,8 @@ type Observation struct {
 	// Timestamp from when observation is made
 	UnixTimestampNanoseconds int64
 	// Votes to remove/add channels. Subject to MAX_OBSERVATION_*_LENGTH limits
-	RemoveChannelIDs      map[ChannelID]struct{}
-	AddChannelDefinitions ChannelDefinitions
+	RemoveChannelIDs      map[commontypes.ChannelID]struct{}
+	AddChannelDefinitions commontypes.ChannelDefinitions
 	// Observed (numeric) stream values. Subject to
 	// MAX_OBSERVATION_STREAM_VALUES_LENGTH limit
 	StreamValues StreamValues
@@ -339,10 +317,10 @@ func (p *StreamsPlugin) Observation(ctx context.Context, outctx ocr3types.Outcom
 
 	// vote to remove channel ids if they're in the previous outcome
 	// ChannelDefinitions or ValidAfterSeconds
-	removeChannelIDs := map[ChannelID]struct{}{}
+	removeChannelIDs := map[commontypes.ChannelID]struct{}{}
 	// vote to add channel definitions that aren't present in the previous
 	// outcome ChannelDefinitions
-	var addChannelDefinitions ChannelDefinitions
+	var addChannelDefinitions commontypes.ChannelDefinitions
 	{
 		expectedChannelDefs := p.ChannelDefinitionCache.Definitions()
 
@@ -365,7 +343,7 @@ func (p *StreamsPlugin) Observation(ctx context.Context, outctx ocr3types.Outcom
 
 	var streamValues StreamValues
 	{
-		streams := map[StreamID]struct{}{}
+		streams := map[commontypes.StreamID]struct{}{}
 		for _, channelDefinition := range previousOutcome.ChannelDefinitions {
 			for _, streamID := range channelDefinition.StreamIDs {
 				streams[streamID] = struct{}{}
@@ -454,14 +432,14 @@ type Outcome struct {
 	ObservationsTimestampNanoseconds int64
 	// ChannelDefinitions defines the set & structure of channels for which we
 	// generate reports
-	ChannelDefinitions ChannelDefinitions
+	ChannelDefinitions commontypes.ChannelDefinitions
 	// Latest ValidAfterSeconds value for each channel, reports for each channel
 	// span from ValidAfterSeconds to ObservationTimestampSeconds
-	ValidAfterSeconds map[ChannelID]uint32
+	ValidAfterSeconds map[commontypes.ChannelID]uint32
 	// StreamMedians is the median observed value for each stream
 	// QUESTION: Can we use arbitrary types here to allow for other types or
 	// consensus methods?
-	StreamMedians map[StreamID]*big.Int
+	StreamMedians map[commontypes.StreamID]*big.Int
 }
 
 // The Outcome's ObservationsTimestamp rounded down to seconds precision
@@ -475,7 +453,7 @@ func (out *Outcome) ObservationsTimestampSeconds() (uint32, error) {
 
 // Indicates whether a report can be generated for the given channel.
 // TODO: Return error indicating why it isn't reportable
-func (out *Outcome) IsReportable(channelID ChannelID) bool {
+func (out *Outcome) IsReportable(channelID commontypes.ChannelID) bool {
 	if out.LifeCycleStage == LifeCycleStageRetired {
 		return false
 	}
@@ -516,8 +494,8 @@ func (out *Outcome) IsReportable(channelID ChannelID) bool {
 
 // List of reportable channels (according to IsReportable), sorted according
 // to a canonical ordering
-func (out *Outcome) ReportableChannels() []ChannelID {
-	result := []ChannelID{}
+func (out *Outcome) ReportableChannels() []commontypes.ChannelID {
+	result := []commontypes.ChannelID{}
 
 	for channelID := range out.ChannelDefinitions {
 		if !out.IsReportable(channelID) {
@@ -582,13 +560,13 @@ func (p *StreamsPlugin) Outcome(outctx ocr3types.OutcomeContext, query types.Que
 
 	timestampsNanoseconds := []int64{}
 
-	removeChannelVotesByID := map[ChannelID]int{}
+	removeChannelVotesByID := map[commontypes.ChannelID]int{}
 
 	// for each channelId count number of votes that mention it and count number of votes that include it.
 	addChannelVotesByHash := map[ChannelHash]int{}
 	addChannelDefinitionsByHash := map[ChannelHash]ChannelDefinitionWithID{}
 
-	streamObservations := map[StreamID][]*big.Int{}
+	streamObservations := map[commontypes.StreamID][]*big.Int{}
 
 	for _, ao := range aos {
 		observation := Observation{}
@@ -663,7 +641,7 @@ func (p *StreamsPlugin) Outcome(outctx ocr3types.OutcomeContext, query types.Que
 	/////////////////////////////////
 	outcome.ChannelDefinitions = previousOutcome.ChannelDefinitions
 	if outcome.ChannelDefinitions == nil {
-		outcome.ChannelDefinitions = ChannelDefinitions{}
+		outcome.ChannelDefinitions = commontypes.ChannelDefinitions{}
 	}
 
 	// if retired, stop updating channel definitions
@@ -671,7 +649,7 @@ func (p *StreamsPlugin) Outcome(outctx ocr3types.OutcomeContext, query types.Que
 		removeChannelVotesByID, addChannelDefinitionsByHash = nil, nil
 	}
 
-	var removedChannelIDs []ChannelID
+	var removedChannelIDs []commontypes.ChannelID
 	for channelID, voteCount := range removeChannelVotesByID {
 		if voteCount <= p.F {
 			continue
@@ -715,7 +693,7 @@ func (p *StreamsPlugin) Outcome(outctx ocr3types.OutcomeContext, query types.Que
 			return nil, fmt.Errorf("error getting previous outcome's observations timestamp: %v", err)
 		}
 
-		outcome.ValidAfterSeconds = map[ChannelID]uint32{}
+		outcome.ValidAfterSeconds = map[commontypes.ChannelID]uint32{}
 		for channelID, previousValidAfterSeconds := range previousOutcome.ValidAfterSeconds {
 			if previousOutcome.IsReportable(channelID) {
 				// was reported based on previous outcome
@@ -753,7 +731,7 @@ func (p *StreamsPlugin) Outcome(outctx ocr3types.OutcomeContext, query types.Que
 	/////////////////////////////////
 	// outcome.StreamMedians
 	/////////////////////////////////
-	outcome.StreamMedians = map[StreamID]*big.Int{}
+	outcome.StreamMedians = map[commontypes.StreamID]*big.Int{}
 	for streamID, observations := range streamObservations {
 		sort.Slice(observations, func(i, j int) bool { return observations[i].Cmp(observations[j]) < 0 })
 		if len(observations) <= p.F {
@@ -774,7 +752,7 @@ type Report struct {
 	// OCR sequence number of this report
 	SeqNr uint64
 	// Channel that is being reported on
-	ChannelID ChannelID
+	ChannelID commontypes.ChannelID
 	// Report is valid for ValidAfterSeconds < block.time <= ValidUntilSeconds
 	ValidAfterSeconds uint32
 	ValidUntilSeconds uint32
@@ -927,7 +905,7 @@ func (p *StreamsPlugin) Close() error {
 	return nil
 }
 
-func subtractChannelDefinitions(minuend ChannelDefinitions, subtrahend ChannelDefinitions, limit int) ChannelDefinitions {
+func subtractChannelDefinitions(minuend commontypes.ChannelDefinitions, subtrahend commontypes.ChannelDefinitions, limit int) commontypes.ChannelDefinitions {
 	differenceList := []ChannelDefinitionWithID{}
 	for channelID, channelDefinition := range minuend {
 		if _, ok := subtrahend[channelID]; !ok {
@@ -944,7 +922,7 @@ func subtractChannelDefinitions(minuend ChannelDefinitions, subtrahend ChannelDe
 		differenceList = differenceList[:limit]
 	}
 
-	difference := ChannelDefinitions{}
+	difference := commontypes.ChannelDefinitions{}
 	for _, defWithID := range differenceList {
 		difference[defWithID.ChannelID] = defWithID.ChannelDefinition
 	}
