@@ -1,0 +1,22 @@
+package streams
+
+import "github.com/smartcontractkit/libocr/offchainreporting2/types"
+
+type OnchainConfig struct {
+	PredecessorConfigDigest *types.ConfigDigest
+}
+
+var _ OnchainConfigCodec = &JSONOnchainConfigCodec{}
+
+// TODO: Replace this with protobuf
+type JSONOnchainConfigCodec struct{}
+
+func (c *JSONOnchainConfigCodec) Encode(OnchainConfig) ([]byte, error) {
+	// TODO
+	return nil, nil
+}
+
+func (c *JSONOnchainConfigCodec) Decode([]byte) (OnchainConfig, error) {
+	// TODO
+	return OnchainConfig{}, nil
+}
