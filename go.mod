@@ -8,7 +8,7 @@ require (
 	github.com/smartcontractkit/chainlink-common v0.1.7-0.20231204152334-1f32103bbb4c
 	github.com/smartcontractkit/libocr v0.0.0-20231107151413-13e0202ae8d7
 	github.com/stretchr/testify v1.8.4
-	google.golang.org/protobuf v1.31.0
+	google.golang.org/protobuf v1.32.0
 )
 
 require (
