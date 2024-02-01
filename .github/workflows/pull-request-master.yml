@@ -48,12 +48,13 @@ jobs:
       actions: read
     steps:
       - name: ci-lint
-        uses: smartcontractkit/.github/actions/ci-lint-go@9e7cc0779934cae4a9028b8588c9adb64d8ce68c # ci-lint-go@0.1.0
+        uses: smartcontractkit/.github/actions/ci-lint-go@6b08487b176ef7cad086526d0b54ddff6691c044 # ci-lint-go@0.1.1
         with:
           # grafana inputs
           metrics-job-name: ci-lint
-          gc-basic-auth: ${{ secrets.GRAFANA_CLOUD_BASIC_AUTH }}
-          gc-host: ${{ secrets.GRAFANA_CLOUD_HOST }}
+          gc-basic-auth: ${{ secrets.GRAFANA_INTERNAL_BASIC_AUTH }}
+          gc-host: ${{ secrets.GRAFANA_INTERNAL_HOST }}
+          gc-org-id: ${{ secrets.GRAFANA_INTERNAL_ORG_ID }}
           # env inputs
           use-env-files: "true"
           env-files: ./tools/env/ci.env
@@ -68,12 +69,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: ci-lint-misc
-        uses: smartcontractkit/.github/actions/ci-lint-misc@9e7cc0779934cae4a9028b8588c9adb64d8ce68c # ci-lint-misc@0.1.0
+        uses: smartcontractkit/.github/actions/ci-lint-misc@6b08487b176ef7cad086526d0b54ddff6691c044 # ci-lint-misc@0.1.1
         with:
           # grafana inputs
           metrics-job-name: ci-lint-misc
-          gc-basic-auth: ${{ secrets.GRAFANA_CLOUD_BASIC_AUTH }}
-          gc-host: ${{ secrets.GRAFANA_CLOUD_HOST }}
+          gc-basic-auth: ${{ secrets.GRAFANA_INTERNAL_BASIC_AUTH }}
+          gc-host: ${{ secrets.GRAFANA_INTERNAL_HOST }}
+          gc-org-id: ${{ secrets.GRAFANA_INTERNAL_ORG_ID }}
+
 
   ci-test:
     runs-on: ubuntu-latest
@@ -83,12 +86,13 @@ jobs:
       actions: read
     steps:
       - name: ci-test
-        uses: smartcontractkit/.github/actions/ci-test-go@9e7cc0779934cae4a9028b8588c9adb64d8ce68c # ci-test-go@0.1.0
+        uses: smartcontractkit/.github/actions/ci-test-go@6b08487b176ef7cad086526d0b54ddff6691c044 # ci-test-go@0.1.1
         with:
           # grafana inputs
           metrics-job-name: ci-test
-          gc-basic-auth: ${{ secrets.GRAFANA_CLOUD_BASIC_AUTH }}
-          gc-host: ${{ secrets.GRAFANA_CLOUD_HOST }}
+          gc-basic-auth: ${{ secrets.GRAFANA_INTERNAL_BASIC_AUTH }}
+          gc-host: ${{ secrets.GRAFANA_INTERNAL_HOST }}
+          gc-org-id: ${{ secrets.GRAFANA_INTERNAL_ORG_ID }}
           # docker inputs
           use-docker-compose: "true"
           docker-compose-workdir: ./tools/docker/setup-postgres
@@ -107,12 +111,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: ci-sonarqube
-        uses: smartcontractkit/.github/actions/ci-sonarqube@cc4cbbd6d39a8e84915b356379a4ef6a16dceaf9 # ci-sonarqube@0.2.0
+        uses: smartcontractkit/.github/actions/ci-sonarqube@6b08487b176ef7cad086526d0b54ddff6691c044 # ci-sonarqube@0.3.1
         with:
           # grafana inputs
           metrics-job-name: ci-sonarqube
-          gc-basic-auth: ${{ secrets.GRAFANA_CLOUD_BASIC_AUTH }}
-          gc-host: ${{ secrets.GRAFANA_CLOUD_HOST }}
+          gc-basic-auth: ${{ secrets.GRAFANA_INTERNAL_BASIC_AUTH }}
+          gc-host: ${{ secrets.GRAFANA_INTERNAL_HOST }}
+          gc-org-id: ${{ secrets.GRAFANA_INTERNAL_ORG_ID }}
           # sonarqube inputs
           sonar-token: ${{ secrets.SONAR_TOKEN }}
           sonar-host-url: ${{ secrets.SONAR_HOST_URL }}
