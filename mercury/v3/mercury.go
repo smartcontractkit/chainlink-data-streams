@@ -89,7 +89,7 @@ func (fac Factory) NewMercuryPlugin(configuration ocr3types.MercuryPluginConfig)
 		fac.logger,
 		fac.reportCodec,
 		configuration.ConfigDigest,
-		configuration.F,
+		configuration.F + 1,
 		mercury.EpochRound{},
 		new(big.Int),
 		maxReportLength,
