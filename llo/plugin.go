@@ -522,9 +522,12 @@ func (out *Outcome) ReportableChannels() []commontypes.ChannelID {
 // *not* strictly) across the lifetime of a protocol instance and that
 // outctx.previousOutcome contains the consensus outcome with sequence
 // number (outctx.SeqNr-1).
+//
+// libocr guarantees that this will always be called with at least 2f+1
+// AttributedObservations
 func (p *LLOPlugin) Outcome(outctx ocr3types.OutcomeContext, query types.Query, aos []types.AttributedObservation) (ocr3types.Outcome, error) {
-	if len(aos) == 0 {
-		return nil, errors.New("no attributed observations")
+	if len(aos) < 2*p.F+1 {
+		return nil, fmt.Errorf("invariant violation: expected at least 2f+1 attributed observations, got %d (f: %d)", len(aos), p.F)
 	}
 
 	if outctx.SeqNr <= 1 {
@@ -748,6 +751,11 @@ func (p *LLOPlugin) Outcome(outctx ocr3types.OutcomeContext, query types.Query, 
 	for streamID, observations := range streamObservations {
 		sort.Slice(observations, func(i, j int) bool { return observations[i].Cmp(observations[j]) < 0 })
 		if len(observations) <= p.F {
+			// In the worst case, we have 2f+1 observations, of which up to f
+			// are allowed to be unparseable/missing. If we have less than f+1
+			// usable observations, we cannot securely generate a median at
+			// all.
+			p.Logger.Debugw("Not enough observations to calculate median, expected at least f+1", "f", p.F, "streamID", streamID, "observations", observations)
 			continue
 		}
 		// We use a "rank-k" median here, instead one could average in case of
