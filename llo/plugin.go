@@ -89,9 +89,13 @@ type PredecessorRetirementReportCache interface {
 }
 
 const (
-	ReportFormatEVM  commontypes.LLOReportFormat = "evm"
-	ReportFormatJSON commontypes.LLOReportFormat = "json"
-	// Solana, CosmWasm, kalechain, etc... all go here
+	// NOTE: ReportFormat strings should be constrained to a maximum of 8 chars
+	// since they need to be stored on-chain
+	ReportFormatEVM      commontypes.LLOReportFormat = "evm"
+	ReportFormatJSON     commontypes.LLOReportFormat = "json"
+	ReportFormatSolana   commontypes.LLOReportFormat = "solana"
+	ReportFormatCosmos   commontypes.LLOReportFormat = "cosmos"
+	ReportFormatStarknet commontypes.LLOReportFormat = "starknet"
 )
 
 // MakeChannelHash is used for mapping ChannelDefinitionWithIDs
