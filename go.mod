@@ -6,7 +6,7 @@ require (
 	github.com/hashicorp/go-plugin v1.6.0
 	github.com/pkg/errors v0.9.1
 	github.com/shopspring/decimal v1.3.1
-	github.com/smartcontractkit/chain-selectors v1.0.5
+	github.com/smartcontractkit/chain-selectors v1.0.9
 	github.com/smartcontractkit/chainlink-common v0.1.7-0.20240209032254-f9b58810d8ca
 	github.com/smartcontractkit/libocr v0.0.0-20240112202000-6359502d2ff1
 	github.com/stretchr/testify v1.8.4
