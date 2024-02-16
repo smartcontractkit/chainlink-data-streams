@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"github.com/smartcontractkit/chainlink-common/pkg/logger"
-	commontypes "github.com/smartcontractkit/chainlink-common/pkg/types"
+	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
 
 	chainselectors "github.com/smartcontractkit/chain-selectors"
 	"github.com/smartcontractkit/libocr/offchainreporting2/types"
@@ -44,27 +44,27 @@ const MAX_OUTCOME_CHANNEL_DEFINITIONS_LENGTH = 500
 // TODO: generalize from *big.Int to anything
 // https://smartcontract-it.atlassian.net/browse/MERC-3525
 // TODO: Consider renaming to StreamDataPoints?
-type StreamValues map[commontypes.StreamID]ObsResult[*big.Int]
+type StreamValues map[llotypes.StreamID]ObsResult[*big.Int]
 
 type DataSource interface {
 	// For each known streamID, Observe should return a non-nil entry in
 	// StreamValues. Observe should ignore unknown streamIDs.
-	Observe(ctx context.Context, streamIDs map[commontypes.StreamID]struct{}) (StreamValues, error)
+	Observe(ctx context.Context, streamIDs map[llotypes.StreamID]struct{}) (StreamValues, error)
 }
 
 // Protocol instances start in either the staging or production stage. They
 // may later be retired and "hand over" their work to another protocol instance
 // that will move from the staging to the production stage.
 const (
-	LifeCycleStageStaging    commontypes.LLOLifeCycleStage = "staging"
-	LifeCycleStageProduction commontypes.LLOLifeCycleStage = "production"
-	LifeCycleStageRetired    commontypes.LLOLifeCycleStage = "retired"
+	LifeCycleStageStaging    llotypes.LifeCycleStage = "staging"
+	LifeCycleStageProduction llotypes.LifeCycleStage = "production"
+	LifeCycleStageRetired    llotypes.LifeCycleStage = "retired"
 )
 
 type RetirementReport struct {
 	// Carries validity time stamps between protocol instances to ensure there
 	// are no gaps
-	ValidAfterSeconds map[commontypes.ChannelID]uint32
+	ValidAfterSeconds map[llotypes.ChannelID]uint32
 }
 
 type ShouldRetireCache interface { // reads asynchronously from onchain ConfigurationStore
@@ -91,11 +91,11 @@ type PredecessorRetirementReportCache interface {
 const (
 	// NOTE: ReportFormat strings should be constrained to a maximum of 8 chars
 	// since they need to be stored on-chain
-	ReportFormatEVM      commontypes.LLOReportFormat = "evm"
-	ReportFormatJSON     commontypes.LLOReportFormat = "json"
-	ReportFormatSolana   commontypes.LLOReportFormat = "solana"
-	ReportFormatCosmos   commontypes.LLOReportFormat = "cosmos"
-	ReportFormatStarknet commontypes.LLOReportFormat = "starknet"
+	ReportFormatEVM      llotypes.ReportFormat = "evm"
+	ReportFormatJSON     llotypes.ReportFormat = "json"
+	ReportFormatSolana   llotypes.ReportFormat = "solana"
+	ReportFormatCosmos   llotypes.ReportFormat = "cosmos"
+	ReportFormatStarknet llotypes.ReportFormat = "starknet"
 )
 
 // MakeChannelHash is used for mapping ChannelDefinitionWithIDs
@@ -176,9 +176,9 @@ func MakeChannelHash(cd ChannelDefinitionWithID) ChannelHash {
 // of an ReportingPlugin, e.g. due to software restarts. If you need ReportingPlugin state
 // to survive across restarts, you should store it in the Outcome or persist it.
 // A ReportingPlugin instance will only ever serve a single protocol instance.
-var _ ocr3types.ReportingPluginFactory[commontypes.LLOReportInfo] = &PluginFactory{}
+var _ ocr3types.ReportingPluginFactory[llotypes.ReportInfo] = &PluginFactory{}
 
-func NewPluginFactory(prrc PredecessorRetirementReportCache, src ShouldRetireCache, cdc commontypes.ChannelDefinitionCache, ds DataSource, lggr logger.Logger, codecs map[commontypes.LLOReportFormat]ReportCodec) *PluginFactory {
+func NewPluginFactory(prrc PredecessorRetirementReportCache, src ShouldRetireCache, cdc llotypes.ChannelDefinitionCache, ds DataSource, lggr logger.Logger, codecs map[llotypes.ReportFormat]ReportCodec) *PluginFactory {
 	return &PluginFactory{
 		prrc, src, cdc, ds, lggr, codecs,
 	}
@@ -187,13 +187,13 @@ func NewPluginFactory(prrc PredecessorRetirementReportCache, src ShouldRetireCac
 type PluginFactory struct {
 	PredecessorRetirementReportCache PredecessorRetirementReportCache
 	ShouldRetireCache                ShouldRetireCache
-	ChannelDefinitionCache           commontypes.ChannelDefinitionCache
+	ChannelDefinitionCache           llotypes.ChannelDefinitionCache
 	DataSource                       DataSource
 	Logger                           logger.Logger
-	Codecs                           map[commontypes.LLOReportFormat]ReportCodec
+	Codecs                           map[llotypes.ReportFormat]ReportCodec
 }
 
-func (f *PluginFactory) NewReportingPlugin(cfg ocr3types.ReportingPluginConfig) (ocr3types.ReportingPlugin[commontypes.LLOReportInfo], ocr3types.ReportingPluginInfo, error) {
+func (f *PluginFactory) NewReportingPlugin(cfg ocr3types.ReportingPluginConfig) (ocr3types.ReportingPlugin[llotypes.ReportInfo], ocr3types.ReportingPluginInfo, error) {
 	offchainCfg, err := DecodeOffchainConfig(cfg.OffchainConfig)
 	if err != nil {
 		return nil, ocr3types.ReportingPluginInfo{}, fmt.Errorf("NewReportingPlugin failed to decode offchain config; got: 0x%x (len: %d); %w", cfg.OffchainConfig, len(cfg.OffchainConfig), err)
@@ -221,7 +221,7 @@ func (f *PluginFactory) NewReportingPlugin(cfg ocr3types.ReportingPluginConfig) 
 		}, nil
 }
 
-var _ ocr3types.ReportingPlugin[commontypes.LLOReportInfo] = &LLOPlugin{}
+var _ ocr3types.ReportingPlugin[llotypes.ReportInfo] = &LLOPlugin{}
 
 type ReportCodec interface {
 	Encode(Report) ([]byte, error)
@@ -234,11 +234,11 @@ type LLOPlugin struct {
 	ConfigDigest                     types.ConfigDigest
 	PredecessorRetirementReportCache PredecessorRetirementReportCache
 	ShouldRetireCache                ShouldRetireCache
-	ChannelDefinitionCache           commontypes.ChannelDefinitionCache
+	ChannelDefinitionCache           llotypes.ChannelDefinitionCache
 	DataSource                       DataSource
 	Logger                           logger.Logger
 	F                                int
-	Codecs                           map[commontypes.LLOReportFormat]ReportCodec
+	Codecs                           map[llotypes.ReportFormat]ReportCodec
 }
 
 // Query creates a Query that is sent from the leader to all follower nodes
@@ -267,8 +267,8 @@ type Observation struct {
 	// Timestamp from when observation is made
 	UnixTimestampNanoseconds int64
 	// Votes to remove/add channels. Subject to MAX_OBSERVATION_*_LENGTH limits
-	RemoveChannelIDs      map[commontypes.ChannelID]struct{}
-	AddChannelDefinitions commontypes.ChannelDefinitions
+	RemoveChannelIDs      map[llotypes.ChannelID]struct{}
+	AddChannelDefinitions llotypes.ChannelDefinitions
 	// Observed (numeric) stream values. Subject to
 	// MAX_OBSERVATION_STREAM_VALUES_LENGTH limit
 	StreamValues StreamValues
@@ -320,10 +320,10 @@ func (p *LLOPlugin) Observation(ctx context.Context, outctx ocr3types.OutcomeCon
 
 	// vote to remove channel ids if they're in the previous outcome
 	// ChannelDefinitions or ValidAfterSeconds
-	removeChannelIDs := map[commontypes.ChannelID]struct{}{}
+	removeChannelIDs := map[llotypes.ChannelID]struct{}{}
 	// vote to add channel definitions that aren't present in the previous
 	// outcome ChannelDefinitions
-	var addChannelDefinitions commontypes.ChannelDefinitions
+	var addChannelDefinitions llotypes.ChannelDefinitions
 	{
 		expectedChannelDefs := p.ChannelDefinitionCache.Definitions()
 
@@ -346,7 +346,7 @@ func (p *LLOPlugin) Observation(ctx context.Context, outctx ocr3types.OutcomeCon
 
 	var streamValues StreamValues
 	{
-		streams := map[commontypes.StreamID]struct{}{}
+		streams := map[llotypes.StreamID]struct{}{}
 		for _, channelDefinition := range previousOutcome.ChannelDefinitions {
 			for _, streamID := range channelDefinition.StreamIDs {
 				streams[streamID] = struct{}{}
@@ -431,20 +431,20 @@ func (p *LLOPlugin) ValidateObservation(outctx ocr3types.OutcomeContext, query t
 
 type Outcome struct {
 	// LifeCycleStage the protocol is in
-	LifeCycleStage commontypes.LLOLifeCycleStage
+	LifeCycleStage llotypes.LifeCycleStage
 	// ObservationsTimestampNanoseconds is the median timestamp from the
 	// latest set of observations
 	ObservationsTimestampNanoseconds int64
 	// ChannelDefinitions defines the set & structure of channels for which we
 	// generate reports
-	ChannelDefinitions commontypes.ChannelDefinitions
+	ChannelDefinitions llotypes.ChannelDefinitions
 	// Latest ValidAfterSeconds value for each channel, reports for each channel
 	// span from ValidAfterSeconds to ObservationTimestampSeconds
-	ValidAfterSeconds map[commontypes.ChannelID]uint32
+	ValidAfterSeconds map[llotypes.ChannelID]uint32
 	// StreamMedians is the median observed value for each stream
 	// QUESTION: Can we use arbitrary types here to allow for other types or
 	// consensus methods?
-	StreamMedians map[commontypes.StreamID]*big.Int
+	StreamMedians map[llotypes.StreamID]*big.Int
 }
 
 // The Outcome's ObservationsTimestamp rounded down to seconds precision
@@ -458,7 +458,7 @@ func (out *Outcome) ObservationsTimestampSeconds() (uint32, error) {
 
 // Indicates whether a report can be generated for the given channel.
 // Returns nil if channel is reportable
-func (out *Outcome) IsReportable(channelID commontypes.ChannelID) error {
+func (out *Outcome) IsReportable(channelID llotypes.ChannelID) error {
 	if out.LifeCycleStage == LifeCycleStageRetired {
 		return fmt.Errorf("IsReportable=false; retired channel with ID: %d", channelID)
 	}
@@ -499,8 +499,8 @@ func (out *Outcome) IsReportable(channelID commontypes.ChannelID) error {
 
 // List of reportable channels (according to IsReportable), sorted according
 // to a canonical ordering
-func (out *Outcome) ReportableChannels() []commontypes.ChannelID {
-	result := []commontypes.ChannelID{}
+func (out *Outcome) ReportableChannels() []llotypes.ChannelID {
+	result := []llotypes.ChannelID{}
 
 	for channelID := range out.ChannelDefinitions {
 		if err := out.IsReportable(channelID); err != nil {
@@ -536,7 +536,7 @@ func (p *LLOPlugin) Outcome(outctx ocr3types.OutcomeContext, query types.Query, 
 
 	if outctx.SeqNr <= 1 {
 		// Initial Outcome
-		var lifeCycleStage commontypes.LLOLifeCycleStage
+		var lifeCycleStage llotypes.LifeCycleStage
 		if p.PredecessorConfigDigest == nil {
 			// Start straight in production if we have no predecessor
 			lifeCycleStage = LifeCycleStageProduction
@@ -572,13 +572,13 @@ func (p *LLOPlugin) Outcome(outctx ocr3types.OutcomeContext, query types.Query, 
 
 	timestampsNanoseconds := []int64{}
 
-	removeChannelVotesByID := map[commontypes.ChannelID]int{}
+	removeChannelVotesByID := map[llotypes.ChannelID]int{}
 
 	// for each channelId count number of votes that mention it and count number of votes that include it.
 	addChannelVotesByHash := map[ChannelHash]int{}
 	addChannelDefinitionsByHash := map[ChannelHash]ChannelDefinitionWithID{}
 
-	streamObservations := map[commontypes.StreamID][]*big.Int{}
+	streamObservations := map[llotypes.StreamID][]*big.Int{}
 
 	for _, ao := range aos {
 		observation := Observation{}
@@ -658,7 +658,7 @@ func (p *LLOPlugin) Outcome(outctx ocr3types.OutcomeContext, query types.Query, 
 	/////////////////////////////////
 	outcome.ChannelDefinitions = previousOutcome.ChannelDefinitions
 	if outcome.ChannelDefinitions == nil {
-		outcome.ChannelDefinitions = commontypes.ChannelDefinitions{}
+		outcome.ChannelDefinitions = llotypes.ChannelDefinitions{}
 	}
 
 	// if retired, stop updating channel definitions
@@ -666,7 +666,7 @@ func (p *LLOPlugin) Outcome(outctx ocr3types.OutcomeContext, query types.Query, 
 		removeChannelVotesByID, addChannelDefinitionsByHash = nil, nil
 	}
 
-	var removedChannelIDs []commontypes.ChannelID
+	var removedChannelIDs []llotypes.ChannelID
 	for channelID, voteCount := range removeChannelVotesByID {
 		if voteCount <= p.F {
 			continue
@@ -710,7 +710,7 @@ func (p *LLOPlugin) Outcome(outctx ocr3types.OutcomeContext, query types.Query, 
 			return nil, fmt.Errorf("error getting previous outcome's observations timestamp: %v", err)
 		}
 
-		outcome.ValidAfterSeconds = map[commontypes.ChannelID]uint32{}
+		outcome.ValidAfterSeconds = map[llotypes.ChannelID]uint32{}
 		for channelID, previousValidAfterSeconds := range previousOutcome.ValidAfterSeconds {
 			if err := previousOutcome.IsReportable(channelID); err != nil {
 				p.Logger.Debugw("Channel is not reportable", "channelID", channelID, "err", err)
@@ -751,7 +751,7 @@ func (p *LLOPlugin) Outcome(outctx ocr3types.OutcomeContext, query types.Query, 
 	/////////////////////////////////
 	// outcome.StreamMedians
 	/////////////////////////////////
-	outcome.StreamMedians = map[commontypes.StreamID]*big.Int{}
+	outcome.StreamMedians = map[llotypes.StreamID]*big.Int{}
 	for streamID, observations := range streamObservations {
 		sort.Slice(observations, func(i, j int) bool { return observations[i].Cmp(observations[j]) < 0 })
 		if len(observations) <= p.F {
@@ -777,7 +777,7 @@ type Report struct {
 	// OCR sequence number of this report
 	SeqNr uint64
 	// Channel that is being reported on
-	ChannelID commontypes.ChannelID
+	ChannelID llotypes.ChannelID
 	// Report is valid for ValidAfterSeconds < block.time <= ValidUntilSeconds
 	ValidAfterSeconds uint32
 	ValidUntilSeconds uint32
@@ -790,7 +790,7 @@ type Report struct {
 	Specimen bool
 }
 
-func (p *LLOPlugin) encodeReport(r Report, format commontypes.LLOReportFormat) (types.Report, error) {
+func (p *LLOPlugin) encodeReport(r Report, format llotypes.ReportFormat) (types.Report, error) {
 	codec, exists := p.Codecs[format]
 	if !exists {
 		return nil, fmt.Errorf("codec missing for ReportFormat=%s", format)
@@ -811,7 +811,7 @@ func (p *LLOPlugin) encodeReport(r Report, format commontypes.LLOReportFormat) (
 // *not* strictly) across the lifetime of a protocol instance and that
 // outctx.previousOutcome contains the consensus outcome with sequence
 // number (outctx.SeqNr-1).
-func (p *LLOPlugin) Reports(seqNr uint64, rawOutcome ocr3types.Outcome) ([]ocr3types.ReportWithInfo[commontypes.LLOReportInfo], error) {
+func (p *LLOPlugin) Reports(seqNr uint64, rawOutcome ocr3types.Outcome) ([]ocr3types.ReportWithInfo[llotypes.ReportInfo], error) {
 	if seqNr <= 1 {
 		// no reports for initial round
 		return nil, nil
@@ -827,7 +827,7 @@ func (p *LLOPlugin) Reports(seqNr uint64, rawOutcome ocr3types.Outcome) ([]ocr3t
 		return nil, fmt.Errorf("error getting observations timestamp: %w", err)
 	}
 
-	rwis := []ocr3types.ReportWithInfo[commontypes.LLOReportInfo]{}
+	rwis := []ocr3types.ReportWithInfo[llotypes.ReportInfo]{}
 
 	if outcome.LifeCycleStage == LifeCycleStageRetired {
 		// if we're retired, emit special retirement report to transfer
@@ -837,9 +837,9 @@ func (p *LLOPlugin) Reports(seqNr uint64, rawOutcome ocr3types.Outcome) ([]ocr3t
 			outcome.ValidAfterSeconds,
 		}
 
-		rwis = append(rwis, ocr3types.ReportWithInfo[commontypes.LLOReportInfo]{
+		rwis = append(rwis, ocr3types.ReportWithInfo[llotypes.ReportInfo]{
 			Report: must(json.Marshal(retirementReport)),
-			Info: commontypes.LLOReportInfo{
+			Info: llotypes.ReportInfo{
 				LifeCycleStage: outcome.LifeCycleStage,
 				ReportFormat:   ReportFormatJSON,
 			},
@@ -868,9 +868,9 @@ func (p *LLOPlugin) Reports(seqNr uint64, rawOutcome ocr3types.Outcome) ([]ocr3t
 		if err != nil {
 			return nil, err
 		}
-		rwis = append(rwis, ocr3types.ReportWithInfo[commontypes.LLOReportInfo]{
+		rwis = append(rwis, ocr3types.ReportWithInfo[llotypes.ReportInfo]{
 			Report: encoded,
-			Info: commontypes.LLOReportInfo{
+			Info: llotypes.ReportInfo{
 				LifeCycleStage: outcome.LifeCycleStage,
 				ReportFormat:   channelDefinition.ReportFormat,
 			},
@@ -884,12 +884,12 @@ func (p *LLOPlugin) Reports(seqNr uint64, rawOutcome ocr3types.Outcome) ([]ocr3t
 	return rwis, nil
 }
 
-func (p *LLOPlugin) ShouldAcceptAttestedReport(context.Context, uint64, ocr3types.ReportWithInfo[commontypes.LLOReportInfo]) (bool, error) {
+func (p *LLOPlugin) ShouldAcceptAttestedReport(context.Context, uint64, ocr3types.ReportWithInfo[llotypes.ReportInfo]) (bool, error) {
 	// Transmit it all to the Mercury server
 	return true, nil
 }
 
-func (p *LLOPlugin) ShouldTransmitAcceptedReport(context.Context, uint64, ocr3types.ReportWithInfo[commontypes.LLOReportInfo]) (bool, error) {
+func (p *LLOPlugin) ShouldTransmitAcceptedReport(context.Context, uint64, ocr3types.ReportWithInfo[llotypes.ReportInfo]) (bool, error) {
 	// Transmit it all to the Mercury server
 	return true, nil
 }
@@ -910,7 +910,7 @@ func (p *LLOPlugin) Close() error {
 	return nil
 }
 
-func subtractChannelDefinitions(minuend commontypes.ChannelDefinitions, subtrahend commontypes.ChannelDefinitions, limit int) commontypes.ChannelDefinitions {
+func subtractChannelDefinitions(minuend llotypes.ChannelDefinitions, subtrahend llotypes.ChannelDefinitions, limit int) llotypes.ChannelDefinitions {
 	differenceList := []ChannelDefinitionWithID{}
 	for channelID, channelDefinition := range minuend {
 		if _, ok := subtrahend[channelID]; !ok {
@@ -927,7 +927,7 @@ func subtractChannelDefinitions(minuend commontypes.ChannelDefinitions, subtrahe
 		differenceList = differenceList[:limit]
 	}
 
-	difference := commontypes.ChannelDefinitions{}
+	difference := llotypes.ChannelDefinitions{}
 	for _, defWithID := range differenceList {
 		difference[defWithID.ChannelID] = defWithID.ChannelDefinition
 	}
