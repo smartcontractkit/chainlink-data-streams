@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"math/big"
 
-	commontypes "github.com/smartcontractkit/chainlink-common/pkg/types"
+	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
 	"github.com/smartcontractkit/libocr/offchainreporting2/types"
 )
 
@@ -25,7 +25,7 @@ func (cdc JSONReportCodec) Decode(b []byte) (r Report, err error) {
 		ConfigDigest      string
 		ChainSelector     uint64
 		SeqNr             uint64
-		ChannelID         commontypes.ChannelID
+		ChannelID         llotypes.ChannelID
 		ValidAfterSeconds uint32
 		ValidUntilSeconds uint32
 		Values            []*big.Int

@@ -4,7 +4,7 @@ import (
 	"math/big"
 	"testing"
 
-	commontypes "github.com/smartcontractkit/chainlink-common/pkg/types"
+	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
 	"github.com/smartcontractkit/libocr/offchainreporting2/types"
 
 	"github.com/stretchr/testify/assert"
@@ -17,7 +17,7 @@ func Test_JSONCodec(t *testing.T) {
 			ConfigDigest:      types.ConfigDigest([32]byte{1, 2, 3}),
 			ChainSelector:     42,
 			SeqNr:             43,
-			ChannelID:         commontypes.ChannelID(46),
+			ChannelID:         llotypes.ChannelID(46),
 			ValidAfterSeconds: 44,
 			ValidUntilSeconds: 45,
 			Values:            []*big.Int{big.NewInt(1), big.NewInt(2)},
