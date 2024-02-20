@@ -89,13 +89,11 @@ type PredecessorRetirementReportCache interface {
 }
 
 const (
-	// NOTE: ReportFormat strings should be constrained to a maximum of 8 chars
-	// since they need to be stored on-chain
-	ReportFormatEVM      llotypes.ReportFormat = "evm"
-	ReportFormatJSON     llotypes.ReportFormat = "json"
-	ReportFormatSolana   llotypes.ReportFormat = "solana"
-	ReportFormatCosmos   llotypes.ReportFormat = "cosmos"
-	ReportFormatStarknet llotypes.ReportFormat = "starknet"
+	ReportFormatEVM llotypes.ReportFormat = iota
+	ReportFormatJSON
+	ReportFormatSolana
+	ReportFormatCosmos
+	ReportFormatStarknet
 )
 
 // MakeChannelHash is used for mapping ChannelDefinitionWithIDs
@@ -103,11 +101,7 @@ func MakeChannelHash(cd ChannelDefinitionWithID) ChannelHash {
 	h := sha256.New()
 	merr := errors.Join(
 		binary.Write(h, binary.BigEndian, cd.ChannelID),
-		binary.Write(h, binary.BigEndian, uint32(len(cd.ReportFormat))),
-	)
-	_, err := h.Write([]byte(cd.ReportFormat))
-	merr = errors.Join(merr,
-		err,
+		binary.Write(h, binary.BigEndian, cd.ReportFormat),
 		binary.Write(h, binary.BigEndian, cd.ChainSelector),
 		binary.Write(h, binary.BigEndian, uint32(len(cd.StreamIDs))),
 	)
@@ -793,7 +787,7 @@ type Report struct {
 func (p *LLOPlugin) encodeReport(r Report, format llotypes.ReportFormat) (types.Report, error) {
 	codec, exists := p.Codecs[format]
 	if !exists {
-		return nil, fmt.Errorf("codec missing for ReportFormat=%s", format)
+		return nil, fmt.Errorf("codec missing for ReportFormat=%d", format)
 	}
 	return codec.Encode(r)
 }
