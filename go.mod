@@ -7,7 +7,7 @@ require (
 	github.com/pkg/errors v0.9.1
 	github.com/shopspring/decimal v1.3.1
 	github.com/smartcontractkit/chain-selectors v1.0.5
-	github.com/smartcontractkit/chainlink-common v0.1.7-0.20240216181624-ccf0da042f11
+	github.com/smartcontractkit/chainlink-common v0.1.7-0.20240220201513-6cb818f8800d
 	github.com/smartcontractkit/libocr v0.0.0-20240112202000-6359502d2ff1
 	github.com/stretchr/testify v1.8.4
 	google.golang.org/protobuf v1.32.0

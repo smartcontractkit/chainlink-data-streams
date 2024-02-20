@@ -88,14 +88,6 @@ type PredecessorRetirementReportCache interface {
 	CheckAttestedRetirementReport(predecessorConfigDigest ocr2types.ConfigDigest, attestedRetirementReport []byte) (RetirementReport, error)
 }
 
-const (
-	ReportFormatEVM llotypes.ReportFormat = iota
-	ReportFormatJSON
-	ReportFormatSolana
-	ReportFormatCosmos
-	ReportFormatStarknet
-)
-
 // MakeChannelHash is used for mapping ChannelDefinitionWithIDs
 func MakeChannelHash(cd ChannelDefinitionWithID) ChannelHash {
 	h := sha256.New()
@@ -835,7 +827,7 @@ func (p *LLOPlugin) Reports(seqNr uint64, rawOutcome ocr3types.Outcome) ([]ocr3t
 			Report: must(json.Marshal(retirementReport)),
 			Info: llotypes.ReportInfo{
 				LifeCycleStage: outcome.LifeCycleStage,
-				ReportFormat:   ReportFormatJSON,
+				ReportFormat:   llotypes.ReportFormatJSON,
 			},
 		})
 	}
