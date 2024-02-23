@@ -103,3 +103,29 @@ jobs:
           # sonarqube inputs
           sonar-token: ${{ secrets.SONAR_TOKEN }}
           sonar-host-url: ${{ secrets.SONAR_HOST_URL }}
+
+  cd-release:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    outputs:
+      changesets_published: ${{ steps.cd-release.outputs.published }}
+      changesets_publishedPackages: ${{ steps.cd-release.outputs.publishedPackages }}
+    steps:
+      - name: cd-release
+        id: cd-release
+        uses: smartcontractkit/.github/actions/cicd-changesets@c5b65fcfe12a5a14b60b03605748af0b0c6cfbea # cicd-changesets@0.2.0
+        with:
+          # general inputs
+          git-user: app-token-issuer-foundations[bot]
+          git-email: app-token-issuer-foundations[bot]@users.noreply.github.com
+          pnpm-use-cache: false
+          # aws inputs
+          aws-region: ${{ secrets.AWS_REGION }}
+          aws-role-arn: ${{ secrets.AWS_OIDC_CHAINLINK_DATA_STREAMS_CI_CHANGESET_TOKEN_ISSUER_ROLE_ARN }}
+          aws-lambda-url: ${{ secrets.AWS_FOUNDATIONS_GATI_URL }}
+          # grafana inputs
+          metrics-job-name: cd-release
+          gc-basic-auth: ${{ secrets.GRAFANA_CLOUD_BASIC_AUTH }}
+          gc-host: ${{ secrets.GRAFANA_CLOUD_HOST }}
