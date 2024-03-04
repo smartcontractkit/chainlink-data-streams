@@ -207,12 +207,6 @@ github.com/shopspring/decimal v1.3.1 h1:2Usl1nmF/WZucqkFZhnfFYxxxu8LG21F6nPQBE5g
 github.com/shopspring/decimal v1.3.1/go.mod h1:DKyhrW/HYNuLGql+MJL6WCR6knT2jwCFRcu2hWCYk4o=
 github.com/smartcontractkit/chain-selectors v1.0.5 h1:NOefQsogPZS4aBbWPFrgAyoke0gppN2ojfa8SQkhu8c=
 github.com/smartcontractkit/chain-selectors v1.0.5/go.mod h1:WBhLlODF5b95vvx2tdKK55vGACg1+qZpuBhOGu1UXVo=
-github.com/smartcontractkit/chainlink-common v0.1.7-0.20240216181624-ccf0da042f11 h1:zazCJSjz60/V5B8+8LxLX7BrtN1AXGUv+B/E1Xrq2OA=
-github.com/smartcontractkit/chainlink-common v0.1.7-0.20240216181624-ccf0da042f11/go.mod h1:6aXWSEQawX2oZXcPPOdxnEGufAhj7PqPKolXf6ijRGA=
-github.com/smartcontractkit/chainlink-common v0.1.7-0.20240220164325-44ed6b4009cb h1:E0K6uq+9SjpktUeqTg8NVarUAfwRBL/reIuZb4msrtA=
-github.com/smartcontractkit/chainlink-common v0.1.7-0.20240220164325-44ed6b4009cb/go.mod h1:6aXWSEQawX2oZXcPPOdxnEGufAhj7PqPKolXf6ijRGA=
-github.com/smartcontractkit/chainlink-common v0.1.7-0.20240220165243-0b144b02fd8d h1:OOezTy1Z4sITGuOx3oegof47O0AbloW/YLPjzVLXn1E=
-github.com/smartcontractkit/chainlink-common v0.1.7-0.20240220165243-0b144b02fd8d/go.mod h1:6aXWSEQawX2oZXcPPOdxnEGufAhj7PqPKolXf6ijRGA=
 github.com/smartcontractkit/chainlink-common v0.1.7-0.20240220201513-6cb818f8800d h1:XByRw7oF2mG+yBuoMpBqm5Ogu1vlunPZfhL74Ny3NFU=
 github.com/smartcontractkit/chainlink-common v0.1.7-0.20240220201513-6cb818f8800d/go.mod h1:6aXWSEQawX2oZXcPPOdxnEGufAhj7PqPKolXf6ijRGA=
 github.com/smartcontractkit/go-plugin v0.0.0-20240208201424-b3b91517de16 h1:TFe+FvzxClblt6qRfqEhUfa4kFQx5UobuoFGO2W4mMo=
@@ -230,8 +224,9 @@ github.com/stretchr/testify v1.7.0/go.mod h1:6Fq8oRcR53rry900zMqJjRRixrwX3KX962/
 github.com/stretchr/testify v1.7.1/go.mod h1:6Fq8oRcR53rry900zMqJjRRixrwX3KX962/h/Wwjteg=
 github.com/stretchr/testify v1.7.2/go.mod h1:R6va5+xMeoiuVRoj+gSkQ7d3FALtqAAGI1FQKckRals=
 github.com/stretchr/testify v1.8.0/go.mod h1:yNjHg4UonilssWZ8iaSj1OCr/vHnekPRkoO+kdMU+MU=
-github.com/stretchr/testify v1.8.4 h1:CcVxjf3Q8PM0mHUKJCdn+eZZtm5yQwehR5yeSVQQcUk=
 github.com/stretchr/testify v1.8.4/go.mod h1:sz/lmYIOXD/1dqDmKjjqLyZ2RngseejIcXlSw2iwfAo=
+github.com/stretchr/testify v1.9.0 h1:HtqpIVDClZ4nwg75+f6Lvsy/wHu+3BoSGCbBAcpTsTg=
+github.com/stretchr/testify v1.9.0/go.mod h1:r2ic/lqez/lEtzL7wO/rwa5dbSLXVDPFyf8C91i36aY=
 github.com/x448/float16 v0.8.4 h1:qLwI1I70+NjRFUR3zs1JPUCgaCXSh3SW62uAKT1mSBM=
 github.com/x448/float16 v0.8.4/go.mod h1:14CWIYCyZA/cWjXOioeEpHeN/83MdbZDRQHoFcYsOfg=
 github.com/yuin/goldmark v1.1.25/go.mod h1:3hX8gzYuyVAZsxl0MRgGTJEmQBFcNTphYh9decYSb74=
