@@ -1,6 +1,7 @@
 package mercury
 
 import (
+	"context"
 	"math/big"
 
 	pkgerrors "github.com/pkg/errors"
@@ -27,7 +28,7 @@ var _ mercury.OnchainConfigCodec = StandardOnchainConfigCodec{}
 // returned by EncodeValueInt192.
 type StandardOnchainConfigCodec struct{}
 
-func (StandardOnchainConfigCodec) Decode(b []byte) (mercury.OnchainConfig, error) {
+func (StandardOnchainConfigCodec) Decode(ctx context.Context, b []byte) (mercury.OnchainConfig, error) {
 	if len(b) != onchainConfigEncodedLength {
 		return mercury.OnchainConfig{}, pkgerrors.Errorf("unexpected length of OnchainConfig, expected %v, got %v", onchainConfigEncodedLength, len(b))
 	}
@@ -56,7 +57,7 @@ func (StandardOnchainConfigCodec) Decode(b []byte) (mercury.OnchainConfig, error
 	return mercury.OnchainConfig{Min: min, Max: max}, nil
 }
 
-func (StandardOnchainConfigCodec) Encode(c mercury.OnchainConfig) ([]byte, error) {
+func (StandardOnchainConfigCodec) Encode(ctx context.Context, c mercury.OnchainConfig) ([]byte, error) {
 	verBytes, err := bigbigendian.SerializeSigned(32, onchainConfigVersionBig)
 	if err != nil {
 		return nil, err
