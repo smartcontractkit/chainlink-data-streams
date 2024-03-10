@@ -15,6 +15,7 @@ import (
 
 	"github.com/smartcontractkit/chainlink-common/pkg/logger"
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
+	"github.com/smartcontractkit/chainlink-common/pkg/utils/tests"
 )
 
 func Test_Outcome(t *testing.T) {
@@ -26,15 +27,17 @@ func Test_Outcome(t *testing.T) {
 	}
 
 	t.Run("if number of observers < 2f+1, errors", func(t *testing.T) {
-		_, err := p.Outcome(ocr3types.OutcomeContext{SeqNr: 1}, types.Query{}, []types.AttributedObservation{})
+		ctx := tests.Context(t)
+		_, err := p.Outcome(ctx, ocr3types.OutcomeContext{SeqNr: 1}, types.Query{}, []types.AttributedObservation{})
 		assert.EqualError(t, err, "invariant violation: expected at least 2f+1 attributed observations, got 0 (f: 0)")
 		p.F = 1
-		_, err = p.Outcome(ocr3types.OutcomeContext{SeqNr: 1}, types.Query{}, []types.AttributedObservation{{}, {}})
+		_, err = p.Outcome(ctx, ocr3types.OutcomeContext{SeqNr: 1}, types.Query{}, []types.AttributedObservation{{}, {}})
 		assert.EqualError(t, err, "invariant violation: expected at least 2f+1 attributed observations, got 2 (f: 1)")
 	})
 
 	t.Run("if seqnr == 1, and has enough observers, emits initial outcome with 'production' LifeCycleStage", func(t *testing.T) {
-		outcome, err := p.Outcome(ocr3types.OutcomeContext{SeqNr: 1}, types.Query{}, []types.AttributedObservation{
+		ctx := tests.Context(t)
+		outcome, err := p.Outcome(ctx, ocr3types.OutcomeContext{SeqNr: 1}, types.Query{}, []types.AttributedObservation{
 			{
 				Observation: []byte{},
 				Observer:    commontypes.OracleID(0),
@@ -64,6 +67,7 @@ func Test_Outcome(t *testing.T) {
 
 	t.Run("channel definitions", func(t *testing.T) {
 		t.Run("adds a new channel definition if there are enough votes", func(t *testing.T) {
+			ctx := tests.Context(t)
 			newCd := llotypes.ChannelDefinition{
 				ReportFormat: llotypes.ReportFormat(2),
 				Streams:      []llotypes.Stream{{StreamID: 1, Aggregator: llotypes.AggregatorMedian}, {StreamID: 2, Aggregator: llotypes.AggregatorMedian}, {StreamID: 3, Aggregator: llotypes.AggregatorMedian}},
@@ -82,7 +86,7 @@ func Test_Outcome(t *testing.T) {
 						Observer:    commontypes.OracleID(i),
 					})
 			}
-			outcome, err := p.Outcome(ocr3types.OutcomeContext{SeqNr: 2}, types.Query{}, aos)
+			outcome, err := p.Outcome(ctx, ocr3types.OutcomeContext{SeqNr: 2}, types.Query{}, aos)
 			require.NoError(t, err)
 
 			decoded, err := p.OutcomeCodec.Decode(outcome)
@@ -92,6 +96,7 @@ func Test_Outcome(t *testing.T) {
 		})
 
 		t.Run("replaces an existing channel definition if there are enough votes", func(t *testing.T) {
+			ctx := tests.Context(t)
 			newCd := llotypes.ChannelDefinition{
 				ReportFormat: llotypes.ReportFormat(2),
 				Streams:      []llotypes.Stream{{StreamID: 1, Aggregator: llotypes.AggregatorQuote}, {StreamID: 2, Aggregator: llotypes.AggregatorMedian}, {StreamID: 3, Aggregator: llotypes.AggregatorMedian}},
@@ -121,7 +126,7 @@ func Test_Outcome(t *testing.T) {
 			})
 			require.NoError(t, err)
 
-			outcome, err := p.Outcome(ocr3types.OutcomeContext{PreviousOutcome: previousOutcome, SeqNr: 2}, types.Query{}, aos)
+			outcome, err := p.Outcome(ctx, ocr3types.OutcomeContext{PreviousOutcome: previousOutcome, SeqNr: 2}, types.Query{}, aos)
 			require.NoError(t, err)
 
 			decoded, err := p.OutcomeCodec.Decode(outcome)
@@ -131,6 +136,7 @@ func Test_Outcome(t *testing.T) {
 		})
 
 		t.Run("does not add channels beyond MaxOutcomeChannelDefinitionsLength", func(t *testing.T) {
+			ctx := tests.Context(t)
 			newCd := llotypes.ChannelDefinition{
 				ReportFormat: llotypes.ReportFormat(2),
 				Streams:      []llotypes.Stream{{StreamID: 1, Aggregator: llotypes.AggregatorMedian}, {StreamID: 2, Aggregator: llotypes.AggregatorMedian}, {StreamID: 3, Aggregator: llotypes.AggregatorMedian}},
@@ -149,7 +155,7 @@ func Test_Outcome(t *testing.T) {
 						Observer:    commontypes.OracleID(i),
 					})
 			}
-			outcome, err := p.Outcome(ocr3types.OutcomeContext{SeqNr: 2}, types.Query{}, aos)
+			outcome, err := p.Outcome(ctx, ocr3types.OutcomeContext{SeqNr: 2}, types.Query{}, aos)
 			require.NoError(t, err)
 
 			decoded, err := p.OutcomeCodec.Decode(outcome)
@@ -180,6 +186,7 @@ func Test_Outcome(t *testing.T) {
 		cdc := &mockChannelDefinitionCache{definitions: smallDefinitions}
 
 		t.Run("aggregates values when all stream values are present from all observers", func(t *testing.T) {
+			ctx := tests.Context(t)
 			previousOutcome := Outcome{
 				LifeCycleStage:                   llotypes.LifeCycleStage("test"),
 				ObservationsTimestampNanoseconds: testStartTS.UnixNano(),
@@ -207,7 +214,7 @@ func Test_Outcome(t *testing.T) {
 						Observer:    commontypes.OracleID(i),
 					})
 			}
-			outcome, err := p.Outcome(outctx, types.Query{}, aos)
+			outcome, err := p.Outcome(ctx, outctx, types.Query{}, aos)
 			require.NoError(t, err)
 
 			decoded, err := p.OutcomeCodec.Decode(outcome)

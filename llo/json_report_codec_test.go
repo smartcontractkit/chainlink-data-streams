@@ -9,6 +9,7 @@ import (
 
 	"github.com/smartcontractkit/chainlink-common/pkg/types/llo"
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
+	"github.com/smartcontractkit/chainlink-common/pkg/utils/tests"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -16,6 +17,7 @@ import (
 
 func Test_JSONCodec(t *testing.T) {
 	t.Run("Encode=>Decode", func(t *testing.T) {
+		ctx := tests.Context(t)
 		r := Report{
 			ConfigDigest:                types.ConfigDigest([32]byte{1, 2, 3}),
 			SeqNr:                       43,
@@ -28,7 +30,7 @@ func Test_JSONCodec(t *testing.T) {
 
 		cdc := JSONReportCodec{}
 
-		encoded, err := cdc.Encode(r, llo.ChannelDefinition{})
+		encoded, err := cdc.Encode(ctx, r, llo.ChannelDefinition{})
 		require.NoError(t, err)
 
 		fmt.Println("encoded", string(encoded))

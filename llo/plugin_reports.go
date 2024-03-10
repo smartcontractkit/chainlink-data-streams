@@ -1,6 +1,7 @@
 package llo
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 
@@ -10,7 +11,7 @@ import (
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
 )
 
-func (p *Plugin) reports(seqNr uint64, rawOutcome ocr3types.Outcome) ([]ocr3types.ReportWithInfo[llotypes.ReportInfo], error) {
+func (p *Plugin) reports(ctx context.Context, seqNr uint64, rawOutcome ocr3types.Outcome) ([]ocr3types.ReportPlus[llotypes.ReportInfo], error) {
 	if seqNr <= 1 {
 		// no reports for initial round
 		return nil, nil
@@ -26,7 +27,7 @@ func (p *Plugin) reports(seqNr uint64, rawOutcome ocr3types.Outcome) ([]ocr3type
 		return nil, fmt.Errorf("error getting observations timestamp: %w", err)
 	}
 
-	rwis := []ocr3types.ReportWithInfo[llotypes.ReportInfo]{}
+	rwis := []ocr3types.ReportPlus[llotypes.ReportInfo]{}
 
 	if outcome.LifeCycleStage == LifeCycleStageRetired {
 		// if we're retired, emit special retirement report to transfer
@@ -36,12 +37,14 @@ func (p *Plugin) reports(seqNr uint64, rawOutcome ocr3types.Outcome) ([]ocr3type
 			outcome.ValidAfterSeconds,
 		}
 
-		rwis = append(rwis, ocr3types.ReportWithInfo[llotypes.ReportInfo]{
-			// TODO: Needs retirement report codec
-			Report: must(json.Marshal(retirementReport)),
-			Info: llotypes.ReportInfo{
-				LifeCycleStage: outcome.LifeCycleStage,
-				ReportFormat:   llotypes.ReportFormatJSON,
+		rwis = append(rwis, ocr3types.ReportPlus[llotypes.ReportInfo]{
+			ReportWithInfo: ocr3types.ReportWithInfo[llotypes.ReportInfo]{
+				// TODO: Needs retirement report codec
+				Report: must(json.Marshal(retirementReport)),
+				Info: llotypes.ReportInfo{
+					LifeCycleStage: outcome.LifeCycleStage,
+					ReportFormat:   llotypes.ReportFormatJSON,
+				},
 			},
 		})
 	}
@@ -68,16 +71,21 @@ func (p *Plugin) reports(seqNr uint64, rawOutcome ocr3types.Outcome) ([]ocr3type
 			outcome.LifeCycleStage != LifeCycleStageProduction,
 		}
 
-		encoded, err := p.encodeReport(report, cd)
+		encoded, err := p.encodeReport(ctx, report, cd)
 		if err != nil {
+			if ctx.Err() != nil {
+				return nil, context.Cause(ctx)
+			}
 			p.Logger.Warnw("Error encoding report", "reportFormat", cd.ReportFormat, "err", err, "channelID", cid, "stage", "Report", "seqNr", seqNr)
 			continue
 		}
-		rwis = append(rwis, ocr3types.ReportWithInfo[llotypes.ReportInfo]{
-			Report: encoded,
-			Info: llotypes.ReportInfo{
-				LifeCycleStage: outcome.LifeCycleStage,
-				ReportFormat:   cd.ReportFormat,
+		rwis = append(rwis, ocr3types.ReportPlus[llotypes.ReportInfo]{
+			ReportWithInfo: ocr3types.ReportWithInfo[llotypes.ReportInfo]{
+				Report: encoded,
+				Info: llotypes.ReportInfo{
+					LifeCycleStage: outcome.LifeCycleStage,
+					ReportFormat:   cd.ReportFormat,
+				},
 			},
 		})
 	}
@@ -89,12 +97,12 @@ func (p *Plugin) reports(seqNr uint64, rawOutcome ocr3types.Outcome) ([]ocr3type
 	return rwis, nil
 }
 
-func (p *Plugin) encodeReport(r Report, cd llotypes.ChannelDefinition) (types.Report, error) {
+func (p *Plugin) encodeReport(ctx context.Context, r Report, cd llotypes.ChannelDefinition) (types.Report, error) {
 	codec, exists := p.Codecs[cd.ReportFormat]
 	if !exists {
 		return nil, fmt.Errorf("codec missing for ReportFormat=%q", cd.ReportFormat)
 	}
-	return codec.Encode(r, cd)
+	return codec.Encode(ctx, r, cd)
 }
 
 type Report struct {

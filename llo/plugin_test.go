@@ -8,6 +8,7 @@ import (
 	"github.com/smartcontractkit/libocr/offchainreporting2plus/ocr3types"
 
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
+	"github.com/smartcontractkit/chainlink-common/pkg/utils/tests"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -47,11 +48,13 @@ func Test_ValidateObservation(t *testing.T) {
 	}
 
 	t.Run("SeqNr < 1 is not valid", func(t *testing.T) {
-		err := p.ValidateObservation(ocr3types.OutcomeContext{}, types.Query{}, types.AttributedObservation{})
+		ctx := tests.Context(t)
+		err := p.ValidateObservation(ctx, ocr3types.OutcomeContext{}, types.Query{}, types.AttributedObservation{})
 		assert.EqualError(t, err, "Invalid SeqNr: 0")
 	})
 	t.Run("SeqNr == 1 enforces empty observation", func(t *testing.T) {
-		err := p.ValidateObservation(ocr3types.OutcomeContext{SeqNr: 1}, types.Query{}, types.AttributedObservation{Observation: []byte{1}})
+		ctx := tests.Context(t)
+		err := p.ValidateObservation(ctx, ocr3types.OutcomeContext{SeqNr: 1}, types.Query{}, types.AttributedObservation{Observation: []byte{1}})
 		assert.EqualError(t, err, "Expected empty observation for first round, got: 0x01")
 	})
 }
