@@ -54,7 +54,7 @@ jobs:
           metrics-job-name: ci-lint
           gc-basic-auth: ${{ secrets.GRAFANA_INTERNAL_BASIC_AUTH }}
           gc-host: ${{ secrets.GRAFANA_INTERNAL_HOST }}
-          gc-org-id: ${{ secrets.GRAFANA_INTERNAL_ORG_ID }}
+          gc-org-id: ${{ secrets.GRAFANA_INTERNAL_TENANT_ID }}
           # env inputs
           use-env-files: "true"
           env-files: ./tools/env/ci.env
@@ -75,7 +75,7 @@ jobs:
           metrics-job-name: ci-lint-misc
           gc-basic-auth: ${{ secrets.GRAFANA_INTERNAL_BASIC_AUTH }}
           gc-host: ${{ secrets.GRAFANA_INTERNAL_HOST }}
-          gc-org-id: ${{ secrets.GRAFANA_INTERNAL_ORG_ID }}
+          gc-org-id: ${{ secrets.GRAFANA_INTERNAL_TENANT_ID }}
 
 
   ci-test:
@@ -92,7 +92,7 @@ jobs:
           metrics-job-name: ci-test
           gc-basic-auth: ${{ secrets.GRAFANA_INTERNAL_BASIC_AUTH }}
           gc-host: ${{ secrets.GRAFANA_INTERNAL_HOST }}
-          gc-org-id: ${{ secrets.GRAFANA_INTERNAL_ORG_ID }}
+          gc-org-id: ${{ secrets.GRAFANA_INTERNAL_TENANT_ID }}
           # docker inputs
           use-docker-compose: "true"
           docker-compose-workdir: ./tools/docker/setup-postgres
@@ -117,7 +117,7 @@ jobs:
           metrics-job-name: ci-sonarqube
           gc-basic-auth: ${{ secrets.GRAFANA_INTERNAL_BASIC_AUTH }}
           gc-host: ${{ secrets.GRAFANA_INTERNAL_HOST }}
-          gc-org-id: ${{ secrets.GRAFANA_INTERNAL_ORG_ID }}
+          gc-org-id: ${{ secrets.GRAFANA_INTERNAL_TENANT_ID }}
           # sonarqube inputs
           sonar-token: ${{ secrets.SONAR_TOKEN }}
           sonar-host-url: ${{ secrets.SONAR_HOST_URL }}
