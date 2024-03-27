@@ -179,7 +179,7 @@ type PluginFactory struct {
 	Codecs                           map[llotypes.ReportFormat]ReportCodec
 }
 
-func (f *PluginFactory) NewReportingPlugin(ctx context.Context, cfg ocr3types.ReportingPluginConfig) (ocr3types.ReportingPlugin[llotypes.ReportInfo], ocr3types.ReportingPluginInfo, error) {
+func (f *PluginFactory) NewReportingPlugin(cfg ocr3types.ReportingPluginConfig) (ocr3types.ReportingPlugin[llotypes.ReportInfo], ocr3types.ReportingPluginInfo, error) {
 	offchainCfg, err := DecodeOffchainConfig(cfg.OffchainConfig)
 	if err != nil {
 		return nil, ocr3types.ReportingPluginInfo{}, fmt.Errorf("NewReportingPlugin failed to decode offchain config; got: 0x%x (len: %d); %w", cfg.OffchainConfig, len(cfg.OffchainConfig), err)
@@ -374,7 +374,7 @@ func (p *LLOPlugin) Observation(ctx context.Context, outctx ocr3types.OutcomeCon
 // *not* strictly) across the lifetime of a protocol instance and that
 // outctx.previousOutcome contains the consensus outcome with sequence
 // number (outctx.SeqNr-1).
-func (p *LLOPlugin) ValidateObservation(ctx context.Context, outctx ocr3types.OutcomeContext, query types.Query, ao types.AttributedObservation) error {
+func (p *LLOPlugin) ValidateObservation(outctx ocr3types.OutcomeContext, query types.Query, ao types.AttributedObservation) error {
 	if outctx.SeqNr <= 1 {
 		if len(ao.Observation) != 0 {
 			return fmt.Errorf("Observation is not empty")
@@ -515,7 +515,7 @@ func (out *Outcome) ReportableChannels() []llotypes.ChannelID {
 //
 // libocr guarantees that this will always be called with at least 2f+1
 // AttributedObservations
-func (p *LLOPlugin) Outcome(ctx context.Context, outctx ocr3types.OutcomeContext, query types.Query, aos []types.AttributedObservation) (ocr3types.Outcome, error) {
+func (p *LLOPlugin) Outcome(outctx ocr3types.OutcomeContext, query types.Query, aos []types.AttributedObservation) (ocr3types.Outcome, error) {
 	if len(aos) < 2*p.F+1 {
 		return nil, fmt.Errorf("invariant violation: expected at least 2f+1 attributed observations, got %d (f: %d)", len(aos), p.F)
 	}
@@ -797,7 +797,7 @@ func (p *LLOPlugin) encodeReport(r Report, format llotypes.ReportFormat) (types.
 // *not* strictly) across the lifetime of a protocol instance and that
 // outctx.previousOutcome contains the consensus outcome with sequence
 // number (outctx.SeqNr-1).
-func (p *LLOPlugin) Reports(ctx context.Context, seqNr uint64, rawOutcome ocr3types.Outcome) ([]ocr3types.ReportWithInfo[llotypes.ReportInfo], error) {
+func (p *LLOPlugin) Reports(seqNr uint64, rawOutcome ocr3types.Outcome) ([]ocr3types.ReportWithInfo[llotypes.ReportInfo], error) {
 	if seqNr <= 1 {
 		// no reports for initial round
 		return nil, nil
@@ -888,7 +888,7 @@ func (p *LLOPlugin) ShouldTransmitAcceptedReport(context.Context, uint64, ocr3ty
 // This is an advanced feature. The "default" approach (what OCR1 & OCR2
 // did) is to have an empty ValidateObservation function and return
 // QuorumTwoFPlusOne from this function.
-func (p *LLOPlugin) ObservationQuorum(ctx context.Context, outctx ocr3types.OutcomeContext, query types.Query) (ocr3types.Quorum, error) {
+func (p *LLOPlugin) ObservationQuorum(outctx ocr3types.OutcomeContext, query types.Query) (ocr3types.Quorum, error) {
 	return ocr3types.QuorumTwoFPlusOne, nil
 }
 

@@ -23,7 +23,6 @@ import (
 	"github.com/smartcontractkit/chainlink-common/pkg/logger"
 	mercurytypes "github.com/smartcontractkit/chainlink-common/pkg/types/mercury"
 	v1 "github.com/smartcontractkit/chainlink-common/pkg/types/mercury/v1"
-	"github.com/smartcontractkit/chainlink-common/pkg/utils/tests"
 
 	"github.com/smartcontractkit/chainlink-data-streams/mercury"
 )
@@ -43,7 +42,7 @@ func (trc *testReportCodec) reset() {
 	trc.builtReportFields = nil
 }
 
-func (trc *testReportCodec) BuildReport(ctx context.Context, rf v1.ReportFields) (types.Report, error) {
+func (trc *testReportCodec) BuildReport(rf v1.ReportFields) (types.Report, error) {
 	if trc.buildReportShouldFail {
 		return nil, errors.New("buildReportShouldFail=true")
 	}
@@ -51,7 +50,7 @@ func (trc *testReportCodec) BuildReport(ctx context.Context, rf v1.ReportFields)
 	return trc.builtReport, nil
 }
 
-func (trc *testReportCodec) MaxReportLength(ctx context.Context, n int) (int, error) {
+func (trc *testReportCodec) MaxReportLength(n int) (int, error) {
 	return 8*32 + // feed ID
 			32 + // timestamp
 			192 + // benchmarkPrice
@@ -63,12 +62,12 @@ func (trc *testReportCodec) MaxReportLength(ctx context.Context, n int) (int, er
 		nil
 }
 
-func (trc *testReportCodec) CurrentBlockNumFromReport(context.Context, types.Report) (int64, error) {
+func (trc *testReportCodec) CurrentBlockNumFromReport(types.Report) (int64, error) {
 	return trc.currentBlock, trc.currentBlockErr
 }
 
 func newReportingPlugin(t *testing.T, codec *testReportCodec) *reportingPlugin {
-	maxReportLength, err := codec.MaxReportLength(tests.Context(t), 4)
+	maxReportLength, err := codec.MaxReportLength(4)
 	require.NoError(t, err)
 	return &reportingPlugin{
 		f:               1,
@@ -713,7 +712,7 @@ func Test_Plugin_Report(t *testing.T) {
 		rp := newReportingPlugin(t, codec)
 
 		t.Run("errors if not enough attributed observations", func(t *testing.T) {
-			_, _, err := rp.Report(tests.Context(t), repts, nil, []types.AttributedObservation{})
+			_, _, err := rp.Report(repts, nil, []types.AttributedObservation{})
 			assert.EqualError(t, err, "got zero valid attributed observations")
 		})
 		t.Run("succeeds, ignoring unparseable attributed observations", func(t *testing.T) {
@@ -723,7 +722,7 @@ func Test_Plugin_Report(t *testing.T) {
 				newAttributedObservation(t, newValidMercuryObservationProto()),
 				newUnparseableAttributedObservation(),
 			}
-			should, report, err := rp.Report(tests.Context(t), repts, nil, aos)
+			should, report, err := rp.Report(repts, nil, aos)
 
 			assert.NoError(t, err)
 			assert.True(t, should)
@@ -738,7 +737,7 @@ func Test_Plugin_Report(t *testing.T) {
 				newAttributedObservation(t, newValidMercuryObservationProto()),
 				newAttributedObservation(t, newValidMercuryObservationProto()),
 			}
-			should, report, err := rp.Report(tests.Context(t), repts, nil, aos)
+			should, report, err := rp.Report(repts, nil, aos)
 
 			assert.True(t, should)
 			assert.Equal(t, codec.builtReport, report)
@@ -763,7 +762,7 @@ func Test_Plugin_Report(t *testing.T) {
 				newAttributedObservation(t, obs[2]),
 				newAttributedObservation(t, obs[3]),
 			}
-			_, _, err := rp.Report(tests.Context(t), repts, nil, aos)
+			_, _, err := rp.Report(repts, nil, aos)
 
 			assert.EqualError(t, err, "no valid maxFinalizedBlockNumber with at least f+1 votes (got counts: map[0:1 1:1 2:1 3:1], f=1)")
 		})
@@ -784,7 +783,7 @@ func Test_Plugin_Report(t *testing.T) {
 				newAttributedObservation(t, obs[2]),
 				newAttributedObservation(t, obs[3]),
 			}
-			_, _, err := rp.Report(tests.Context(t), repts, nil, aos)
+			_, _, err := rp.Report(repts, nil, aos)
 
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), "GetConsensusCurrentBlock failed: cannot come to consensus on latest block number")
@@ -807,7 +806,7 @@ func Test_Plugin_Report(t *testing.T) {
 				newAttributedObservation(t, obs[2]),
 				newAttributedObservation(t, obs[3]),
 			}
-			_, _, err := rp.Report(tests.Context(t), repts, nil, aos)
+			_, _, err := rp.Report(repts, nil, aos)
 
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), "GetConsensusCurrentBlock failed: cannot come to consensus on latest block number")
@@ -828,7 +827,7 @@ func Test_Plugin_Report(t *testing.T) {
 				newAttributedObservation(t, obs[2]),
 				newAttributedObservation(t, obs[3]),
 			}
-			should, report, err := rp.Report(tests.Context(t), repts, nil, aos)
+			should, report, err := rp.Report(repts, nil, aos)
 
 			assert.False(t, should)
 			assert.Nil(t, report)
@@ -845,7 +844,7 @@ func Test_Plugin_Report(t *testing.T) {
 					newAttributedObservation(t, newValidMercuryObservationProto()),
 					newUnparseableAttributedObservation(),
 				}
-				_, _, err := rp.Report(tests.Context(t), repts, nil, aos)
+				_, _, err := rp.Report(repts, nil, aos)
 
 				assert.EqualError(t, err, "buildReportShouldFail=true")
 			})
@@ -857,7 +856,7 @@ func Test_Plugin_Report(t *testing.T) {
 					newAttributedObservation(t, newValidMercuryObservationProto()),
 					newUnparseableAttributedObservation(),
 				}
-				_, _, err := rp.Report(tests.Context(t), repts, nil, aos)
+				_, _, err := rp.Report(repts, nil, aos)
 
 				assert.EqualError(t, err, "report with len 9999 violates MaxReportLength limit set by ReportCodec (1248)")
 			})
@@ -869,7 +868,7 @@ func Test_Plugin_Report(t *testing.T) {
 					newAttributedObservation(t, newValidMercuryObservationProto()),
 					newUnparseableAttributedObservation(),
 				}
-				_, _, err := rp.Report(tests.Context(t), repts, nil, aos)
+				_, _, err := rp.Report(repts, nil, aos)
 
 				assert.EqualError(t, err, "report may not have zero length (invariant violation)")
 			})
@@ -893,7 +892,7 @@ func Test_Plugin_Report(t *testing.T) {
 				newAttributedObservation(t, newValidMercuryObservationProto()),
 				newAttributedObservation(t, newValidMercuryObservationProto()),
 			}
-			should, report, err := rp.Report(tests.Context(t), repts, previousReport, aos)
+			should, report, err := rp.Report(repts, previousReport, aos)
 
 			assert.True(t, should)
 			assert.Equal(t, codec.builtReport, report)
@@ -912,7 +911,7 @@ func Test_Plugin_Report(t *testing.T) {
 				newAttributedObservation(t, newValidMercuryObservationProto()),
 				newAttributedObservation(t, newValidMercuryObservationProto()),
 			}
-			should, _, err := rp.Report(tests.Context(t), repts, previousReport, aos)
+			should, _, err := rp.Report(repts, previousReport, aos)
 
 			assert.False(t, should)
 			assert.EqualError(t, err, "test error current block fail")
@@ -927,7 +926,7 @@ func Test_Plugin_Report(t *testing.T) {
 				newAttributedObservation(t, newValidMercuryObservationProto()),
 				newAttributedObservation(t, newValidMercuryObservationProto()),
 			}
-			should, _, err := rp.Report(tests.Context(t), repts, previousReport, aos)
+			should, _, err := rp.Report(repts, previousReport, aos)
 
 			assert.False(t, should)
 			assert.NoError(t, err)

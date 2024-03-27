@@ -78,18 +78,18 @@ func NewFactory(ds DataSource, lggr logger.Logger, occ mercurytypes.OnchainConfi
 	return Factory{ds, lggr, occ, rc}
 }
 
-func (fac Factory) NewMercuryPlugin(ctx context.Context, configuration ocr3types.MercuryPluginConfig) (ocr3types.MercuryPlugin, ocr3types.MercuryPluginInfo, error) {
+func (fac Factory) NewMercuryPlugin(configuration ocr3types.MercuryPluginConfig) (ocr3types.MercuryPlugin, ocr3types.MercuryPluginInfo, error) {
 	offchainConfig, err := mercury.DecodeOffchainConfig(configuration.OffchainConfig)
 	if err != nil {
 		return nil, ocr3types.MercuryPluginInfo{}, err
 	}
 
-	onchainConfig, err := fac.onchainConfigCodec.Decode(ctx, configuration.OnchainConfig)
+	onchainConfig, err := fac.onchainConfigCodec.Decode(configuration.OnchainConfig)
 	if err != nil {
 		return nil, ocr3types.MercuryPluginInfo{}, err
 	}
 
-	maxReportLength, err := fac.reportCodec.MaxReportLength(ctx, configuration.N)
+	maxReportLength, err := fac.reportCodec.MaxReportLength(configuration.N)
 	if err != nil {
 		return nil, ocr3types.MercuryPluginInfo{}, err
 	}
@@ -328,7 +328,7 @@ func parseAttributedObservations(lggr logger.Logger, aos []types.AttributedObser
 	return paos
 }
 
-func (rp *reportingPlugin) Report(ctx context.Context, repts types.ReportTimestamp, previousReport types.Report, aos []types.AttributedObservation) (shouldReport bool, report types.Report, err error) {
+func (rp *reportingPlugin) Report(repts types.ReportTimestamp, previousReport types.Report, aos []types.AttributedObservation) (shouldReport bool, report types.Report, err error) {
 	paos := parseAttributedObservations(rp.logger, aos)
 
 	if len(paos) == 0 {
@@ -340,7 +340,7 @@ func (rp *reportingPlugin) Report(ctx context.Context, repts types.ReportTimesta
 		return false, nil, pkgerrors.Errorf("only received %v valid attributed observations, but need at least f+1 (%v)", len(paos), rp.f+1)
 	}
 
-	rf, err := rp.buildReportFields(ctx, previousReport, paos)
+	rf, err := rp.buildReportFields(previousReport, paos)
 	if err != nil {
 		rp.logger.Errorw("failed to build report fields", "paos", paos, "f", rp.f, "reportFields", rf, "repts", repts, "err", err)
 		return false, nil, err
@@ -359,7 +359,7 @@ func (rp *reportingPlugin) Report(ctx context.Context, repts types.ReportTimesta
 		"timestamp", repts,
 	)
 
-	report, err = rp.reportCodec.BuildReport(ctx, rf)
+	report, err = rp.reportCodec.BuildReport(rf)
 	if err != nil {
 		rp.logger.Debugw("failed to BuildReport", "paos", paos, "f", rp.f, "reportFields", rf, "repts", repts)
 		return false, nil, err
@@ -373,11 +373,11 @@ func (rp *reportingPlugin) Report(ctx context.Context, repts types.ReportTimesta
 	return true, report, nil
 }
 
-func (rp *reportingPlugin) buildReportFields(ctx context.Context, previousReport types.Report, paos []PAO) (rf v1.ReportFields, merr error) {
+func (rp *reportingPlugin) buildReportFields(previousReport types.Report, paos []PAO) (rf v1.ReportFields, merr error) {
 	var err error
 	if previousReport != nil {
 		var maxFinalizedBlockNumber int64
-		maxFinalizedBlockNumber, err = rp.reportCodec.CurrentBlockNumFromReport(ctx, previousReport)
+		maxFinalizedBlockNumber, err = rp.reportCodec.CurrentBlockNumFromReport(previousReport)
 		if err != nil {
 			merr = errors.Join(merr, err)
 		} else {
