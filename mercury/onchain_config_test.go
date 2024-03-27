@@ -6,11 +6,10 @@ import (
 	"testing"
 
 	"github.com/smartcontractkit/chainlink-common/pkg/types/mercury"
-	"github.com/smartcontractkit/chainlink-common/pkg/utils/tests"
 )
 
 func FuzzDecodeOnchainConfig(f *testing.F) {
-	valid, err := StandardOnchainConfigCodec{}.Encode(tests.Context(f), mercury.OnchainConfig{Min: big.NewInt(1), Max: big.NewInt(1000)})
+	valid, err := StandardOnchainConfigCodec{}.Encode(mercury.OnchainConfig{Min: big.NewInt(1), Max: big.NewInt(1000)})
 	if err != nil {
 		f.Fatalf("failed to construct valid OnchainConfig: %s", err)
 	}
@@ -18,13 +17,12 @@ func FuzzDecodeOnchainConfig(f *testing.F) {
 	f.Add([]byte{})
 	f.Add([]byte(valid))
 	f.Fuzz(func(t *testing.T, encoded []byte) {
-		ctx := tests.Context(t)
-		decoded, err := StandardOnchainConfigCodec{}.Decode(ctx, encoded)
+		decoded, err := StandardOnchainConfigCodec{}.Decode(encoded)
 		if err != nil {
 			return
 		}
 
-		encoded2, err := StandardOnchainConfigCodec{}.Encode(ctx, decoded)
+		encoded2, err := StandardOnchainConfigCodec{}.Encode(decoded)
 		if err != nil {
 			t.Fatalf("failed to re-encode decoded input: %s", err)
 		}
