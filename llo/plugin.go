@@ -756,26 +756,6 @@ func (p *LLOPlugin) Outcome(outctx ocr3types.OutcomeContext, query types.Query, 
 	return json.Marshal(outcome)
 }
 
-type Report struct {
-	ConfigDigest types.ConfigDigest
-	// Chain the report is destined for
-	ChainSelector uint64
-	// OCR sequence number of this report
-	SeqNr uint64
-	// Channel that is being reported on
-	ChannelID llotypes.ChannelID
-	// Report is valid for ValidAfterSeconds < block.time <= ValidUntilSeconds
-	ValidAfterSeconds uint32
-	ValidUntilSeconds uint32
-	// Here we only encode big.Ints, but in principle there's nothing stopping
-	// us from also supporting non-numeric data or smaller values etc...
-	Values []*big.Int
-	// The contract onchain will only validate non-specimen reports. A staging
-	// protocol instance will generate specimen reports so we can validate it
-	// works properly without any risk of misreports landing on chain.
-	Specimen bool
-}
-
 func (p *LLOPlugin) encodeReport(r Report, format llotypes.ReportFormat) (types.Report, error) {
 	codec, exists := p.Codecs[format]
 	if !exists {
