@@ -115,7 +115,7 @@ jobs:
     steps:
       - name: cd-release
         id: cd-release
-        uses: smartcontractkit/.github/actions/cicd-changesets@c5b65fcfe12a5a14b60b03605748af0b0c6cfbea # cicd-changesets@0.2.0
+        uses: smartcontractkit/.github/actions/cicd-changesets@6da79c7b9f14bec077df2c1ad40d53823b409d9c # cicd-changesets@0.3.3
         with:
           # general inputs
           git-user: app-token-issuer-foundations[bot]
