@@ -3,8 +3,6 @@ package v1
 import (
 	"fmt"
 
-	"github.com/pkg/errors"
-
 	v1 "github.com/smartcontractkit/chainlink-common/pkg/types/mercury/v1"
 
 	"github.com/smartcontractkit/chainlink-data-streams/mercury"
@@ -23,7 +21,7 @@ func ValidateCurrentBlock(rf v1.ReportFields) error {
 	}
 	// NOTE: hardcoded ethereum hash
 	if len(rf.CurrentBlockHash) != mercury.EvmHashLen {
-		return errors.Errorf("invalid length for hash; expected %d (got: %d)", mercury.EvmHashLen, len(rf.CurrentBlockHash))
+		return fmt.Errorf("invalid length for hash; expected %d (got: %d)", mercury.EvmHashLen, len(rf.CurrentBlockHash))
 	}
 
 	return nil
