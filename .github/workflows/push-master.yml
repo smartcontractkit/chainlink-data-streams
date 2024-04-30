@@ -40,7 +40,7 @@ jobs:
       actions: read
     steps:
       - name: ci-lint
-        uses: smartcontractkit/.github/actions/ci-lint-go@6b08487b176ef7cad086526d0b54ddff6691c044 # ci-lint-go@0.1.1
+        uses: smartcontractkit/.github/actions/ci-lint-go@7ac9af09dda8c553593d2153a975b43b6958fa9f # ci-lint-go@0.2.2
         with:
           # grafana inputs
           metrics-job-name: ci-lint
