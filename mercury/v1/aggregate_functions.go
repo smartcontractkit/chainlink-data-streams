@@ -76,7 +76,6 @@ func GetConsensusLatestBlock(paos []PAO, f int) (hash []byte, num int64, ts uint
 			})
 
 			return usableBlocks[0].HashBytes(), usableBlocks[0].Num, usableBlocks[0].Ts, nil
-
 		}
 		// this grouping does not have any identical blocks with at least f+1 in agreement, try next block number down
 	}

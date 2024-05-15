@@ -33,12 +33,12 @@ import (
 
 // Additional limits so we can more effectively bound the size of observations
 const (
-	MAX_OBSERVATION_REMOVE_CHANNEL_IDS_LENGTH      = 5
-	MAX_OBSERVATION_ADD_CHANNEL_DEFINITIONS_LENGTH = 5
-	MAX_OBSERVATION_STREAM_VALUES_LENGTH           = 1_000
+	MaxObservationRemoveChannelIDsLength      = 5
+	MaxObservationAddChannelDefinitionsLength = 5
+	MaxObservationStreamValuesLength          = 1_000
 )
 
-const MAX_OUTCOME_CHANNEL_DEFINITIONS_LENGTH = 500
+const MaxOutcomeChannelDefinitionsLength = 500
 
 // Values for a set of streams, e.g. "eth-usd", "link-usd", and "eur-chf"
 // TODO: generalize from *big.Int to anything
@@ -185,7 +185,7 @@ func (f *PluginFactory) NewReportingPlugin(cfg ocr3types.ReportingPluginConfig) 
 		return nil, ocr3types.ReportingPluginInfo{}, fmt.Errorf("NewReportingPlugin failed to decode offchain config; got: 0x%x (len: %d); %w", cfg.OffchainConfig, len(cfg.OffchainConfig), err)
 	}
 
-	return &LLOPlugin{
+	return &Plugin{
 			offchainCfg.PredecessorConfigDigest,
 			cfg.ConfigDigest,
 			f.PredecessorRetirementReportCache,
@@ -207,7 +207,7 @@ func (f *PluginFactory) NewReportingPlugin(cfg ocr3types.ReportingPluginConfig) 
 		}, nil
 }
 
-var _ ocr3types.ReportingPlugin[llotypes.ReportInfo] = &LLOPlugin{}
+var _ ocr3types.ReportingPlugin[llotypes.ReportInfo] = &Plugin{}
 
 type ReportCodec interface {
 	Encode(Report) ([]byte, error)
@@ -215,7 +215,7 @@ type ReportCodec interface {
 	// TODO: max length check? https://smartcontract-it.atlassian.net/browse/MERC-3524
 }
 
-type LLOPlugin struct {
+type Plugin struct {
 	PredecessorConfigDigest          *types.ConfigDigest
 	ConfigDigest                     types.ConfigDigest
 	PredecessorRetirementReportCache PredecessorRetirementReportCache
@@ -240,7 +240,7 @@ type LLOPlugin struct {
 // *not* strictly) across the lifetime of a protocol instance and that
 // outctx.previousOutcome contains the consensus outcome with sequence
 // number (outctx.SeqNr-1).
-func (p *LLOPlugin) Query(ctx context.Context, outctx ocr3types.OutcomeContext) (types.Query, error) {
+func (p *Plugin) Query(ctx context.Context, outctx ocr3types.OutcomeContext) (types.Query, error) {
 	return nil, nil
 }
 
@@ -256,7 +256,7 @@ type Observation struct {
 	RemoveChannelIDs      map[llotypes.ChannelID]struct{}
 	AddChannelDefinitions llotypes.ChannelDefinitions
 	// Observed (numeric) stream values. Subject to
-	// MAX_OBSERVATION_STREAM_VALUES_LENGTH limit
+	// MaxObservationStreamValuesLength limit
 	StreamValues StreamValues
 }
 
@@ -269,7 +269,7 @@ type Observation struct {
 // number (outctx.SeqNr-1).
 //
 // Should return a serialized Observation struct.
-func (p *LLOPlugin) Observation(ctx context.Context, outctx ocr3types.OutcomeContext, query types.Query) (types.Observation, error) {
+func (p *Plugin) Observation(ctx context.Context, outctx ocr3types.OutcomeContext, query types.Query) (types.Observation, error) {
 	// send empty observation in initial round
 	// NOTE: First sequence number is always 1
 	if outctx.SeqNr < 1 {
@@ -313,13 +313,13 @@ func (p *LLOPlugin) Observation(ctx context.Context, outctx ocr3types.OutcomeCon
 	{
 		expectedChannelDefs := p.ChannelDefinitionCache.Definitions()
 
-		removeChannelDefinitions := subtractChannelDefinitions(previousOutcome.ChannelDefinitions, expectedChannelDefs, MAX_OBSERVATION_REMOVE_CHANNEL_IDS_LENGTH)
+		removeChannelDefinitions := subtractChannelDefinitions(previousOutcome.ChannelDefinitions, expectedChannelDefs, MaxObservationRemoveChannelIDsLength)
 		for channelID := range removeChannelDefinitions {
 			removeChannelIDs[channelID] = struct{}{}
 		}
 
 		for channelID := range previousOutcome.ValidAfterSeconds {
-			if len(removeChannelIDs) >= MAX_OBSERVATION_REMOVE_CHANNEL_IDS_LENGTH {
+			if len(removeChannelIDs) >= MaxObservationRemoveChannelIDsLength {
 				break
 			}
 			if _, ok := expectedChannelDefs[channelID]; !ok {
@@ -327,7 +327,7 @@ func (p *LLOPlugin) Observation(ctx context.Context, outctx ocr3types.OutcomeCon
 			}
 		}
 
-		addChannelDefinitions = subtractChannelDefinitions(expectedChannelDefs, previousOutcome.ChannelDefinitions, MAX_OBSERVATION_ADD_CHANNEL_DEFINITIONS_LENGTH)
+		addChannelDefinitions = subtractChannelDefinitions(expectedChannelDefs, previousOutcome.ChannelDefinitions, MaxObservationAddChannelDefinitionsLength)
 	}
 
 	var streamValues StreamValues
@@ -374,7 +374,7 @@ func (p *LLOPlugin) Observation(ctx context.Context, outctx ocr3types.OutcomeCon
 // *not* strictly) across the lifetime of a protocol instance and that
 // outctx.previousOutcome contains the consensus outcome with sequence
 // number (outctx.SeqNr-1).
-func (p *LLOPlugin) ValidateObservation(outctx ocr3types.OutcomeContext, query types.Query, ao types.AttributedObservation) error {
+func (p *Plugin) ValidateObservation(outctx ocr3types.OutcomeContext, query types.Query, ao types.AttributedObservation) error {
 	if outctx.SeqNr <= 1 {
 		if len(ao.Observation) != 0 {
 			return fmt.Errorf("Observation is not empty")
@@ -394,16 +394,16 @@ func (p *LLOPlugin) ValidateObservation(outctx ocr3types.OutcomeContext, query t
 		return fmt.Errorf("AttestedPredecessorRetirement is not empty even though this instance has no predecessor")
 	}
 
-	if len(observation.AddChannelDefinitions) > MAX_OBSERVATION_ADD_CHANNEL_DEFINITIONS_LENGTH {
-		return fmt.Errorf("AddChannelDefinitions is too long: %v vs %v", len(observation.AddChannelDefinitions), MAX_OBSERVATION_ADD_CHANNEL_DEFINITIONS_LENGTH)
+	if len(observation.AddChannelDefinitions) > MaxObservationAddChannelDefinitionsLength {
+		return fmt.Errorf("AddChannelDefinitions is too long: %v vs %v", len(observation.AddChannelDefinitions), MaxObservationAddChannelDefinitionsLength)
 	}
 
-	if len(observation.RemoveChannelIDs) > MAX_OBSERVATION_REMOVE_CHANNEL_IDS_LENGTH {
-		return fmt.Errorf("RemoveChannelIDs is too long: %v vs %v", len(observation.RemoveChannelIDs), MAX_OBSERVATION_REMOVE_CHANNEL_IDS_LENGTH)
+	if len(observation.RemoveChannelIDs) > MaxObservationRemoveChannelIDsLength {
+		return fmt.Errorf("RemoveChannelIDs is too long: %v vs %v", len(observation.RemoveChannelIDs), MaxObservationRemoveChannelIDsLength)
 	}
 
-	if len(observation.StreamValues) > MAX_OBSERVATION_STREAM_VALUES_LENGTH {
-		return fmt.Errorf("StreamValues is too long: %v vs %v", len(observation.StreamValues), MAX_OBSERVATION_STREAM_VALUES_LENGTH)
+	if len(observation.StreamValues) > MaxObservationStreamValuesLength {
+		return fmt.Errorf("StreamValues is too long: %v vs %v", len(observation.StreamValues), MaxObservationStreamValuesLength)
 	}
 
 	for streamID, obsResult := range observation.StreamValues {
@@ -515,7 +515,7 @@ func (out *Outcome) ReportableChannels() []llotypes.ChannelID {
 //
 // libocr guarantees that this will always be called with at least 2f+1
 // AttributedObservations
-func (p *LLOPlugin) Outcome(outctx ocr3types.OutcomeContext, query types.Query, aos []types.AttributedObservation) (ocr3types.Outcome, error) {
+func (p *Plugin) Outcome(outctx ocr3types.OutcomeContext, query types.Query, aos []types.AttributedObservation) (ocr3types.Outcome, error) {
 	if len(aos) < 2*p.F+1 {
 		return nil, fmt.Errorf("invariant violation: expected at least 2f+1 attributed observations, got %d (f: %d)", len(aos), p.F)
 	}
@@ -673,9 +673,9 @@ func (p *LLOPlugin) Outcome(outctx ocr3types.OutcomeContext, query types.Query, 
 			)
 			continue
 		}
-		if len(outcome.ChannelDefinitions) > MAX_OUTCOME_CHANNEL_DEFINITIONS_LENGTH {
+		if len(outcome.ChannelDefinitions) > MaxOutcomeChannelDefinitionsLength {
 			p.Logger.Warn("Cannot add channel, outcome already contains maximum number of channels",
-				"maxOutcomeChannelDefinitionsLength", MAX_OUTCOME_CHANNEL_DEFINITIONS_LENGTH,
+				"maxOutcomeChannelDefinitionsLength", MaxOutcomeChannelDefinitionsLength,
 				"addChannelDefinition", defWithID,
 			)
 			continue
@@ -776,7 +776,7 @@ type Report struct {
 	Specimen bool
 }
 
-func (p *LLOPlugin) encodeReport(r Report, format llotypes.ReportFormat) (types.Report, error) {
+func (p *Plugin) encodeReport(r Report, format llotypes.ReportFormat) (types.Report, error) {
 	codec, exists := p.Codecs[format]
 	if !exists {
 		return nil, fmt.Errorf("codec missing for ReportFormat=%d", format)
@@ -797,7 +797,7 @@ func (p *LLOPlugin) encodeReport(r Report, format llotypes.ReportFormat) (types.
 // *not* strictly) across the lifetime of a protocol instance and that
 // outctx.previousOutcome contains the consensus outcome with sequence
 // number (outctx.SeqNr-1).
-func (p *LLOPlugin) Reports(seqNr uint64, rawOutcome ocr3types.Outcome) ([]ocr3types.ReportWithInfo[llotypes.ReportInfo], error) {
+func (p *Plugin) Reports(seqNr uint64, rawOutcome ocr3types.Outcome) ([]ocr3types.ReportWithInfo[llotypes.ReportInfo], error) {
 	if seqNr <= 1 {
 		// no reports for initial round
 		return nil, nil
@@ -870,12 +870,12 @@ func (p *LLOPlugin) Reports(seqNr uint64, rawOutcome ocr3types.Outcome) ([]ocr3t
 	return rwis, nil
 }
 
-func (p *LLOPlugin) ShouldAcceptAttestedReport(context.Context, uint64, ocr3types.ReportWithInfo[llotypes.ReportInfo]) (bool, error) {
+func (p *Plugin) ShouldAcceptAttestedReport(context.Context, uint64, ocr3types.ReportWithInfo[llotypes.ReportInfo]) (bool, error) {
 	// Transmit it all to the Mercury server
 	return true, nil
 }
 
-func (p *LLOPlugin) ShouldTransmitAcceptedReport(context.Context, uint64, ocr3types.ReportWithInfo[llotypes.ReportInfo]) (bool, error) {
+func (p *Plugin) ShouldTransmitAcceptedReport(context.Context, uint64, ocr3types.ReportWithInfo[llotypes.ReportInfo]) (bool, error) {
 	// Transmit it all to the Mercury server
 	return true, nil
 }
@@ -888,11 +888,11 @@ func (p *LLOPlugin) ShouldTransmitAcceptedReport(context.Context, uint64, ocr3ty
 // This is an advanced feature. The "default" approach (what OCR1 & OCR2
 // did) is to have an empty ValidateObservation function and return
 // QuorumTwoFPlusOne from this function.
-func (p *LLOPlugin) ObservationQuorum(outctx ocr3types.OutcomeContext, query types.Query) (ocr3types.Quorum, error) {
+func (p *Plugin) ObservationQuorum(outctx ocr3types.OutcomeContext, query types.Query) (ocr3types.Quorum, error) {
 	return ocr3types.QuorumTwoFPlusOne, nil
 }
 
-func (p *LLOPlugin) Close() error {
+func (p *Plugin) Close() error {
 	return nil
 }
 

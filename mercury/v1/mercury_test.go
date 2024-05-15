@@ -3,6 +3,7 @@ package v1
 import (
 	"context"
 	crand "crypto/rand"
+	"errors"
 	"fmt"
 	"math"
 	"math/big"
@@ -12,7 +13,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pkg/errors"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
@@ -443,7 +443,6 @@ func Test_Plugin_Observation(t *testing.T) {
 		assert.True(t, p.CurrentBlockValid)
 		assert.True(t, p.MaxFinalizedBlockNumberValid)
 	})
-
 }
 
 func newAttributedObservation(t *testing.T, p *MercuryObservationProto) types.AttributedObservation {
