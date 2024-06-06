@@ -164,6 +164,34 @@ func newValidAos(t *testing.T, protos ...*MercuryObservationProto) (aos []types.
 	return
 }
 
+func Test_parseAttributedObservation(t *testing.T) {
+	t.Run("returns error if bid<=mid<=ask is violated, even if observation claims itself to be valid", func(t *testing.T) {
+		obs := &MercuryObservationProto{
+			Timestamp: 42,
+
+			BenchmarkPrice: mercury.MustEncodeValueInt192(big.NewInt(123)),
+			Bid:            mercury.MustEncodeValueInt192(big.NewInt(130)),
+			Ask:            mercury.MustEncodeValueInt192(big.NewInt(120)),
+			PricesValid:    true,
+
+			MaxFinalizedTimestamp:      40,
+			MaxFinalizedTimestampValid: true,
+
+			LinkFee:        mercury.MustEncodeValueInt192(big.NewInt(1.1e18)),
+			LinkFeeValid:   true,
+			NativeFee:      mercury.MustEncodeValueInt192(big.NewInt(2.1e18)),
+			NativeFeeValid: true,
+		}
+
+		serialized, err := proto.Marshal(obs)
+		require.NoError(t, err)
+
+		_, err = parseAttributedObservation(types.AttributedObservation{Observation: serialized, Observer: commontypes.OracleID(42)})
+		require.Error(t, err)
+		assert.Equal(t, "observation claimed to be valid, but contains invalid prices: invariant violated: expected bid<=mid<=ask, got bid: 130, mid: 123, ask: 120", err.Error())
+	})
+}
+
 func Test_Plugin_Report(t *testing.T) {
 	dataSource := &testDataSource{}
 	codec := &testReportCodec{
@@ -495,16 +523,20 @@ func Test_Plugin_Observation(t *testing.T) {
 		assert.LessOrEqual(t, len(b), maxObservationLength)
 	})
 
+	validBid := big.NewInt(rand.Int63() - 2)
+	validBenchmarkPrice := new(big.Int).Add(validBid, big.NewInt(1))
+	validAsk := new(big.Int).Add(validBid, big.NewInt(2))
+
 	t.Run("all observations succeeded", func(t *testing.T) {
 		obs := v3.Observation{
 			BenchmarkPrice: mercurytypes.ObsResult[*big.Int]{
-				Val: big.NewInt(rand.Int63()),
+				Val: validBenchmarkPrice,
 			},
 			Bid: mercurytypes.ObsResult[*big.Int]{
-				Val: big.NewInt(rand.Int63()),
+				Val: validBid,
 			},
 			Ask: mercurytypes.ObsResult[*big.Int]{
-				Val: big.NewInt(rand.Int63()),
+				Val: validAsk,
 			},
 			MaxFinalizedTimestamp: mercurytypes.ObsResult[int64]{
 				Val: rand.Int63(),
@@ -708,6 +740,61 @@ func Test_Plugin_Observation(t *testing.T) {
 		assert.Zero(t, p.Bid)
 		assert.Zero(t, p.Ask)
 		assert.False(t, p.PricesValid)
+	})
+
+	t.Run("bid<=mid<=ask violation", func(t *testing.T) {
+		obs := v3.Observation{
+			BenchmarkPrice: mercurytypes.ObsResult[*big.Int]{
+				Val: big.NewInt(10),
+			},
+			Bid: mercurytypes.ObsResult[*big.Int]{
+				Val: big.NewInt(11),
+			},
+			Ask: mercurytypes.ObsResult[*big.Int]{
+				Val: big.NewInt(12),
+			},
+			MaxFinalizedTimestamp: mercurytypes.ObsResult[int64]{
+				Val: rand.Int63(),
+			},
+			LinkPrice: mercurytypes.ObsResult[*big.Int]{
+				Val: big.NewInt(rand.Int63()),
+			},
+			NativePrice: mercurytypes.ObsResult[*big.Int]{
+				Val: big.NewInt(rand.Int63()),
+			},
+		}
+		dataSource.Obs = obs
+
+		parsedObs, err := rp.Observation(context.Background(), types.ReportTimestamp{}, nil)
+		require.NoError(t, err)
+
+		var p MercuryObservationProto
+		require.NoError(t, proto.Unmarshal(parsedObs, &p))
+
+		assert.LessOrEqual(t, p.Timestamp, uint32(time.Now().Unix()))
+		assert.Equal(t, obs.BenchmarkPrice.Val, mustDecodeBigInt(p.BenchmarkPrice))
+		assert.False(t, p.PricesValid) // not valid!
+
+		// other values passed through ok
+		assert.Equal(t, obs.MaxFinalizedTimestamp.Val, p.MaxFinalizedTimestamp)
+		assert.True(t, p.MaxFinalizedTimestampValid)
+
+		fee := mercury.CalculateFee(obs.LinkPrice.Val, decimal.NewFromInt32(1))
+		assert.Equal(t, fee, mustDecodeBigInt(p.LinkFee))
+		assert.True(t, p.LinkFeeValid)
+
+		fee = mercury.CalculateFee(obs.NativePrice.Val, decimal.NewFromInt32(1))
+		assert.Equal(t, fee, mustDecodeBigInt(p.NativeFee))
+		assert.True(t, p.NativeFeeValid)
+
+		// test benchmark price higher than ask
+		obs.BenchmarkPrice.Val = big.NewInt(13)
+		dataSource.Obs = obs
+
+		parsedObs, err = rp.Observation(context.Background(), types.ReportTimestamp{}, nil)
+		require.NoError(t, err)
+		require.NoError(t, proto.Unmarshal(parsedObs, &p))
+		assert.False(t, p.PricesValid) // not valid!
 	})
 }
 
