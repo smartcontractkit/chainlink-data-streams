@@ -165,7 +165,7 @@ func newValidAos(t *testing.T, protos ...*MercuryObservationProto) (aos []types.
 }
 
 func Test_parseAttributedObservation(t *testing.T) {
-	t.Run("returns error if bid<=mid<=ask is violated, even if observation claims itself to be valid", func(t *testing.T) {
+	t.Run("returns no error if bid<=mid<=ask is violated", func(t *testing.T) {
 		obs := &MercuryObservationProto{
 			Timestamp: 42,
 
@@ -187,8 +187,7 @@ func Test_parseAttributedObservation(t *testing.T) {
 		require.NoError(t, err)
 
 		_, err = parseAttributedObservation(types.AttributedObservation{Observation: serialized, Observer: commontypes.OracleID(42)})
-		require.Error(t, err)
-		assert.Equal(t, "observation claimed to be valid, but contains invalid prices: invariant violated: expected bid<=mid<=ask, got bid: 130, mid: 123, ask: 120", err.Error())
+		require.NoError(t, err)
 	})
 }
 
@@ -246,7 +245,7 @@ func Test_Plugin_Report(t *testing.T) {
 				ExpiresAt:          46,
 				BenchmarkPrice:     big.NewInt(345),
 				Bid:                big.NewInt(340),
-				Ask:                big.NewInt(350),
+				Ask:                big.NewInt(353),
 			}, *codec.builtReportFields)
 		})
 		t.Run("succeeds and generates validFromTimestamp from maxFinalizedTimestamp when maxFinalizedTimestamp is zero", func(t *testing.T) {
@@ -269,7 +268,7 @@ func Test_Plugin_Report(t *testing.T) {
 				ExpiresAt:          46,
 				BenchmarkPrice:     big.NewInt(345),
 				Bid:                big.NewInt(340),
-				Ask:                big.NewInt(350),
+				Ask:                big.NewInt(353),
 			}, *codec.builtReportFields)
 		})
 		t.Run("succeeds and generates validFromTimestamp from maxFinalizedTimestamp when maxFinalizedTimestamp is -1 (missing feed)", func(t *testing.T) {
@@ -292,7 +291,7 @@ func Test_Plugin_Report(t *testing.T) {
 				ExpiresAt:          46,
 				BenchmarkPrice:     big.NewInt(345),
 				Bid:                big.NewInt(340),
-				Ask:                big.NewInt(350),
+				Ask:                big.NewInt(353),
 			}, *codec.builtReportFields)
 		})
 
@@ -314,7 +313,7 @@ func Test_Plugin_Report(t *testing.T) {
 				ExpiresAt:          46,
 				BenchmarkPrice:     big.NewInt(345),
 				Bid:                big.NewInt(340),
-				Ask:                big.NewInt(350),
+				Ask:                big.NewInt(349),
 			}, *codec.builtReportFields)
 		})
 	})
@@ -348,7 +347,7 @@ func Test_Plugin_Report(t *testing.T) {
 				ExpiresAt:          ts + 1,
 				BenchmarkPrice:     big.NewInt(345),
 				Bid:                big.NewInt(340),
-				Ask:                big.NewInt(350),
+				Ask:                big.NewInt(353),
 			}, *codec.builtReportFields)
 		})
 		t.Run("errors if cannot extract timestamp from previous report", func(t *testing.T) {
@@ -740,61 +739,6 @@ func Test_Plugin_Observation(t *testing.T) {
 		assert.Zero(t, p.Bid)
 		assert.Zero(t, p.Ask)
 		assert.False(t, p.PricesValid)
-	})
-
-	t.Run("bid<=mid<=ask violation", func(t *testing.T) {
-		obs := v3.Observation{
-			BenchmarkPrice: mercurytypes.ObsResult[*big.Int]{
-				Val: big.NewInt(10),
-			},
-			Bid: mercurytypes.ObsResult[*big.Int]{
-				Val: big.NewInt(11),
-			},
-			Ask: mercurytypes.ObsResult[*big.Int]{
-				Val: big.NewInt(12),
-			},
-			MaxFinalizedTimestamp: mercurytypes.ObsResult[int64]{
-				Val: rand.Int63(),
-			},
-			LinkPrice: mercurytypes.ObsResult[*big.Int]{
-				Val: big.NewInt(rand.Int63()),
-			},
-			NativePrice: mercurytypes.ObsResult[*big.Int]{
-				Val: big.NewInt(rand.Int63()),
-			},
-		}
-		dataSource.Obs = obs
-
-		parsedObs, err := rp.Observation(context.Background(), types.ReportTimestamp{}, nil)
-		require.NoError(t, err)
-
-		var p MercuryObservationProto
-		require.NoError(t, proto.Unmarshal(parsedObs, &p))
-
-		assert.LessOrEqual(t, p.Timestamp, uint32(time.Now().Unix()))
-		assert.Equal(t, obs.BenchmarkPrice.Val, mustDecodeBigInt(p.BenchmarkPrice))
-		assert.False(t, p.PricesValid) // not valid!
-
-		// other values passed through ok
-		assert.Equal(t, obs.MaxFinalizedTimestamp.Val, p.MaxFinalizedTimestamp)
-		assert.True(t, p.MaxFinalizedTimestampValid)
-
-		fee := mercury.CalculateFee(obs.LinkPrice.Val, decimal.NewFromInt32(1))
-		assert.Equal(t, fee, mustDecodeBigInt(p.LinkFee))
-		assert.True(t, p.LinkFeeValid)
-
-		fee = mercury.CalculateFee(obs.NativePrice.Val, decimal.NewFromInt32(1))
-		assert.Equal(t, fee, mustDecodeBigInt(p.NativeFee))
-		assert.True(t, p.NativeFeeValid)
-
-		// test benchmark price higher than ask
-		obs.BenchmarkPrice.Val = big.NewInt(13)
-		dataSource.Obs = obs
-
-		parsedObs, err = rp.Observation(context.Background(), types.ReportTimestamp{}, nil)
-		require.NoError(t, err)
-		require.NoError(t, proto.Unmarshal(parsedObs, &p))
-		assert.False(t, p.PricesValid) // not valid!
 	})
 }
 

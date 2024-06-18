@@ -10,11 +10,10 @@ import (
 
 type PAO interface {
 	mercury.PAO
-	GetBid() (*big.Int, bool)
-	GetAsk() (*big.Int, bool)
 	GetMaxFinalizedTimestamp() (int64, bool)
 	GetLinkFee() (*big.Int, bool)
 	GetNativeFee() (*big.Int, bool)
+	GetPrices() (prices Prices, valid bool)
 }
 
 var _ PAO = parsedAttributedObservation{}
@@ -79,6 +78,16 @@ func (pao parsedAttributedObservation) GetBid() (*big.Int, bool) {
 
 func (pao parsedAttributedObservation) GetAsk() (*big.Int, bool) {
 	return pao.Ask, pao.PricesValid
+}
+
+type Prices struct {
+	Bid       *big.Int
+	Benchmark *big.Int
+	Ask       *big.Int
+}
+
+func (pao parsedAttributedObservation) GetPrices() (prices Prices, valid bool) {
+	return Prices{pao.Bid, pao.BenchmarkPrice, pao.Ask}, pao.PricesValid
 }
 
 func (pao parsedAttributedObservation) GetMaxFinalizedTimestamp() (int64, bool) {

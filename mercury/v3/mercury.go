@@ -166,12 +166,7 @@ func (rp *reportingPlugin) Observation(ctx context.Context, repts types.ReportTi
 	}
 
 	if bpErr == nil && bidErr == nil && askErr == nil {
-		if err := validatePrices(obs.Bid.Val, obs.BenchmarkPrice.Val, obs.Ask.Val); err != nil {
-			rp.logger.Errorw("Cannot generate price observation: invalid bid/mid/ask", "err", err)
-			p.PricesValid = false
-		} else {
-			p.PricesValid = true
-		}
+		p.PricesValid = true
 	}
 
 	var maxFinalizedTimestampErr error
@@ -230,13 +225,6 @@ func (rp *reportingPlugin) Observation(ctx context.Context, repts types.ReportTi
 	return proto.Marshal(&p)
 }
 
-func validatePrices(bid, benchmarkPrice, ask *big.Int) error {
-	if bid.Cmp(benchmarkPrice) > 0 || benchmarkPrice.Cmp(ask) > 0 {
-		return fmt.Errorf("invariant violated: expected bid<=mid<=ask, got bid: %s, mid: %s, ask: %s", bid, benchmarkPrice, ask)
-	}
-	return nil
-}
-
 func parseAttributedObservation(ao types.AttributedObservation) (PAO, error) {
 	var pao parsedAttributedObservation
 	var obs MercuryObservationProto
@@ -260,13 +248,6 @@ func parseAttributedObservation(ao types.AttributedObservation) (PAO, error) {
 		pao.Ask, err = mercury.DecodeValueInt192(obs.Ask)
 		if err != nil {
 			return parsedAttributedObservation{}, fmt.Errorf("ask cannot be converted to big.Int: %s", err)
-		}
-		if err := validatePrices(pao.Bid, pao.BenchmarkPrice, pao.Ask); err != nil {
-			// NOTE: since nodes themselves are not supposed to set
-			// PricesValid=true if this invariant is violated, this indicates a
-			// faulty/misbehaving node and the entire observation should be
-			// ignored
-			return parsedAttributedObservation{}, fmt.Errorf("observation claimed to be valid, but contains invalid prices: %w", err)
 		}
 		pao.PricesValid = true
 	}
@@ -383,20 +364,11 @@ func (rp *reportingPlugin) buildReportFields(previousReport types.Report, paos [
 		}
 	}
 
-	rf.BenchmarkPrice, err = mercury.GetConsensusBenchmarkPrice(mPaos, rp.f)
+	prices, err := GetConsensusPrices(paos, rp.f)
 	if err != nil {
-		merr = errors.Join(merr, fmt.Errorf("GetConsensusBenchmarkPrice failed: %w", err))
+		merr = errors.Join(merr, fmt.Errorf("GetConsensusPrices failed: %w", err))
 	}
-
-	rf.Bid, err = mercury.GetConsensusBid(convertBid(paos), rp.f)
-	if err != nil {
-		merr = errors.Join(merr, fmt.Errorf("GetConsensusBid failed: %w", err))
-	}
-
-	rf.Ask, err = mercury.GetConsensusAsk(convertAsk(paos), rp.f)
-	if err != nil {
-		merr = errors.Join(merr, fmt.Errorf("GetConsensusAsk failed: %w", err))
-	}
+	rf.Bid, rf.BenchmarkPrice, rf.Ask = prices.Bid, prices.Benchmark, prices.Ask
 
 	rf.LinkFee, err = mercury.GetConsensusLinkFee(convertLinkFee(paos), rp.f)
 	if err != nil {
@@ -450,18 +422,6 @@ func convert(pao []PAO) (ret []mercury.PAO) {
 	return ret
 }
 func convertMaxFinalizedTimestamp(pao []PAO) (ret []mercury.PAOMaxFinalizedTimestamp) {
-	for _, v := range pao {
-		ret = append(ret, v)
-	}
-	return ret
-}
-func convertBid(pao []PAO) (ret []mercury.PAOBid) {
-	for _, v := range pao {
-		ret = append(ret, v)
-	}
-	return ret
-}
-func convertAsk(pao []PAO) (ret []mercury.PAOAsk) {
 	for _, v := range pao {
 		ret = append(ret, v)
 	}
