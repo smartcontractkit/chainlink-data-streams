@@ -45,12 +45,20 @@ func GetConsensusPrices(paos []PAO, f int) (Prices, error) {
 	})
 	medianBidSpread := bidSpreads[len(bidSpreads)/2]
 	prices.Bid = benchmarkDecimal.Mul(medianBidSpread).BigInt()
+	if prices.Bid.Cmp(prices.Benchmark) > 0 {
+		// Cannot happen unless > f nodes are inverted which is by assumption undefined behavior
+		return Prices{}, fmt.Errorf("invariant violation: bid price is greater than benchmark price (bid: %s, benchmark: %s)", prices.Bid.String(), benchmarkDecimal.String())
+	}
 
 	sort.Slice(askSpreads, func(i, j int) bool {
 		return askSpreads[i].Cmp(askSpreads[j]) < 0
 	})
 	medianAskSpread := askSpreads[len(askSpreads)/2]
 	prices.Ask = benchmarkDecimal.Mul(medianAskSpread).BigInt()
+	if prices.Ask.Cmp(prices.Benchmark) < 0 {
+		// Cannot happen unless > f nodes are inverted which is by assumption undefined behavior
+		return Prices{}, fmt.Errorf("invariant violation: ask price is less than benchmark price (ask: %s, benchmark: %s)", prices.Ask.String(), benchmarkDecimal.String())
+	}
 
 	return prices, nil
 }

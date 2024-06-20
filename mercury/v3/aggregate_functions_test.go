@@ -166,11 +166,11 @@ func Test_GetConsensusPrices(t *testing.T) {
 				testPAO{big.NewInt(1315854500), big.NewInt(1316190800), big.NewInt(1316527000), true},
 				testPAO{big.NewInt(1315854500), big.NewInt(1316190800), big.NewInt(1316527000), true},
 				testPAO{big.NewInt(1314633333), big.NewInt(1315131262), big.NewInt(1315629191), true},
-				testPAO{big.NewInt(1315243916), big.NewInt(1316190800), big.NewInt(1316078096), true}, // inverted, ask > benchmark
-				testPAO{big.NewInt(1315243916), big.NewInt(1316190800), big.NewInt(1316078096), true}, // inverted, ask > benchmark
-				testPAO{big.NewInt(1315243916), big.NewInt(1316190800), big.NewInt(1316078096), true}, // inverted, ask > benchmark
-				testPAO{big.NewInt(1315243916), big.NewInt(1316190800), big.NewInt(1316078096), true}, // inverted, ask > benchmark
-				testPAO{big.NewInt(1315243916), big.NewInt(1316190800), big.NewInt(1316078096), true}, // inverted, ask > benchmark
+				testPAO{big.NewInt(1315243916), big.NewInt(1316190800), big.NewInt(1316078096), true}, // inverted, ask < benchmark
+				testPAO{big.NewInt(1315243916), big.NewInt(1316190800), big.NewInt(1316078096), true}, // inverted, ask < benchmark
+				testPAO{big.NewInt(1315243916), big.NewInt(1316190800), big.NewInt(1316078096), true}, // inverted, ask < benchmark
+				testPAO{big.NewInt(1315243916), big.NewInt(1316190800), big.NewInt(1316078096), true}, // inverted, ask < benchmark
+				testPAO{big.NewInt(1315243916), big.NewInt(1316190800), big.NewInt(1316078096), true}, // inverted, ask < benchmark
 				testPAO{big.NewInt(1315243916), big.NewInt(1315661031), big.NewInt(1316078096), true},
 				testPAO{big.NewInt(1314633333), big.NewInt(1315131262), big.NewInt(1315629191), true},
 			},
@@ -179,23 +179,42 @@ func Test_GetConsensusPrices(t *testing.T) {
 			err:  "",
 		},
 		{
-			name: "inverts output in complex inverted case with f+1 failures skewed the same way",
+			name: "errors output in complex inverted case with f+1 failures such that ask > benchmark",
 			paos: []PAO{
 				testPAO{big.NewInt(1315854500), big.NewInt(1316190800), big.NewInt(1316527000), true},
 				testPAO{big.NewInt(1315854500), big.NewInt(1316190800), big.NewInt(1316527000), true},
 				testPAO{big.NewInt(1315854500), big.NewInt(1316190800), big.NewInt(1316527000), true},
 				testPAO{big.NewInt(1314633333), big.NewInt(1315131262), big.NewInt(1315629191), true},
-				testPAO{big.NewInt(1315243916), big.NewInt(1316190800), big.NewInt(1316078096), true}, // inverted, ask > benchmark
-				testPAO{big.NewInt(1315243916), big.NewInt(1316190800), big.NewInt(1316078096), true}, // inverted, ask > benchmark
-				testPAO{big.NewInt(1315243916), big.NewInt(1316190800), big.NewInt(1316078096), true}, // inverted, ask > benchmark
-				testPAO{big.NewInt(1315243916), big.NewInt(1316190800), big.NewInt(1316078096), true}, // inverted, ask > benchmark
-				testPAO{big.NewInt(1315243916), big.NewInt(1316190800), big.NewInt(1316078096), true}, // inverted, ask > benchmark
-				testPAO{big.NewInt(1315243916), big.NewInt(1316190800), big.NewInt(1316078096), true}, // inverted, ask > benchmark
+				testPAO{big.NewInt(1315243916), big.NewInt(1316190800), big.NewInt(1316078096), true}, // inverted, ask < benchmark
+				testPAO{big.NewInt(1315243916), big.NewInt(1316190800), big.NewInt(1316078096), true}, // inverted, ask < benchmark
+				testPAO{big.NewInt(1315243916), big.NewInt(1316190800), big.NewInt(1316078096), true}, // inverted, ask < benchmark
+				testPAO{big.NewInt(1315243916), big.NewInt(1316190800), big.NewInt(1316078096), true}, // inverted, ask < benchmark
+				testPAO{big.NewInt(1315243916), big.NewInt(1316190800), big.NewInt(1316078096), true}, // inverted, ask < benchmark
+				testPAO{big.NewInt(1315243916), big.NewInt(1316190800), big.NewInt(1316078096), true}, // inverted, ask < benchmark
 				testPAO{big.NewInt(1314633333), big.NewInt(1315131262), big.NewInt(1315629191), true},
 			},
 			f:    5,
-			want: Prices{Bid: big.NewInt(1315243915), Benchmark: big.NewInt(1316190800), Ask: big.NewInt(1316078096)}, // ask < bid but expected because f+1 failures is explicitly undefined
-			err:  "",
+			want: Prices{},
+			err:  "invariant violation: ask price is greater than benchmark price (ask: 1316078096, benchmark: 1316190800)",
+		},
+		{
+			name: "errors output in complex inverted case with f+1 failures such that bid < benchmark",
+			paos: []PAO{
+				testPAO{big.NewInt(1315854500), big.NewInt(1316190800), big.NewInt(1316527000), true},
+				testPAO{big.NewInt(1315854500), big.NewInt(1316190800), big.NewInt(1316527000), true},
+				testPAO{big.NewInt(1315854500), big.NewInt(1316190800), big.NewInt(1316527000), true},
+				testPAO{big.NewInt(1314633333), big.NewInt(1315131262), big.NewInt(1315629191), true},
+				testPAO{big.NewInt(1314633333), big.NewInt(1315131262), big.NewInt(1315629191), true},
+				testPAO{big.NewInt(1315131263), big.NewInt(1315131262), big.NewInt(1315629191), true}, // inverted, bid > benchmark
+				testPAO{big.NewInt(1315131263), big.NewInt(1315131262), big.NewInt(1315629191), true}, // inverted, bid > benchmark
+				testPAO{big.NewInt(1315131263), big.NewInt(1315131262), big.NewInt(1315629191), true}, // inverted, bid > benchmark
+				testPAO{big.NewInt(1315131263), big.NewInt(1315131262), big.NewInt(1315629191), true}, // inverted, bid > benchmark
+				testPAO{big.NewInt(1315131263), big.NewInt(1315131262), big.NewInt(1315629191), true}, // inverted, bid > benchmark
+				testPAO{big.NewInt(1315131263), big.NewInt(1315131262), big.NewInt(1315629191), true}, // inverted, bid > benchmark
+			},
+			f:    5,
+			want: Prices{},
+			err:  "invariant violation: bid price is greater than benchmark price (bid: 1315131263, benchmark: 1315131262)",
 		},
 	}
 	for _, tt := range tests {
@@ -204,6 +223,8 @@ func Test_GetConsensusPrices(t *testing.T) {
 			if tt.err != "" {
 				require.Error(t, err)
 				assert.Equal(t, tt.err, err.Error())
+			} else {
+				assert.NoError(t, err)
 			}
 			assert.Equal(t, tt.want, prices)
 		})
