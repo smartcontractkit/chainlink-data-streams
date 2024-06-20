@@ -43,7 +43,13 @@ func GetConsensusPrices(paos []PAO, f int) (Prices, error) {
 	sort.Slice(bidSpreads, func(i, j int) bool {
 		return bidSpreads[i].Cmp(bidSpreads[j]) < 0
 	})
+	// We started with at least 2f+1 observations. There are at most f
+	// dishonest participants. Suppose with threw out m observations for
+	// disordered prices. Then we are left with 2f+1-m observations, f-m of
+	// which could still have come from dishonest participants. But
+	// 2f+1-m=2(f-m)+(m+1), so the median must come from an honest participant.
 	medianBidSpread := bidSpreads[len(bidSpreads)/2]
+
 	prices.Bid = benchmarkDecimal.Mul(medianBidSpread).BigInt()
 	if prices.Bid.Cmp(prices.Benchmark) > 0 {
 		// Cannot happen unless > f nodes are inverted which is by assumption undefined behavior
