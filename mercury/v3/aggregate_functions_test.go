@@ -195,7 +195,7 @@ func Test_GetConsensusPrices(t *testing.T) {
 			},
 			f:    5,
 			want: Prices{},
-			err:  "invariant violation: ask price is greater than benchmark price (ask: 1316078096, benchmark: 1316190800)",
+			err:  "invariant violation: ask price is less than benchmark price (ask: 1316078096, benchmark: 1316190800)",
 		},
 		{
 			name: "errors output in complex inverted case with f+1 failures such that bid < benchmark",
