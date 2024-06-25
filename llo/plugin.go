@@ -331,7 +331,9 @@ func (p *Plugin) Observation(ctx context.Context, outctx ocr3types.OutcomeContex
 	}
 
 	var streamValues StreamValues
-	{
+	if len(previousOutcome.ChannelDefinitions) == 0 {
+		p.Logger.Warn("ChannelDefinitions is empty, will not generate any observations")
+	} else {
 		streams := map[llotypes.StreamID]struct{}{}
 		for _, channelDefinition := range previousOutcome.ChannelDefinitions {
 			for _, streamID := range channelDefinition.StreamIDs {
@@ -699,7 +701,7 @@ func (p *Plugin) Outcome(outctx ocr3types.OutcomeContext, query types.Query, aos
 		outcome.ValidAfterSeconds = map[llotypes.ChannelID]uint32{}
 		for channelID, previousValidAfterSeconds := range previousOutcome.ValidAfterSeconds {
 			if err := previousOutcome.IsReportable(channelID); err != nil {
-				p.Logger.Debugw("Channel is not reportable", "channelID", channelID, "err", err)
+				p.Logger.Warnw("Channel is not reportable", "channelID", channelID, "err", err)
 				// was reported based on previous outcome
 				outcome.ValidAfterSeconds[channelID] = previousObservationsTimestampSeconds
 			} else {
