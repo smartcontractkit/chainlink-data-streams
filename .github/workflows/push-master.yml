@@ -92,7 +92,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: ci-sonarqube
-        uses: smartcontractkit/.github/actions/ci-sonarqube@5b1046c28343660ecb84844c6fa95a66d1cdb52e # ci-sonarqube@0.3.2
+        uses: smartcontractkit/.github/actions/ci-sonarqube-go@3e11dbc45e4c8b18dd996fb417ccf22056176388 # ci-sonarqube-go@0.1.0
         with:
           # grafana inputs
           metrics-job-name: ci-sonarqube
