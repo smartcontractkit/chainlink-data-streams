@@ -23,6 +23,8 @@ type testParsedAttributedObservation struct {
 	LinkFeeValid               bool
 	NativeFee                  *big.Int
 	NativeFeeValid             bool
+	MarketStatus               uint32
+	MarketStatusValid          bool
 }
 
 func (t testParsedAttributedObservation) GetObserver() commontypes.OracleID { return 0 }
@@ -45,6 +47,10 @@ func (t testParsedAttributedObservation) GetLinkFee() (*big.Int, bool) {
 func (t testParsedAttributedObservation) GetNativeFee() (*big.Int, bool) {
 	return t.NativeFee, t.NativeFeeValid
 }
+func (t testParsedAttributedObservation) GetMarketStatus() (uint32, bool) {
+	return t.MarketStatus, t.MarketStatusValid
+}
+
 func newValidParsedAttributedObservations() []testParsedAttributedObservation {
 	return []testParsedAttributedObservation{
 		testParsedAttributedObservation{
@@ -64,6 +70,9 @@ func newValidParsedAttributedObservations() []testParsedAttributedObservation {
 			LinkFeeValid:   true,
 			NativeFee:      big.NewInt(1),
 			NativeFeeValid: true,
+
+			MarketStatus:      1,
+			MarketStatusValid: true,
 		},
 		testParsedAttributedObservation{
 			Timestamp: 1689648456,
@@ -82,6 +91,9 @@ func newValidParsedAttributedObservations() []testParsedAttributedObservation {
 			LinkFeeValid:   true,
 			NativeFee:      big.NewInt(2),
 			NativeFeeValid: true,
+
+			MarketStatus:      1,
+			MarketStatusValid: true,
 		},
 		testParsedAttributedObservation{
 			Timestamp: 1689648789,
@@ -100,6 +112,9 @@ func newValidParsedAttributedObservations() []testParsedAttributedObservation {
 			LinkFeeValid:   true,
 			NativeFee:      big.NewInt(3),
 			NativeFeeValid: true,
+
+			MarketStatus:      2,
+			MarketStatusValid: true,
 		},
 		testParsedAttributedObservation{
 			Timestamp: 1689648789,
@@ -118,9 +133,13 @@ func newValidParsedAttributedObservations() []testParsedAttributedObservation {
 			LinkFeeValid:   true,
 			NativeFee:      big.NewInt(4),
 			NativeFeeValid: true,
+
+			MarketStatus:      3,
+			MarketStatusValid: true,
 		},
 	}
 }
+
 func NewValidParsedAttributedObservations(paos ...testParsedAttributedObservation) []testParsedAttributedObservation {
 	if len(paos) == 0 {
 		paos = newValidParsedAttributedObservations()
@@ -152,6 +171,9 @@ func NewInvalidParsedAttributedObservations() []testParsedAttributedObservation 
 			LinkFeeValid:   false,
 			NativeFee:      big.NewInt(1),
 			NativeFeeValid: false,
+
+			MarketStatus:      1,
+			MarketStatusValid: false,
 		},
 		testParsedAttributedObservation{
 			Timestamp: 2,
@@ -170,6 +192,9 @@ func NewInvalidParsedAttributedObservations() []testParsedAttributedObservation 
 			LinkFeeValid:   false,
 			NativeFee:      big.NewInt(2),
 			NativeFeeValid: false,
+
+			MarketStatus:      1,
+			MarketStatusValid: false,
 		},
 		testParsedAttributedObservation{
 			Timestamp: 2,
@@ -188,6 +213,9 @@ func NewInvalidParsedAttributedObservations() []testParsedAttributedObservation 
 			LinkFeeValid:   false,
 			NativeFee:      big.NewInt(3),
 			NativeFeeValid: false,
+
+			MarketStatus:      2,
+			MarketStatusValid: false,
 		},
 		testParsedAttributedObservation{
 			Timestamp: 3,
@@ -206,6 +234,9 @@ func NewInvalidParsedAttributedObservations() []testParsedAttributedObservation 
 			LinkFeeValid:   true,
 			NativeFee:      big.NewInt(4),
 			NativeFeeValid: true,
+
+			MarketStatus:      3,
+			MarketStatusValid: false,
 		},
 	}
 }
@@ -376,6 +407,44 @@ func Test_AggregateFunctions(t *testing.T) {
 			assert.EqualError(t, err, "fewer than f+1 observations have a valid nativeFee (got: 1/4)")
 		})
 	})
+
+	t.Run("GetConsensusMarketStatus", func(t *testing.T) {
+		t.Run("gets consensus on market status when valid", func(t *testing.T) {
+			marketStatus, err := GetConsensusMarketStatus(convertMarketStatus(validPaos), f)
+			require.NoError(t, err)
+			assert.Equal(t, uint32(1), marketStatus)
+		})
+		t.Run("treats zero values as valid", func(t *testing.T) {
+			paos := NewValidParsedAttributedObservations()
+			for i := range paos {
+				paos[i].MarketStatus = 0
+			}
+			marketStatus, err := GetConsensusMarketStatus(convertMarketStatus(paos), f)
+			require.NoError(t, err)
+			assert.Equal(t, uint32(0), marketStatus)
+		})
+		t.Run("is stable during ties", func(t *testing.T) {
+			paos := NewValidParsedAttributedObservations()
+			for i := range paos {
+				paos[i].MarketStatus = uint32(i % 2)
+			}
+			marketStatus, err := GetConsensusMarketStatus(convertMarketStatus(paos), f)
+			require.NoError(t, err)
+			assert.Equal(t, uint32(0), marketStatus)
+		})
+		t.Run("fails when the mode is less than f+1", func(t *testing.T) {
+			paos := NewValidParsedAttributedObservations()
+			for i := range paos {
+				paos[i].MarketStatus = uint32(i)
+			}
+			_, err := GetConsensusMarketStatus(convertMarketStatus(paos), f)
+			assert.EqualError(t, err, "market status has fewer than f+1 observations (status 0 got 1/4)")
+		})
+		t.Run("fails when all observations are invalid", func(t *testing.T) {
+			_, err := GetConsensusMarketStatus(convertMarketStatus(invalidPaos), f)
+			assert.EqualError(t, err, "market status has fewer than f+1 observations (status 0 got 0/4)")
+		})
+	})
 }
 
 // convert funcs are necessary because go is not smart enough to cast
@@ -411,6 +480,12 @@ func convertLinkFee(pao []testParsedAttributedObservation) (ret []PAOLinkFee) {
 	return ret
 }
 func convertNativeFee(pao []testParsedAttributedObservation) (ret []PAONativeFee) {
+	for _, v := range pao {
+		ret = append(ret, v)
+	}
+	return ret
+}
+func convertMarketStatus(pao []testParsedAttributedObservation) (ret []PAOMarketStatus) {
 	for _, v := range pao {
 		ret = append(ret, v)
 	}
