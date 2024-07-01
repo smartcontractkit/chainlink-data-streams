@@ -465,10 +465,22 @@ func Test_Plugin_validateReport(t *testing.T) {
 		assert.Contains(t, err.Error(), "median benchmark price (Value: 150000) is outside of allowable range (Min: 1, Max: 1000)")
 		assert.Contains(t, err.Error(), "median bid (Value: 150000) is outside of allowable range (Min: 1, Max: 1000)")
 		assert.Contains(t, err.Error(), "median ask (Value: 150000) is outside of allowable range (Min: 1, Max: 1000)")
-		assert.Contains(t, err.Error(), "median link fee (Value: -1) is outside of allowable range (Min: 0, Max: 3138550867693340381917894711603833208051177722232017256447)")
 		assert.Contains(t, err.Error(), "median native fee (Value: -1) is outside of allowable range (Min: 0, Max: 3138550867693340381917894711603833208051177722232017256447)")
 		assert.Contains(t, err.Error(), "observationTimestamp (Value: 43) must be >= validFromTimestamp (Value: 44)")
+		assert.Contains(t, err.Error(), "median link fee (Value: -1) is outside of allowable range (Min: 0, Max: 3138550867693340381917894711603833208051177722232017256447)")
 		assert.Contains(t, err.Error(), "expiresAt (Value: 42) must be ahead of observation timestamp (Value: 43)")
+	})
+	t.Run("bid/ask invariant violation", func(t *testing.T) {
+		rf := v3.ReportFields{
+			BenchmarkPrice: big.NewInt(500),
+			Bid:            big.NewInt(501),
+			Ask:            big.NewInt(499),
+		}
+		err := rp.validateReport(rf)
+		require.Error(t, err)
+
+		assert.Contains(t, err.Error(), "median bid invariant (Value: 501) is outside of allowable range (Min: 1, Max: 500)")
+		assert.Contains(t, err.Error(), "median ask invariant (Value: 499) is outside of allowable range (Min: 500, Max: 1000)")
 	})
 
 	t.Run("zero values", func(t *testing.T) {

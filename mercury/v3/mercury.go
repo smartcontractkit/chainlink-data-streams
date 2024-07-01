@@ -428,6 +428,8 @@ func (rp *reportingPlugin) buildReportFields(previousReport types.Report, paos [
 func (rp *reportingPlugin) validateReport(rf v3.ReportFields) error {
 	return errors.Join(
 		mercury.ValidateBetween("median benchmark price", rf.BenchmarkPrice, rp.onchainConfig.Min, rp.onchainConfig.Max),
+		mercury.ValidateBetween("median bid invariant", rf.Bid, rp.onchainConfig.Min, rf.BenchmarkPrice),
+		mercury.ValidateBetween("median ask invariant", rf.Ask, rf.BenchmarkPrice, rp.onchainConfig.Max),
 		mercury.ValidateBetween("median bid", rf.Bid, rp.onchainConfig.Min, rp.onchainConfig.Max),
 		mercury.ValidateBetween("median ask", rf.Ask, rp.onchainConfig.Min, rp.onchainConfig.Max),
 		mercury.ValidateFee("median link fee", rf.LinkFee),
