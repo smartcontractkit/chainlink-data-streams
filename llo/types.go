@@ -25,8 +25,3 @@ type Transmitter interface {
 	// - FromAccount() should return CSA public key
 	ocr3types.ContractTransmitter[llotypes.ReportInfo]
 }
-
-type ObsResult[T any] struct {
-	Val   T
-	Valid bool
-}

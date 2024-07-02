@@ -1,0 +1,58 @@
+syntax="proto3";
+
+package v1;
+option go_package = ".;llo";
+
+// WARNING
+// Use extreme caution making changes in this file
+// All changes MUST be backwards compatible
+// If the format changes in a backwards incompatible way, active DONs can
+// become stuck permanently
+message LLOObservationProto {
+	bytes attestedPredecessorRetirement = 1;
+	bool shouldRetire = 2;
+	int64 unixTimestampNanoseconds = 3;
+	repeated uint32 removeChannelIDs = 4;
+    // Maps are safe to use here because Observation serialization does not
+    // need to be deterministic. Non-deterministic map serialization is
+    // marginally more efficient than converting to tuples and guarantees
+    // uniqueness.
+	map<uint32, LLOChannelDefinitionProto> updateChannelDefinitions = 5;
+	map<uint32, bytes> streamValues = 6;
+}
+
+message LLOChannelDefinitionProto {
+	uint32 reportFormat = 1;
+	uint64 chainSelector = 2;
+	repeated uint32 streamIDs = 3;
+}
+
+message LLOStreamObservationProto {
+    bool valid = 1;
+    bytes value = 2;
+}
+
+// NOTE: Outcome must serialize deterministically, hence use of repeated tuple instead of maps
+message LLOOutcomeProto {
+	string lifeCycleStage = 1;
+	int64 ObservationsTimestampNanoseconds = 2;
+	repeated LLOChannelIDAndDefinitionProto channelDefinitions = 3;
+	repeated LLOChannelIDAndValidAfterSecondsProto validAfterSeconds = 4;
+	repeated LLOStreamIDAndValue streamMedians = 5;
+}
+
+message LLOChannelIDAndDefinitionProto {
+    uint32 channelID = 1;
+    LLOChannelDefinitionProto channelDefinition = 2;
+}
+
+message LLOChannelIDAndValidAfterSecondsProto {
+    uint32 channelID = 1;
+    uint32 validAfterSeconds = 2;
+}
+
+message LLOStreamIDAndValue {
+    uint32 streamID = 1;
+    bytes value = 2;
+}
+
