@@ -55,6 +55,9 @@ func (cdc JSONReportCodec) Encode(r Report, _ llotypes.ChannelDefinition) ([]byt
 	}
 	values := make([]JSONStreamValue, len(r.Values))
 	for i, sv := range r.Values {
+		if sv == nil {
+			return nil, ErrNilStreamValue
+		}
 		b, err := sv.MarshalText()
 		if err != nil {
 			return nil, fmt.Errorf("failed to encode StreamValue: %w", err)
