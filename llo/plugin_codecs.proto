@@ -18,13 +18,34 @@ message LLOObservationProto {
     // marginally more efficient than converting to tuples and guarantees
     // uniqueness.
 	map<uint32, LLOChannelDefinitionProto> updateChannelDefinitions = 5;
-	map<uint32, bytes> streamValues = 6;
+	map<uint32, LLOStreamValue> streamValues = 6;
+}
+
+message LLOStreamValue {
+    enum Type
+    {
+        Decimal = 0;
+        Quote = 1;
+    }
+    Type type = 1;
+    bytes value = 2;
+}
+
+message LLOStreamValueQuote{
+    bytes bid = 1;
+    bytes benchmark = 2;
+    bytes ask = 3;
 }
 
 message LLOChannelDefinitionProto {
 	uint32 reportFormat = 1;
-	uint64 chainSelector = 2;
-	repeated uint32 streamIDs = 3;
+	repeated LLOStreamDefinition streams = 2;
+    bytes opts = 3;
+}
+
+message LLOStreamDefinition {
+    uint32 streamID = 1;
+    uint32 aggregator = 2;
 }
 
 message LLOStreamObservationProto {
@@ -35,10 +56,10 @@ message LLOStreamObservationProto {
 // NOTE: Outcome must serialize deterministically, hence use of repeated tuple instead of maps
 message LLOOutcomeProto {
 	string lifeCycleStage = 1;
-	int64 ObservationsTimestampNanoseconds = 2;
+	int64 observationsTimestampNanoseconds = 2;
 	repeated LLOChannelIDAndDefinitionProto channelDefinitions = 3;
 	repeated LLOChannelIDAndValidAfterSecondsProto validAfterSeconds = 4;
-	repeated LLOStreamIDAndValue streamMedians = 5;
+	repeated LLOStreamAggregate streamAggregates = 5;
 }
 
 message LLOChannelIDAndDefinitionProto {
@@ -51,8 +72,9 @@ message LLOChannelIDAndValidAfterSecondsProto {
     uint32 validAfterSeconds = 2;
 }
 
-message LLOStreamIDAndValue {
+message LLOStreamAggregate {
     uint32 streamID = 1;
-    bytes value = 2;
+    LLOStreamValue streamValue = 2;
+    uint32 aggregator = 3;
 }
 

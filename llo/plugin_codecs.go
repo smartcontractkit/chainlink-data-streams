@@ -1,8 +1,8 @@
 package llo
 
 import (
+	"errors"
 	"fmt"
-	"math/big"
 	"sort"
 
 	"github.com/smartcontractkit/libocr/offchainreporting2/types"
@@ -33,10 +33,20 @@ type protoObservationCodec struct{}
 func (c protoObservationCodec) Encode(obs Observation) (types.Observation, error) {
 	dfns := channelDefinitionsToProtoObservation(obs.UpdateChannelDefinitions)
 
-	streamValues := make(map[uint32][]byte, len(obs.StreamValues))
+	streamValues := make(map[uint32]*LLOStreamValue, len(obs.StreamValues))
 	for id, sv := range obs.StreamValues {
 		if sv != nil {
-			streamValues[id] = sv.Bytes()
+			enc, err := sv.MarshalBinary()
+			if errors.Is(err, ErrNilStreamValue) {
+				// Ignore nil values
+				continue
+			} else if err != nil {
+				return nil, err
+			}
+			streamValues[id] = &LLOStreamValue{
+				Type:  sv.Type(),
+				Value: enc,
+			}
 		}
 	}
 
@@ -56,10 +66,17 @@ func channelDefinitionsToProtoObservation(in llotypes.ChannelDefinitions) (out m
 	if len(in) > 0 {
 		out = make(map[uint32]*LLOChannelDefinitionProto, len(in))
 		for id, d := range in {
+			streams := make([]*LLOStreamDefinition, len(d.Streams))
+			for i, strm := range d.Streams {
+				streams[i] = &LLOStreamDefinition{
+					StreamID:   strm.StreamID,
+					Aggregator: uint32(strm.Aggregator),
+				}
+			}
 			out[id] = &LLOChannelDefinitionProto{
-				ReportFormat:  uint32(d.ReportFormat),
-				ChainSelector: d.ChainSelector,
-				StreamIDs:     d.StreamIDs,
+				ReportFormat: uint32(d.ReportFormat),
+				Streams:      streams,
+				Opts:         d.Opts,
 			}
 		}
 	}
@@ -67,6 +84,7 @@ func channelDefinitionsToProtoObservation(in llotypes.ChannelDefinitions) (out m
 }
 
 // TODO: Guard against untrusted inputs!
+// MERC-3524
 func (c protoObservationCodec) Decode(b types.Observation) (Observation, error) {
 	pbuf := &LLOObservationProto{}
 	err := proto.Unmarshal(b, pbuf)
@@ -84,12 +102,14 @@ func (c protoObservationCodec) Decode(b types.Observation) (Observation, error) 
 	var streamValues StreamValues
 	if len(pbuf.StreamValues) > 0 {
 		streamValues = make(StreamValues, len(pbuf.StreamValues))
-		for id, sv := range pbuf.StreamValues {
+		for id, enc := range pbuf.StreamValues {
 			// StreamValues shouldn't have explicit nils, but for safety we
 			// ought to handle it anyway
-			if sv != nil {
-				streamValues[id] = new(big.Int).SetBytes(sv)
+			sv, err := UnmarshalProtoStreamValue(enc)
+			if err != nil {
+				return Observation{}, err
 			}
+			streamValues[id] = sv
 		}
 	}
 	obs := Observation{
@@ -103,16 +123,25 @@ func (c protoObservationCodec) Decode(b types.Observation) (Observation, error) 
 	return obs, nil
 }
 
+// TODO: Needs fuzz testing
+// MERC-3524
 func channelDefinitionsFromProtoObservation(channelDefinitions map[uint32]*LLOChannelDefinitionProto) llotypes.ChannelDefinitions {
 	if len(channelDefinitions) == 0 {
 		return nil
 	}
 	dfns := make(map[llotypes.ChannelID]llotypes.ChannelDefinition, len(channelDefinitions))
 	for id, d := range channelDefinitions {
+		streams := make([]llotypes.Stream, len(d.Streams))
+		for i, strm := range d.Streams {
+			streams[i] = llotypes.Stream{
+				StreamID:   strm.StreamID,
+				Aggregator: llotypes.Aggregator(strm.Aggregator),
+			}
+		}
 		dfns[id] = llotypes.ChannelDefinition{
-			ReportFormat:  llotypes.ReportFormat(d.ReportFormat),
-			ChainSelector: d.ChainSelector,
-			StreamIDs:     d.StreamIDs,
+			ReportFormat: llotypes.ReportFormat(d.ReportFormat),
+			Streams:      streams,
+			Opts:         d.Opts,
 		}
 	}
 	return dfns
@@ -132,7 +161,11 @@ type protoOutcomeCodec struct{}
 func (protoOutcomeCodec) Encode(outcome Outcome) (ocr3types.Outcome, error) {
 	dfns := channelDefinitionsToProtoOutcome(outcome.ChannelDefinitions)
 
-	streamMedians := streamMediansToProtoOutcome(outcome.StreamMedians)
+	streamAggregates, err := StreamAggregatesToProtoOutcome(outcome.StreamAggregates)
+	if err != nil {
+		return nil, err
+	}
+
 	validAfterSeconds := validAfterSecondsToProtoOutcome(outcome.ValidAfterSeconds)
 
 	pbuf := &LLOOutcomeProto{
@@ -140,7 +173,7 @@ func (protoOutcomeCodec) Encode(outcome Outcome) (ocr3types.Outcome, error) {
 		ObservationsTimestampNanoseconds: outcome.ObservationsTimestampNanoseconds,
 		ChannelDefinitions:               dfns,
 		ValidAfterSeconds:                validAfterSeconds,
-		StreamMedians:                    streamMedians,
+		StreamAggregates:                 streamAggregates,
 	}
 
 	// It's very important that Outcome serialization be deterministic across all nodes!
@@ -152,12 +185,19 @@ func channelDefinitionsToProtoOutcome(in llotypes.ChannelDefinitions) (out []*LL
 	if len(in) > 0 {
 		out = make([]*LLOChannelIDAndDefinitionProto, 0, len(in))
 		for id, d := range in {
+			streams := make([]*LLOStreamDefinition, len(d.Streams))
+			for i, strm := range d.Streams {
+				streams[i] = &LLOStreamDefinition{
+					StreamID:   strm.StreamID,
+					Aggregator: uint32(strm.Aggregator),
+				}
+			}
 			out = append(out, &LLOChannelIDAndDefinitionProto{
 				ChannelID: id,
 				ChannelDefinition: &LLOChannelDefinitionProto{
-					ReportFormat:  uint32(d.ReportFormat),
-					ChainSelector: d.ChainSelector,
-					StreamIDs:     d.StreamIDs,
+					ReportFormat: uint32(d.ReportFormat),
+					Streams:      streams,
+					Opts:         d.Opts,
 				},
 			})
 		}
@@ -168,20 +208,35 @@ func channelDefinitionsToProtoOutcome(in llotypes.ChannelDefinitions) (out []*LL
 	return
 }
 
-func streamMediansToProtoOutcome(in StreamValues) (out []*LLOStreamIDAndValue) {
+// TODO: Needs thorough unit testing of all paths including nil handling
+// MERC-3524
+func StreamAggregatesToProtoOutcome(in StreamAggregates) (out []*LLOStreamAggregate, err error) {
 	if len(in) > 0 {
-		out = make([]*LLOStreamIDAndValue, 0, len(in))
-		for id, v := range in {
-			// StreamMedians shouldn't have explicit nil values, but for
-			// safety we ought to handle it anyway
-			if v != nil {
-				out = append(out, &LLOStreamIDAndValue{
-					StreamID: id,
-					Value:    v.Bytes(),
+		out = make([]*LLOStreamAggregate, 0, len(in))
+		for sid, aggregates := range in {
+			if aggregates == nil {
+				return nil, fmt.Errorf("cannot marshal protobuf; nil value for stream ID: %d", sid)
+			}
+			for agg, v := range aggregates {
+				if v == nil {
+					return nil, fmt.Errorf("cannot marshal protobuf; nil value for stream ID: %d, aggregator: %v", sid, agg)
+				}
+				value, err := v.MarshalBinary()
+				if err != nil {
+					return nil, err
+				}
+
+				out = append(out, &LLOStreamAggregate{
+					StreamID:    sid,
+					StreamValue: &LLOStreamValue{Type: v.Type(), Value: value},
+					Aggregator:  uint32(agg),
 				})
 			}
 		}
 		sort.Slice(out, func(i, j int) bool {
+			if out[i].StreamID == out[j].StreamID {
+				return out[i].Aggregator < out[j].Aggregator
+			}
 			return out[i].StreamID < out[j].StreamID
 		})
 	}
@@ -205,6 +260,7 @@ func validAfterSecondsToProtoOutcome(in map[llotypes.ChannelID]uint32) (out []*L
 }
 
 // TODO: Guard against untrusted inputs!
+// MERC-3524
 func (protoOutcomeCodec) Decode(b ocr3types.Outcome) (outcome Outcome, err error) {
 	pbuf := &LLOOutcomeProto{}
 	err = proto.Unmarshal(b, pbuf)
@@ -212,46 +268,68 @@ func (protoOutcomeCodec) Decode(b ocr3types.Outcome) (outcome Outcome, err error
 		return Outcome{}, fmt.Errorf("failed to decode outcome: expected protobuf (got: 0x%x); %w", b, err)
 	}
 	dfns := channelDefinitionsFromProtoOutcome(pbuf.ChannelDefinitions)
-	streamMedians := streamMediansFromProtoOutcome(pbuf.StreamMedians)
+	streamAggregates, err := streamAggregatesFromProtoOutcome(pbuf.StreamAggregates)
+	if err != nil {
+		return Outcome{}, err
+	}
 	validAfterSeconds := validAfterSecondsFromProtoOutcome(pbuf.ValidAfterSeconds)
 	outcome = Outcome{
 		LifeCycleStage:                   llotypes.LifeCycleStage(pbuf.LifeCycleStage),
 		ObservationsTimestampNanoseconds: pbuf.ObservationsTimestampNanoseconds,
 		ChannelDefinitions:               dfns,
 		ValidAfterSeconds:                validAfterSeconds,
-		StreamMedians:                    streamMedians,
+		StreamAggregates:                 streamAggregates,
 	}
 	return outcome, nil
 }
 
+// TODO: Needs fuzz testing
+// MERC-3524
 func channelDefinitionsFromProtoOutcome(in []*LLOChannelIDAndDefinitionProto) (out llotypes.ChannelDefinitions) {
 	if len(in) > 0 {
 		out = make(map[llotypes.ChannelID]llotypes.ChannelDefinition, len(in))
 		for _, d := range in {
+			streams := make([]llotypes.Stream, len(d.ChannelDefinition.Streams))
+			for i, strm := range d.ChannelDefinition.Streams {
+				streams[i] = llotypes.Stream{
+					StreamID:   strm.StreamID,
+					Aggregator: llotypes.Aggregator(strm.Aggregator),
+				}
+			}
 			out[d.ChannelID] = llotypes.ChannelDefinition{
-				ReportFormat:  llotypes.ReportFormat(d.ChannelDefinition.ReportFormat),
-				ChainSelector: d.ChannelDefinition.ChainSelector,
-				StreamIDs:     d.ChannelDefinition.StreamIDs,
+				ReportFormat: llotypes.ReportFormat(d.ChannelDefinition.ReportFormat),
+				Streams:      streams,
+				Opts:         d.ChannelDefinition.Opts,
 			}
 		}
 	}
 	return
 }
 
-func streamMediansFromProtoOutcome(in []*LLOStreamIDAndValue) (out StreamValues) {
+// TODO: Needs fuzz testing
+// MERC-3524
+func streamAggregatesFromProtoOutcome(in []*LLOStreamAggregate) (out StreamAggregates, err error) {
 	if len(in) > 0 {
-		out = make(map[llotypes.StreamID]*big.Int, len(in))
-		for _, sv := range in {
-			if sv.Value != nil {
-				// StreamMedians shouldn't have explicit nil values, but for
-				// safety we ought to handle it anyway
-				out[sv.StreamID] = new(big.Int).SetBytes(sv.Value)
+		out = make(StreamAggregates, len(in))
+		for _, enc := range in {
+			var sv StreamValue
+			sv, err = UnmarshalProtoStreamValue(enc.StreamValue)
+			if err != nil {
+				return
 			}
+			m, exists := out[enc.StreamID]
+			if !exists {
+				m = make(map[llotypes.Aggregator]StreamValue)
+				out[enc.StreamID] = m
+			}
+			m[llotypes.Aggregator(enc.Aggregator)] = sv
 		}
 	}
 	return
 }
 
+// TODO: Needs fuzz testing
+// MERC-3524
 func validAfterSecondsFromProtoOutcome(in []*LLOChannelIDAndValidAfterSecondsProto) (out map[llotypes.ChannelID]uint32) {
 	if len(in) > 0 {
 		out = make(map[llotypes.ChannelID]uint32, len(in))

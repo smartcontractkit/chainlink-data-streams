@@ -1,11 +1,14 @@
 package llo
 
 import (
-	"math/big"
+	"fmt"
 	"testing"
 
-	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
+	"github.com/shopspring/decimal"
 	"github.com/smartcontractkit/libocr/offchainreporting2/types"
+
+	"github.com/smartcontractkit/chainlink-common/pkg/types/llo"
+	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -14,22 +17,22 @@ import (
 func Test_JSONCodec(t *testing.T) {
 	t.Run("Encode=>Decode", func(t *testing.T) {
 		r := Report{
-			ConfigDigest:      types.ConfigDigest([32]byte{1, 2, 3}),
-			ChainSelector:     42,
-			SeqNr:             43,
-			ChannelID:         llotypes.ChannelID(46),
-			ValidAfterSeconds: 44,
-			ValidUntilSeconds: 45,
-			Values:            []*big.Int{big.NewInt(1), big.NewInt(2)},
-			Specimen:          true,
+			ConfigDigest:                types.ConfigDigest([32]byte{1, 2, 3}),
+			SeqNr:                       43,
+			ChannelID:                   llotypes.ChannelID(46),
+			ValidAfterSeconds:           44,
+			ObservationTimestampSeconds: 45,
+			Values:                      []StreamValue{ToDecimal(decimal.NewFromInt(1)), ToDecimal(decimal.NewFromInt(2))},
+			Specimen:                    true,
 		}
 
 		cdc := JSONReportCodec{}
 
-		encoded, err := cdc.Encode(r)
+		encoded, err := cdc.Encode(r, llo.ChannelDefinition{})
 		require.NoError(t, err)
 
-		assert.Equal(t, `{"ConfigDigest":"0102030000000000000000000000000000000000000000000000000000000000","ChainSelector":42,"SeqNr":43,"ChannelID":46,"ValidAfterSeconds":44,"ValidUntilSeconds":45,"Values":[1,2],"Specimen":true}`, string(encoded))
+		fmt.Println("encoded", string(encoded))
+		assert.Equal(t, `{"ConfigDigest":"0102030000000000000000000000000000000000000000000000000000000000","SeqNr":43,"ChannelID":46,"ValidAfterSeconds":44,"ObservationTimestampSeconds":45,"Values":[{"Type":0,"Value":"1"},{"Type":0,"Value":"2"}],"Specimen":true}`, string(encoded))
 
 		decoded, err := cdc.Decode(encoded)
 		require.NoError(t, err)
