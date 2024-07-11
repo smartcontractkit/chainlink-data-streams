@@ -13,4 +13,4 @@ jobs:
           - name: Setup go
             uses: actions/setup-go@cdcb36043654635271a94b9a6d1392de5bb323a7 # v5.0.1
           - name: go-mod-validation
-            uses: smartcontractkit/.github/apps/go-mod-validator@7c641ba626e828293bae3ea30ff89fafedfa50c8 # 0.0.0
+            uses: smartcontractkit/.github/apps/go-mod-validator@bc6767b4a038fe29f2ac082a84e1411fcd1cdc3d # 0.0.0
