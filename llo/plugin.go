@@ -689,6 +689,7 @@ func (p *Plugin) Outcome(outctx ocr3types.OutcomeContext, query types.Query, aos
 
 	for _, ao := range aos {
 		// TODO: Put in a function
+		// MERC-3524
 		observation, err2 := p.ObservationCodec.Decode(ao.Observation)
 		if err2 != nil {
 			p.Logger.Warnw("ignoring invalid observation", "oracleID", ao.Observer, "error", err2)
@@ -724,7 +725,7 @@ func (p *Plugin) Outcome(outctx ocr3types.OutcomeContext, query types.Query, aos
 
 		var missingObservations []llotypes.StreamID
 		for id, sv := range observation.StreamValues {
-			if sv != nil {
+			if sv != nil { // FIXME: nil checks don't work here. Test this and figure out what to do (also, are there other cases?)
 				streamObservations[id] = append(streamObservations[id], sv)
 			} else {
 				missingObservations = append(missingObservations, id)
@@ -766,6 +767,7 @@ func (p *Plugin) Outcome(outctx ocr3types.OutcomeContext, query types.Query, aos
 	/////////////////////////////////
 	// outcome.ObservationsTimestampNanoseconds
 	// TODO: Refactor this into an aggregate function
+	// MERC-3524
 	sort.Slice(timestampsNanoseconds, func(i, j int) bool { return timestampsNanoseconds[i] < timestampsNanoseconds[j] })
 	outcome.ObservationsTimestampNanoseconds = timestampsNanoseconds[len(timestampsNanoseconds)/2]
 
@@ -918,7 +920,8 @@ func (p *Plugin) Outcome(outctx ocr3types.OutcomeContext, query types.Query, aos
 				if p.Config.VerboseLogging {
 					p.Logger.Warnw("Aggregation failed", "aggregator", agg, "channelID", cid, "f", p.F, "streamID", sid, "observations", streamObservations[sid], "stage", "Outcome", "seqNr", outctx.SeqNr, "err", err)
 				}
-				// TODO: Is this a complete failure?
+				// FIXME: Is this a complete failure?
+				// MERC-3524
 				continue
 			}
 			m[agg] = result
@@ -1019,6 +1022,7 @@ func (p *Plugin) Reports(seqNr uint64, rawOutcome ocr3types.Outcome) ([]ocr3type
 		for _, strm := range cd.Streams {
 			// TODO: Can you ever get nil values (i.e. missing from the
 			// StreamAggregates) here? What happens if you do?
+			// MERC-3524
 			values = append(values, outcome.StreamAggregates[strm.StreamID][strm.Aggregator])
 		}
 
