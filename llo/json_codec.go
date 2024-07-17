@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/shopspring/decimal"
 	"github.com/smartcontractkit/libocr/offchainreporting2/types"
 
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
@@ -25,7 +24,13 @@ func UnmarshalJSONStreamValue(enc *JSONStreamValue) (StreamValue, error) {
 	switch enc.Type {
 	case LLOStreamValue_Decimal:
 		sv := new(Decimal)
-		if err := (*decimal.Decimal)(sv).UnmarshalJSON([]byte(enc.Value)); err != nil {
+		if err := (sv).UnmarshalText([]byte(enc.Value)); err != nil {
+			return nil, err
+		}
+		return sv, nil
+	case LLOStreamValue_Quote:
+		sv := new(Quote)
+		if err := (sv).UnmarshalText([]byte(enc.Value)); err != nil {
 			return nil, err
 		}
 		return sv, nil
@@ -49,13 +54,13 @@ func (cdc JSONReportCodec) Encode(r Report, _ llotypes.ChannelDefinition) ([]byt
 		Specimen                    bool
 	}
 	values := make([]JSONStreamValue, len(r.Values))
-	for i, v := range r.Values {
-		b, err := v.MarshalText()
+	for i, sv := range r.Values {
+		b, err := sv.MarshalText()
 		if err != nil {
 			return nil, fmt.Errorf("failed to encode StreamValue: %w", err)
 		}
 		values[i] = JSONStreamValue{
-			Type:  LLOStreamValue_Decimal,
+			Type:  sv.Type(),
 			Value: string(b),
 		}
 	}

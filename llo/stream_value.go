@@ -4,6 +4,7 @@ import (
 	"encoding"
 	"errors"
 	"fmt"
+	"regexp"
 
 	"google.golang.org/protobuf/proto"
 
@@ -20,6 +21,7 @@ type StreamValue interface {
 	// TextMarshaler needed for JSON serialization and logging
 	// Unmarshal should NOT panic on nil receiver, but instead return ErrNilStreamValue
 	encoding.TextMarshaler
+	encoding.TextUnmarshaler
 	// Type is needed for proto serialization so we know how to unserialize it
 	Type() LLOStreamValue_Type
 }
@@ -106,6 +108,30 @@ func (v *Quote) MarshalText() ([]byte, error) {
 	return []byte(fmt.Sprintf("Q{Bid: %s, Benchmark: %s, Ask: %s}", v.Bid.String(), v.Benchmark.String(), v.Ask.String())), nil
 }
 
+var quoteRegex = regexp.MustCompile(`Q\{Bid: ([0-9.]+), Benchmark: ([0-9.]+), Ask: ([0-9.]+)\}`)
+
+func (v *Quote) UnmarshalText(data []byte) error {
+	if v == nil {
+		return ErrNilStreamValue
+	}
+
+	matches := quoteRegex.FindStringSubmatch(string(data))
+	if len(matches) != 4 {
+		return fmt.Errorf("unexpected input for quote, expected format Q{Bid: <bid>, Benchmark: <benchmark>, Ask: <ask>}, got %s", string(data))
+	}
+
+	bid := matches[1]
+	benchmark := matches[2]
+	ask := matches[3]
+	if err := v.Bid.UnmarshalText([]byte(bid)); err != nil {
+		return err
+	}
+	if err := v.Benchmark.UnmarshalText([]byte(benchmark)); err != nil {
+		return err
+	}
+	return v.Ask.UnmarshalText([]byte(ask))
+}
+
 func (v *Quote) Type() LLOStreamValue_Type {
 	return LLOStreamValue_Quote
 }
@@ -149,6 +175,13 @@ func (v *Decimal) MarshalText() ([]byte, error) {
 		return nil, ErrNilStreamValue
 	}
 	return []byte(v.String()), nil
+}
+
+func (v *Decimal) UnmarshalText(data []byte) error {
+	if v == nil {
+		return ErrNilStreamValue
+	}
+	return (*decimal.Decimal)(v).UnmarshalText(data)
 }
 
 func (v *Decimal) Type() LLOStreamValue_Type {
