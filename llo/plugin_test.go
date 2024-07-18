@@ -544,10 +544,6 @@ func Test_Outcome(t *testing.T) {
 		assert.NotContains(t, decoded.ChannelDefinitions, llotypes.ChannelID(MaxOutcomeChannelDefinitionsLength))
 		assert.NotContains(t, decoded.ChannelDefinitions, llotypes.ChannelID(MaxOutcomeChannelDefinitionsLength+1))
 	})
-
-	t.Run("aggregates values, and handles missing observations", func(t *testing.T) {
-		t.Fatal("TODO")
-	})
 }
 
 func Test_MakeChannelHash(t *testing.T) {
