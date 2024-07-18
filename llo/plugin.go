@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"math/big"
 	"sort"
 	"time"
 
@@ -16,7 +15,6 @@ import (
 	"github.com/smartcontractkit/chainlink-common/pkg/logger"
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
 
-	chainselectors "github.com/smartcontractkit/chain-selectors"
 	"github.com/smartcontractkit/libocr/offchainreporting2/types"
 	ocr2types "github.com/smartcontractkit/libocr/offchainreporting2/types"
 	"github.com/smartcontractkit/libocr/offchainreporting2plus/ocr3types"
@@ -49,13 +47,6 @@ const (
 	// even generate an observation that fails this
 	MaxOutcomeChannelDefinitionsLength = 10_000
 )
-
-// Values for a set of streams, e.g. "eth-usd", "link-usd", "eur-chf" etc
-// StreamIDs are uint32
-// TODO: generalize from *big.Int to anything
-// https://smartcontract-it.atlassian.net/browse/MERC-3525
-// TODO: Consider renaming to StreamDataPoints? Or StreamObservations?
-type StreamValues map[llotypes.StreamID]*big.Int
 
 type DSOpts interface {
 	VerboseLogging() bool
@@ -123,41 +114,23 @@ type ChannelDefinitionCache interface {
 	Definitions() llotypes.ChannelDefinitions
 }
 
-// TODO: Test this
-func ChannelEquals(a, b llotypes.ChannelDefinition) bool {
-	if a.ChainSelector != b.ChainSelector {
-		return false
-	}
-	if a.ReportFormat != b.ReportFormat {
-		return false
-	}
-	if len(a.StreamIDs) != len(b.StreamIDs) {
-		return false
-	}
-	for i, streamID := range a.StreamIDs {
-		if streamID != b.StreamIDs[i] {
-			return false
-		}
-	}
-	return true
-}
-
 // MakeChannelHash is used for mapping ChannelDefinitionWithIDs
 func MakeChannelHash(cd ChannelDefinitionWithID) ChannelHash {
 	h := sha256.New()
 	merr := errors.Join(
 		binary.Write(h, binary.BigEndian, cd.ChannelID),
 		binary.Write(h, binary.BigEndian, cd.ReportFormat),
-		binary.Write(h, binary.BigEndian, cd.ChainSelector),
-		binary.Write(h, binary.BigEndian, uint32(len(cd.StreamIDs))),
+		binary.Write(h, binary.BigEndian, uint32(len(cd.Streams))),
 	)
-	for _, streamID := range cd.StreamIDs {
-		merr = errors.Join(merr, binary.Write(h, binary.BigEndian, streamID))
+	for _, strm := range cd.Streams {
+		merr = errors.Join(merr, binary.Write(h, binary.BigEndian, strm.StreamID))
+		merr = errors.Join(merr, binary.Write(h, binary.BigEndian, strm.Aggregator))
 	}
 	if merr != nil {
 		// This should never happen
 		panic(merr)
 	}
+	h.Write(cd.Opts)
 	var result [32]byte
 	h.Sum(result[:0])
 	return result
@@ -263,10 +236,10 @@ func (f *PluginFactory) NewReportingPlugin(cfg ocr3types.ReportingPluginConfig) 
 			Name: "LLO",
 			Limits: ocr3types.ReportingPluginLimits{
 				MaxQueryLength:       0,
-				MaxObservationLength: ocr3types.MaxMaxObservationLength, // TODO: use tighter bound
-				MaxOutcomeLength:     ocr3types.MaxMaxOutcomeLength,     // TODO: use tighter bound
-				MaxReportLength:      ocr3types.MaxMaxReportLength,      // TODO: use tighter bound
-				MaxReportCount:       ocr3types.MaxMaxReportCount,       // TODO: use tighter bound
+				MaxObservationLength: ocr3types.MaxMaxObservationLength, // TODO: use tighter bound MERC-3524
+				MaxOutcomeLength:     ocr3types.MaxMaxOutcomeLength,     // TODO: use tighter bound MERC-3524
+				MaxReportLength:      ocr3types.MaxMaxReportLength,      // TODO: use tighter bound MERC-3524
+				MaxReportCount:       ocr3types.MaxMaxReportCount,       // TODO: use tighter bound MERC-3524
 			},
 		}, nil
 }
@@ -274,9 +247,8 @@ func (f *PluginFactory) NewReportingPlugin(cfg ocr3types.ReportingPluginConfig) 
 var _ ocr3types.ReportingPlugin[llotypes.ReportInfo] = &Plugin{}
 
 type ReportCodec interface {
-	Encode(Report) ([]byte, error)
-	Decode([]byte) (Report, error)
-	// TODO: max length check? https://smartcontract-it.atlassian.net/browse/MERC-3524
+	// Encode may be lossy, so no Decode function is expected
+	Encode(Report, llotypes.ChannelDefinition) ([]byte, error)
 }
 
 type Plugin struct {
@@ -318,6 +290,8 @@ type Observation struct {
 	// Should this protocol instance be retired?
 	ShouldRetire bool
 	// Timestamp from when observation is made
+	// Note that this is the timestamp immediately before we initiate any
+	// observations
 	UnixTimestampNanoseconds int64
 	// Votes to remove/add channels. Subject to MAX_OBSERVATION_*_LENGTH limits
 	RemoveChannelIDs map[llotypes.ChannelID]struct{}
@@ -390,6 +364,9 @@ func (p *Plugin) Observation(ctx context.Context, outctx ocr3types.OutcomeContex
 		//
 		// ChannelIDs should always be sorted the same way (channel ID ascending).
 		expectedChannelDefs := p.ChannelDefinitionCache.Definitions()
+		if err := VerifyChannelDefinitions(expectedChannelDefs); err != nil {
+			return nil, fmt.Errorf("ChannelDefinitionCache.Definitions is invalid: %w", err)
+		}
 
 		removeChannelDefinitions := subtractChannelDefinitions(previousOutcome.ChannelDefinitions, expectedChannelDefs, MaxObservationRemoveChannelIDsLength)
 		for channelID := range removeChannelDefinitions {
@@ -421,7 +398,7 @@ func (p *Plugin) Observation(ctx context.Context, outctx ocr3types.OutcomeContex
 		for _, channelID := range expectedChannelIDs {
 			prev, exists := previousOutcome.ChannelDefinitions[channelID]
 			channelDefinition := expectedChannelDefs[channelID]
-			if exists && ChannelEquals(prev, channelDefinition) {
+			if exists && prev.Equals(channelDefinition) {
 				continue
 			}
 			// Add or replace channel
@@ -435,23 +412,26 @@ func (p *Plugin) Observation(ctx context.Context, outctx ocr3types.OutcomeContex
 		if len(updateChannelDefinitions) > 0 {
 			p.Logger.Debugw("Voting to update channel definitions",
 				"updateChannelDefinitions", updateChannelDefinitions,
-				"seqNr", outctx.SeqNr)
+				"seqNr", outctx.SeqNr,
+				"stage", "Observation")
 		}
 		if len(removeChannelIDs) > 0 {
 			p.Logger.Debugw("Voting to remove channel definitions",
 				"removeChannelIDs", removeChannelIDs,
-				"seqNr", outctx.SeqNr)
+				"seqNr", outctx.SeqNr,
+				"stage", "Observation",
+			)
 		}
 	}
 
 	var streamValues StreamValues
 	if len(previousOutcome.ChannelDefinitions) == 0 {
-		p.Logger.Debugw("ChannelDefinitions is empty, will not generate any observations", "seqNr", outctx.SeqNr)
+		p.Logger.Debugw("ChannelDefinitions is empty, will not generate any observations", "stage", "Observation", "seqNr", outctx.SeqNr)
 	} else {
-		streamValues = make(map[llotypes.StreamID]*big.Int)
+		streamValues = make(StreamValues)
 		for _, channelDefinition := range previousOutcome.ChannelDefinitions {
-			for _, streamID := range channelDefinition.StreamIDs {
-				streamValues[streamID] = nil
+			for _, strm := range channelDefinition.Streams {
+				streamValues[strm.StreamID] = nil
 			}
 		}
 
@@ -516,6 +496,10 @@ func (p *Plugin) ValidateObservation(outctx ocr3types.OutcomeContext, query type
 		return fmt.Errorf("RemoveChannelIDs is too long: %v vs %v", len(observation.RemoveChannelIDs), MaxObservationRemoveChannelIDsLength)
 	}
 
+	if err := VerifyChannelDefinitions(observation.UpdateChannelDefinitions); err != nil {
+		return fmt.Errorf("UpdateChannelDefinitions is invalid: %w", err)
+	}
+
 	if len(observation.StreamValues) > MaxObservationStreamValuesLength {
 		return fmt.Errorf("StreamValues is too long: %v vs %v", len(observation.StreamValues), MaxObservationStreamValuesLength)
 	}
@@ -535,10 +519,11 @@ type Outcome struct {
 	// Latest ValidAfterSeconds value for each channel, reports for each channel
 	// span from ValidAfterSeconds to ObservationTimestampSeconds
 	ValidAfterSeconds map[llotypes.ChannelID]uint32
-	// StreamMedians is the median observed value for each stream
-	// QUESTION: Can we use arbitrary types here to allow for other types or
-	// consensus methods?
-	StreamMedians map[llotypes.StreamID]*big.Int
+	// StreamAggregates contains stream IDs mapped to various aggregations.
+	// Usually you will only have one aggregation type per stream but since
+	// channels can define different aggregation methods, sometimes we will
+	// need multiple.
+	StreamAggregates StreamAggregates
 }
 
 // The Outcome's ObservationsTimestamp rounded down to seconds precision
@@ -568,12 +553,8 @@ func (out *Outcome) IsReportable(channelID llotypes.ChannelID) *ErrUnreportableC
 		return &ErrUnreportableChannel{nil, "IsReportable=false; no channel definition with this ID", channelID}
 	}
 
-	if _, err := chainselectors.ChainIdFromSelector(channelDefinition.ChainSelector); err != nil {
-		return &ErrUnreportableChannel{err, "IsReportable=false; invalid chain selector", channelID}
-	}
-
-	for _, streamID := range channelDefinition.StreamIDs {
-		if out.StreamMedians[streamID] == nil {
+	for _, strm := range channelDefinition.Streams {
+		if out.StreamAggregates[strm.StreamID] == nil {
 			// FIXME: Is this comment actually correct?
 			// This can happen in normal operation, because in Report() we use
 			// the ChannelDefinitions in the generated Outcome. But that was
@@ -581,7 +562,7 @@ func (out *Outcome) IsReportable(channelID llotypes.ChannelID) *ErrUnreportableC
 			// from the PREVIOUS outcome. So if channel definitions have been
 			// added in this round, we would not expect there to be
 			// observations present for new streams in those channels.
-			return &ErrUnreportableChannel{nil, fmt.Sprintf("IsReportable=false; median was nil for stream %d", streamID), channelID}
+			return &ErrUnreportableChannel{nil, fmt.Sprintf("IsReportable=false; median was nil for stream %d", strm.StreamID), channelID}
 		}
 	}
 
@@ -704,10 +685,11 @@ func (p *Plugin) Outcome(outctx ocr3types.OutcomeContext, query types.Query, aos
 	updateChannelVotesByHash := map[ChannelHash]int{}
 	updateChannelDefinitionsByHash := map[ChannelHash]ChannelDefinitionWithID{}
 
-	streamObservations := map[llotypes.StreamID][]*big.Int{}
+	streamObservations := make(map[llotypes.StreamID][]StreamValue)
 
 	for _, ao := range aos {
 		// TODO: Put in a function
+		// MERC-3524
 		observation, err2 := p.ObservationCodec.Decode(ao.Observation)
 		if err2 != nil {
 			p.Logger.Warnw("ignoring invalid observation", "oracleID", ao.Observer, "error", err2)
@@ -742,9 +724,9 @@ func (p *Plugin) Outcome(outctx ocr3types.OutcomeContext, query types.Query, aos
 		}
 
 		var missingObservations []llotypes.StreamID
-		for id, obsResult := range observation.StreamValues {
-			if obsResult != nil {
-				streamObservations[id] = append(streamObservations[id], obsResult)
+		for id, sv := range observation.StreamValues {
+			if sv != nil { // FIXME: nil checks don't work here. Test this and figure out what to do (also, are there other cases?)
+				streamObservations[id] = append(streamObservations[id], sv)
 			} else {
 				missingObservations = append(missingObservations, id)
 			}
@@ -752,9 +734,9 @@ func (p *Plugin) Outcome(outctx ocr3types.OutcomeContext, query types.Query, aos
 		if p.Config.VerboseLogging {
 			if len(missingObservations) > 0 {
 				sort.Slice(missingObservations, func(i, j int) bool { return missingObservations[i] < missingObservations[j] })
-				p.Logger.Debugw("Missing observations", "streamIDs", missingObservations, "oracleID", ao.Observer, "seqNr", outctx.SeqNr)
+				p.Logger.Debugw("Peer was missing observations", "streamIDs", missingObservations, "oracleID", ao.Observer, "stage", "Outcome", "seqNr", outctx.SeqNr)
 			}
-			p.Logger.Debugw("Using observations", "sv", streamObservations, "oracleID", ao.Observer, "seqNr", outctx.SeqNr)
+			p.Logger.Debugw("Got observations from peer", "stage", "Outcome", "sv", streamObservations, "oracleID", ao.Observer, "seqNr", outctx.SeqNr)
 		}
 	}
 
@@ -784,6 +766,8 @@ func (p *Plugin) Outcome(outctx ocr3types.OutcomeContext, query types.Query, aos
 
 	/////////////////////////////////
 	// outcome.ObservationsTimestampNanoseconds
+	// TODO: Refactor this into an aggregate function
+	// MERC-3524
 	sort.Slice(timestampsNanoseconds, func(i, j int) bool { return timestampsNanoseconds[i] < timestampsNanoseconds[j] })
 	outcome.ObservationsTimestampNanoseconds = timestampsNanoseconds[len(timestampsNanoseconds)/2]
 
@@ -832,6 +816,7 @@ func (p *Plugin) Outcome(outctx ocr3types.OutcomeContext, query types.Query, aos
 				"originalChannelDefinition", original,
 				"replaceChannelDefinition", defWithID,
 				"seqNr", outctx.SeqNr,
+				"stage", "Outcome",
 			)
 			outcome.ChannelDefinitions[defWithID.ChannelID] = defWithID.ChannelDefinition
 		} else if len(outcome.ChannelDefinitions) >= MaxOutcomeChannelDefinitionsLength {
@@ -839,13 +824,17 @@ func (p *Plugin) Outcome(outctx ocr3types.OutcomeContext, query types.Query, aos
 				"maxOutcomeChannelDefinitionsLength", MaxOutcomeChannelDefinitionsLength,
 				"addChannelDefinition", defWithID,
 				"seqNr", outctx.SeqNr,
+				"stage", "Outcome",
 			)
+			// continue, don't break here because remaining channels might be a
+			// replacement rather than an addition, and this is still ok
 			continue
 		}
 		p.Logger.Debugw("Adding channel (new)",
 			"channelID", defWithID.ChannelID,
 			"addChannelDefinition", defWithID,
 			"seqNr", outctx.SeqNr,
+			"stage", "Outcome",
 		)
 		outcome.ChannelDefinitions[defWithID.ChannelID] = defWithID.ChannelDefinition
 	}
@@ -867,7 +856,7 @@ func (p *Plugin) Outcome(outctx ocr3types.OutcomeContext, query types.Query, aos
 		for channelID, previousValidAfterSeconds := range previousOutcome.ValidAfterSeconds {
 			if err3 := previousOutcome.IsReportable(channelID); err3 != nil {
 				if p.Config.VerboseLogging {
-					p.Logger.Debugw("Channel is not reportable", "channelID", channelID, "err", err3, "seqNr", outctx.SeqNr)
+					p.Logger.Debugw("Channel is not reportable", "channelID", channelID, "err", err3, "stage", "Outcome", "seqNr", outctx.SeqNr)
 				}
 				// was reported based on previous outcome
 				outcome.ValidAfterSeconds[channelID] = previousObservationsTimestampSeconds
@@ -902,58 +891,75 @@ func (p *Plugin) Outcome(outctx ocr3types.OutcomeContext, query types.Query, aos
 	}
 
 	/////////////////////////////////
-	// outcome.StreamMedians
+	// outcome.StreamAggregates
 	/////////////////////////////////
-	outcome.StreamMedians = map[llotypes.StreamID]*big.Int{}
-	for streamID, observations := range streamObservations {
-		sort.Slice(observations, func(i, j int) bool { return observations[i].Cmp(observations[j]) < 0 })
-		if len(observations) <= p.F {
-			// In the worst case, we have 2f+1 observations, of which up to f
-			// are allowed to be unparseable/missing. If we have less than f+1
-			// usable observations, we cannot securely generate a median at
-			// all.
-			if p.Config.VerboseLogging {
-				p.Logger.Warnw("Not enough observations to calculate median, expected at least f+1", "f", p.F, "streamID", streamID, "observations", observations, "seqNr", outctx.SeqNr)
+	outcome.StreamAggregates = make(map[llotypes.StreamID]map[llotypes.Aggregator]StreamValue, len(streamObservations))
+	// Aggregation methods are defined on a per-channel basis, but we only want
+	// to do the minimum necessary number of aggregations (one per stream/aggregator
+	// pair) and re-use the same result, in case multiple channels share the
+	// same stream/aggregator pair.
+	for cid, cd := range outcome.ChannelDefinitions {
+		for _, strm := range cd.Streams {
+			sid, agg := strm.StreamID, strm.Aggregator
+			if _, exists := outcome.StreamAggregates[sid][agg]; exists {
+				// Should only happen in the case of duplicate streams, no
+				// need to aggregate twice
+				continue
 			}
-			continue
+			aggF := GetAggregatorFunc(agg)
+			if aggF == nil {
+				return nil, fmt.Errorf("no aggregator function defined for aggregator of type %v", agg)
+			}
+			m, exists := outcome.StreamAggregates[sid]
+			if !exists {
+				m = make(map[llotypes.Aggregator]StreamValue)
+				outcome.StreamAggregates[sid] = m
+			}
+			result, err := aggF(streamObservations[sid], p.F)
+			if err != nil {
+				if p.Config.VerboseLogging {
+					p.Logger.Warnw("Aggregation failed", "aggregator", agg, "channelID", cid, "f", p.F, "streamID", sid, "observations", streamObservations[sid], "stage", "Outcome", "seqNr", outctx.SeqNr, "err", err)
+				}
+				// FIXME: Is this a complete failure?
+				// MERC-3524
+				continue
+			}
+			m[agg] = result
 		}
-		// We use a "rank-k" median here, instead one could average in case of
-		// an even number of observations.
-		outcome.StreamMedians[streamID] = observations[len(observations)/2]
 	}
 
 	if p.Config.VerboseLogging {
-		p.Logger.Debugw("Generated outcome", "outcome", outcome, "seqNr", outctx.SeqNr)
+		p.Logger.Debugw("Generated outcome", "outcome", outcome, "stage", "Outcome", "seqNr", outctx.SeqNr)
 	}
 	return p.OutcomeCodec.Encode(outcome)
 }
 
 type Report struct {
 	ConfigDigest types.ConfigDigest
-	// Chain the report is destined for
-	ChainSelector uint64
 	// OCR sequence number of this report
 	SeqNr uint64
 	// Channel that is being reported on
 	ChannelID llotypes.ChannelID
-	// Report is valid for ValidAfterSeconds < block.time <= ValidUntilSeconds
+	// Report is only valid at t > ValidAfterSeconds
 	ValidAfterSeconds uint32
-	ValidUntilSeconds uint32
-	// Here we only encode big.Ints, but in principle there's nothing stopping
-	// us from also supporting non-numeric data or smaller values etc...
-	Values []*big.Int
+	// ObservationTimestampSeconds is the median of all observation timestamps
+	// (note that this timestamp is taken immediately before we initiate any
+	// observations)
+	ObservationTimestampSeconds uint32
+	// Values for every stream in the channel
+	Values []StreamValue
 	// The contract onchain will only validate non-specimen reports. A staging
 	// protocol instance will generate specimen reports so we can validate it
 	// works properly without any risk of misreports landing on chain.
 	Specimen bool
 }
 
-func (p *Plugin) encodeReport(r Report, format llotypes.ReportFormat) (types.Report, error) {
-	codec, exists := p.Codecs[format]
+func (p *Plugin) encodeReport(r Report, cd llotypes.ChannelDefinition) (types.Report, error) {
+	codec, exists := p.Codecs[cd.ReportFormat]
 	if !exists {
-		return nil, fmt.Errorf("codec missing for ReportFormat=%d", format)
+		return nil, fmt.Errorf("codec missing for ReportFormat=%q", cd.ReportFormat)
 	}
-	return codec.Encode(r)
+	return codec.Encode(r, cd)
 }
 
 // Generates a (possibly empty) list of reports from an outcome. Each report
@@ -1007,28 +1013,30 @@ func (p *Plugin) Reports(seqNr uint64, rawOutcome ocr3types.Outcome) ([]ocr3type
 
 	reportableChannels, unreportableChannels := outcome.ReportableChannels()
 	if p.Config.VerboseLogging {
-		p.Logger.Debugw("Reportable channels", "reportableChannels", reportableChannels, "unreportableChannels", unreportableChannels, "seqNr", seqNr)
+		p.Logger.Debugw("Reportable channels", "reportableChannels", reportableChannels, "unreportableChannels", unreportableChannels, "stage", "Report", "seqNr", seqNr)
 	}
 
-	for _, channelID := range reportableChannels {
-		channelDefinition := outcome.ChannelDefinitions[channelID]
-		values := []*big.Int{}
-		for _, streamID := range channelDefinition.StreamIDs {
-			values = append(values, outcome.StreamMedians[streamID])
+	for _, cid := range reportableChannels {
+		cd := outcome.ChannelDefinitions[cid]
+		values := make([]StreamValue, 0, len(cd.Streams))
+		for _, strm := range cd.Streams {
+			// TODO: Can you ever get nil values (i.e. missing from the
+			// StreamAggregates) here? What happens if you do?
+			// MERC-3524
+			values = append(values, outcome.StreamAggregates[strm.StreamID][strm.Aggregator])
 		}
 
 		report := Report{
 			p.ConfigDigest,
-			channelDefinition.ChainSelector,
 			seqNr,
-			channelID,
-			outcome.ValidAfterSeconds[channelID],
+			cid,
+			outcome.ValidAfterSeconds[cid],
 			observationsTimestampSeconds,
 			values,
 			outcome.LifeCycleStage != LifeCycleStageProduction,
 		}
 
-		encoded, err := p.encodeReport(report, channelDefinition.ReportFormat)
+		encoded, err := p.encodeReport(report, cd)
 		if err != nil {
 			return nil, err
 		}
@@ -1036,13 +1044,13 @@ func (p *Plugin) Reports(seqNr uint64, rawOutcome ocr3types.Outcome) ([]ocr3type
 			Report: encoded,
 			Info: llotypes.ReportInfo{
 				LifeCycleStage: outcome.LifeCycleStage,
-				ReportFormat:   channelDefinition.ReportFormat,
+				ReportFormat:   cd.ReportFormat,
 			},
 		})
 	}
 
 	if p.Config.VerboseLogging && len(rwis) == 0 {
-		p.Logger.Debugw("No reports, will not transmit anything", "reportableChannels", reportableChannels, "seqNr", seqNr)
+		p.Logger.Debugw("No reports, will not transmit anything", "reportableChannels", reportableChannels, "stage", "Report", "seqNr", seqNr)
 	}
 
 	return rwis, nil

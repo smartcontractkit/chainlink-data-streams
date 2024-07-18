@@ -2,10 +2,11 @@ package llo
 
 import (
 	"context"
-	"math/big"
+	"fmt"
 	"testing"
 	"time"
 
+	"github.com/shopspring/decimal"
 	"github.com/smartcontractkit/libocr/commontypes"
 	"github.com/smartcontractkit/libocr/offchainreporting2/types"
 	"github.com/smartcontractkit/libocr/offchainreporting2plus/ocr3types"
@@ -49,25 +50,24 @@ func (m *mockDataSource) Observe(ctx context.Context, streamValues StreamValues,
 
 func Test_Observation(t *testing.T) {
 	smallDefinitions := map[llotypes.ChannelID]llotypes.ChannelDefinition{
-		1: llotypes.ChannelDefinition{
-			ReportFormat:  llotypes.ReportFormatJSON,
-			ChainSelector: 123,
-			StreamIDs:     []llotypes.StreamID{1, 2, 3},
+		1: {
+			ReportFormat: llotypes.ReportFormatJSON,
+			Streams:      []llotypes.Stream{{StreamID: 1, Aggregator: llotypes.AggregatorMedian}, {StreamID: 2, Aggregator: llotypes.AggregatorMedian}, {StreamID: 3, Aggregator: llotypes.AggregatorMedian}},
 		},
-		2: llotypes.ChannelDefinition{
-			ReportFormat:  llotypes.ReportFormatEVM,
-			ChainSelector: 456,
-			StreamIDs:     []llotypes.StreamID{2, 3, 4},
+		2: {
+			ReportFormat: llotypes.ReportFormatEVMPremiumLegacy,
+			Streams:      []llotypes.Stream{{StreamID: 2, Aggregator: llotypes.AggregatorMedian}, {StreamID: 3, Aggregator: llotypes.AggregatorMedian}, {StreamID: 4, Aggregator: llotypes.AggregatorMedian}},
 		},
 	}
-	cdc := &mockChannelDefinitionCache{smallDefinitions}
+	cdc := &mockChannelDefinitionCache{definitions: smallDefinitions}
 
 	ds := &mockDataSource{
-		s: map[llotypes.StreamID]*big.Int{
-			1: big.NewInt(1000),
-			3: big.NewInt(3000),
-			4: big.NewInt(4000),
+		s: map[llotypes.StreamID]StreamValue{
+			1: ToDecimal(decimal.NewFromInt(1000)),
+			3: ToDecimal(decimal.NewFromInt(3000)),
+			4: ToDecimal(decimal.NewFromInt(4000)),
 		},
+		err: nil,
 	}
 
 	p := &Plugin{
@@ -119,7 +119,7 @@ func Test_Observation(t *testing.T) {
 			ObservationsTimestampNanoseconds: testStartTS.UnixNano(),
 			ChannelDefinitions:               cdc.definitions,
 			ValidAfterSeconds:                nil,
-			StreamMedians:                    nil,
+			StreamAggregates:                 nil,
 		}
 		encodedPreviousOutcome, err := p.OutcomeCodec.Encode(previousOutcome)
 		require.NoError(t, err)
@@ -139,30 +139,25 @@ func Test_Observation(t *testing.T) {
 	})
 
 	mediumDefinitions := map[llotypes.ChannelID]llotypes.ChannelDefinition{
-		1: llotypes.ChannelDefinition{
-			ReportFormat:  llotypes.ReportFormatJSON,
-			ChainSelector: 123,
-			StreamIDs:     []llotypes.StreamID{1, 2, 3},
+		1: {
+			ReportFormat: llotypes.ReportFormatJSON,
+			Streams:      []llotypes.Stream{{StreamID: 1, Aggregator: llotypes.AggregatorMedian}, {StreamID: 2, Aggregator: llotypes.AggregatorMedian}, {StreamID: 3, Aggregator: llotypes.AggregatorMedian}},
 		},
-		3: llotypes.ChannelDefinition{
-			ReportFormat:  llotypes.ReportFormatEVM,
-			ChainSelector: 456,
-			StreamIDs:     []llotypes.StreamID{2, 3, 4},
+		3: {
+			ReportFormat: llotypes.ReportFormatEVMPremiumLegacy,
+			Streams:      []llotypes.Stream{{StreamID: 2, Aggregator: llotypes.AggregatorMedian}, {StreamID: 3, Aggregator: llotypes.AggregatorMedian}, {StreamID: 4, Aggregator: llotypes.AggregatorMedian}},
 		},
-		4: llotypes.ChannelDefinition{
-			ReportFormat:  llotypes.ReportFormatEVM,
-			ChainSelector: 457,
-			StreamIDs:     []llotypes.StreamID{2, 3, 4},
+		4: {
+			ReportFormat: llotypes.ReportFormatEVMPremiumLegacy,
+			Streams:      []llotypes.Stream{{StreamID: 2, Aggregator: llotypes.AggregatorMedian}, {StreamID: 3, Aggregator: llotypes.AggregatorMedian}, {StreamID: 4, Aggregator: llotypes.AggregatorMedian}},
 		},
-		5: llotypes.ChannelDefinition{
-			ReportFormat:  llotypes.ReportFormatEVM,
-			ChainSelector: 458,
-			StreamIDs:     []llotypes.StreamID{2, 3, 4},
+		5: {
+			ReportFormat: llotypes.ReportFormatEVMPremiumLegacy,
+			Streams:      []llotypes.Stream{{StreamID: 2, Aggregator: llotypes.AggregatorMedian}, {StreamID: 3, Aggregator: llotypes.AggregatorMedian}, {StreamID: 4, Aggregator: llotypes.AggregatorMedian}},
 		},
-		6: llotypes.ChannelDefinition{
-			ReportFormat:  llotypes.ReportFormatEVM,
-			ChainSelector: 459,
-			StreamIDs:     []llotypes.StreamID{2, 3, 4},
+		6: {
+			ReportFormat: llotypes.ReportFormatEVMPremiumLegacy,
+			Streams:      []llotypes.Stream{{StreamID: 2, Aggregator: llotypes.AggregatorMedian}, {StreamID: 3, Aggregator: llotypes.AggregatorMedian}, {StreamID: 4, Aggregator: llotypes.AggregatorMedian}},
 		},
 	}
 
@@ -176,7 +171,7 @@ func Test_Observation(t *testing.T) {
 			ObservationsTimestampNanoseconds: testStartTS.UnixNano(),
 			ChannelDefinitions:               smallDefinitions,
 			ValidAfterSeconds:                nil,
-			StreamMedians:                    nil,
+			StreamAggregates:                 nil,
 		}
 		encodedPreviousOutcome, err := p.OutcomeCodec.Encode(previousOutcome)
 		require.NoError(t, err)
@@ -201,7 +196,7 @@ func Test_Observation(t *testing.T) {
 		assert.Equal(t, expected, decoded.UpdateChannelDefinitions)
 
 		assert.Len(t, decoded.RemoveChannelIDs, 1)
-		assert.Equal(t, map[uint32]struct{}{2: struct{}{}}, decoded.RemoveChannelIDs)
+		assert.Equal(t, map[uint32]struct{}{2: {}}, decoded.RemoveChannelIDs)
 
 		assert.GreaterOrEqual(t, decoded.UnixTimestampNanoseconds, testStartTS.UnixNano())
 		assert.Equal(t, ds.s, decoded.StreamValues)
@@ -212,9 +207,8 @@ func Test_Observation(t *testing.T) {
 	largeDefinitions := make(map[llotypes.ChannelID]llotypes.ChannelDefinition, largeSize)
 	for i := 0; i < largeSize; i++ {
 		largeDefinitions[llotypes.ChannelID(i)] = llotypes.ChannelDefinition{
-			ReportFormat:  llotypes.ReportFormatEVM,
-			ChainSelector: uint64(i),
-			StreamIDs:     []llotypes.StreamID{uint32(i)},
+			ReportFormat: llotypes.ReportFormatEVMPremiumLegacy,
+			Streams:      []llotypes.Stream{{StreamID: uint32(i), Aggregator: llotypes.AggregatorMedian}},
 		}
 	}
 	cdc.definitions = largeDefinitions
@@ -228,7 +222,7 @@ func Test_Observation(t *testing.T) {
 				ObservationsTimestampNanoseconds: testStartTS.UnixNano(),
 				ChannelDefinitions:               smallDefinitions,
 				ValidAfterSeconds:                nil,
-				StreamMedians:                    nil,
+				StreamAggregates:                 nil,
 			}
 			encodedPreviousOutcome, err := p.OutcomeCodec.Encode(previousOutcome)
 			require.NoError(t, err)
@@ -275,7 +269,7 @@ func Test_Observation(t *testing.T) {
 				ObservationsTimestampNanoseconds: testStartTS.UnixNano(),
 				ChannelDefinitions:               subsetDfns,
 				ValidAfterSeconds:                nil,
-				StreamMedians:                    nil,
+				StreamAggregates:                 nil,
 			}
 			encodedPreviousOutcome, err := p.OutcomeCodec.Encode(previousOutcome)
 			require.NoError(t, err)
@@ -323,7 +317,7 @@ func Test_Observation(t *testing.T) {
 				ObservationsTimestampNanoseconds: testStartTS.UnixNano(),
 				ChannelDefinitions:               largeDefinitions,
 				ValidAfterSeconds:                nil,
-				StreamMedians:                    nil,
+				StreamAggregates:                 nil,
 			}
 			encodedPreviousOutcome, err := p.OutcomeCodec.Encode(previousOutcome)
 			require.NoError(t, err)
@@ -361,7 +355,7 @@ func Test_Observation(t *testing.T) {
 				ObservationsTimestampNanoseconds: testStartTS.UnixNano(),
 				ChannelDefinitions:               subsetDfns,
 				ValidAfterSeconds:                nil,
-				StreamMedians:                    nil,
+				StreamAggregates:                 nil,
 			}
 			encodedPreviousOutcome, err := p.OutcomeCodec.Encode(previousOutcome)
 			require.NoError(t, err)
@@ -452,9 +446,8 @@ func Test_Outcome(t *testing.T) {
 
 	t.Run("adds a new channel definition if there are enough votes", func(t *testing.T) {
 		newCd := llotypes.ChannelDefinition{
-			ReportFormat:  llotypes.ReportFormat(2),
-			ChainSelector: 3,
-			StreamIDs:     []llotypes.StreamID{1, 2, 3},
+			ReportFormat: llotypes.ReportFormat(2),
+			Streams:      []llotypes.Stream{{StreamID: 1, Aggregator: llotypes.AggregatorMedian}, {StreamID: 2, Aggregator: llotypes.AggregatorMedian}, {StreamID: 3, Aggregator: llotypes.AggregatorMedian}},
 		}
 		obs, err := p.ObservationCodec.Encode(Observation{
 			UpdateChannelDefinitions: map[llotypes.ChannelID]llotypes.ChannelDefinition{
@@ -481,9 +474,8 @@ func Test_Outcome(t *testing.T) {
 
 	t.Run("replaces an existing channel definition if there are enough votes", func(t *testing.T) {
 		newCd := llotypes.ChannelDefinition{
-			ReportFormat:  llotypes.ReportFormat(2),
-			ChainSelector: 3,
-			StreamIDs:     []llotypes.StreamID{1, 2, 3},
+			ReportFormat: llotypes.ReportFormat(2),
+			Streams:      []llotypes.Stream{{StreamID: 1, Aggregator: llotypes.AggregatorQuote}, {StreamID: 2, Aggregator: llotypes.AggregatorMedian}, {StreamID: 3, Aggregator: llotypes.AggregatorMedian}},
 		}
 		obs, err := p.ObservationCodec.Encode(Observation{
 			UpdateChannelDefinitions: map[llotypes.ChannelID]llotypes.ChannelDefinition{
@@ -503,9 +495,8 @@ func Test_Outcome(t *testing.T) {
 		previousOutcome, err := p.OutcomeCodec.Encode(Outcome{
 			ChannelDefinitions: map[llotypes.ChannelID]llotypes.ChannelDefinition{
 				42: {
-					ReportFormat:  llotypes.ReportFormat(1),
-					ChainSelector: 2,
-					StreamIDs:     []llotypes.StreamID{2, 3, 4},
+					ReportFormat: llotypes.ReportFormat(1),
+					Streams:      []llotypes.Stream{{StreamID: 2, Aggregator: llotypes.AggregatorMedian}, {StreamID: 3, Aggregator: llotypes.AggregatorMedian}, {StreamID: 4, Aggregator: llotypes.AggregatorMedian}},
 				},
 			},
 		})
@@ -522,9 +513,8 @@ func Test_Outcome(t *testing.T) {
 
 	t.Run("does not add channels beyond MaxOutcomeChannelDefinitionsLength", func(t *testing.T) {
 		newCd := llotypes.ChannelDefinition{
-			ReportFormat:  llotypes.ReportFormat(2),
-			ChainSelector: 3,
-			StreamIDs:     []llotypes.StreamID{1, 2, 3},
+			ReportFormat: llotypes.ReportFormat(2),
+			Streams:      []llotypes.Stream{{StreamID: 1, Aggregator: llotypes.AggregatorMedian}, {StreamID: 2, Aggregator: llotypes.AggregatorMedian}, {StreamID: 3, Aggregator: llotypes.AggregatorMedian}},
 		}
 		obs := Observation{UpdateChannelDefinitions: map[llotypes.ChannelID]llotypes.ChannelDefinition{}}
 		for i := 0; i < MaxOutcomeChannelDefinitionsLength+10; i++ {
@@ -553,5 +543,88 @@ func Test_Outcome(t *testing.T) {
 		assert.Contains(t, decoded.ChannelDefinitions, llotypes.ChannelID(MaxOutcomeChannelDefinitionsLength-1))
 		assert.NotContains(t, decoded.ChannelDefinitions, llotypes.ChannelID(MaxOutcomeChannelDefinitionsLength))
 		assert.NotContains(t, decoded.ChannelDefinitions, llotypes.ChannelID(MaxOutcomeChannelDefinitionsLength+1))
+	})
+}
+
+func Test_MakeChannelHash(t *testing.T) {
+	t.Run("hashes channel definitions", func(t *testing.T) {
+		defs := ChannelDefinitionWithID{
+			ChannelID: 1,
+			ChannelDefinition: llotypes.ChannelDefinition{
+				ReportFormat: llotypes.ReportFormat(1),
+				Streams:      []llotypes.Stream{{StreamID: 1, Aggregator: llotypes.AggregatorMedian}, {StreamID: 2, Aggregator: llotypes.AggregatorMedian}, {StreamID: 3, Aggregator: llotypes.AggregatorMedian}},
+				Opts:         []byte(`{}`),
+			},
+		}
+		hash := MakeChannelHash(defs)
+		// NOTE: Breaking this test by changing the hash below may break existing running instances
+		assert.Equal(t, "c0b72f4acb79bb8f5075f979f86016a30159266a96870b1c617b44426337162a", fmt.Sprintf("%x", hash))
+	})
+
+	t.Run("different channelID makes different hash", func(t *testing.T) {
+		def1 := ChannelDefinitionWithID{ChannelID: 1}
+		def2 := ChannelDefinitionWithID{ChannelID: 2}
+
+		assert.NotEqual(t, MakeChannelHash(def1), MakeChannelHash(def2))
+	})
+
+	t.Run("different report format makes different hash", func(t *testing.T) {
+		def1 := ChannelDefinitionWithID{
+			ChannelDefinition: llotypes.ChannelDefinition{
+				ReportFormat: llotypes.ReportFormatJSON,
+			},
+		}
+		def2 := ChannelDefinitionWithID{
+			ChannelDefinition: llotypes.ChannelDefinition{
+				ReportFormat: llotypes.ReportFormatEVMPremiumLegacy,
+			},
+		}
+
+		assert.NotEqual(t, MakeChannelHash(def1), MakeChannelHash(def2))
+	})
+
+	t.Run("different streamIDs makes different hash", func(t *testing.T) {
+		def1 := ChannelDefinitionWithID{
+			ChannelDefinition: llotypes.ChannelDefinition{
+				Streams: []llotypes.Stream{{StreamID: 1, Aggregator: llotypes.AggregatorMedian}},
+			},
+		}
+		def2 := ChannelDefinitionWithID{
+			ChannelDefinition: llotypes.ChannelDefinition{
+				Streams: []llotypes.Stream{{StreamID: 2, Aggregator: llotypes.AggregatorMedian}},
+			},
+		}
+
+		assert.NotEqual(t, MakeChannelHash(def1), MakeChannelHash(def2))
+	})
+
+	t.Run("different aggregators makes different hash", func(t *testing.T) {
+		def1 := ChannelDefinitionWithID{
+			ChannelDefinition: llotypes.ChannelDefinition{
+				Streams: []llotypes.Stream{{StreamID: 1, Aggregator: llotypes.AggregatorMedian}},
+			},
+		}
+		def2 := ChannelDefinitionWithID{
+			ChannelDefinition: llotypes.ChannelDefinition{
+				Streams: []llotypes.Stream{{StreamID: 1, Aggregator: llotypes.AggregatorQuote}},
+			},
+		}
+
+		assert.NotEqual(t, MakeChannelHash(def1), MakeChannelHash(def2))
+	})
+
+	t.Run("different opts makes different hash", func(t *testing.T) {
+		def1 := ChannelDefinitionWithID{
+			ChannelDefinition: llotypes.ChannelDefinition{
+				Opts: []byte(`{"foo":"bar"}`),
+			},
+		}
+		def2 := ChannelDefinitionWithID{
+			ChannelDefinition: llotypes.ChannelDefinition{
+				Opts: []byte(`{"foo":"baz"}`),
+			},
+		}
+
+		assert.NotEqual(t, MakeChannelHash(def1), MakeChannelHash(def2))
 	})
 }
