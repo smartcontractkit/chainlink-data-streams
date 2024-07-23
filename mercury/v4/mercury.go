@@ -431,7 +431,7 @@ func (rp *reportingPlugin) buildReportFields(previousReport types.Report, paos [
 		rf.NativeFee = big.NewInt(0)
 	}
 
-	rf.MarketStatus, err = mercury.GetConsensusMarketStatus(convertMarketStatus(paos), rp.f)
+	rf.MarketStatus, err = GetConsensusMarketStatus(convertMarketStatus(paos), rp.f)
 	if err != nil {
 		merr = errors.Join(merr, fmt.Errorf("GetConsensusMarketStatus failed: %w", err))
 	}
@@ -499,7 +499,7 @@ func convertNativeFee(pao []PAO) (ret []mercury.PAONativeFee) {
 	}
 	return ret
 }
-func convertMarketStatus(pao []PAO) (ret []mercury.PAOMarketStatus) {
+func convertMarketStatus(pao []PAO) (ret []PAOMarketStatus) {
 	for _, v := range pao {
 		ret = append(ret, v)
 	}

@@ -1,4 +1,4 @@
-package mercury
+package v4
 
 import (
 	"math/big"
@@ -49,6 +49,14 @@ func (t testParsedAttributedObservation) GetNativeFee() (*big.Int, bool) {
 }
 func (t testParsedAttributedObservation) GetMarketStatus() (uint32, bool) {
 	return t.MarketStatus, t.MarketStatusValid
+}
+
+func convertTestPAOsToPAOs(testPAOs []testParsedAttributedObservation) []PAO {
+	var paos []PAO
+	for _, testPAO := range testPAOs {
+		paos = append(paos, testPAO)
+	}
+	return paos
 }
 
 func newValidParsedAttributedObservations() []testParsedAttributedObservation {
@@ -246,204 +254,41 @@ func Test_AggregateFunctions(t *testing.T) {
 	validPaos := NewValidParsedAttributedObservations()
 	invalidPaos := NewInvalidParsedAttributedObservations()
 
-	t.Run("GetConsensusTimestamp", func(t *testing.T) {
-		validMPaos := convert(validPaos)
-		ts := GetConsensusTimestamp(validMPaos)
-
-		assert.Equal(t, 1689648789, int(ts))
-	})
-
-	t.Run("GetConsensusBenchmarkPrice", func(t *testing.T) {
-		t.Run("gets consensus price when prices are valid", func(t *testing.T) {
-			validMPaos := convert(validPaos)
-			bp, err := GetConsensusBenchmarkPrice(validMPaos, f)
+	t.Run("GetConsensusMarketStatus", func(t *testing.T) {
+		t.Run("gets consensus on market status when valid", func(t *testing.T) {
+			marketStatus, err := GetConsensusMarketStatus(convertMarketStatus(convertTestPAOsToPAOs(validPaos)), f)
 			require.NoError(t, err)
-			assert.Equal(t, "456", bp.String())
-		})
-
-		t.Run("fails when fewer than f+1 prices are valid", func(t *testing.T) {
-			invalidMPaos := convert(invalidPaos)
-			_, err := GetConsensusBenchmarkPrice(invalidMPaos, f)
-			assert.EqualError(t, err, "fewer than f+1 observations have a valid price (got: 1/4)")
-		})
-	})
-
-	t.Run("GetConsensusBid", func(t *testing.T) {
-		t.Run("gets consensus bid when prices are valid", func(t *testing.T) {
-			validMPaos := convertBid(validPaos)
-			bid, err := GetConsensusBid(validMPaos, f)
-			require.NoError(t, err)
-			assert.Equal(t, "450", bid.String())
-		})
-
-		t.Run("fails when fewer than f+1 prices are valid", func(t *testing.T) {
-			invalidMPaos := convertBid(invalidPaos)
-			_, err := GetConsensusBid(invalidMPaos, f)
-			assert.EqualError(t, err, "fewer than f+1 observations have a valid price (got: 1/4)")
-		})
-	})
-
-	t.Run("GetConsensusAsk", func(t *testing.T) {
-		t.Run("gets consensus ask when prices are valid", func(t *testing.T) {
-			validMPaos := convertAsk(validPaos)
-			bid, err := GetConsensusAsk(validMPaos, f)
-			require.NoError(t, err)
-			assert.Equal(t, "460", bid.String())
-		})
-
-		t.Run("fails when fewer than f+1 prices are valid", func(t *testing.T) {
-			invalidMPaos := convertAsk(invalidPaos)
-			_, err := GetConsensusAsk(invalidMPaos, f)
-			assert.EqualError(t, err, "fewer than f+1 observations have a valid price (got: 1/4)")
-		})
-	})
-
-	t.Run("GetConsensusMaxFinalizedTimestamp", func(t *testing.T) {
-		t.Run("gets consensus on maxFinalizedTimestamp when valid", func(t *testing.T) {
-			validMPaos := convertMaxFinalizedTimestamp(validPaos)
-			ts, err := GetConsensusMaxFinalizedTimestamp(validMPaos, f)
-			require.NoError(t, err)
-			assert.Equal(t, int64(1679448456), ts)
-		})
-
-		t.Run("uses highest value as tiebreaker", func(t *testing.T) {
-			paos := newValidParsedAttributedObservations()
-			(paos[0]).MaxFinalizedTimestamp = 1679513477
-			validMPaos := convertMaxFinalizedTimestamp(NewValidParsedAttributedObservations(paos...))
-			ts, err := GetConsensusMaxFinalizedTimestamp(validMPaos, f)
-			require.NoError(t, err)
-			assert.Equal(t, int64(1679513477), ts)
-		})
-
-		t.Run("fails when fewer than f+1 maxFinalizedTimestamps are valid", func(t *testing.T) {
-			invalidMPaos := convertMaxFinalizedTimestamp(invalidPaos)
-			_, err := GetConsensusMaxFinalizedTimestamp(invalidMPaos, f)
-			assert.EqualError(t, err, "fewer than f+1 observations have a valid maxFinalizedTimestamp (got: 1/4)")
-		})
-
-		t.Run("fails when cannot come to consensus f+1 maxFinalizedTimestamps", func(t *testing.T) {
-			paos := []PAOMaxFinalizedTimestamp{
-				testParsedAttributedObservation{
-					MaxFinalizedTimestamp:      1679648456,
-					MaxFinalizedTimestampValid: true,
-				},
-				testParsedAttributedObservation{
-					MaxFinalizedTimestamp:      1679648457,
-					MaxFinalizedTimestampValid: true,
-				},
-				testParsedAttributedObservation{
-					MaxFinalizedTimestamp:      1679648458,
-					MaxFinalizedTimestampValid: true,
-				},
-				testParsedAttributedObservation{
-					MaxFinalizedTimestamp:      1679513477,
-					MaxFinalizedTimestampValid: true,
-				},
-			}
-			_, err := GetConsensusMaxFinalizedTimestamp(paos, f)
-			assert.EqualError(t, err, "no valid maxFinalizedTimestamp with at least f+1 votes (got counts: map[1679513477:1 1679648456:1 1679648457:1 1679648458:1])")
-		})
-	})
-
-	t.Run("GetConsensusLinkFee", func(t *testing.T) {
-		t.Run("gets consensus on linkFee when valid", func(t *testing.T) {
-			validMPaos := convertLinkFee(validPaos)
-			linkFee, err := GetConsensusLinkFee(validMPaos, f)
-			require.NoError(t, err)
-			assert.Equal(t, big.NewInt(3), linkFee)
+			assert.Equal(t, uint32(1), marketStatus)
 		})
 		t.Run("treats zero values as valid", func(t *testing.T) {
 			paos := NewValidParsedAttributedObservations()
 			for i := range paos {
-				paos[i].LinkFee = big.NewInt(0)
+				paos[i].MarketStatus = 0
 			}
-			linkFee, err := GetConsensusLinkFee(convertLinkFee(paos), f)
+			marketStatus, err := GetConsensusMarketStatus(convertMarketStatus(convertTestPAOsToPAOs(paos)), f)
 			require.NoError(t, err)
-			assert.Equal(t, big.NewInt(0), linkFee)
+			assert.Equal(t, uint32(0), marketStatus)
 		})
-		t.Run("treats negative values as invalid", func(t *testing.T) {
+		t.Run("is stable during ties", func(t *testing.T) {
 			paos := NewValidParsedAttributedObservations()
 			for i := range paos {
-				paos[i].LinkFee = big.NewInt(int64(0 - i))
+				paos[i].MarketStatus = uint32(i % 2)
 			}
-			_, err := GetConsensusLinkFee(convertLinkFee(paos), f)
-			assert.EqualError(t, err, "fewer than f+1 observations have a valid linkFee (got: 1/4)")
+			marketStatus, err := GetConsensusMarketStatus(convertMarketStatus(convertTestPAOsToPAOs(paos)), f)
+			require.NoError(t, err)
+			assert.Equal(t, uint32(0), marketStatus)
 		})
-
-		t.Run("fails when fewer than f+1 linkFees are valid", func(t *testing.T) {
-			invalidMPaos := convertLinkFee(invalidPaos)
-			_, err := GetConsensusLinkFee(invalidMPaos, f)
-			assert.EqualError(t, err, "fewer than f+1 observations have a valid linkFee (got: 1/4)")
+		t.Run("fails when the mode is less than f+1", func(t *testing.T) {
+			paos := NewValidParsedAttributedObservations()
+			for i := range paos {
+				paos[i].MarketStatus = uint32(i)
+			}
+			_, err := GetConsensusMarketStatus(convertMarketStatus(convertTestPAOsToPAOs(paos)), f)
+			assert.EqualError(t, err, "market status has fewer than f+1 observations (status 0 got 1/4)")
+		})
+		t.Run("fails when all observations are invalid", func(t *testing.T) {
+			_, err := GetConsensusMarketStatus(convertMarketStatus(convertTestPAOsToPAOs(invalidPaos)), f)
+			assert.EqualError(t, err, "market status has fewer than f+1 observations (status 0 got 0/4)")
 		})
 	})
-
-	t.Run("GetConsensusNativeFee", func(t *testing.T) {
-		t.Run("gets consensus on nativeFee when valid", func(t *testing.T) {
-			validMPaos := convertNativeFee(validPaos)
-			nativeFee, err := GetConsensusNativeFee(validMPaos, f)
-			require.NoError(t, err)
-			assert.Equal(t, big.NewInt(3), nativeFee)
-		})
-		t.Run("treats zero values as valid", func(t *testing.T) {
-			paos := NewValidParsedAttributedObservations()
-			for i := range paos {
-				paos[i].NativeFee = big.NewInt(0)
-			}
-			nativeFee, err := GetConsensusNativeFee(convertNativeFee(paos), f)
-			require.NoError(t, err)
-			assert.Equal(t, big.NewInt(0), nativeFee)
-		})
-		t.Run("treats negative values as invalid", func(t *testing.T) {
-			paos := NewValidParsedAttributedObservations()
-			for i := range paos {
-				paos[i].NativeFee = big.NewInt(int64(0 - i))
-			}
-			_, err := GetConsensusNativeFee(convertNativeFee(paos), f)
-			assert.EqualError(t, err, "fewer than f+1 observations have a valid nativeFee (got: 1/4)")
-		})
-		t.Run("fails when fewer than f+1 nativeFees are valid", func(t *testing.T) {
-			invalidMPaos := convertNativeFee(invalidPaos)
-			_, err := GetConsensusNativeFee(invalidMPaos, f)
-			assert.EqualError(t, err, "fewer than f+1 observations have a valid nativeFee (got: 1/4)")
-		})
-	})
-}
-
-// convert funcs are necessary because go is not smart enough to cast
-// []interface1 to []interface2 even if interface1 is a superset of interface2
-func convert(pao []testParsedAttributedObservation) (ret []PAO) {
-	for _, v := range pao {
-		ret = append(ret, v)
-	}
-	return ret
-}
-func convertMaxFinalizedTimestamp(pao []testParsedAttributedObservation) (ret []PAOMaxFinalizedTimestamp) {
-	for _, v := range pao {
-		ret = append(ret, v)
-	}
-	return ret
-}
-func convertAsk(pao []testParsedAttributedObservation) (ret []PAOAsk) {
-	for _, v := range pao {
-		ret = append(ret, v)
-	}
-	return ret
-}
-func convertBid(pao []testParsedAttributedObservation) (ret []PAOBid) {
-	for _, v := range pao {
-		ret = append(ret, v)
-	}
-	return ret
-}
-func convertLinkFee(pao []testParsedAttributedObservation) (ret []PAOLinkFee) {
-	for _, v := range pao {
-		ret = append(ret, v)
-	}
-	return ret
-}
-func convertNativeFee(pao []testParsedAttributedObservation) (ret []PAONativeFee) {
-	for _, v := range pao {
-		ret = append(ret, v)
-	}
-	return ret
 }
