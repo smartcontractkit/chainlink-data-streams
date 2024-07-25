@@ -1,9 +1,8 @@
 package mercury
 
 import (
+	"fmt"
 	"math/big"
-
-	pkgerrors "github.com/pkg/errors"
 
 	"github.com/smartcontractkit/libocr/bigbigendian"
 
@@ -29,7 +28,7 @@ type StandardOnchainConfigCodec struct{}
 
 func (StandardOnchainConfigCodec) Decode(b []byte) (mercury.OnchainConfig, error) {
 	if len(b) != onchainConfigEncodedLength {
-		return mercury.OnchainConfig{}, pkgerrors.Errorf("unexpected length of OnchainConfig, expected %v, got %v", onchainConfigEncodedLength, len(b))
+		return mercury.OnchainConfig{}, fmt.Errorf("unexpected length of OnchainConfig, expected %v, got %v", onchainConfigEncodedLength, len(b))
 	}
 
 	v, err := bigbigendian.DeserializeSigned(32, b[:32])
@@ -37,7 +36,7 @@ func (StandardOnchainConfigCodec) Decode(b []byte) (mercury.OnchainConfig, error
 		return mercury.OnchainConfig{}, err
 	}
 	if v.Cmp(onchainConfigVersionBig) != 0 {
-		return mercury.OnchainConfig{}, pkgerrors.Errorf("unexpected version of OnchainConfig, expected %v, got %v", onchainConfigVersion, v)
+		return mercury.OnchainConfig{}, fmt.Errorf("unexpected version of OnchainConfig, expected %v, got %v", onchainConfigVersion, v)
 	}
 
 	min, err := bigbigendian.DeserializeSigned(32, b[32:64])
@@ -50,7 +49,7 @@ func (StandardOnchainConfigCodec) Decode(b []byte) (mercury.OnchainConfig, error
 	}
 
 	if !(min.Cmp(max) <= 0) {
-		return mercury.OnchainConfig{}, pkgerrors.Errorf("OnchainConfig min (%v) should not be greater than max(%v)", min, max)
+		return mercury.OnchainConfig{}, fmt.Errorf("OnchainConfig min (%v) should not be greater than max(%v)", min, max)
 	}
 
 	return mercury.OnchainConfig{Min: min, Max: max}, nil

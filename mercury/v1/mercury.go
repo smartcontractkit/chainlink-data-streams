@@ -7,7 +7,6 @@ import (
 	"sort"
 	"time"
 
-	pkgerrors "github.com/pkg/errors"
 	"google.golang.org/protobuf/proto"
 
 	"github.com/smartcontractkit/libocr/offchainreporting2plus/ocr3types"
@@ -133,7 +132,7 @@ type reportingPlugin struct {
 func (rp *reportingPlugin) Observation(ctx context.Context, repts types.ReportTimestamp, previousReport types.Report) (types.Observation, error) {
 	obs, err := rp.dataSource.Observe(ctx, repts, previousReport == nil)
 	if err != nil {
-		return nil, pkgerrors.Errorf("DataSource.Observe returned an error: %s", err)
+		return nil, fmt.Errorf("DataSource.Observe returned an error: %s", err)
 	}
 
 	p := MercuryObservationProto{Timestamp: uint32(time.Now().Unix())}
@@ -144,7 +143,7 @@ func (rp *reportingPlugin) Observation(ctx context.Context, repts types.ReportTi
 		if obs.MaxFinalizedBlockNumber.Err != nil {
 			obsErrors = append(obsErrors, err)
 		} else if obs.CurrentBlockNum.Err == nil && obs.CurrentBlockNum.Val < obs.MaxFinalizedBlockNumber.Val {
-			obsErrors = append(obsErrors, pkgerrors.Errorf("failed to observe ValidFromBlockNum; current block number %d (hash: 0x%x) < max finalized block number %d; ignoring observation for out-of-date RPC", obs.CurrentBlockNum.Val, obs.CurrentBlockHash.Val, obs.MaxFinalizedBlockNumber.Val))
+			obsErrors = append(obsErrors, fmt.Errorf("failed to observe ValidFromBlockNum; current block number %d (hash: 0x%x) < max finalized block number %d; ignoring observation for out-of-date RPC", obs.CurrentBlockNum.Val, obs.CurrentBlockHash.Val, obs.MaxFinalizedBlockNumber.Val))
 		} else {
 			p.MaxFinalizedBlockNumber = obs.MaxFinalizedBlockNumber.Val // MaxFinalizedBlockNumber comes as -1 if unset
 			p.MaxFinalizedBlockNumberValid = true
@@ -153,30 +152,30 @@ func (rp *reportingPlugin) Observation(ctx context.Context, repts types.ReportTi
 
 	var bpErr, bidErr, askErr error
 	if obs.BenchmarkPrice.Err != nil {
-		bpErr = pkgerrors.Wrap(obs.BenchmarkPrice.Err, "failed to observe BenchmarkPrice")
+		bpErr = fmt.Errorf("failed to observe BenchmarkPrice: %w", obs.BenchmarkPrice.Err)
 		obsErrors = append(obsErrors, bpErr)
 	} else if benchmarkPrice, err := mercury.EncodeValueInt192(obs.BenchmarkPrice.Val); err != nil {
-		bpErr = pkgerrors.Wrap(err, "failed to observe BenchmarkPrice; encoding failed")
+		bpErr = fmt.Errorf("failed to observe BenchmarkPrice; encoding failed: %w", err)
 		obsErrors = append(obsErrors, bpErr)
 	} else {
 		p.BenchmarkPrice = benchmarkPrice
 	}
 
 	if obs.Bid.Err != nil {
-		bidErr = pkgerrors.Wrap(obs.Bid.Err, "failed to observe Bid")
+		bidErr = fmt.Errorf("failed to observe Bid: %w", obs.Bid.Err)
 		obsErrors = append(obsErrors, bidErr)
 	} else if bid, err := mercury.EncodeValueInt192(obs.Bid.Val); err != nil {
-		bidErr = pkgerrors.Wrap(err, "failed to observe Bid; encoding failed")
+		bidErr = fmt.Errorf("failed to observe Bid; encoding failed: %w", err)
 		obsErrors = append(obsErrors, bidErr)
 	} else {
 		p.Bid = bid
 	}
 
 	if obs.Ask.Err != nil {
-		askErr = pkgerrors.Wrap(obs.Ask.Err, "failed to observe Ask")
+		askErr = fmt.Errorf("failed to observe Ask: %w", obs.Ask.Err)
 		obsErrors = append(obsErrors, askErr)
 	} else if ask, err := mercury.EncodeValueInt192(obs.Ask.Val); err != nil {
-		askErr = pkgerrors.Wrap(err, "failed to observe Ask; encoding failed")
+		askErr = fmt.Errorf("failed to observe Ask; encoding failed: %w", err)
 		obsErrors = append(obsErrors, askErr)
 	} else {
 		p.Ask = ask
@@ -187,19 +186,19 @@ func (rp *reportingPlugin) Observation(ctx context.Context, repts types.ReportTi
 	}
 
 	if obs.CurrentBlockNum.Err != nil {
-		obsErrors = append(obsErrors, pkgerrors.Wrap(obs.CurrentBlockNum.Err, "failed to observe CurrentBlockNum"))
+		obsErrors = append(obsErrors, fmt.Errorf("failed to observe CurrentBlockNum: %w", obs.CurrentBlockNum.Err))
 	} else {
 		p.CurrentBlockNum = obs.CurrentBlockNum.Val
 	}
 
 	if obs.CurrentBlockHash.Err != nil {
-		obsErrors = append(obsErrors, pkgerrors.Wrap(obs.CurrentBlockHash.Err, "failed to observe CurrentBlockHash"))
+		obsErrors = append(obsErrors, fmt.Errorf("failed to observe CurrentBlockHash: %w", obs.CurrentBlockHash.Err))
 	} else {
 		p.CurrentBlockHash = obs.CurrentBlockHash.Val
 	}
 
 	if obs.CurrentBlockTimestamp.Err != nil {
-		obsErrors = append(obsErrors, pkgerrors.Wrap(obs.CurrentBlockTimestamp.Err, "failed to observe CurrentBlockTimestamp"))
+		obsErrors = append(obsErrors, fmt.Errorf("failed to observe CurrentBlockTimestamp: %w", obs.CurrentBlockTimestamp.Err))
 	} else {
 		p.CurrentBlockTimestamp = obs.CurrentBlockTimestamp.Val
 	}
@@ -227,7 +226,7 @@ func parseAttributedObservation(ao types.AttributedObservation) (PAO, error) {
 	var pao parsedAttributedObservation
 	var obs MercuryObservationProto
 	if err := proto.Unmarshal(ao.Observation, &obs); err != nil {
-		return parsedAttributedObservation{}, pkgerrors.Errorf("attributed observation cannot be unmarshaled: %s", err)
+		return parsedAttributedObservation{}, fmt.Errorf("attributed observation cannot be unmarshaled: %s", err)
 	}
 
 	pao.Timestamp = obs.Timestamp
@@ -237,22 +236,22 @@ func parseAttributedObservation(ao types.AttributedObservation) (PAO, error) {
 		var err error
 		pao.BenchmarkPrice, err = mercury.DecodeValueInt192(obs.BenchmarkPrice)
 		if err != nil {
-			return parsedAttributedObservation{}, pkgerrors.Errorf("benchmarkPrice cannot be converted to big.Int: %s", err)
+			return parsedAttributedObservation{}, fmt.Errorf("benchmarkPrice cannot be converted to big.Int: %s", err)
 		}
 		pao.Bid, err = mercury.DecodeValueInt192(obs.Bid)
 		if err != nil {
-			return parsedAttributedObservation{}, pkgerrors.Errorf("bid cannot be converted to big.Int: %s", err)
+			return parsedAttributedObservation{}, fmt.Errorf("bid cannot be converted to big.Int: %s", err)
 		}
 		pao.Ask, err = mercury.DecodeValueInt192(obs.Ask)
 		if err != nil {
-			return parsedAttributedObservation{}, pkgerrors.Errorf("ask cannot be converted to big.Int: %s", err)
+			return parsedAttributedObservation{}, fmt.Errorf("ask cannot be converted to big.Int: %s", err)
 		}
 		pao.PricesValid = true
 	}
 
 	if len(obs.LatestBlocks) > 0 {
 		if len(obs.LatestBlocks) > MaxAllowedBlocks {
-			return parsedAttributedObservation{}, pkgerrors.Errorf("LatestBlocks too large; got: %d, max: %d", len(obs.LatestBlocks), MaxAllowedBlocks)
+			return parsedAttributedObservation{}, fmt.Errorf("LatestBlocks too large; got: %d, max: %d", len(obs.LatestBlocks), MaxAllowedBlocks)
 		}
 		for _, b := range obs.LatestBlocks {
 			pao.LatestBlocks = append(pao.LatestBlocks, v1.NewBlock(b.Num, b.Hash, b.Ts))
@@ -264,19 +263,19 @@ func parseAttributedObservation(ao types.AttributedObservation) (PAO, error) {
 			hashes := make(map[string]struct{}, len(pao.LatestBlocks))
 			for _, block := range pao.LatestBlocks {
 				if _, exists := nums[block.Num]; exists {
-					return parsedAttributedObservation{}, pkgerrors.Errorf("observation invalid for observer %d; got duplicate block number: %d", ao.Observer, block.Num)
+					return parsedAttributedObservation{}, fmt.Errorf("observation invalid for observer %d; got duplicate block number: %d", ao.Observer, block.Num)
 				}
 				if _, exists := hashes[block.Hash]; exists {
-					return parsedAttributedObservation{}, pkgerrors.Errorf("observation invalid for observer %d; got duplicate block hash: 0x%x", ao.Observer, block.HashBytes())
+					return parsedAttributedObservation{}, fmt.Errorf("observation invalid for observer %d; got duplicate block hash: 0x%x", ao.Observer, block.HashBytes())
 				}
 				nums[block.Num] = struct{}{}
 				hashes[block.Hash] = struct{}{}
 
 				if len(block.Hash) != mercury.EvmHashLen {
-					return parsedAttributedObservation{}, pkgerrors.Errorf("wrong len for hash: %d (expected: %d)", len(block.Hash), mercury.EvmHashLen)
+					return parsedAttributedObservation{}, fmt.Errorf("wrong len for hash: %d (expected: %d)", len(block.Hash), mercury.EvmHashLen)
 				}
 				if block.Num < 0 {
-					return parsedAttributedObservation{}, pkgerrors.Errorf("negative block number: %d", block.Num)
+					return parsedAttributedObservation{}, fmt.Errorf("negative block number: %d", block.Num)
 				}
 			}
 
@@ -292,11 +291,11 @@ func parseAttributedObservation(ao types.AttributedObservation) (PAO, error) {
 		// DEPRECATED
 		// TODO: Remove this handling after deployment (https://smartcontract-it.atlassian.net/browse/MERC-2272)
 		if len(obs.CurrentBlockHash) != mercury.EvmHashLen {
-			return parsedAttributedObservation{}, pkgerrors.Errorf("wrong len for hash: %d (expected: %d)", len(obs.CurrentBlockHash), mercury.EvmHashLen)
+			return parsedAttributedObservation{}, fmt.Errorf("wrong len for hash: %d (expected: %d)", len(obs.CurrentBlockHash), mercury.EvmHashLen)
 		}
 		pao.CurrentBlockHash = obs.CurrentBlockHash
 		if obs.CurrentBlockNum < 0 {
-			return parsedAttributedObservation{}, pkgerrors.Errorf("negative block number: %d", obs.CurrentBlockNum)
+			return parsedAttributedObservation{}, fmt.Errorf("negative block number: %d", obs.CurrentBlockNum)
 		}
 		pao.CurrentBlockNum = obs.CurrentBlockNum
 		pao.CurrentBlockTimestamp = obs.CurrentBlockTimestamp
@@ -337,7 +336,7 @@ func (rp *reportingPlugin) Report(repts types.ReportTimestamp, previousReport ty
 
 	// By assumption, we have at most f malicious oracles, so there should be at least f+1 valid paos
 	if !(rp.f+1 <= len(paos)) {
-		return false, nil, pkgerrors.Errorf("only received %v valid attributed observations, but need at least f+1 (%v)", len(paos), rp.f+1)
+		return false, nil, fmt.Errorf("only received %v valid attributed observations, but need at least f+1 (%v)", len(paos), rp.f+1)
 	}
 
 	rf, err := rp.buildReportFields(previousReport, paos)
@@ -365,7 +364,7 @@ func (rp *reportingPlugin) Report(repts types.ReportTimestamp, previousReport ty
 		return false, nil, err
 	}
 	if !(len(report) <= rp.maxReportLength) {
-		return false, nil, pkgerrors.Errorf("report with len %d violates MaxReportLength limit set by ReportCodec (%d)", len(report), rp.maxReportLength)
+		return false, nil, fmt.Errorf("report with len %d violates MaxReportLength limit set by ReportCodec (%d)", len(report), rp.maxReportLength)
 	} else if len(report) == 0 {
 		return false, nil, errors.New("report may not have zero length (invariant violation)")
 	}
@@ -398,16 +397,24 @@ func (rp *reportingPlugin) buildReportFields(previousReport types.Report, paos [
 	rf.Timestamp = mercury.GetConsensusTimestamp(mPaos)
 
 	rf.BenchmarkPrice, err = mercury.GetConsensusBenchmarkPrice(mPaos, rp.f)
-	merr = errors.Join(merr, pkgerrors.Wrap(err, "GetConsensusBenchmarkPrice failed"))
+	if err != nil {
+		merr = errors.Join(merr, fmt.Errorf("GetConsensusBenchmarkPrice failed: %w", err))
+	}
 
 	rf.Bid, err = mercury.GetConsensusBid(convertBid(paos), rp.f)
-	merr = errors.Join(merr, pkgerrors.Wrap(err, "GetConsensusBid failed"))
+	if err != nil {
+		merr = errors.Join(merr, fmt.Errorf("GetConsensusBid failed: %w", err))
+	}
 
 	rf.Ask, err = mercury.GetConsensusAsk(convertAsk(paos), rp.f)
-	merr = errors.Join(merr, pkgerrors.Wrap(err, "GetConsensusAsk failed"))
+	if err != nil {
+		merr = errors.Join(merr, fmt.Errorf("GetConsensusAsk failed: %w", err))
+	}
 
 	rf.CurrentBlockHash, rf.CurrentBlockNum, rf.CurrentBlockTimestamp, err = GetConsensusLatestBlock(paos, rp.f)
-	merr = errors.Join(merr, pkgerrors.Wrap(err, "GetConsensusCurrentBlock failed"))
+	if err != nil {
+		merr = errors.Join(merr, fmt.Errorf("GetConsensusCurrentBlock failed: %w", err))
+	}
 
 	return rf, merr
 }

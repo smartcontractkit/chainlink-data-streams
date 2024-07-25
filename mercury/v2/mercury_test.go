@@ -2,6 +2,7 @@ package v2
 
 import (
 	"context"
+	"errors"
 	"math"
 	"math/big"
 	"math/rand"
@@ -9,18 +10,17 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pkg/errors"
 	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
 
+	"github.com/smartcontractkit/libocr/commontypes"
+	"github.com/smartcontractkit/libocr/offchainreporting2plus/types"
+
 	"github.com/smartcontractkit/chainlink-common/pkg/logger"
 	mercurytypes "github.com/smartcontractkit/chainlink-common/pkg/types/mercury"
 	v2 "github.com/smartcontractkit/chainlink-common/pkg/types/mercury/v2"
-
-	"github.com/smartcontractkit/libocr/commontypes"
-	"github.com/smartcontractkit/libocr/offchainreporting2plus/types"
 
 	"github.com/smartcontractkit/chainlink-data-streams/mercury"
 )
@@ -272,7 +272,6 @@ func Test_Plugin_Report(t *testing.T) {
 				BenchmarkPrice:     big.NewInt(345),
 			}, *codec.builtReportFields)
 		})
-
 	})
 
 	t.Run("when previous report is present", func(t *testing.T) {
@@ -304,7 +303,6 @@ func Test_Plugin_Report(t *testing.T) {
 				ExpiresAt:          ts + 1,
 				BenchmarkPrice:     big.NewInt(345),
 			}, *codec.builtReportFields)
-
 		})
 		t.Run("errors if cannot extract timestamp from previous report", func(t *testing.T) {
 			codec.err = errors.New("something exploded trying to extract timestamp")

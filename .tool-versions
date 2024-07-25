@@ -1,2 +1,4 @@
 golang 1.21.4
 protoc 23.2
+golangci-lint 1.55.2 # keep in sync with .github/workflows/ci.yml
+nodejs 20.11.0

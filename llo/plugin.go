@@ -7,49 +7,71 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"math/big"
 	"sort"
 	"time"
+
+	"golang.org/x/exp/maps"
 
 	"github.com/smartcontractkit/chainlink-common/pkg/logger"
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
 
-	chainselectors "github.com/smartcontractkit/chain-selectors"
 	"github.com/smartcontractkit/libocr/offchainreporting2/types"
 	ocr2types "github.com/smartcontractkit/libocr/offchainreporting2/types"
-	ocr3types "github.com/smartcontractkit/libocr/offchainreporting2plus/ocr3types"
+	"github.com/smartcontractkit/libocr/offchainreporting2plus/ocr3types"
 )
 
 // TODO: Split out this file and write unit tests: https://smartcontract-it.atlassian.net/browse/MERC-3524
 
-// Notes:
-//
-// This is a sketch, there are many improvements to be made for this to be
-// production-grade, secure code.
-//
-// We use JSON for serialization/deserialization. We rely on the fact that
-// golang's json package serializes maps deterministically. Protobufs would
-// likely be a more performant & efficient choice.
-
 // Additional limits so we can more effectively bound the size of observations
+// NOTE: These are hardcoded because these exact values are relied upon as a
+// property of coming to consensus, it's too dangerous to make these
+// configurable on a per-node basis. It may be possible to add them to the
+// OffchainConfig if they need to be changed dynamically and in a
+// backwards-compatible way.
 const (
-	MAX_OBSERVATION_REMOVE_CHANNEL_IDS_LENGTH      = 5
-	MAX_OBSERVATION_ADD_CHANNEL_DEFINITIONS_LENGTH = 5
-	MAX_OBSERVATION_STREAM_VALUES_LENGTH           = 1_000
+	// Maximum amount of channels that can be added per round (if more than
+	// this needs to be added, it will be added in batches until everything is
+	// up-to-date)
+	MaxObservationRemoveChannelIDsLength = 5
+	// Maximum amount of channels that can be removed per round (if more than
+	// this needs to be removed, it will be removed in batches until everything
+	// is up-to-date)
+	MaxObservationUpdateChannelDefinitionsLength = 5
+	// Maximum number of streams that can be observed per round
+	// TODO: This needs to be implemented on the Observation side so we don't
+	// even generate an observation that fails this
+	MaxObservationStreamValuesLength = 10_000
+	// MaxOutcomeChannelDefinitionsLength is the maximum number of channels that
+	// can be supported
+	// TODO: This needs to be implemented on the Observation side so we don't
+	// even generate an observation that fails this
+	MaxOutcomeChannelDefinitionsLength = 10_000
 )
 
-const MAX_OUTCOME_CHANNEL_DEFINITIONS_LENGTH = 500
+type DSOpts interface {
+	VerboseLogging() bool
+	SeqNr() uint64
+}
 
-// Values for a set of streams, e.g. "eth-usd", "link-usd", and "eur-chf"
-// TODO: generalize from *big.Int to anything
-// https://smartcontract-it.atlassian.net/browse/MERC-3525
-// TODO: Consider renaming to StreamDataPoints?
-type StreamValues map[llotypes.StreamID]ObsResult[*big.Int]
+type dsOpts struct {
+	verboseLogging bool
+	seqNr          uint64
+}
+
+func (o dsOpts) VerboseLogging() bool {
+	return o.verboseLogging
+}
+
+func (o dsOpts) SeqNr() uint64 {
+	return o.seqNr
+}
 
 type DataSource interface {
-	// For each known streamID, Observe should return a non-nil entry in
-	// StreamValues. Observe should ignore unknown streamIDs.
-	Observe(ctx context.Context, streamIDs map[llotypes.StreamID]struct{}) (StreamValues, error)
+	// For each known streamID, Observe should set the observed value in the
+	// passed streamValues.
+	// If an observation fails, or the stream is unknown, no value should be
+	// set.
+	Observe(ctx context.Context, streamValues StreamValues, opts DSOpts) error
 }
 
 // Protocol instances start in either the staging or production stage. They
@@ -88,22 +110,27 @@ type PredecessorRetirementReportCache interface {
 	CheckAttestedRetirementReport(predecessorConfigDigest ocr2types.ConfigDigest, attestedRetirementReport []byte) (RetirementReport, error)
 }
 
+type ChannelDefinitionCache interface {
+	Definitions() llotypes.ChannelDefinitions
+}
+
 // MakeChannelHash is used for mapping ChannelDefinitionWithIDs
 func MakeChannelHash(cd ChannelDefinitionWithID) ChannelHash {
 	h := sha256.New()
 	merr := errors.Join(
 		binary.Write(h, binary.BigEndian, cd.ChannelID),
 		binary.Write(h, binary.BigEndian, cd.ReportFormat),
-		binary.Write(h, binary.BigEndian, cd.ChainSelector),
-		binary.Write(h, binary.BigEndian, uint32(len(cd.StreamIDs))),
+		binary.Write(h, binary.BigEndian, uint32(len(cd.Streams))),
 	)
-	for _, streamID := range cd.StreamIDs {
-		merr = errors.Join(merr, binary.Write(h, binary.BigEndian, streamID))
+	for _, strm := range cd.Streams {
+		merr = errors.Join(merr, binary.Write(h, binary.BigEndian, strm.StreamID))
+		merr = errors.Join(merr, binary.Write(h, binary.BigEndian, strm.Aggregator))
 	}
 	if merr != nil {
 		// This should never happen
 		panic(merr)
 	}
+	h.Write(cd.Opts)
 	var result [32]byte
 	h.Sum(result[:0])
 	return result
@@ -164,16 +191,23 @@ func MakeChannelHash(cd ChannelDefinitionWithID) ChannelHash {
 // A ReportingPlugin instance will only ever serve a single protocol instance.
 var _ ocr3types.ReportingPluginFactory[llotypes.ReportInfo] = &PluginFactory{}
 
-func NewPluginFactory(prrc PredecessorRetirementReportCache, src ShouldRetireCache, cdc llotypes.ChannelDefinitionCache, ds DataSource, lggr logger.Logger, codecs map[llotypes.ReportFormat]ReportCodec) *PluginFactory {
+func NewPluginFactory(cfg Config, prrc PredecessorRetirementReportCache, src ShouldRetireCache, cdc ChannelDefinitionCache, ds DataSource, lggr logger.Logger, codecs map[llotypes.ReportFormat]ReportCodec) *PluginFactory {
 	return &PluginFactory{
-		prrc, src, cdc, ds, lggr, codecs,
+		cfg, prrc, src, cdc, ds, lggr, codecs,
 	}
 }
 
+type Config struct {
+	// Enables additional logging that might be expensive, e.g. logging entire
+	// channel definitions on every round or other very large structs
+	VerboseLogging bool
+}
+
 type PluginFactory struct {
+	Config                           Config
 	PredecessorRetirementReportCache PredecessorRetirementReportCache
 	ShouldRetireCache                ShouldRetireCache
-	ChannelDefinitionCache           llotypes.ChannelDefinitionCache
+	ChannelDefinitionCache           ChannelDefinitionCache
 	DataSource                       DataSource
 	Logger                           logger.Logger
 	Codecs                           map[llotypes.ReportFormat]ReportCodec
@@ -185,7 +219,8 @@ func (f *PluginFactory) NewReportingPlugin(cfg ocr3types.ReportingPluginConfig) 
 		return nil, ocr3types.ReportingPluginInfo{}, fmt.Errorf("NewReportingPlugin failed to decode offchain config; got: 0x%x (len: %d); %w", cfg.OffchainConfig, len(cfg.OffchainConfig), err)
 	}
 
-	return &LLOPlugin{
+	return &Plugin{
+			f.Config,
 			offchainCfg.PredecessorConfigDigest,
 			cfg.ConfigDigest,
 			f.PredecessorRetirementReportCache,
@@ -194,36 +229,40 @@ func (f *PluginFactory) NewReportingPlugin(cfg ocr3types.ReportingPluginConfig) 
 			f.DataSource,
 			f.Logger,
 			cfg.F,
+			protoObservationCodec{},
+			protoOutcomeCodec{},
 			f.Codecs,
 		}, ocr3types.ReportingPluginInfo{
 			Name: "LLO",
 			Limits: ocr3types.ReportingPluginLimits{
 				MaxQueryLength:       0,
-				MaxObservationLength: ocr3types.MaxMaxObservationLength, // TODO: use tighter bound
-				MaxOutcomeLength:     ocr3types.MaxMaxOutcomeLength,     // TODO: use tighter bound
-				MaxReportLength:      ocr3types.MaxMaxReportLength,      // TODO: use tighter bound
-				MaxReportCount:       ocr3types.MaxMaxReportCount,       // TODO: use tighter bound
+				MaxObservationLength: ocr3types.MaxMaxObservationLength, // TODO: use tighter bound MERC-3524
+				MaxOutcomeLength:     ocr3types.MaxMaxOutcomeLength,     // TODO: use tighter bound MERC-3524
+				MaxReportLength:      ocr3types.MaxMaxReportLength,      // TODO: use tighter bound MERC-3524
+				MaxReportCount:       ocr3types.MaxMaxReportCount,       // TODO: use tighter bound MERC-3524
 			},
 		}, nil
 }
 
-var _ ocr3types.ReportingPlugin[llotypes.ReportInfo] = &LLOPlugin{}
+var _ ocr3types.ReportingPlugin[llotypes.ReportInfo] = &Plugin{}
 
 type ReportCodec interface {
-	Encode(Report) ([]byte, error)
-	Decode([]byte) (Report, error)
-	// TODO: max length check? https://smartcontract-it.atlassian.net/browse/MERC-3524
+	// Encode may be lossy, so no Decode function is expected
+	Encode(Report, llotypes.ChannelDefinition) ([]byte, error)
 }
 
-type LLOPlugin struct {
+type Plugin struct {
+	Config                           Config
 	PredecessorConfigDigest          *types.ConfigDigest
 	ConfigDigest                     types.ConfigDigest
 	PredecessorRetirementReportCache PredecessorRetirementReportCache
 	ShouldRetireCache                ShouldRetireCache
-	ChannelDefinitionCache           llotypes.ChannelDefinitionCache
+	ChannelDefinitionCache           ChannelDefinitionCache
 	DataSource                       DataSource
 	Logger                           logger.Logger
 	F                                int
+	ObservationCodec                 ObservationCodec
+	OutcomeCodec                     OutcomeCodec
 	Codecs                           map[llotypes.ReportFormat]ReportCodec
 }
 
@@ -240,7 +279,7 @@ type LLOPlugin struct {
 // *not* strictly) across the lifetime of a protocol instance and that
 // outctx.previousOutcome contains the consensus outcome with sequence
 // number (outctx.SeqNr-1).
-func (p *LLOPlugin) Query(ctx context.Context, outctx ocr3types.OutcomeContext) (types.Query, error) {
+func (p *Plugin) Query(ctx context.Context, outctx ocr3types.OutcomeContext) (types.Query, error) {
 	return nil, nil
 }
 
@@ -251,12 +290,15 @@ type Observation struct {
 	// Should this protocol instance be retired?
 	ShouldRetire bool
 	// Timestamp from when observation is made
+	// Note that this is the timestamp immediately before we initiate any
+	// observations
 	UnixTimestampNanoseconds int64
 	// Votes to remove/add channels. Subject to MAX_OBSERVATION_*_LENGTH limits
-	RemoveChannelIDs      map[llotypes.ChannelID]struct{}
-	AddChannelDefinitions llotypes.ChannelDefinitions
+	RemoveChannelIDs map[llotypes.ChannelID]struct{}
+	// Votes to add or replace channel definitions
+	UpdateChannelDefinitions llotypes.ChannelDefinitions
 	// Observed (numeric) stream values. Subject to
-	// MAX_OBSERVATION_STREAM_VALUES_LENGTH limit
+	// MaxObservationStreamValuesLength limit
 	StreamValues StreamValues
 }
 
@@ -269,22 +311,26 @@ type Observation struct {
 // number (outctx.SeqNr-1).
 //
 // Should return a serialized Observation struct.
-func (p *LLOPlugin) Observation(ctx context.Context, outctx ocr3types.OutcomeContext, query types.Query) (types.Observation, error) {
-	// send empty observation in initial round
-	// NOTE: First sequence number is always 1
+func (p *Plugin) Observation(ctx context.Context, outctx ocr3types.OutcomeContext, query types.Query) (types.Observation, error) {
+	// NOTE: First sequence number is always 1 (0 is invalid)
 	if outctx.SeqNr < 1 {
-		// send empty observation in initial round
 		return types.Observation{}, fmt.Errorf("got invalid seqnr=%d, must be >=1", outctx.SeqNr)
 	} else if outctx.SeqNr == 1 {
-		return types.Observation{}, nil // FIXME: but it needs to be properly serialized
+		// First round always has empty PreviousOutcome
+		// Don't bother observing on the first ever round, because the result
+		// will never be used anyway.
+		// See case at the top of Outcome()
+		return types.Observation{}, nil
 	}
+	// Second round will have no channel definitions yet, but may vote to add
+	// them
 
 	// QUESTION: is there a way to have this captured in EAs so we get something
 	// closer to the source?
 	nowNanoseconds := time.Now().UnixNano()
 
-	var previousOutcome Outcome
-	if err := json.Unmarshal(outctx.PreviousOutcome, &previousOutcome); err != nil {
+	previousOutcome, err := p.OutcomeCodec.Decode(outctx.PreviousOutcome)
+	if err != nil {
 		return nil, fmt.Errorf("error unmarshalling previous outcome: %w", err)
 	}
 
@@ -292,10 +338,10 @@ func (p *LLOPlugin) Observation(ctx context.Context, outctx ocr3types.OutcomeCon
 	// Only try to fetch this from the cache if this instance if configured
 	// with a predecessor and we're still in the staging stage.
 	if p.PredecessorConfigDigest != nil && previousOutcome.LifeCycleStage == LifeCycleStageStaging {
-		var err error
-		attestedRetirementReport, err = p.PredecessorRetirementReportCache.AttestedRetirementReport(*p.PredecessorConfigDigest)
-		if err != nil {
-			return nil, fmt.Errorf("error fetching attested retirement report from cache: %w", err)
+		var err2 error
+		attestedRetirementReport, err2 = p.PredecessorRetirementReportCache.AttestedRetirementReport(*p.PredecessorConfigDigest)
+		if err2 != nil {
+			return nil, fmt.Errorf("error fetching attested retirement report from cache: %w", err2)
 		}
 	}
 
@@ -309,17 +355,30 @@ func (p *LLOPlugin) Observation(ctx context.Context, outctx ocr3types.OutcomeCon
 	removeChannelIDs := map[llotypes.ChannelID]struct{}{}
 	// vote to add channel definitions that aren't present in the previous
 	// outcome ChannelDefinitions
-	var addChannelDefinitions llotypes.ChannelDefinitions
+	// FIXME: Why care about ValidAfterSeconds here?
+	var updateChannelDefinitions llotypes.ChannelDefinitions
 	{
+		// NOTE: Be careful using maps, since key ordering is randomized! All
+		// addition/removal lists must be built deterministically so that nodes
+		// can agree on the same set of changes.
+		//
+		// ChannelIDs should always be sorted the same way (channel ID ascending).
 		expectedChannelDefs := p.ChannelDefinitionCache.Definitions()
+		if err := VerifyChannelDefinitions(expectedChannelDefs); err != nil {
+			return nil, fmt.Errorf("ChannelDefinitionCache.Definitions is invalid: %w", err)
+		}
 
-		removeChannelDefinitions := subtractChannelDefinitions(previousOutcome.ChannelDefinitions, expectedChannelDefs, MAX_OBSERVATION_REMOVE_CHANNEL_IDS_LENGTH)
+		removeChannelDefinitions := subtractChannelDefinitions(previousOutcome.ChannelDefinitions, expectedChannelDefs, MaxObservationRemoveChannelIDsLength)
 		for channelID := range removeChannelDefinitions {
 			removeChannelIDs[channelID] = struct{}{}
 		}
 
-		for channelID := range previousOutcome.ValidAfterSeconds {
-			if len(removeChannelIDs) >= MAX_OBSERVATION_REMOVE_CHANNEL_IDS_LENGTH {
+		// TODO: needs testing
+		validAfterSecondsChannelIDs := maps.Keys(previousOutcome.ValidAfterSeconds)
+		// Sort so we cut off deterministically
+		sortChannelIDs(validAfterSecondsChannelIDs)
+		for _, channelID := range validAfterSecondsChannelIDs {
+			if len(removeChannelIDs) >= MaxObservationRemoveChannelIDsLength {
 				break
 			}
 			if _, ok := expectedChannelDefs[channelID]; !ok {
@@ -327,22 +386,56 @@ func (p *LLOPlugin) Observation(ctx context.Context, outctx ocr3types.OutcomeCon
 			}
 		}
 
-		addChannelDefinitions = subtractChannelDefinitions(expectedChannelDefs, previousOutcome.ChannelDefinitions, MAX_OBSERVATION_ADD_CHANNEL_DEFINITIONS_LENGTH)
-	}
-
-	var streamValues StreamValues
-	{
-		streams := map[llotypes.StreamID]struct{}{}
-		for _, channelDefinition := range previousOutcome.ChannelDefinitions {
-			for _, streamID := range channelDefinition.StreamIDs {
-				streams[streamID] = struct{}{}
+		// NOTE: This is slow because it deeply compares every value in the map.
+		// To improve performance, consider changing channel voting to happen
+		// every N rounds instead of every round. Or, alternatively perhaps the
+		// first e.g. 100 rounds could check every round to allow for fast feed
+		// spinup, then after that every 10 or 100 rounds.
+		updateChannelDefinitions = make(llotypes.ChannelDefinitions)
+		expectedChannelIDs := maps.Keys(expectedChannelDefs)
+		// Sort so we cut off deterministically
+		sortChannelIDs(expectedChannelIDs)
+		for _, channelID := range expectedChannelIDs {
+			prev, exists := previousOutcome.ChannelDefinitions[channelID]
+			channelDefinition := expectedChannelDefs[channelID]
+			if exists && prev.Equals(channelDefinition) {
+				continue
+			}
+			// Add or replace channel
+			updateChannelDefinitions[channelID] = channelDefinition
+			if len(updateChannelDefinitions) >= MaxObservationUpdateChannelDefinitionsLength {
+				// Never add more than MaxObservationUpdateChannelDefinitionsLength
+				break
 			}
 		}
 
-		var err error
-		// TODO: Should probably be a slice, not map?
-		streamValues, err = p.DataSource.Observe(ctx, streams)
-		if err != nil {
+		if len(updateChannelDefinitions) > 0 {
+			p.Logger.Debugw("Voting to update channel definitions",
+				"updateChannelDefinitions", updateChannelDefinitions,
+				"seqNr", outctx.SeqNr,
+				"stage", "Observation")
+		}
+		if len(removeChannelIDs) > 0 {
+			p.Logger.Debugw("Voting to remove channel definitions",
+				"removeChannelIDs", removeChannelIDs,
+				"seqNr", outctx.SeqNr,
+				"stage", "Observation",
+			)
+		}
+	}
+
+	var streamValues StreamValues
+	if len(previousOutcome.ChannelDefinitions) == 0 {
+		p.Logger.Debugw("ChannelDefinitions is empty, will not generate any observations", "stage", "Observation", "seqNr", outctx.SeqNr)
+	} else {
+		streamValues = make(StreamValues)
+		for _, channelDefinition := range previousOutcome.ChannelDefinitions {
+			for _, strm := range channelDefinition.Streams {
+				streamValues[strm.StreamID] = nil
+			}
+		}
+
+		if err := p.DataSource.Observe(ctx, streamValues, dsOpts{p.Config.VerboseLogging, outctx.SeqNr}); err != nil {
 			return nil, fmt.Errorf("DataSource.Observe error: %w", err)
 		}
 	}
@@ -350,16 +443,16 @@ func (p *LLOPlugin) Observation(ctx context.Context, outctx ocr3types.OutcomeCon
 	var rawObservation []byte
 	{
 		var err error
-		rawObservation, err = json.Marshal(Observation{
+		rawObservation, err = p.ObservationCodec.Encode(Observation{
 			attestedRetirementReport,
 			shouldRetire,
 			nowNanoseconds,
 			removeChannelIDs,
-			addChannelDefinitions,
+			updateChannelDefinitions,
 			streamValues,
 		})
 		if err != nil {
-			return nil, fmt.Errorf("json.Marshal error: %w", err)
+			return nil, fmt.Errorf("Observation encode error: %w", err)
 		}
 	}
 
@@ -374,42 +467,41 @@ func (p *LLOPlugin) Observation(ctx context.Context, outctx ocr3types.OutcomeCon
 // *not* strictly) across the lifetime of a protocol instance and that
 // outctx.previousOutcome contains the consensus outcome with sequence
 // number (outctx.SeqNr-1).
-func (p *LLOPlugin) ValidateObservation(outctx ocr3types.OutcomeContext, query types.Query, ao types.AttributedObservation) error {
-	if outctx.SeqNr <= 1 {
+func (p *Plugin) ValidateObservation(outctx ocr3types.OutcomeContext, query types.Query, ao types.AttributedObservation) error {
+	if outctx.SeqNr < 1 {
+		return fmt.Errorf("Invalid SeqNr: %d", outctx.SeqNr)
+	} else if outctx.SeqNr == 1 {
 		if len(ao.Observation) != 0 {
-			return fmt.Errorf("Observation is not empty")
+			return fmt.Errorf("Expected empty observation for first round, got: 0x%x", ao.Observation)
 		}
 	}
 
-	var observation Observation
-	// FIXME: do we really want to allow empty observations? happens because "" is not valid JSON
-	if len(ao.Observation) > 0 {
-		err := json.Unmarshal(ao.Observation, &observation)
-		if err != nil {
-			return fmt.Errorf("Observation is invalid json (got: %q): %w", ao.Observation, err)
-		}
+	observation, err := p.ObservationCodec.Decode(ao.Observation)
+	if err != nil {
+		// Critical error
+		// If the previous outcome cannot be decoded for whatever reason, the
+		// protocol will become permanently stuck at this point
+		return fmt.Errorf("Observation decode error (got: 0x%x): %w", ao.Observation, err)
 	}
 
 	if p.PredecessorConfigDigest == nil && len(observation.AttestedPredecessorRetirement) != 0 {
 		return fmt.Errorf("AttestedPredecessorRetirement is not empty even though this instance has no predecessor")
 	}
 
-	if len(observation.AddChannelDefinitions) > MAX_OBSERVATION_ADD_CHANNEL_DEFINITIONS_LENGTH {
-		return fmt.Errorf("AddChannelDefinitions is too long: %v vs %v", len(observation.AddChannelDefinitions), MAX_OBSERVATION_ADD_CHANNEL_DEFINITIONS_LENGTH)
+	if len(observation.UpdateChannelDefinitions) > MaxObservationUpdateChannelDefinitionsLength {
+		return fmt.Errorf("UpdateChannelDefinitions is too long: %v vs %v", len(observation.UpdateChannelDefinitions), MaxObservationUpdateChannelDefinitionsLength)
 	}
 
-	if len(observation.RemoveChannelIDs) > MAX_OBSERVATION_REMOVE_CHANNEL_IDS_LENGTH {
-		return fmt.Errorf("RemoveChannelIDs is too long: %v vs %v", len(observation.RemoveChannelIDs), MAX_OBSERVATION_REMOVE_CHANNEL_IDS_LENGTH)
+	if len(observation.RemoveChannelIDs) > MaxObservationRemoveChannelIDsLength {
+		return fmt.Errorf("RemoveChannelIDs is too long: %v vs %v", len(observation.RemoveChannelIDs), MaxObservationRemoveChannelIDsLength)
 	}
 
-	if len(observation.StreamValues) > MAX_OBSERVATION_STREAM_VALUES_LENGTH {
-		return fmt.Errorf("StreamValues is too long: %v vs %v", len(observation.StreamValues), MAX_OBSERVATION_STREAM_VALUES_LENGTH)
+	if err := VerifyChannelDefinitions(observation.UpdateChannelDefinitions); err != nil {
+		return fmt.Errorf("UpdateChannelDefinitions is invalid: %w", err)
 	}
 
-	for streamID, obsResult := range observation.StreamValues {
-		if obsResult.Valid && obsResult.Val == nil {
-			return fmt.Errorf("stream with id %q was marked valid but carries nil value", streamID)
-		}
+	if len(observation.StreamValues) > MaxObservationStreamValuesLength {
+		return fmt.Errorf("StreamValues is too long: %v vs %v", len(observation.StreamValues), MaxObservationStreamValuesLength)
 	}
 
 	return nil
@@ -427,10 +519,11 @@ type Outcome struct {
 	// Latest ValidAfterSeconds value for each channel, reports for each channel
 	// span from ValidAfterSeconds to ObservationTimestampSeconds
 	ValidAfterSeconds map[llotypes.ChannelID]uint32
-	// StreamMedians is the median observed value for each stream
-	// QUESTION: Can we use arbitrary types here to allow for other types or
-	// consensus methods?
-	StreamMedians map[llotypes.StreamID]*big.Int
+	// StreamAggregates contains stream IDs mapped to various aggregations.
+	// Usually you will only have one aggregation type per stream but since
+	// channels can define different aggregation methods, sometimes we will
+	// need multiple.
+	StreamAggregates StreamAggregates
 }
 
 // The Outcome's ObservationsTimestamp rounded down to seconds precision
@@ -444,28 +537,32 @@ func (out *Outcome) ObservationsTimestampSeconds() (uint32, error) {
 
 // Indicates whether a report can be generated for the given channel.
 // Returns nil if channel is reportable
-func (out *Outcome) IsReportable(channelID llotypes.ChannelID) error {
+// TODO: Test this function
+func (out *Outcome) IsReportable(channelID llotypes.ChannelID) *ErrUnreportableChannel {
 	if out.LifeCycleStage == LifeCycleStageRetired {
-		return fmt.Errorf("IsReportable=false; retired channel with ID: %d", channelID)
+		return &ErrUnreportableChannel{nil, "IsReportable=false; retired channel", channelID}
 	}
 
 	observationsTimestampSeconds, err := out.ObservationsTimestampSeconds()
 	if err != nil {
-		return fmt.Errorf("IsReportable=false; invalid observations timestamp; %w", err)
+		return &ErrUnreportableChannel{err, "IsReportable=false; invalid observations timestamp", channelID}
 	}
 
 	channelDefinition, exists := out.ChannelDefinitions[channelID]
 	if !exists {
-		return fmt.Errorf("IsReportable=false; no channel definition with ID: %d", channelID)
+		return &ErrUnreportableChannel{nil, "IsReportable=false; no channel definition with this ID", channelID}
 	}
 
-	if _, err := chainselectors.ChainIdFromSelector(channelDefinition.ChainSelector); err != nil {
-		return fmt.Errorf("IsReportable=false; invalid chain selector; %w", err)
-	}
-
-	for _, streamID := range channelDefinition.StreamIDs {
-		if out.StreamMedians[streamID] == nil {
-			return errors.New("IsReportable=false; median was nil")
+	for _, strm := range channelDefinition.Streams {
+		if out.StreamAggregates[strm.StreamID] == nil {
+			// FIXME: Is this comment actually correct?
+			// This can happen in normal operation, because in Report() we use
+			// the ChannelDefinitions in the generated Outcome. But that was
+			// compiled with Observations made using the ChannelDefinitions
+			// from the PREVIOUS outcome. So if channel definitions have been
+			// added in this round, we would not expect there to be
+			// observations present for new streams in those channels.
+			return &ErrUnreportableChannel{nil, fmt.Sprintf("IsReportable=false; median was nil for stream %d", strm.StreamID), channelID}
 		}
 	}
 
@@ -473,33 +570,56 @@ func (out *Outcome) IsReportable(channelID llotypes.ChannelID) error {
 		// No validAfterSeconds entry yet, this must be a new channel.
 		// validAfterSeconds will be populated in Outcome() so the channel
 		// becomes reportable in later protocol rounds.
-		return errors.New("IsReportable=false; no validAfterSeconds entry yet, this must be a new channel")
+		// TODO: Test this case, haven't seen it in prod logs even though it would be expected
+		return &ErrUnreportableChannel{nil, "IsReportable=false; no validAfterSeconds entry yet, this must be a new channel", channelID}
 	}
 
 	if validAfterSeconds := out.ValidAfterSeconds[channelID]; validAfterSeconds >= observationsTimestampSeconds {
-		return fmt.Errorf("IsReportable=false; not valid yet (observationsTimestampSeconds=%d < validAfterSeconds=%d)", observationsTimestampSeconds, validAfterSeconds)
+		return &ErrUnreportableChannel{nil, fmt.Sprintf("IsReportable=false; not valid yet (observationsTimestampSeconds=%d < validAfterSeconds=%d)", observationsTimestampSeconds, validAfterSeconds), channelID}
 	}
 
 	return nil
 }
 
+type ErrUnreportableChannel struct {
+	Inner     error
+	Reason    string
+	ChannelID llotypes.ChannelID
+}
+
+func (e *ErrUnreportableChannel) Error() string {
+	s := fmt.Sprintf("ChannelID: %d; Reason: %s", e.ChannelID, e.Reason)
+	if e.Inner != nil {
+		s += fmt.Sprintf("; Err: %v", e.Inner)
+	}
+	return s
+}
+
+func (e *ErrUnreportableChannel) String() string {
+	return e.Error()
+}
+
+func (e *ErrUnreportableChannel) Unwrap() error {
+	return e.Inner
+}
+
 // List of reportable channels (according to IsReportable), sorted according
 // to a canonical ordering
-func (out *Outcome) ReportableChannels() []llotypes.ChannelID {
-	result := []llotypes.ChannelID{}
-
+// TODO: test this
+func (out *Outcome) ReportableChannels() (reportable []llotypes.ChannelID, unreportable []*ErrUnreportableChannel) {
 	for channelID := range out.ChannelDefinitions {
 		if err := out.IsReportable(channelID); err != nil {
-			continue
+			unreportable = append(unreportable, err)
+		} else {
+			reportable = append(reportable, channelID)
 		}
-		result = append(result, channelID)
 	}
 
-	sort.Slice(result, func(i, j int) bool {
-		return result[i] < result[j]
+	sort.Slice(reportable, func(i, j int) bool {
+		return reportable[i] < reportable[j]
 	})
 
-	return result
+	return
 }
 
 // Generates an outcome for a seqNr, typically based on the previous
@@ -515,11 +635,12 @@ func (out *Outcome) ReportableChannels() []llotypes.ChannelID {
 //
 // libocr guarantees that this will always be called with at least 2f+1
 // AttributedObservations
-func (p *LLOPlugin) Outcome(outctx ocr3types.OutcomeContext, query types.Query, aos []types.AttributedObservation) (ocr3types.Outcome, error) {
+func (p *Plugin) Outcome(outctx ocr3types.OutcomeContext, query types.Query, aos []types.AttributedObservation) (ocr3types.Outcome, error) {
 	if len(aos) < 2*p.F+1 {
 		return nil, fmt.Errorf("invariant violation: expected at least 2f+1 attributed observations, got %d (f: %d)", len(aos), p.F)
 	}
 
+	// Initial outcome is kind of a "keystone" with minimum extra information
 	if outctx.SeqNr <= 1 {
 		// Initial Outcome
 		var lifeCycleStage llotypes.LifeCycleStage
@@ -536,15 +657,15 @@ func (p *LLOPlugin) Outcome(outctx ocr3types.OutcomeContext, query types.Query, 
 			nil,
 			nil,
 		}
-		return json.Marshal(outcome)
+		return p.OutcomeCodec.Encode(outcome)
 	}
 
 	/////////////////////////////////
 	// Decode previousOutcome
 	/////////////////////////////////
-	var previousOutcome Outcome
-	if err := json.Unmarshal(outctx.PreviousOutcome, &previousOutcome); err != nil {
-		return nil, fmt.Errorf("error unmarshalling previous outcome: %v", err)
+	previousOutcome, err := p.OutcomeCodec.Decode(outctx.PreviousOutcome)
+	if err != nil {
+		return nil, fmt.Errorf("error decoding previous outcome: %v", err)
 	}
 
 	/////////////////////////////////
@@ -561,24 +682,25 @@ func (p *LLOPlugin) Outcome(outctx ocr3types.OutcomeContext, query types.Query, 
 	removeChannelVotesByID := map[llotypes.ChannelID]int{}
 
 	// for each channelId count number of votes that mention it and count number of votes that include it.
-	addChannelVotesByHash := map[ChannelHash]int{}
-	addChannelDefinitionsByHash := map[ChannelHash]ChannelDefinitionWithID{}
+	updateChannelVotesByHash := map[ChannelHash]int{}
+	updateChannelDefinitionsByHash := map[ChannelHash]ChannelDefinitionWithID{}
 
-	streamObservations := map[llotypes.StreamID][]*big.Int{}
+	streamObservations := make(map[llotypes.StreamID][]StreamValue)
 
 	for _, ao := range aos {
-		observation := Observation{}
-		// TODO: Use protobufs
-		if err := json.Unmarshal(ao.Observation, &observation); err != nil {
-			p.Logger.Warnw("ignoring invalid observation", "oracleID", ao.Observer, "error", err)
+		// TODO: Put in a function
+		// MERC-3524
+		observation, err2 := p.ObservationCodec.Decode(ao.Observation)
+		if err2 != nil {
+			p.Logger.Warnw("ignoring invalid observation", "oracleID", ao.Observer, "error", err2)
 			continue
 		}
 
 		if len(observation.AttestedPredecessorRetirement) != 0 && validPredecessorRetirementReport == nil {
 			pcd := *p.PredecessorConfigDigest
-			retirementReport, err := p.PredecessorRetirementReportCache.CheckAttestedRetirementReport(pcd, observation.AttestedPredecessorRetirement)
-			if err != nil {
-				p.Logger.Warnw("ignoring observation with invalid attested predecessor retirement", "oracleID", ao.Observer, "error", err, "predecessorConfigDigest", pcd)
+			retirementReport, err3 := p.PredecessorRetirementReportCache.CheckAttestedRetirementReport(pcd, observation.AttestedPredecessorRetirement)
+			if err3 != nil {
+				p.Logger.Warnw("ignoring observation with invalid attested predecessor retirement", "oracleID", ao.Observer, "error", err3, "predecessorConfigDigest", pcd)
 				continue
 			}
 			validPredecessorRetirementReport = &retirementReport
@@ -594,19 +716,27 @@ func (p *LLOPlugin) Outcome(outctx ocr3types.OutcomeContext, query types.Query, 
 			removeChannelVotesByID[channelID]++
 		}
 
-		for channelID, channelDefinition := range observation.AddChannelDefinitions {
+		for channelID, channelDefinition := range observation.UpdateChannelDefinitions {
 			defWithID := ChannelDefinitionWithID{channelDefinition, channelID}
 			channelHash := MakeChannelHash(defWithID)
-			addChannelVotesByHash[channelHash]++
-			addChannelDefinitionsByHash[channelHash] = defWithID
+			updateChannelVotesByHash[channelHash]++
+			updateChannelDefinitionsByHash[channelHash] = defWithID
 		}
 
-		for id, obsResult := range observation.StreamValues {
-			if obsResult.Valid {
-				streamObservations[id] = append(streamObservations[id], obsResult.Val)
+		var missingObservations []llotypes.StreamID
+		for id, sv := range observation.StreamValues {
+			if sv != nil { // FIXME: nil checks don't work here. Test this and figure out what to do (also, are there other cases?)
+				streamObservations[id] = append(streamObservations[id], sv)
 			} else {
-				p.Logger.Debugw("Ignoring invalid observation", "streamID", id, "oracleID", ao.Observer)
+				missingObservations = append(missingObservations, id)
 			}
+		}
+		if p.Config.VerboseLogging {
+			if len(missingObservations) > 0 {
+				sort.Slice(missingObservations, func(i, j int) bool { return missingObservations[i] < missingObservations[j] })
+				p.Logger.Debugw("Peer was missing observations", "streamIDs", missingObservations, "oracleID", ao.Observer, "stage", "Outcome", "seqNr", outctx.SeqNr)
+			}
+			p.Logger.Debugw("Got observations from peer", "stage", "Outcome", "sv", streamObservations, "oracleID", ao.Observer, "seqNr", outctx.SeqNr)
 		}
 	}
 
@@ -636,6 +766,8 @@ func (p *LLOPlugin) Outcome(outctx ocr3types.OutcomeContext, query types.Query, 
 
 	/////////////////////////////////
 	// outcome.ObservationsTimestampNanoseconds
+	// TODO: Refactor this into an aggregate function
+	// MERC-3524
 	sort.Slice(timestampsNanoseconds, func(i, j int) bool { return timestampsNanoseconds[i] < timestampsNanoseconds[j] })
 	outcome.ObservationsTimestampNanoseconds = timestampsNanoseconds[len(timestampsNanoseconds)/2]
 
@@ -649,7 +781,7 @@ func (p *LLOPlugin) Outcome(outctx ocr3types.OutcomeContext, query types.Query, 
 
 	// if retired, stop updating channel definitions
 	if outcome.LifeCycleStage == LifeCycleStageRetired {
-		removeChannelVotesByID, addChannelDefinitionsByHash = nil, nil
+		removeChannelVotesByID, updateChannelDefinitionsByHash = nil, nil
 	}
 
 	var removedChannelIDs []llotypes.ChannelID
@@ -661,25 +793,49 @@ func (p *LLOPlugin) Outcome(outctx ocr3types.OutcomeContext, query types.Query, 
 		delete(outcome.ChannelDefinitions, channelID)
 	}
 
-	for channelHash, defWithID := range addChannelDefinitionsByHash {
-		voteCount := addChannelVotesByHash[channelHash]
+	type hashWithID struct {
+		ChannelHash
+		ChannelDefinitionWithID
+	}
+	orderedHashes := make([]hashWithID, 0, len(updateChannelDefinitionsByHash))
+	for channelHash, dfnWithID := range updateChannelDefinitionsByHash {
+		orderedHashes = append(orderedHashes, hashWithID{channelHash, dfnWithID})
+	}
+	// Use predictable order for adding channels (id asc) so that extras that
+	// exceed the max are consistent across all nodes
+	sort.Slice(orderedHashes, func(i, j int) bool { return orderedHashes[i].ChannelID < orderedHashes[j].ChannelID })
+	for _, hwid := range orderedHashes {
+		voteCount := updateChannelVotesByHash[hwid.ChannelHash]
 		if voteCount <= p.F {
 			continue
 		}
-		if conflictDef, exists := outcome.ChannelDefinitions[defWithID.ChannelID]; exists {
-			p.Logger.Warn("More than f nodes vote to add a channel, but a channel with the same id already exists",
-				"existingChannelDefinition", conflictDef,
-				"addChannelDefinition", defWithID,
+		defWithID := hwid.ChannelDefinitionWithID
+		if original, exists := outcome.ChannelDefinitions[defWithID.ChannelID]; exists {
+			p.Logger.Debugw("Adding channel (replacement)",
+				"channelID", defWithID.ChannelID,
+				"originalChannelDefinition", original,
+				"replaceChannelDefinition", defWithID,
+				"seqNr", outctx.SeqNr,
+				"stage", "Outcome",
 			)
+			outcome.ChannelDefinitions[defWithID.ChannelID] = defWithID.ChannelDefinition
+		} else if len(outcome.ChannelDefinitions) >= MaxOutcomeChannelDefinitionsLength {
+			p.Logger.Warnw("Adding channel FAILED. Cannot add channel, outcome already contains maximum number of channels",
+				"maxOutcomeChannelDefinitionsLength", MaxOutcomeChannelDefinitionsLength,
+				"addChannelDefinition", defWithID,
+				"seqNr", outctx.SeqNr,
+				"stage", "Outcome",
+			)
+			// continue, don't break here because remaining channels might be a
+			// replacement rather than an addition, and this is still ok
 			continue
 		}
-		if len(outcome.ChannelDefinitions) > MAX_OUTCOME_CHANNEL_DEFINITIONS_LENGTH {
-			p.Logger.Warn("Cannot add channel, outcome already contains maximum number of channels",
-				"maxOutcomeChannelDefinitionsLength", MAX_OUTCOME_CHANNEL_DEFINITIONS_LENGTH,
-				"addChannelDefinition", defWithID,
-			)
-			continue
-		}
+		p.Logger.Debugw("Adding channel (new)",
+			"channelID", defWithID.ChannelID,
+			"addChannelDefinition", defWithID,
+			"seqNr", outctx.SeqNr,
+			"stage", "Outcome",
+		)
 		outcome.ChannelDefinitions[defWithID.ChannelID] = defWithID.ChannelDefinition
 	}
 
@@ -691,20 +847,20 @@ func (p *LLOPlugin) Outcome(outctx ocr3types.OutcomeContext, query types.Query, 
 	// populated ValidAfterSeconds during promotion to production. In this
 	// case, nothing to do.
 	if outcome.ValidAfterSeconds == nil {
-		previousObservationsTimestampSeconds, err := previousOutcome.ObservationsTimestampSeconds()
-		if err != nil {
-			return nil, fmt.Errorf("error getting previous outcome's observations timestamp: %v", err)
+		previousObservationsTimestampSeconds, err2 := previousOutcome.ObservationsTimestampSeconds()
+		if err2 != nil {
+			return nil, fmt.Errorf("error getting previous outcome's observations timestamp: %v", err2)
 		}
 
 		outcome.ValidAfterSeconds = map[llotypes.ChannelID]uint32{}
 		for channelID, previousValidAfterSeconds := range previousOutcome.ValidAfterSeconds {
-			if err := previousOutcome.IsReportable(channelID); err != nil {
-				p.Logger.Debugw("Channel is not reportable", "channelID", channelID, "err", err)
+			if err3 := previousOutcome.IsReportable(channelID); err3 != nil {
+				if p.Config.VerboseLogging {
+					p.Logger.Debugw("Channel is not reportable", "channelID", channelID, "err", err3, "stage", "Outcome", "seqNr", outctx.SeqNr)
+				}
 				// was reported based on previous outcome
 				outcome.ValidAfterSeconds[channelID] = previousObservationsTimestampSeconds
 			} else {
-				p.Logger.Debugw("Channel is reportable", "channelID", channelID)
-				// TODO: change log level based on what type of error we got
 				// was skipped based on previous outcome
 				outcome.ValidAfterSeconds[channelID] = previousValidAfterSeconds
 			}
@@ -735,53 +891,75 @@ func (p *LLOPlugin) Outcome(outctx ocr3types.OutcomeContext, query types.Query, 
 	}
 
 	/////////////////////////////////
-	// outcome.StreamMedians
+	// outcome.StreamAggregates
 	/////////////////////////////////
-	outcome.StreamMedians = map[llotypes.StreamID]*big.Int{}
-	for streamID, observations := range streamObservations {
-		sort.Slice(observations, func(i, j int) bool { return observations[i].Cmp(observations[j]) < 0 })
-		if len(observations) <= p.F {
-			// In the worst case, we have 2f+1 observations, of which up to f
-			// are allowed to be unparseable/missing. If we have less than f+1
-			// usable observations, we cannot securely generate a median at
-			// all.
-			p.Logger.Debugw("Not enough observations to calculate median, expected at least f+1", "f", p.F, "streamID", streamID, "observations", observations)
-			continue
+	outcome.StreamAggregates = make(map[llotypes.StreamID]map[llotypes.Aggregator]StreamValue, len(streamObservations))
+	// Aggregation methods are defined on a per-channel basis, but we only want
+	// to do the minimum necessary number of aggregations (one per stream/aggregator
+	// pair) and re-use the same result, in case multiple channels share the
+	// same stream/aggregator pair.
+	for cid, cd := range outcome.ChannelDefinitions {
+		for _, strm := range cd.Streams {
+			sid, agg := strm.StreamID, strm.Aggregator
+			if _, exists := outcome.StreamAggregates[sid][agg]; exists {
+				// Should only happen in the case of duplicate streams, no
+				// need to aggregate twice
+				continue
+			}
+			aggF := GetAggregatorFunc(agg)
+			if aggF == nil {
+				return nil, fmt.Errorf("no aggregator function defined for aggregator of type %v", agg)
+			}
+			m, exists := outcome.StreamAggregates[sid]
+			if !exists {
+				m = make(map[llotypes.Aggregator]StreamValue)
+				outcome.StreamAggregates[sid] = m
+			}
+			result, err := aggF(streamObservations[sid], p.F)
+			if err != nil {
+				if p.Config.VerboseLogging {
+					p.Logger.Warnw("Aggregation failed", "aggregator", agg, "channelID", cid, "f", p.F, "streamID", sid, "observations", streamObservations[sid], "stage", "Outcome", "seqNr", outctx.SeqNr, "err", err)
+				}
+				// FIXME: Is this a complete failure?
+				// MERC-3524
+				continue
+			}
+			m[agg] = result
 		}
-		// We use a "rank-k" median here, instead one could average in case of
-		// an even number of observations.
-		outcome.StreamMedians[streamID] = observations[len(observations)/2]
 	}
 
-	return json.Marshal(outcome)
+	if p.Config.VerboseLogging {
+		p.Logger.Debugw("Generated outcome", "outcome", outcome, "stage", "Outcome", "seqNr", outctx.SeqNr)
+	}
+	return p.OutcomeCodec.Encode(outcome)
 }
 
 type Report struct {
 	ConfigDigest types.ConfigDigest
-	// Chain the report is destined for
-	ChainSelector uint64
 	// OCR sequence number of this report
 	SeqNr uint64
 	// Channel that is being reported on
 	ChannelID llotypes.ChannelID
-	// Report is valid for ValidAfterSeconds < block.time <= ValidUntilSeconds
+	// Report is only valid at t > ValidAfterSeconds
 	ValidAfterSeconds uint32
-	ValidUntilSeconds uint32
-	// Here we only encode big.Ints, but in principle there's nothing stopping
-	// us from also supporting non-numeric data or smaller values etc...
-	Values []*big.Int
+	// ObservationTimestampSeconds is the median of all observation timestamps
+	// (note that this timestamp is taken immediately before we initiate any
+	// observations)
+	ObservationTimestampSeconds uint32
+	// Values for every stream in the channel
+	Values []StreamValue
 	// The contract onchain will only validate non-specimen reports. A staging
 	// protocol instance will generate specimen reports so we can validate it
 	// works properly without any risk of misreports landing on chain.
 	Specimen bool
 }
 
-func (p *LLOPlugin) encodeReport(r Report, format llotypes.ReportFormat) (types.Report, error) {
-	codec, exists := p.Codecs[format]
+func (p *Plugin) encodeReport(r Report, cd llotypes.ChannelDefinition) (types.Report, error) {
+	codec, exists := p.Codecs[cd.ReportFormat]
 	if !exists {
-		return nil, fmt.Errorf("codec missing for ReportFormat=%d", format)
+		return nil, fmt.Errorf("codec missing for ReportFormat=%q", cd.ReportFormat)
 	}
-	return codec.Encode(r)
+	return codec.Encode(r, cd)
 }
 
 // Generates a (possibly empty) list of reports from an outcome. Each report
@@ -797,14 +975,14 @@ func (p *LLOPlugin) encodeReport(r Report, format llotypes.ReportFormat) (types.
 // *not* strictly) across the lifetime of a protocol instance and that
 // outctx.previousOutcome contains the consensus outcome with sequence
 // number (outctx.SeqNr-1).
-func (p *LLOPlugin) Reports(seqNr uint64, rawOutcome ocr3types.Outcome) ([]ocr3types.ReportWithInfo[llotypes.ReportInfo], error) {
+func (p *Plugin) Reports(seqNr uint64, rawOutcome ocr3types.Outcome) ([]ocr3types.ReportWithInfo[llotypes.ReportInfo], error) {
 	if seqNr <= 1 {
 		// no reports for initial round
 		return nil, nil
 	}
 
-	var outcome Outcome
-	if err := json.Unmarshal(rawOutcome, &outcome); err != nil {
+	outcome, err := p.OutcomeCodec.Decode(rawOutcome)
+	if err != nil {
 		return nil, fmt.Errorf("error unmarshalling outcome: %w", err)
 	}
 
@@ -824,6 +1002,7 @@ func (p *LLOPlugin) Reports(seqNr uint64, rawOutcome ocr3types.Outcome) ([]ocr3t
 		}
 
 		rwis = append(rwis, ocr3types.ReportWithInfo[llotypes.ReportInfo]{
+			// TODO: Needs retirement report codec
 			Report: must(json.Marshal(retirementReport)),
 			Info: llotypes.ReportInfo{
 				LifeCycleStage: outcome.LifeCycleStage,
@@ -832,25 +1011,32 @@ func (p *LLOPlugin) Reports(seqNr uint64, rawOutcome ocr3types.Outcome) ([]ocr3t
 		})
 	}
 
-	for _, channelID := range outcome.ReportableChannels() {
-		channelDefinition := outcome.ChannelDefinitions[channelID]
-		values := []*big.Int{}
-		for _, streamID := range channelDefinition.StreamIDs {
-			values = append(values, outcome.StreamMedians[streamID])
+	reportableChannels, unreportableChannels := outcome.ReportableChannels()
+	if p.Config.VerboseLogging {
+		p.Logger.Debugw("Reportable channels", "reportableChannels", reportableChannels, "unreportableChannels", unreportableChannels, "stage", "Report", "seqNr", seqNr)
+	}
+
+	for _, cid := range reportableChannels {
+		cd := outcome.ChannelDefinitions[cid]
+		values := make([]StreamValue, 0, len(cd.Streams))
+		for _, strm := range cd.Streams {
+			// TODO: Can you ever get nil values (i.e. missing from the
+			// StreamAggregates) here? What happens if you do?
+			// MERC-3524
+			values = append(values, outcome.StreamAggregates[strm.StreamID][strm.Aggregator])
 		}
 
 		report := Report{
 			p.ConfigDigest,
-			channelDefinition.ChainSelector,
 			seqNr,
-			channelID,
-			outcome.ValidAfterSeconds[channelID],
+			cid,
+			outcome.ValidAfterSeconds[cid],
 			observationsTimestampSeconds,
 			values,
 			outcome.LifeCycleStage != LifeCycleStageProduction,
 		}
 
-		encoded, err := p.encodeReport(report, channelDefinition.ReportFormat)
+		encoded, err := p.encodeReport(report, cd)
 		if err != nil {
 			return nil, err
 		}
@@ -858,24 +1044,24 @@ func (p *LLOPlugin) Reports(seqNr uint64, rawOutcome ocr3types.Outcome) ([]ocr3t
 			Report: encoded,
 			Info: llotypes.ReportInfo{
 				LifeCycleStage: outcome.LifeCycleStage,
-				ReportFormat:   channelDefinition.ReportFormat,
+				ReportFormat:   cd.ReportFormat,
 			},
 		})
 	}
 
-	if len(rwis) == 0 {
-		p.Logger.Debugw("No reports", "reportableChannels", outcome.ReportableChannels())
+	if p.Config.VerboseLogging && len(rwis) == 0 {
+		p.Logger.Debugw("No reports, will not transmit anything", "reportableChannels", reportableChannels, "stage", "Report", "seqNr", seqNr)
 	}
 
 	return rwis, nil
 }
 
-func (p *LLOPlugin) ShouldAcceptAttestedReport(context.Context, uint64, ocr3types.ReportWithInfo[llotypes.ReportInfo]) (bool, error) {
+func (p *Plugin) ShouldAcceptAttestedReport(context.Context, uint64, ocr3types.ReportWithInfo[llotypes.ReportInfo]) (bool, error) {
 	// Transmit it all to the Mercury server
 	return true, nil
 }
 
-func (p *LLOPlugin) ShouldTransmitAcceptedReport(context.Context, uint64, ocr3types.ReportWithInfo[llotypes.ReportInfo]) (bool, error) {
+func (p *Plugin) ShouldTransmitAcceptedReport(context.Context, uint64, ocr3types.ReportWithInfo[llotypes.ReportInfo]) (bool, error) {
 	// Transmit it all to the Mercury server
 	return true, nil
 }
@@ -888,11 +1074,11 @@ func (p *LLOPlugin) ShouldTransmitAcceptedReport(context.Context, uint64, ocr3ty
 // This is an advanced feature. The "default" approach (what OCR1 & OCR2
 // did) is to have an empty ValidateObservation function and return
 // QuorumTwoFPlusOne from this function.
-func (p *LLOPlugin) ObservationQuorum(outctx ocr3types.OutcomeContext, query types.Query) (ocr3types.Quorum, error) {
+func (p *Plugin) ObservationQuorum(outctx ocr3types.OutcomeContext, query types.Query) (ocr3types.Quorum, error) {
 	return ocr3types.QuorumTwoFPlusOne, nil
 }
 
-func (p *LLOPlugin) Close() error {
+func (p *Plugin) Close() error {
 	return nil
 }
 
@@ -919,4 +1105,11 @@ func subtractChannelDefinitions(minuend llotypes.ChannelDefinitions, subtrahend 
 	}
 
 	return difference
+}
+
+// deterministic sort of channel IDs
+func sortChannelIDs(cids []llotypes.ChannelID) {
+	sort.Slice(cids, func(i, j int) bool {
+		return cids[i] < cids[j]
+	})
 }

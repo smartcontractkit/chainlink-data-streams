@@ -16,7 +16,7 @@ jobs:
       lint_args_packages: ${{ steps.set-matrix-packages.outputs.lint_args_packages }}
     steps:
       - name: Checkout code
-        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+        uses: actions/checkout@0ad4b8fadaa221de15dcec353f45205ec38ea70b # v4.1.4
       - name: Set matrix packages
         id: set-matrix-packages
         shell: bash
@@ -40,13 +40,13 @@ jobs:
       actions: read
     steps:
       - name: ci-lint
-        uses: smartcontractkit/.github/actions/ci-lint-go@6b08487b176ef7cad086526d0b54ddff6691c044 # ci-lint-go@0.1.1
+        uses: smartcontractkit/.github/actions/ci-lint-go@7ac9af09dda8c553593d2153a975b43b6958fa9f # ci-lint-go@0.2.2
         with:
           # grafana inputs
           metrics-job-name: ci-lint
           gc-basic-auth: ${{ secrets.GRAFANA_INTERNAL_BASIC_AUTH }}
           gc-host: ${{ secrets.GRAFANA_INTERNAL_HOST }}
-          gc-org-id: ${{ secrets.GRAFANA_INTERNAL_ORG_ID }}
+          gc-org-id: ${{ secrets.GRAFANA_INTERNAL_TENANT_ID }}
 
           # env inputs
           use-env-files: "true"
@@ -66,13 +66,13 @@ jobs:
       actions: read
     steps:
       - name: ci-test
-        uses: smartcontractkit/.github/actions/ci-test-go@6b08487b176ef7cad086526d0b54ddff6691c044 # ci-test-go@0.1.1
+        uses: smartcontractkit/.github/actions/ci-test-go@f8efc6bb91480713ddd64eaabd63d4b97ae6f088 # ci-test-go@0.1.4
         with:
           # grafana inputs
           metrics-job-name: ci-test
           gc-basic-auth: ${{ secrets.GRAFANA_INTERNAL_BASIC_AUTH }}
           gc-host: ${{ secrets.GRAFANA_INTERNAL_HOST }}
-          gc-org-id: ${{ secrets.GRAFANA_INTERNAL_ORG_ID }}
+          gc-org-id: ${{ secrets.GRAFANA_INTERNAL_TENANT_ID }}
 
           # docker inputs
           use-docker-compose: "true"
@@ -92,14 +92,40 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: ci-sonarqube
-        uses: smartcontractkit/.github/actions/ci-sonarqube@6b08487b176ef7cad086526d0b54ddff6691c044 # ci-sonarqube@0.3.1
+        uses: smartcontractkit/.github/actions/ci-sonarqube-go@3e11dbc45e4c8b18dd996fb417ccf22056176388 # ci-sonarqube-go@0.1.0
         with:
           # grafana inputs
           metrics-job-name: ci-sonarqube
           gc-basic-auth: ${{ secrets.GRAFANA_INTERNAL_BASIC_AUTH }}
           gc-host: ${{ secrets.GRAFANA_INTERNAL_HOST }}
-          gc-org-id: ${{ secrets.GRAFANA_INTERNAL_ORG_ID }}
+          gc-org-id: ${{ secrets.GRAFANA_INTERNAL_TENANT_ID }}
 
           # sonarqube inputs
           sonar-token: ${{ secrets.SONAR_TOKEN }}
           sonar-host-url: ${{ secrets.SONAR_HOST_URL }}
+
+  cd-release:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    outputs:
+      changesets_published: ${{ steps.cd-release.outputs.published }}
+      changesets_publishedPackages: ${{ steps.cd-release.outputs.publishedPackages }}
+    steps:
+      - name: cd-release
+        id: cd-release
+        uses: smartcontractkit/.github/actions/cicd-changesets@6da79c7b9f14bec077df2c1ad40d53823b409d9c # cicd-changesets@0.3.3
+        with:
+          # general inputs
+          git-user: app-token-issuer-foundations[bot]
+          git-email: app-token-issuer-foundations[bot]@users.noreply.github.com
+          pnpm-use-cache: false
+          # aws inputs
+          aws-region: ${{ secrets.AWS_REGION }}
+          aws-role-arn: ${{ secrets.AWS_OIDC_CHAINLINK_DATA_STREAMS_CI_CHANGESET_TOKEN_ISSUER_ROLE_ARN }}
+          aws-lambda-url: ${{ secrets.AWS_FOUNDATIONS_GATI_URL }}
+          # grafana inputs
+          metrics-job-name: cd-release
+          gc-basic-auth: ${{ secrets.GRAFANA_CLOUD_BASIC_AUTH }}
+          gc-host: ${{ secrets.GRAFANA_CLOUD_HOST }}

@@ -8,7 +8,6 @@ import (
 	"math/big"
 	"time"
 
-	pkgerrors "github.com/pkg/errors"
 	"google.golang.org/protobuf/proto"
 
 	"github.com/smartcontractkit/libocr/offchainreporting2plus/ocr3types"
@@ -123,7 +122,7 @@ var MissingPrice = big.NewInt(-1)
 func (rp *reportingPlugin) Observation(ctx context.Context, repts types.ReportTimestamp, previousReport types.Report) (types.Observation, error) {
 	obs, err := rp.dataSource.Observe(ctx, repts, previousReport == nil)
 	if err != nil {
-		return nil, pkgerrors.Errorf("DataSource.Observe returned an error: %s", err)
+		return nil, fmt.Errorf("DataSource.Observe returned an error: %s", err)
 	}
 
 	observationTimestamp := time.Now()
@@ -135,10 +134,10 @@ func (rp *reportingPlugin) Observation(ctx context.Context, repts types.ReportTi
 
 	var bpErr error
 	if obs.BenchmarkPrice.Err != nil {
-		bpErr = pkgerrors.Wrap(obs.BenchmarkPrice.Err, "failed to observe BenchmarkPrice")
+		bpErr = fmt.Errorf("failed to observe BenchmarkPrice: %w", obs.BenchmarkPrice.Err)
 		obsErrors = append(obsErrors, bpErr)
 	} else if benchmarkPrice, err := mercury.EncodeValueInt192(obs.BenchmarkPrice.Val); err != nil {
-		bpErr = pkgerrors.Wrapf(err, "failed to encode BenchmarkPrice; val=%s", obs.BenchmarkPrice.Val)
+		bpErr = fmt.Errorf("failed to encode BenchmarkPrice; val=%s: %w", obs.BenchmarkPrice.Val, err)
 		obsErrors = append(obsErrors, bpErr)
 	} else {
 		p.BenchmarkPrice = benchmarkPrice
@@ -147,7 +146,7 @@ func (rp *reportingPlugin) Observation(ctx context.Context, repts types.ReportTi
 
 	var maxFinalizedTimestampErr error
 	if obs.MaxFinalizedTimestamp.Err != nil {
-		maxFinalizedTimestampErr = pkgerrors.Wrap(obs.MaxFinalizedTimestamp.Err, "failed to observe MaxFinalizedTimestamp")
+		maxFinalizedTimestampErr = fmt.Errorf("failed to observe MaxFinalizedTimestamp: %w", obs.MaxFinalizedTimestamp.Err)
 		obsErrors = append(obsErrors, maxFinalizedTimestampErr)
 	} else {
 		p.MaxFinalizedTimestamp = obs.MaxFinalizedTimestamp.Val
@@ -156,14 +155,14 @@ func (rp *reportingPlugin) Observation(ctx context.Context, repts types.ReportTi
 
 	var linkErr error
 	if obs.LinkPrice.Err != nil {
-		linkErr = pkgerrors.Wrap(obs.LinkPrice.Err, "failed to observe LINK price")
+		linkErr = fmt.Errorf("failed to observe LINK price: %w", obs.LinkPrice.Err)
 		obsErrors = append(obsErrors, linkErr)
 	} else if obs.LinkPrice.Val.Cmp(MissingPrice) <= 0 {
 		p.LinkFee = mercury.MaxInt192Enc
 	} else {
 		linkFee := mercury.CalculateFee(obs.LinkPrice.Val, rp.offchainConfig.BaseUSDFee)
 		if linkFeeEncoded, err := mercury.EncodeValueInt192(linkFee); err != nil {
-			linkErr = pkgerrors.Wrapf(err, "failed to encode LINK fee; val=%s", linkFee)
+			linkErr = fmt.Errorf("failed to encode LINK fee; val=%s: %w", linkFee, err)
 			obsErrors = append(obsErrors, linkErr)
 		} else {
 			p.LinkFee = linkFeeEncoded
@@ -176,14 +175,14 @@ func (rp *reportingPlugin) Observation(ctx context.Context, repts types.ReportTi
 
 	var nativeErr error
 	if obs.NativePrice.Err != nil {
-		nativeErr = pkgerrors.Wrap(obs.NativePrice.Err, "failed to observe native price")
+		nativeErr = fmt.Errorf("failed to observe native price: %w", obs.NativePrice.Err)
 		obsErrors = append(obsErrors, nativeErr)
 	} else if obs.NativePrice.Val.Cmp(MissingPrice) <= 0 {
 		p.NativeFee = mercury.MaxInt192Enc
 	} else {
 		nativeFee := mercury.CalculateFee(obs.NativePrice.Val, rp.offchainConfig.BaseUSDFee)
 		if nativeFeeEncoded, err := mercury.EncodeValueInt192(nativeFee); err != nil {
-			nativeErr = pkgerrors.Wrapf(err, "failed to encode native fee; val=%s", nativeFee)
+			nativeErr = fmt.Errorf("failed to encode native fee; val=%s: %w", nativeFee, err)
 			obsErrors = append(obsErrors, nativeErr)
 		} else {
 			p.NativeFee = nativeFeeEncoded
@@ -205,7 +204,7 @@ func parseAttributedObservation(ao types.AttributedObservation) (PAO, error) {
 	var pao parsedAttributedObservation
 	var obs MercuryObservationProto
 	if err := proto.Unmarshal(ao.Observation, &obs); err != nil {
-		return parsedAttributedObservation{}, pkgerrors.Errorf("attributed observation cannot be unmarshaled: %s", err)
+		return parsedAttributedObservation{}, fmt.Errorf("attributed observation cannot be unmarshaled: %s", err)
 	}
 
 	pao.Timestamp = obs.Timestamp
@@ -215,7 +214,7 @@ func parseAttributedObservation(ao types.AttributedObservation) (PAO, error) {
 		var err error
 		pao.BenchmarkPrice, err = mercury.DecodeValueInt192(obs.BenchmarkPrice)
 		if err != nil {
-			return parsedAttributedObservation{}, pkgerrors.Errorf("benchmarkPrice cannot be converted to big.Int: %s", err)
+			return parsedAttributedObservation{}, fmt.Errorf("benchmarkPrice cannot be converted to big.Int: %s", err)
 		}
 		pao.PricesValid = true
 	}
@@ -229,7 +228,7 @@ func parseAttributedObservation(ao types.AttributedObservation) (PAO, error) {
 		var err error
 		pao.LinkFee, err = mercury.DecodeValueInt192(obs.LinkFee)
 		if err != nil {
-			return parsedAttributedObservation{}, pkgerrors.Errorf("link price cannot be converted to big.Int: %s", err)
+			return parsedAttributedObservation{}, fmt.Errorf("link price cannot be converted to big.Int: %s", err)
 		}
 		pao.LinkFeeValid = true
 	}
@@ -237,7 +236,7 @@ func parseAttributedObservation(ao types.AttributedObservation) (PAO, error) {
 		var err error
 		pao.NativeFee, err = mercury.DecodeValueInt192(obs.NativeFee)
 		if err != nil {
-			return parsedAttributedObservation{}, pkgerrors.Errorf("native price cannot be converted to big.Int: %s", err)
+			return parsedAttributedObservation{}, fmt.Errorf("native price cannot be converted to big.Int: %s", err)
 		}
 		pao.NativeFeeValid = true
 	}
@@ -271,7 +270,7 @@ func (rp *reportingPlugin) Report(repts types.ReportTimestamp, previousReport ty
 
 	// By assumption, we have at most f malicious oracles, so there should be at least f+1 valid paos
 	if !(rp.f+1 <= len(paos)) {
-		return false, nil, pkgerrors.Errorf("only received %v valid attributed observations, but need at least f+1 (%v)", len(paos), rp.f+1)
+		return false, nil, fmt.Errorf("only received %v valid attributed observations, but need at least f+1 (%v)", len(paos), rp.f+1)
 	}
 
 	rf, err := rp.buildReportFields(previousReport, paos)
@@ -298,7 +297,7 @@ func (rp *reportingPlugin) Report(repts types.ReportTimestamp, previousReport ty
 	}
 
 	if !(len(report) <= rp.maxReportLength) {
-		return false, nil, pkgerrors.Errorf("report with len %d violates MaxReportLength limit set by ReportCodec (%d)", len(report), rp.maxReportLength)
+		return false, nil, fmt.Errorf("report with len %d violates MaxReportLength limit set by ReportCodec (%d)", len(report), rp.maxReportLength)
 	} else if len(report) == 0 {
 		return false, nil, errors.New("report may not have zero length (invariant violation)")
 	}
@@ -333,7 +332,9 @@ func (rp *reportingPlugin) buildReportFields(previousReport types.Report, paos [
 	}
 
 	rf.BenchmarkPrice, err = mercury.GetConsensusBenchmarkPrice(mPaos, rp.f)
-	merr = errors.Join(merr, pkgerrors.Wrap(err, "GetConsensusBenchmarkPrice failed"))
+	if err != nil {
+		merr = errors.Join(merr, fmt.Errorf("GetConsensusBenchmarkPrice failed: %w", err))
+	}
 
 	rf.LinkFee, err = mercury.GetConsensusLinkFee(convertLinkFee(paos), rp.f)
 	if err != nil {

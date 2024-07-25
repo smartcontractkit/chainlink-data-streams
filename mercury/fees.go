@@ -8,12 +8,12 @@ import (
 
 // PriceScalingFactor indicates the multiplier applied to token prices that we expect from data source
 // e.g. for a 1e8 multiplier, a LINK/USD value of 7.42 will be derived from a data source value of 742000000
-var PRICE_SCALING_FACTOR = decimal.NewFromInt(1e18) //nolint:revive
+var PriceScalingFactor = decimal.NewFromInt(1e18) //nolint:revive
 
 // FeeScalingFactor indicates the multiplier applied to fees.
 // e.g. for a 1e18 multiplier, a LINK fee of 7.42 will be represented as 7.42e18
 // This is what will be baked into the report for use on-chain.
-var FEE_SCALING_FACTOR = decimal.NewFromInt(1e18)
+var FeeScalingFactor = decimal.NewFromInt(1e18)
 
 // CalculateFee outputs a fee in wei according to the formula: baseUSDFee * scaleFactor / tokenPriceInUSD
 func CalculateFee(tokenPriceInUSD *big.Int, baseUSDFee decimal.Decimal) *big.Int {
@@ -23,7 +23,7 @@ func CalculateFee(tokenPriceInUSD *big.Int, baseUSDFee decimal.Decimal) *big.Int
 	}
 
 	// scale baseFee in USD
-	baseFeeScaled := baseUSDFee.Mul(PRICE_SCALING_FACTOR)
+	baseFeeScaled := baseUSDFee.Mul(PriceScalingFactor)
 
 	tokenPrice := decimal.NewFromBigInt(tokenPriceInUSD, 0)
 
@@ -31,7 +31,7 @@ func CalculateFee(tokenPriceInUSD *big.Int, baseUSDFee decimal.Decimal) *big.Int
 	fee := baseFeeScaled.Div(tokenPrice)
 
 	// scale fee to the expected format
-	fee = fee.Mul(FEE_SCALING_FACTOR)
+	fee = fee.Mul(FeeScalingFactor)
 
 	// convert to big.Int
 	return fee.BigInt()
