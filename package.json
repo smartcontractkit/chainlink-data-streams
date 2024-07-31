@@ -1,5 +1,5 @@
 {
-  "name": "chainlink-data-streams",
+  "name": "@chainlink/data-streams",
   "version": "0.1.0",
   "description": "Chainlink data streams plugin",
   "main": "index.js",
