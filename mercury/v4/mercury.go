@@ -8,13 +8,13 @@ import (
 	"math/big"
 	"time"
 
+	"github.com/smartcontractkit/chainlink-common/pkg/logger"
+	mercurytypes "github.com/smartcontractkit/chainlink-common/pkg/types/mercury"
+	v4 "github.com/smartcontractkit/chainlink-common/pkg/types/mercury/v4"
 	"github.com/smartcontractkit/libocr/offchainreporting2plus/ocr3types"
 	"github.com/smartcontractkit/libocr/offchainreporting2plus/types"
 	"google.golang.org/protobuf/proto"
 
-	"github.com/smartcontractkit/chainlink-common/pkg/logger"
-	mercurytypes "github.com/smartcontractkit/chainlink-common/pkg/types/mercury"
-	v4 "github.com/smartcontractkit/chainlink-common/pkg/types/mercury/v4"
 	"github.com/smartcontractkit/chainlink-data-streams/mercury"
 )
 

@@ -12,7 +12,7 @@ func GetConsensusMarketStatus(paos []PAOMarketStatus, f int) (uint32, error) {
 	for _, pao := range paos {
 		marketStatus, valid := pao.GetMarketStatus()
 		if valid {
-			marketStatusCounts[marketStatus] += 1
+			marketStatusCounts[marketStatus]++
 		}
 	}
 

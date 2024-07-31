@@ -11,15 +11,15 @@ import (
 	"time"
 
 	"github.com/shopspring/decimal"
+	"github.com/smartcontractkit/chainlink-common/pkg/logger"
+	mercurytypes "github.com/smartcontractkit/chainlink-common/pkg/types/mercury"
+	v4 "github.com/smartcontractkit/chainlink-common/pkg/types/mercury/v4"
 	"github.com/smartcontractkit/libocr/commontypes"
 	"github.com/smartcontractkit/libocr/offchainreporting2plus/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
 
-	"github.com/smartcontractkit/chainlink-common/pkg/logger"
-	mercurytypes "github.com/smartcontractkit/chainlink-common/pkg/types/mercury"
-	"github.com/smartcontractkit/chainlink-common/pkg/types/mercury/v4"
 	"github.com/smartcontractkit/chainlink-data-streams/mercury"
 )
 
