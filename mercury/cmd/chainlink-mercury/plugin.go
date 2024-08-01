@@ -12,10 +12,12 @@ import (
 	v1 "github.com/smartcontractkit/chainlink-common/pkg/types/mercury/v1"
 	v2 "github.com/smartcontractkit/chainlink-common/pkg/types/mercury/v2"
 	v3 "github.com/smartcontractkit/chainlink-common/pkg/types/mercury/v3"
+	v4 "github.com/smartcontractkit/chainlink-common/pkg/types/mercury/v4"
 
 	ds_v1 "github.com/smartcontractkit/chainlink-data-streams/mercury/v1"
 	ds_v2 "github.com/smartcontractkit/chainlink-data-streams/mercury/v2"
 	ds_v3 "github.com/smartcontractkit/chainlink-data-streams/mercury/v3"
+	ds_v4 "github.com/smartcontractkit/chainlink-data-streams/mercury/v4"
 )
 
 type Plugin struct {
@@ -63,6 +65,20 @@ func (p *Plugin) NewMercuryV3Factory(ctx context.Context, provider types.Mercury
 	factory := ds_v3.NewFactory(dataSource, lggr, provider.OnchainConfigCodec(), provider.ReportCodecV3())
 
 	s := &mercuryPluginFactoryService{lggr: logger.Named(lggr, "MercuryV3PluginFactory"), MercuryPluginFactory: factory}
+
+	p.SubService(s)
+
+	return s, nil
+}
+
+func (p *Plugin) NewMercuryV4Factory(ctx context.Context, provider types.MercuryProvider, dataSource v4.DataSource) (types.MercuryPluginFactory, error) {
+	var ctxVals loop.ContextValues
+	ctxVals.SetValues(ctx)
+	lggr := logger.With(p.Logger, ctxVals.Args()...)
+
+	factory := ds_v4.NewFactory(dataSource, lggr, provider.OnchainConfigCodec(), provider.ReportCodecV4())
+
+	s := &mercuryPluginFactoryService{lggr: logger.Named(lggr, "MercuryV4PluginFactory"), MercuryPluginFactory: factory}
 
 	p.SubService(s)
 
