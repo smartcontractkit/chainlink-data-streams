@@ -8,12 +8,13 @@ import (
 	"math/big"
 	"time"
 
-	"github.com/smartcontractkit/chainlink-common/pkg/logger"
-	mercurytypes "github.com/smartcontractkit/chainlink-common/pkg/types/mercury"
-	v4 "github.com/smartcontractkit/chainlink-common/pkg/types/mercury/v4"
 	"github.com/smartcontractkit/libocr/offchainreporting2plus/ocr3types"
 	"github.com/smartcontractkit/libocr/offchainreporting2plus/types"
 	"google.golang.org/protobuf/proto"
+
+	"github.com/smartcontractkit/chainlink-common/pkg/logger"
+	mercurytypes "github.com/smartcontractkit/chainlink-common/pkg/types/mercury"
+	v4 "github.com/smartcontractkit/chainlink-common/pkg/types/mercury/v4"
 
 	"github.com/smartcontractkit/chainlink-data-streams/mercury"
 )
@@ -66,13 +67,13 @@ func NewFactory(ds DataSource, lggr logger.Logger, occ mercurytypes.OnchainConfi
 	return Factory{ds, lggr, occ, rc}
 }
 
-func (fac Factory) NewMercuryPlugin(configuration ocr3types.MercuryPluginConfig) (ocr3types.MercuryPlugin, ocr3types.MercuryPluginInfo, error) {
+func (fac Factory) NewMercuryPlugin(ctx context.Context, configuration ocr3types.MercuryPluginConfig) (ocr3types.MercuryPlugin, ocr3types.MercuryPluginInfo, error) {
 	offchainConfig, err := mercury.DecodeOffchainConfig(configuration.OffchainConfig)
 	if err != nil {
 		return nil, ocr3types.MercuryPluginInfo{}, err
 	}
 
-	onchainConfig, err := fac.onchainConfigCodec.Decode(configuration.OnchainConfig)
+	onchainConfig, err := fac.onchainConfigCodec.Decode(ctx, configuration.OnchainConfig)
 	if err != nil {
 		return nil, ocr3types.MercuryPluginInfo{}, err
 	}
@@ -328,7 +329,7 @@ func parseAttributedObservations(lggr logger.Logger, aos []types.AttributedObser
 	return paos
 }
 
-func (rp *reportingPlugin) Report(repts types.ReportTimestamp, previousReport types.Report, aos []types.AttributedObservation) (shouldReport bool, report types.Report, err error) {
+func (rp *reportingPlugin) Report(ctx context.Context, repts types.ReportTimestamp, previousReport types.Report, aos []types.AttributedObservation) (shouldReport bool, report types.Report, err error) {
 	paos := parseAttributedObservations(rp.logger, aos)
 
 	if len(paos) == 0 {
