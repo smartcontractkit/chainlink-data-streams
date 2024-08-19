@@ -51,7 +51,7 @@ func Test_Reports(t *testing.T) {
 			}
 			encoded, err := p.OutcomeCodec.Encode(outcome)
 			require.NoError(t, err)
-			rwis, err := p.Reports(2, ocr3types.Outcome(encoded))
+			rwis, err := p.Reports(2, encoded)
 			require.NoError(t, err)
 			require.Len(t, rwis, 1)
 			assert.Equal(t, llo.ReportInfo{LifeCycleStage: LifeCycleStageRetired, ReportFormat: llotypes.ReportFormatJSON}, rwis[0].Info)
@@ -91,7 +91,7 @@ func Test_Reports(t *testing.T) {
 		}
 		encoded, err := p.OutcomeCodec.Encode(outcome)
 		require.NoError(t, err)
-		rwis, err := p.Reports(2, ocr3types.Outcome(encoded))
+		rwis, err := p.Reports(2, encoded)
 		require.NoError(t, err)
 		require.Len(t, rwis, 0)
 	})
@@ -216,7 +216,7 @@ func Test_Reports(t *testing.T) {
 		}
 		encoded, err := p.OutcomeCodec.Encode(outcome)
 		require.NoError(t, err)
-		rwis, err := p.Reports(2, ocr3types.Outcome(encoded))
+		rwis, err := p.Reports(2, encoded)
 		require.NoError(t, err)
 		require.Len(t, rwis, 2)
 		assert.Equal(t, `{"ConfigDigest":"0000000000000000000000000000000000000000000000000000000000000000","SeqNr":2,"ChannelID":1,"ValidAfterSeconds":100,"ObservationTimestampSeconds":200,"Values":[{"Type":0,"Value":"1.1"},{"Type":0,"Value":"2.2"},{"Type":1,"Value":"Q{Bid: 5.5, Benchmark: 4.4, Ask: 3.3}"}],"Specimen":false}`, string(rwis[0].Report))
