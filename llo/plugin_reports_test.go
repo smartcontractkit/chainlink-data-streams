@@ -38,7 +38,7 @@ func Test_Reports(t *testing.T) {
 	})
 
 	t.Run("returns error if unmarshalling outcome fails", func(t *testing.T) {
-		rwi, err := p.Reports(2, ocr3types.Outcome([]byte("invalid")))
+		rwi, err := p.Reports(2, []byte("invalid"))
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "failed to decode outcome: expected protobuf")
 		assert.Nil(t, rwi)
@@ -117,7 +117,7 @@ func Test_Reports(t *testing.T) {
 		}
 		encoded, err := p.OutcomeCodec.Encode(outcome)
 		require.NoError(t, err)
-		rwis, err := p.Reports(2, ocr3types.Outcome(encoded))
+		rwis, err := p.Reports(2, encoded)
 		require.NoError(t, err)
 		require.Len(t, rwis, 0)
 	})
@@ -150,7 +150,7 @@ func Test_Reports(t *testing.T) {
 		}
 		encoded, err := p.OutcomeCodec.Encode(outcome)
 		require.NoError(t, err)
-		rwis, err := p.Reports(2, ocr3types.Outcome(encoded))
+		rwis, err := p.Reports(2, encoded)
 		require.NoError(t, err)
 		require.Len(t, rwis, 0)
 	})
@@ -181,7 +181,7 @@ func Test_Reports(t *testing.T) {
 		}
 		encoded, err := p.OutcomeCodec.Encode(outcome)
 		require.NoError(t, err)
-		rwis, err := p.Reports(2, ocr3types.Outcome(encoded))
+		rwis, err := p.Reports(2, encoded)
 		require.NoError(t, err)
 		require.Len(t, rwis, 2)
 		assert.Equal(t, `{"ConfigDigest":"0000000000000000000000000000000000000000000000000000000000000000","SeqNr":2,"ChannelID":1,"ValidAfterSeconds":100,"ObservationTimestampSeconds":200,"Values":[{"Type":0,"Value":"1.1"},{"Type":0,"Value":"2.2"},{"Type":1,"Value":"Q{Bid: 5.5, Benchmark: 4.4, Ask: 3.3}"}],"Specimen":true}`, string(rwis[0].Report))
