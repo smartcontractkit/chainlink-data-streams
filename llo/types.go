@@ -13,11 +13,6 @@ type ChannelDefinitionWithID struct {
 
 type ChannelHash [32]byte
 
-type OnchainConfigCodec interface {
-	Encode(OnchainConfig) ([]byte, error)
-	Decode([]byte) (OnchainConfig, error)
-}
-
 type Transmitter interface {
 	// NOTE: Mercury doesn't actually transmit on-chain, so there is no
 	// "contract" involved with the transmitter.
