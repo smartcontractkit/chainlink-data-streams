@@ -7,8 +7,6 @@ message MercuryObservationProto {
     uint32 timestamp = 1;
 
     bytes benchmarkPrice = 2;
-    bytes bid = 3;
-    bytes ask = 4;
     bool pricesValid = 5;
 
     int64 maxFinalizedTimestamp = 6;

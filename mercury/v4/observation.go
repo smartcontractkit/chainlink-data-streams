@@ -10,8 +10,6 @@ import (
 
 type PAO interface {
 	mercury.PAO
-	GetBid() (*big.Int, bool)
-	GetAsk() (*big.Int, bool)
 	GetMaxFinalizedTimestamp() (int64, bool)
 	GetLinkFee() (*big.Int, bool)
 	GetNativeFee() (*big.Int, bool)
@@ -25,8 +23,6 @@ type parsedAttributedObservation struct {
 	Observer  commontypes.OracleID
 
 	BenchmarkPrice *big.Int
-	Bid            *big.Int
-	Ask            *big.Int
 	PricesValid    bool
 
 	MaxFinalizedTimestamp      int64
@@ -43,7 +39,7 @@ type parsedAttributedObservation struct {
 }
 
 func NewParsedAttributedObservation(ts uint32, observer commontypes.OracleID,
-	bp *big.Int, bid *big.Int, ask *big.Int, pricesValid bool, mfts int64,
+	bp *big.Int, pricesValid bool, mfts int64,
 	mftsValid bool, linkFee *big.Int, linkFeeValid bool, nativeFee *big.Int, nativeFeeValid bool,
 	marketStatus uint32, marketStatusValid bool) PAO {
 	return parsedAttributedObservation{
@@ -51,8 +47,6 @@ func NewParsedAttributedObservation(ts uint32, observer commontypes.OracleID,
 		Observer:  observer,
 
 		BenchmarkPrice: bp,
-		Bid:            bid,
-		Ask:            ask,
 		PricesValid:    pricesValid,
 
 		MaxFinalizedTimestamp:      mfts,
@@ -79,14 +73,6 @@ func (pao parsedAttributedObservation) GetObserver() commontypes.OracleID {
 
 func (pao parsedAttributedObservation) GetBenchmarkPrice() (*big.Int, bool) {
 	return pao.BenchmarkPrice, pao.PricesValid
-}
-
-func (pao parsedAttributedObservation) GetBid() (*big.Int, bool) {
-	return pao.Bid, pao.PricesValid
-}
-
-func (pao parsedAttributedObservation) GetAsk() (*big.Int, bool) {
-	return pao.Ask, pao.PricesValid
 }
 
 func (pao parsedAttributedObservation) GetMaxFinalizedTimestamp() (int64, bool) {

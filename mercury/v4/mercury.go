@@ -135,7 +135,7 @@ func (rp *reportingPlugin) Observation(ctx context.Context, repts types.ReportTi
 	p := MercuryObservationProto{Timestamp: uint32(observationTimestamp.Unix())}
 	var obsErrors []error
 
-	var bpErr, bidErr, askErr error
+	var bpErr error
 	if obs.BenchmarkPrice.Err != nil {
 		bpErr = fmt.Errorf("failed to observe BenchmarkPrice: %w", obs.BenchmarkPrice.Err)
 		obsErrors = append(obsErrors, bpErr)
@@ -144,35 +144,7 @@ func (rp *reportingPlugin) Observation(ctx context.Context, repts types.ReportTi
 		obsErrors = append(obsErrors, bpErr)
 	} else {
 		p.BenchmarkPrice = benchmarkPrice
-	}
-
-	if obs.Bid.Err != nil {
-		bidErr = fmt.Errorf("failed to observe Bid: %w", obs.Bid.Err)
-		obsErrors = append(obsErrors, bidErr)
-	} else if bid, err := mercury.EncodeValueInt192(obs.Bid.Val); err != nil {
-		bidErr = fmt.Errorf("failed to encode Bid; val=%s: %w", obs.Bid.Val, err)
-		obsErrors = append(obsErrors, bidErr)
-	} else {
-		p.Bid = bid
-	}
-
-	if obs.Ask.Err != nil {
-		askErr = fmt.Errorf("failed to observe Ask: %w", obs.Ask.Err)
-		obsErrors = append(obsErrors, askErr)
-	} else if ask, err := mercury.EncodeValueInt192(obs.Ask.Val); err != nil {
-		askErr = fmt.Errorf("failed to encode Ask; val=%s: %w", obs.Ask.Val, err)
-		obsErrors = append(obsErrors, askErr)
-	} else {
-		p.Ask = ask
-	}
-
-	if bpErr == nil && bidErr == nil && askErr == nil {
-		if err := validatePrices(obs.Bid.Val, obs.BenchmarkPrice.Val, obs.Ask.Val); err != nil {
-			rp.logger.Errorw("Cannot generate price observation: invalid bid/mid/ask", "err", err)
-			p.PricesValid = false
-		} else {
-			p.PricesValid = true
-		}
+		p.PricesValid = true
 	}
 
 	var maxFinalizedTimestampErr error
@@ -240,13 +212,6 @@ func (rp *reportingPlugin) Observation(ctx context.Context, repts types.ReportTi
 	return proto.Marshal(&p)
 }
 
-func validatePrices(bid, benchmarkPrice, ask *big.Int) error {
-	if bid.Cmp(benchmarkPrice) > 0 || benchmarkPrice.Cmp(ask) > 0 {
-		return fmt.Errorf("invariant violated: expected bid<=mid<=ask, got bid: %s, mid: %s, ask: %s", bid, benchmarkPrice, ask)
-	}
-	return nil
-}
-
 func parseAttributedObservation(ao types.AttributedObservation) (PAO, error) {
 	var pao parsedAttributedObservation
 	var obs MercuryObservationProto
@@ -262,21 +227,6 @@ func parseAttributedObservation(ao types.AttributedObservation) (PAO, error) {
 		pao.BenchmarkPrice, err = mercury.DecodeValueInt192(obs.BenchmarkPrice)
 		if err != nil {
 			return parsedAttributedObservation{}, fmt.Errorf("benchmarkPrice cannot be converted to big.Int: %s", err)
-		}
-		pao.Bid, err = mercury.DecodeValueInt192(obs.Bid)
-		if err != nil {
-			return parsedAttributedObservation{}, fmt.Errorf("bid cannot be converted to big.Int: %s", err)
-		}
-		pao.Ask, err = mercury.DecodeValueInt192(obs.Ask)
-		if err != nil {
-			return parsedAttributedObservation{}, fmt.Errorf("ask cannot be converted to big.Int: %s", err)
-		}
-		if err := validatePrices(pao.Bid, pao.BenchmarkPrice, pao.Ask); err != nil {
-			// NOTE: since nodes themselves are not supposed to set
-			// PricesValid=true if this invariant is violated, this indicates a
-			// faulty/misbehaving node and the entire observation should be
-			// ignored
-			return parsedAttributedObservation{}, fmt.Errorf("observation claimed to be valid, but contains invalid prices: %w", err)
 		}
 		pao.PricesValid = true
 	}
@@ -403,16 +353,6 @@ func (rp *reportingPlugin) buildReportFields(previousReport types.Report, paos [
 		merr = errors.Join(merr, fmt.Errorf("GetConsensusBenchmarkPrice failed: %w", err))
 	}
 
-	rf.Bid, err = mercury.GetConsensusBid(convertBid(paos), rp.f)
-	if err != nil {
-		merr = errors.Join(merr, fmt.Errorf("GetConsensusBid failed: %w", err))
-	}
-
-	rf.Ask, err = mercury.GetConsensusAsk(convertAsk(paos), rp.f)
-	if err != nil {
-		merr = errors.Join(merr, fmt.Errorf("GetConsensusAsk failed: %w", err))
-	}
-
 	rf.LinkFee, err = mercury.GetConsensusLinkFee(convertLinkFee(paos), rp.f)
 	if err != nil {
 		// It is better to generate a report that will validate for free,
@@ -448,8 +388,6 @@ func (rp *reportingPlugin) buildReportFields(previousReport types.Report, paos [
 func (rp *reportingPlugin) validateReport(rf v4.ReportFields) error {
 	return errors.Join(
 		mercury.ValidateBetween("median benchmark price", rf.BenchmarkPrice, rp.onchainConfig.Min, rp.onchainConfig.Max),
-		mercury.ValidateBetween("median bid", rf.Bid, rp.onchainConfig.Min, rp.onchainConfig.Max),
-		mercury.ValidateBetween("median ask", rf.Ask, rp.onchainConfig.Min, rp.onchainConfig.Max),
 		mercury.ValidateFee("median link fee", rf.LinkFee),
 		mercury.ValidateFee("median native fee", rf.NativeFee),
 		mercury.ValidateValidFromTimestamp(rf.Timestamp, rf.ValidFromTimestamp),
@@ -470,18 +408,6 @@ func convert(pao []PAO) (ret []mercury.PAO) {
 	return ret
 }
 func convertMaxFinalizedTimestamp(pao []PAO) (ret []mercury.PAOMaxFinalizedTimestamp) {
-	for _, v := range pao {
-		ret = append(ret, v)
-	}
-	return ret
-}
-func convertBid(pao []PAO) (ret []mercury.PAOBid) {
-	for _, v := range pao {
-		ret = append(ret, v)
-	}
-	return ret
-}
-func convertAsk(pao []PAO) (ret []mercury.PAOAsk) {
 	for _, v := range pao {
 		ret = append(ret, v)
 	}
