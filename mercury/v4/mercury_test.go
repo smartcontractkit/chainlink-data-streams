@@ -83,8 +83,6 @@ func newValidProtos() []*MercuryObservationProto {
 			Timestamp: 42,
 
 			BenchmarkPrice: mercury.MustEncodeValueInt192(big.NewInt(123)),
-			Bid:            mercury.MustEncodeValueInt192(big.NewInt(120)),
-			Ask:            mercury.MustEncodeValueInt192(big.NewInt(130)),
 			PricesValid:    true,
 
 			MaxFinalizedTimestamp:      40,
@@ -102,8 +100,6 @@ func newValidProtos() []*MercuryObservationProto {
 			Timestamp: 45,
 
 			BenchmarkPrice: mercury.MustEncodeValueInt192(big.NewInt(234)),
-			Bid:            mercury.MustEncodeValueInt192(big.NewInt(230)),
-			Ask:            mercury.MustEncodeValueInt192(big.NewInt(240)),
 			PricesValid:    true,
 
 			MaxFinalizedTimestamp:      40,
@@ -121,8 +117,6 @@ func newValidProtos() []*MercuryObservationProto {
 			Timestamp: 47,
 
 			BenchmarkPrice: mercury.MustEncodeValueInt192(big.NewInt(345)),
-			Bid:            mercury.MustEncodeValueInt192(big.NewInt(340)),
-			Ask:            mercury.MustEncodeValueInt192(big.NewInt(350)),
 			PricesValid:    true,
 
 			MaxFinalizedTimestamp:      39,
@@ -140,8 +134,6 @@ func newValidProtos() []*MercuryObservationProto {
 			Timestamp: 39,
 
 			BenchmarkPrice: mercury.MustEncodeValueInt192(big.NewInt(456)),
-			Bid:            mercury.MustEncodeValueInt192(big.NewInt(450)),
-			Ask:            mercury.MustEncodeValueInt192(big.NewInt(460)),
 			PricesValid:    true,
 
 			MaxFinalizedTimestamp:      39,
@@ -172,34 +164,6 @@ func newValidAos(t *testing.T, protos ...*MercuryObservationProto) (aos []types.
 		}
 	}
 	return
-}
-
-func Test_parseAttributedObservation(t *testing.T) {
-	t.Run("returns error if bid<=mid<=ask is violated, even if observation claims itself to be valid", func(t *testing.T) {
-		obs := &MercuryObservationProto{
-			Timestamp: 42,
-
-			BenchmarkPrice: mercury.MustEncodeValueInt192(big.NewInt(123)),
-			Bid:            mercury.MustEncodeValueInt192(big.NewInt(130)),
-			Ask:            mercury.MustEncodeValueInt192(big.NewInt(120)),
-			PricesValid:    true,
-
-			MaxFinalizedTimestamp:      40,
-			MaxFinalizedTimestampValid: true,
-
-			LinkFee:        mercury.MustEncodeValueInt192(big.NewInt(1.1e18)),
-			LinkFeeValid:   true,
-			NativeFee:      mercury.MustEncodeValueInt192(big.NewInt(2.1e18)),
-			NativeFeeValid: true,
-		}
-
-		serialized, err := proto.Marshal(obs)
-		require.NoError(t, err)
-
-		_, err = parseAttributedObservation(types.AttributedObservation{Observation: serialized, Observer: commontypes.OracleID(42)})
-		require.Error(t, err)
-		assert.Equal(t, "observation claimed to be valid, but contains invalid prices: invariant violated: expected bid<=mid<=ask, got bid: 130, mid: 123, ask: 120", err.Error())
-	})
 }
 
 func Test_Plugin_Report(t *testing.T) {
@@ -255,8 +219,6 @@ func Test_Plugin_Report(t *testing.T) {
 				LinkFee:            big.NewInt(1300000000000000000), // 1.3e18
 				ExpiresAt:          46,
 				BenchmarkPrice:     big.NewInt(345),
-				Bid:                big.NewInt(340),
-				Ask:                big.NewInt(350),
 				MarketStatus:       1,
 			}, *codec.builtReportFields)
 		})
@@ -279,8 +241,6 @@ func Test_Plugin_Report(t *testing.T) {
 				LinkFee:            big.NewInt(1300000000000000000), // 1.3e18
 				ExpiresAt:          46,
 				BenchmarkPrice:     big.NewInt(345),
-				Bid:                big.NewInt(340),
-				Ask:                big.NewInt(350),
 				MarketStatus:       1,
 			}, *codec.builtReportFields)
 		})
@@ -303,8 +263,6 @@ func Test_Plugin_Report(t *testing.T) {
 				LinkFee:            big.NewInt(1300000000000000000), // 1.3e18
 				ExpiresAt:          46,
 				BenchmarkPrice:     big.NewInt(345),
-				Bid:                big.NewInt(340),
-				Ask:                big.NewInt(350),
 				MarketStatus:       1,
 			}, *codec.builtReportFields)
 		})
@@ -326,8 +284,6 @@ func Test_Plugin_Report(t *testing.T) {
 				LinkFee:            big.NewInt(1300000000000000000), // 1.3e18
 				ExpiresAt:          46,
 				BenchmarkPrice:     big.NewInt(345),
-				Bid:                big.NewInt(340),
-				Ask:                big.NewInt(350),
 				MarketStatus:       1,
 			}, *codec.builtReportFields)
 		})
@@ -361,8 +317,6 @@ func Test_Plugin_Report(t *testing.T) {
 				LinkFee:            big.NewInt(1300000000000000000), // 1.3e18
 				ExpiresAt:          ts + 1,
 				BenchmarkPrice:     big.NewInt(345),
-				Bid:                big.NewInt(340),
-				Ask:                big.NewInt(350),
 				MarketStatus:       1,
 			}, *codec.builtReportFields)
 		})
@@ -444,8 +398,6 @@ func Test_Plugin_validateReport(t *testing.T) {
 			LinkFee:            big.NewInt(50),
 			ExpiresAt:          44,
 			BenchmarkPrice:     big.NewInt(150),
-			Bid:                big.NewInt(140),
-			Ask:                big.NewInt(160),
 		}
 		err := rp.validateReport(rf)
 		require.NoError(t, err)
@@ -457,12 +409,11 @@ func Test_Plugin_validateReport(t *testing.T) {
 			LinkFee:            big.NewInt(0),
 			ExpiresAt:          42,
 			BenchmarkPrice:     big.NewInt(1),
-			Bid:                big.NewInt(1),
-			Ask:                big.NewInt(1),
 		}
 		err = rp.validateReport(rf)
 		require.NoError(t, err)
 	})
+
 	t.Run("fails validation", func(t *testing.T) {
 		rf := v4.ReportFields{
 			ValidFromTimestamp: 44, // later than timestamp not allowed
@@ -471,15 +422,11 @@ func Test_Plugin_validateReport(t *testing.T) {
 			LinkFee:            big.NewInt(-1),     // negative value not allowed
 			ExpiresAt:          42,                 // before timestamp
 			BenchmarkPrice:     big.NewInt(150000), // exceeds max
-			Bid:                big.NewInt(150000), // exceeds max
-			Ask:                big.NewInt(150000), // exceeds max
 		}
 		err := rp.validateReport(rf)
 		require.Error(t, err)
 
 		assert.Contains(t, err.Error(), "median benchmark price (Value: 150000) is outside of allowable range (Min: 1, Max: 1000)")
-		assert.Contains(t, err.Error(), "median bid (Value: 150000) is outside of allowable range (Min: 1, Max: 1000)")
-		assert.Contains(t, err.Error(), "median ask (Value: 150000) is outside of allowable range (Min: 1, Max: 1000)")
 		assert.Contains(t, err.Error(), "median link fee (Value: -1) is outside of allowable range (Min: 0, Max: 3138550867693340381917894711603833208051177722232017256447)")
 		assert.Contains(t, err.Error(), "median native fee (Value: -1) is outside of allowable range (Min: 0, Max: 3138550867693340381917894711603833208051177722232017256447)")
 		assert.Contains(t, err.Error(), "observationTimestamp (Value: 43) must be >= validFromTimestamp (Value: 44)")
@@ -492,8 +439,6 @@ func Test_Plugin_validateReport(t *testing.T) {
 		require.Error(t, err)
 
 		assert.Contains(t, err.Error(), "median benchmark price: got nil value")
-		assert.Contains(t, err.Error(), "median bid: got nil value")
-		assert.Contains(t, err.Error(), "median ask: got nil value")
 		assert.Contains(t, err.Error(), "median native fee: got nil value")
 		assert.Contains(t, err.Error(), "median link fee: got nil value")
 	})
@@ -515,8 +460,6 @@ func Test_Plugin_Observation(t *testing.T) {
 		obs := MercuryObservationProto{
 			Timestamp:                  math.MaxUint32,
 			BenchmarkPrice:             make([]byte, 24),
-			Bid:                        make([]byte, 24),
-			Ask:                        make([]byte, 24),
 			PricesValid:                true,
 			MaxFinalizedTimestamp:      math.MaxUint32,
 			MaxFinalizedTimestampValid: true,
@@ -531,27 +474,19 @@ func Test_Plugin_Observation(t *testing.T) {
 		// that increment the count below
 		numFields := reflect.TypeOf(obs).NumField() //nolint:all
 		// 3 fields internal to pbuf struct
-		require.Equal(t, 13, numFields-3)
+		require.Equal(t, 11, numFields-3)
 
 		b, err := proto.Marshal(&obs)
 		require.NoError(t, err)
 		assert.LessOrEqual(t, len(b), maxObservationLength)
 	})
 
-	validBid := big.NewInt(rand.Int63() - 2)
-	validBenchmarkPrice := new(big.Int).Add(validBid, big.NewInt(1))
-	validAsk := new(big.Int).Add(validBid, big.NewInt(2))
+	validBenchmarkPrice := big.NewInt(rand.Int63() - 2)
 
 	t.Run("all observations succeeded", func(t *testing.T) {
 		obs := v4.Observation{
 			BenchmarkPrice: mercurytypes.ObsResult[*big.Int]{
 				Val: validBenchmarkPrice,
-			},
-			Bid: mercurytypes.ObsResult[*big.Int]{
-				Val: validBid,
-			},
-			Ask: mercurytypes.ObsResult[*big.Int]{
-				Val: validAsk,
 			},
 			MaxFinalizedTimestamp: mercurytypes.ObsResult[int64]{
 				Val: rand.Int63(),
@@ -652,13 +587,7 @@ func Test_Plugin_Observation(t *testing.T) {
 	t.Run("all observations failed", func(t *testing.T) {
 		obs := v4.Observation{
 			BenchmarkPrice: mercurytypes.ObsResult[*big.Int]{
-				Err: errors.New("bechmarkPrice error"),
-			},
-			Bid: mercurytypes.ObsResult[*big.Int]{
-				Err: errors.New("bid error"),
-			},
-			Ask: mercurytypes.ObsResult[*big.Int]{
-				Err: errors.New("ask error"),
+				Err: errors.New("benchmarkPrice error"),
 			},
 			MaxFinalizedTimestamp: mercurytypes.ObsResult[int64]{
 				Err: errors.New("maxFinalizedTimestamp error"),
@@ -681,8 +610,6 @@ func Test_Plugin_Observation(t *testing.T) {
 
 		assert.LessOrEqual(t, p.Timestamp, uint32(time.Now().Unix()))
 		assert.Zero(t, p.BenchmarkPrice)
-		assert.Zero(t, p.Bid)
-		assert.Zero(t, p.Ask)
 		assert.False(t, p.PricesValid)
 		assert.Zero(t, p.MaxFinalizedTimestamp)
 		assert.False(t, p.MaxFinalizedTimestampValid)
@@ -725,12 +652,6 @@ func Test_Plugin_Observation(t *testing.T) {
 			BenchmarkPrice: mercurytypes.ObsResult[*big.Int]{
 				Val: new(big.Int).Exp(big.NewInt(2), big.NewInt(256), nil),
 			},
-			Bid: mercurytypes.ObsResult[*big.Int]{
-				Val: new(big.Int).Exp(big.NewInt(2), big.NewInt(256), nil),
-			},
-			Ask: mercurytypes.ObsResult[*big.Int]{
-				Val: new(big.Int).Exp(big.NewInt(2), big.NewInt(256), nil),
-			},
 			MaxFinalizedTimestamp: mercurytypes.ObsResult[int64]{
 				Val: rand.Int63(),
 			},
@@ -752,64 +673,7 @@ func Test_Plugin_Observation(t *testing.T) {
 		require.NoError(t, proto.Unmarshal(parsedObs, &p))
 
 		assert.Zero(t, p.BenchmarkPrice)
-		assert.Zero(t, p.Bid)
-		assert.Zero(t, p.Ask)
 		assert.False(t, p.PricesValid)
-	})
-
-	t.Run("bid<=mid<=ask violation", func(t *testing.T) {
-		obs := v4.Observation{
-			BenchmarkPrice: mercurytypes.ObsResult[*big.Int]{
-				Val: big.NewInt(10),
-			},
-			Bid: mercurytypes.ObsResult[*big.Int]{
-				Val: big.NewInt(11),
-			},
-			Ask: mercurytypes.ObsResult[*big.Int]{
-				Val: big.NewInt(12),
-			},
-			MaxFinalizedTimestamp: mercurytypes.ObsResult[int64]{
-				Val: rand.Int63(),
-			},
-			LinkPrice: mercurytypes.ObsResult[*big.Int]{
-				Val: big.NewInt(rand.Int63()),
-			},
-			NativePrice: mercurytypes.ObsResult[*big.Int]{
-				Val: big.NewInt(rand.Int63()),
-			},
-		}
-		dataSource.Obs = obs
-
-		parsedObs, err := rp.Observation(context.Background(), types.ReportTimestamp{}, nil)
-		require.NoError(t, err)
-
-		var p MercuryObservationProto
-		require.NoError(t, proto.Unmarshal(parsedObs, &p))
-
-		assert.LessOrEqual(t, p.Timestamp, uint32(time.Now().Unix()))
-		assert.Equal(t, obs.BenchmarkPrice.Val, mustDecodeBigInt(p.BenchmarkPrice))
-		assert.False(t, p.PricesValid) // not valid!
-
-		// other values passed through ok
-		assert.Equal(t, obs.MaxFinalizedTimestamp.Val, p.MaxFinalizedTimestamp)
-		assert.True(t, p.MaxFinalizedTimestampValid)
-
-		fee := mercury.CalculateFee(obs.LinkPrice.Val, decimal.NewFromInt32(1))
-		assert.Equal(t, fee, mustDecodeBigInt(p.LinkFee))
-		assert.True(t, p.LinkFeeValid)
-
-		fee = mercury.CalculateFee(obs.NativePrice.Val, decimal.NewFromInt32(1))
-		assert.Equal(t, fee, mustDecodeBigInt(p.NativeFee))
-		assert.True(t, p.NativeFeeValid)
-
-		// test benchmark price higher than ask
-		obs.BenchmarkPrice.Val = big.NewInt(13)
-		dataSource.Obs = obs
-
-		parsedObs, err = rp.Observation(context.Background(), types.ReportTimestamp{}, nil)
-		require.NoError(t, err)
-		require.NoError(t, proto.Unmarshal(parsedObs, &p))
-		assert.False(t, p.PricesValid) // not valid!
 	})
 }
 

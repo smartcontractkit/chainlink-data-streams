@@ -13,10 +13,6 @@ type testParsedAttributedObservation struct {
 	Timestamp                  uint32
 	BenchmarkPrice             *big.Int
 	BenchmarkPriceValid        bool
-	Bid                        *big.Int
-	BidValid                   bool
-	Ask                        *big.Int
-	AskValid                   bool
 	MaxFinalizedTimestamp      int64
 	MaxFinalizedTimestampValid bool
 	LinkFee                    *big.Int
@@ -31,12 +27,6 @@ func (t testParsedAttributedObservation) GetObserver() commontypes.OracleID { re
 func (t testParsedAttributedObservation) GetTimestamp() uint32              { return t.Timestamp }
 func (t testParsedAttributedObservation) GetBenchmarkPrice() (*big.Int, bool) {
 	return t.BenchmarkPrice, t.BenchmarkPriceValid
-}
-func (t testParsedAttributedObservation) GetBid() (*big.Int, bool) {
-	return t.Bid, t.BidValid
-}
-func (t testParsedAttributedObservation) GetAsk() (*big.Int, bool) {
-	return t.Ask, t.AskValid
 }
 func (t testParsedAttributedObservation) GetMaxFinalizedTimestamp() (int64, bool) {
 	return t.MaxFinalizedTimestamp, t.MaxFinalizedTimestampValid
@@ -66,10 +56,6 @@ func newValidParsedAttributedObservations() []testParsedAttributedObservation {
 
 			BenchmarkPrice:      big.NewInt(123),
 			BenchmarkPriceValid: true,
-			Bid:                 big.NewInt(120),
-			BidValid:            true,
-			Ask:                 big.NewInt(130),
-			AskValid:            true,
 
 			MaxFinalizedTimestamp:      1679448456,
 			MaxFinalizedTimestampValid: true,
@@ -87,10 +73,6 @@ func newValidParsedAttributedObservations() []testParsedAttributedObservation {
 
 			BenchmarkPrice:      big.NewInt(456),
 			BenchmarkPriceValid: true,
-			Bid:                 big.NewInt(450),
-			BidValid:            true,
-			Ask:                 big.NewInt(460),
-			AskValid:            true,
 
 			MaxFinalizedTimestamp:      1679448456,
 			MaxFinalizedTimestampValid: true,
@@ -108,10 +90,6 @@ func newValidParsedAttributedObservations() []testParsedAttributedObservation {
 
 			BenchmarkPrice:      big.NewInt(789),
 			BenchmarkPriceValid: true,
-			Bid:                 big.NewInt(780),
-			BidValid:            true,
-			Ask:                 big.NewInt(800),
-			AskValid:            true,
 
 			MaxFinalizedTimestamp:      1679448456,
 			MaxFinalizedTimestampValid: true,
@@ -129,10 +107,6 @@ func newValidParsedAttributedObservations() []testParsedAttributedObservation {
 
 			BenchmarkPrice:      big.NewInt(456),
 			BenchmarkPriceValid: true,
-			Bid:                 big.NewInt(450),
-			BidValid:            true,
-			Ask:                 big.NewInt(460),
-			AskValid:            true,
 
 			MaxFinalizedTimestamp:      1679513477,
 			MaxFinalizedTimestampValid: true,
@@ -167,10 +141,6 @@ func NewInvalidParsedAttributedObservations() []testParsedAttributedObservation 
 
 			BenchmarkPrice:      big.NewInt(123),
 			BenchmarkPriceValid: false,
-			Bid:                 big.NewInt(120),
-			BidValid:            false,
-			Ask:                 big.NewInt(130),
-			AskValid:            false,
 
 			MaxFinalizedTimestamp:      1679648456,
 			MaxFinalizedTimestampValid: false,
@@ -188,10 +158,6 @@ func NewInvalidParsedAttributedObservations() []testParsedAttributedObservation 
 
 			BenchmarkPrice:      big.NewInt(456),
 			BenchmarkPriceValid: false,
-			Bid:                 big.NewInt(450),
-			BidValid:            false,
-			Ask:                 big.NewInt(460),
-			AskValid:            false,
 
 			MaxFinalizedTimestamp:      1679648456,
 			MaxFinalizedTimestampValid: false,
@@ -209,10 +175,6 @@ func NewInvalidParsedAttributedObservations() []testParsedAttributedObservation 
 
 			BenchmarkPrice:      big.NewInt(789),
 			BenchmarkPriceValid: false,
-			Bid:                 big.NewInt(780),
-			BidValid:            false,
-			Ask:                 big.NewInt(800),
-			AskValid:            false,
 
 			MaxFinalizedTimestamp:      1679648456,
 			MaxFinalizedTimestampValid: false,
@@ -230,10 +192,6 @@ func NewInvalidParsedAttributedObservations() []testParsedAttributedObservation 
 
 			BenchmarkPrice:      big.NewInt(456),
 			BenchmarkPriceValid: true,
-			Bid:                 big.NewInt(450),
-			BidValid:            true,
-			Ask:                 big.NewInt(460),
-			AskValid:            true,
 
 			MaxFinalizedTimestamp:      1679513477,
 			MaxFinalizedTimestampValid: true,
