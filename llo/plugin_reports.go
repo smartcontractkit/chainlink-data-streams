@@ -18,10 +18,8 @@ func (p *Plugin) reports(seqNr uint64, rawOutcome ocr3types.Outcome) ([]ocr3type
 
 	outcome, err := p.OutcomeCodec.Decode(rawOutcome)
 	if err != nil {
-		fmt.Println("TRASH 1", err)
 		return nil, fmt.Errorf("error unmarshalling outcome: %w", err)
 	}
-	fmt.Println("TRASH 2", outcome)
 
 	observationsTimestampSeconds, err := outcome.ObservationsTimestampSeconds()
 	if err != nil {
@@ -96,8 +94,6 @@ func (p *Plugin) encodeReport(r Report, cd llotypes.ChannelDefinition) (types.Re
 	if !exists {
 		return nil, fmt.Errorf("codec missing for ReportFormat=%q", cd.ReportFormat)
 	}
-	fmt.Printf("TRASH report: %v\n", r)
-	fmt.Printf("TRASH report: %#v\n", r)
 	return codec.Encode(r, cd)
 }
 
