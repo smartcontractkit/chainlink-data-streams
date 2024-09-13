@@ -73,6 +73,3 @@ require (
 	google.golang.org/grpc v1.65.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
-
-// until merged upstream: https://github.com/omissis/go-jsonschema/pull/264
-replace github.com/atombender/go-jsonschema => github.com/nolag/go-jsonschema v0.16.0-rtinianov
