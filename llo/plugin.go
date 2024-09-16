@@ -43,11 +43,14 @@ const (
 type DSOpts interface {
 	VerboseLogging() bool
 	SeqNr() uint64
+	OutCtx() ocr3types.OutcomeContext
+	ConfigDigest() ocr2types.ConfigDigest
 }
 
 type dsOpts struct {
 	verboseLogging bool
-	seqNr          uint64
+	outCtx         ocr3types.OutcomeContext
+	configDigest   ocr2types.ConfigDigest
 }
 
 func (o dsOpts) VerboseLogging() bool {
@@ -55,7 +58,15 @@ func (o dsOpts) VerboseLogging() bool {
 }
 
 func (o dsOpts) SeqNr() uint64 {
-	return o.seqNr
+	return o.outCtx.SeqNr
+}
+
+func (o dsOpts) OutCtx() ocr3types.OutcomeContext {
+	return o.outCtx
+}
+
+func (o dsOpts) ConfigDigest() ocr2types.ConfigDigest {
+	return o.configDigest
 }
 
 type DataSource interface {

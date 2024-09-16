@@ -137,7 +137,7 @@ func (p *Plugin) observation(ctx context.Context, outctx ocr3types.OutcomeContex
 			}
 		}
 
-		if err := p.DataSource.Observe(ctx, streamValues, dsOpts{p.Config.VerboseLogging, outctx.SeqNr}); err != nil {
+		if err := p.DataSource.Observe(ctx, streamValues, dsOpts{p.Config.VerboseLogging, outctx, p.ConfigDigest}); err != nil {
 			return nil, fmt.Errorf("DataSource.Observe error: %w", err)
 		}
 	}
