@@ -24,16 +24,25 @@ func (p *Plugin) observation(ctx context.Context, outctx ocr3types.OutcomeContex
 		// See case at the top of Outcome()
 		return types.Observation{}, nil
 	}
-	// Second round will have no channel definitions yet, but may vote to add
-	// them
-
-	// QUESTION: is there a way to have this captured in EAs so we get something
-	// closer to the source?
-	nowNanoseconds := time.Now().UnixNano()
+	// SeqNr==2 will have no channel definitions yet, so will not make any
+	// observations, but it may vote to add new channel definitions
 
 	previousOutcome, err := p.OutcomeCodec.Decode(outctx.PreviousOutcome)
 	if err != nil {
 		return nil, fmt.Errorf("error unmarshalling previous outcome: %w", err)
+	}
+
+	if previousOutcome.LifeCycleStage == LifeCycleStageRetired {
+		return nil, fmt.Errorf("will not generate observations for retired protocol instance")
+	}
+
+	if err = VerifyChannelDefinitions(previousOutcome.ChannelDefinitions); err != nil {
+		// This is not expected, unless the majority of nodes are using a
+		// different verification method than this one.
+		//
+		// If it does happen, it's an invariant violation and we cannot
+		// generate an observation.
+		return nil, fmt.Errorf("previousOutcome.Definitions is invalid: %w", err)
 	}
 
 	var attestedRetirementReport []byte
@@ -47,17 +56,19 @@ func (p *Plugin) observation(ctx context.Context, outctx ocr3types.OutcomeContex
 		}
 	}
 
-	shouldRetire, err := p.ShouldRetireCache.ShouldRetire()
+	shouldRetire, err := p.ShouldRetireCache.ShouldRetire(p.ConfigDigest)
 	if err != nil {
 		return nil, fmt.Errorf("error fetching shouldRetire from cache: %w", err)
 	}
+	if shouldRetire && p.Config.VerboseLogging {
+		p.Logger.Debugw("Voting to retire", "seqNr", outctx.SeqNr, "stage", "Observation")
+	}
 
 	// vote to remove channel ids if they're in the previous outcome
-	// ChannelDefinitions or ValidAfterSeconds
+	// ChannelDefinitions
 	removeChannelIDs := map[llotypes.ChannelID]struct{}{}
 	// vote to add channel definitions that aren't present in the previous
 	// outcome ChannelDefinitions
-	// FIXME: Why care about ValidAfterSeconds here?
 	var updateChannelDefinitions llotypes.ChannelDefinitions
 	{
 		// NOTE: Be careful using maps, since key ordering is randomized! All
@@ -67,47 +78,39 @@ func (p *Plugin) observation(ctx context.Context, outctx ocr3types.OutcomeContex
 		// ChannelIDs should always be sorted the same way (channel ID ascending).
 		expectedChannelDefs := p.ChannelDefinitionCache.Definitions()
 		if err := VerifyChannelDefinitions(expectedChannelDefs); err != nil {
-			return nil, fmt.Errorf("ChannelDefinitionCache.Definitions is invalid: %w", err)
-		}
-
-		removeChannelDefinitions := subtractChannelDefinitions(previousOutcome.ChannelDefinitions, expectedChannelDefs, MaxObservationRemoveChannelIDsLength)
-		for channelID := range removeChannelDefinitions {
-			removeChannelIDs[channelID] = struct{}{}
-		}
-
-		// TODO: needs testing
-		validAfterSecondsChannelIDs := maps.Keys(previousOutcome.ValidAfterSeconds)
-		// Sort so we cut off deterministically
-		sortChannelIDs(validAfterSecondsChannelIDs)
-		for _, channelID := range validAfterSecondsChannelIDs {
-			if len(removeChannelIDs) >= MaxObservationRemoveChannelIDsLength {
-				break
-			}
-			if _, ok := expectedChannelDefs[channelID]; !ok {
+			// If channel definitions is invalid, do not error out but instead
+			// don't vote on any new channels.
+			//
+			// This prevents protocol halts in the event of an invalid channel
+			// definitions file.
+			p.Logger.Errorw("ChannelDefinitionCache.Definitions is invalid", "err", err)
+		} else {
+			removeChannelDefinitions := subtractChannelDefinitions(previousOutcome.ChannelDefinitions, expectedChannelDefs, MaxObservationRemoveChannelIDsLength)
+			for channelID := range removeChannelDefinitions {
 				removeChannelIDs[channelID] = struct{}{}
 			}
-		}
 
-		// NOTE: This is slow because it deeply compares every value in the map.
-		// To improve performance, consider changing channel voting to happen
-		// every N rounds instead of every round. Or, alternatively perhaps the
-		// first e.g. 100 rounds could check every round to allow for fast feed
-		// spinup, then after that every 10 or 100 rounds.
-		updateChannelDefinitions = make(llotypes.ChannelDefinitions)
-		expectedChannelIDs := maps.Keys(expectedChannelDefs)
-		// Sort so we cut off deterministically
-		sortChannelIDs(expectedChannelIDs)
-		for _, channelID := range expectedChannelIDs {
-			prev, exists := previousOutcome.ChannelDefinitions[channelID]
-			channelDefinition := expectedChannelDefs[channelID]
-			if exists && prev.Equals(channelDefinition) {
-				continue
-			}
-			// Add or replace channel
-			updateChannelDefinitions[channelID] = channelDefinition
-			if len(updateChannelDefinitions) >= MaxObservationUpdateChannelDefinitionsLength {
-				// Never add more than MaxObservationUpdateChannelDefinitionsLength
-				break
+			// NOTE: This is slow because it deeply compares every value in the map.
+			// To improve performance, consider changing channel voting to happen
+			// every N rounds instead of every round. Or, alternatively perhaps the
+			// first e.g. 100 rounds could check every round to allow for fast feed
+			// spinup, then after that every 10 or 100 rounds.
+			updateChannelDefinitions = make(llotypes.ChannelDefinitions)
+			expectedChannelIDs := maps.Keys(expectedChannelDefs)
+			// Sort so we cut off deterministically
+			sortChannelIDs(expectedChannelIDs)
+			for _, channelID := range expectedChannelIDs {
+				prev, exists := previousOutcome.ChannelDefinitions[channelID]
+				channelDefinition := expectedChannelDefs[channelID]
+				if exists && prev.Equals(channelDefinition) {
+					continue
+				}
+				// Add or replace channel
+				updateChannelDefinitions[channelID] = channelDefinition
+				if len(updateChannelDefinitions) >= MaxObservationUpdateChannelDefinitionsLength {
+					// Never add more than MaxObservationUpdateChannelDefinitionsLength
+					break
+				}
 			}
 		}
 
@@ -125,6 +128,10 @@ func (p *Plugin) observation(ctx context.Context, outctx ocr3types.OutcomeContex
 			)
 		}
 	}
+
+	// QUESTION: is there a way to have this captured in EAs so we get something
+	// closer to the source?
+	nowNanoseconds := time.Now().UnixNano()
 
 	var streamValues StreamValues
 	if len(previousOutcome.ChannelDefinitions) == 0 {

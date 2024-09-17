@@ -14,8 +14,6 @@ import (
 	"github.com/smartcontractkit/libocr/offchainreporting2plus/ocr3types"
 )
 
-// TODO: Split out this file and write unit tests: https://smartcontract-it.atlassian.net/browse/MERC-3524
-
 // Additional limits so we can more effectively bound the size of observations
 // NOTE: These are hardcoded because these exact values are relied upon as a
 // property of coming to consensus, it's too dangerous to make these
@@ -23,6 +21,18 @@ import (
 // OffchainConfig if they need to be changed dynamically and in a
 // backwards-compatible way.
 const (
+	// OCR protocol limits
+	// NOTE: CAREFUL! If we ever accidentally exceed these e.g.
+	// through too many channels/streams, the protocol will halt.
+	//
+	// TODO: How many channels/streams can we support given these constraints?
+	// https://smartcontract-it.atlassian.net/browse/MERC-6468
+	MaxReportCount       = ocr3types.MaxMaxReportCount
+	MaxObservationLength = ocr3types.MaxMaxObservationLength
+	MaxOutcomeLength     = ocr3types.MaxMaxOutcomeLength
+	MaxReportLength      = ocr3types.MaxMaxReportLength
+
+	// LLO-specific limits
 	// Maximum amount of channels that can be added per round (if more than
 	// this needs to be added, it will be added in batches until everything is
 	// up-to-date)
@@ -32,14 +42,10 @@ const (
 	// is up-to-date)
 	MaxObservationUpdateChannelDefinitionsLength = 5
 	// Maximum number of streams that can be observed per round
-	// TODO: This needs to be implemented on the Observation side so we don't
-	// even generate an observation that fails this
 	MaxObservationStreamValuesLength = 10_000
 	// MaxOutcomeChannelDefinitionsLength is the maximum number of channels that
 	// can be supported
-	// TODO: This needs to be implemented on the Observation side so we don't
-	// even generate an observation that fails this
-	MaxOutcomeChannelDefinitionsLength = 10_000
+	MaxOutcomeChannelDefinitionsLength = MaxReportCount
 )
 
 type DSOpts interface {
@@ -98,7 +104,7 @@ type ShouldRetireCache interface { // reads asynchronously from onchain Configur
 	// Should the protocol instance retire according to the configuration
 	// contract?
 	// See: https://github.com/smartcontractkit/mercury-v1-sketch/blob/main/onchain/src/ConfigurationStore.sol#L18
-	ShouldRetire() (bool, error)
+	ShouldRetire(digest ocr2types.ConfigDigest) (bool, error)
 }
 
 // The predecessor protocol instance stores its attested retirement report in
@@ -111,7 +117,15 @@ type ShouldRetireCache interface { // reads asynchronously from onchain Configur
 // The sketch envisions it being implemented as a single object that is shared
 // between different protocol instances.
 type PredecessorRetirementReportCache interface {
+	// AttestedRetirementReport returns the attested retirement report for the
+	// given config digest from the local cache.
+	//
+	// This should return nil and not error in the case of a missing attested
+	// retirement report.
 	AttestedRetirementReport(predecessorConfigDigest ocr2types.ConfigDigest) ([]byte, error)
+	// CheckAttestedRetirementReport verifies that an attested retirement
+	// report, which may have come from another node, is valid (signed) with
+	// signers corresponding to the given config digest
 	CheckAttestedRetirementReport(predecessorConfigDigest ocr2types.ConfigDigest, attestedRetirementReport []byte) (RetirementReport, error)
 }
 
@@ -174,9 +188,9 @@ type ChannelDefinitionCache interface {
 // A ReportingPlugin instance will only ever serve a single protocol instance.
 var _ ocr3types.ReportingPluginFactory[llotypes.ReportInfo] = &PluginFactory{}
 
-func NewPluginFactory(cfg Config, prrc PredecessorRetirementReportCache, src ShouldRetireCache, cdc ChannelDefinitionCache, ds DataSource, lggr logger.Logger, codecs map[llotypes.ReportFormat]ReportCodec) *PluginFactory {
+func NewPluginFactory(cfg Config, prrc PredecessorRetirementReportCache, src ShouldRetireCache, rcodec RetirementReportCodec, cdc ChannelDefinitionCache, ds DataSource, lggr logger.Logger, oncc OnchainConfigCodec, reportCodecs map[llotypes.ReportFormat]ReportCodec) *PluginFactory {
 	return &PluginFactory{
-		cfg, prrc, src, cdc, ds, lggr, codecs,
+		cfg, prrc, src, rcodec, cdc, ds, lggr, oncc, reportCodecs,
 	}
 }
 
@@ -190,21 +204,23 @@ type PluginFactory struct {
 	Config                           Config
 	PredecessorRetirementReportCache PredecessorRetirementReportCache
 	ShouldRetireCache                ShouldRetireCache
+	RetirementReportCodec            RetirementReportCodec
 	ChannelDefinitionCache           ChannelDefinitionCache
 	DataSource                       DataSource
 	Logger                           logger.Logger
-	Codecs                           map[llotypes.ReportFormat]ReportCodec
+	OnchainConfigCodec               OnchainConfigCodec
+	ReportCodecs                     map[llotypes.ReportFormat]ReportCodec
 }
 
 func (f *PluginFactory) NewReportingPlugin(ctx context.Context, cfg ocr3types.ReportingPluginConfig) (ocr3types.ReportingPlugin[llotypes.ReportInfo], ocr3types.ReportingPluginInfo, error) {
-	offchainCfg, err := DecodeOffchainConfig(cfg.OffchainConfig)
+	onchainConfig, err := f.OnchainConfigCodec.Decode(cfg.OnchainConfig)
 	if err != nil {
-		return nil, ocr3types.ReportingPluginInfo{}, fmt.Errorf("NewReportingPlugin failed to decode offchain config; got: 0x%x (len: %d); %w", cfg.OffchainConfig, len(cfg.OffchainConfig), err)
+		return nil, ocr3types.ReportingPluginInfo{}, fmt.Errorf("NewReportingPlugin failed to decode onchain config; got: 0x%x (len: %d); %w", cfg.OnchainConfig, len(cfg.OnchainConfig), err)
 	}
 
 	return &Plugin{
 			f.Config,
-			offchainCfg.PredecessorConfigDigest,
+			onchainConfig.PredecessorConfigDigest,
 			cfg.ConfigDigest,
 			f.PredecessorRetirementReportCache,
 			f.ShouldRetireCache,
@@ -215,15 +231,16 @@ func (f *PluginFactory) NewReportingPlugin(ctx context.Context, cfg ocr3types.Re
 			cfg.F,
 			protoObservationCodec{},
 			protoOutcomeCodec{},
-			f.Codecs,
+			f.RetirementReportCodec,
+			f.ReportCodecs,
 		}, ocr3types.ReportingPluginInfo{
 			Name: "LLO",
 			Limits: ocr3types.ReportingPluginLimits{
 				MaxQueryLength:       0,
-				MaxObservationLength: ocr3types.MaxMaxObservationLength, // TODO: use tighter bound MERC-3524
-				MaxOutcomeLength:     ocr3types.MaxMaxOutcomeLength,     // TODO: use tighter bound MERC-3524
-				MaxReportLength:      ocr3types.MaxMaxReportLength,      // TODO: use tighter bound MERC-3524
-				MaxReportCount:       ocr3types.MaxMaxReportCount,       // TODO: use tighter bound MERC-3524
+				MaxObservationLength: MaxObservationLength,
+				MaxOutcomeLength:     MaxOutcomeLength,
+				MaxReportLength:      MaxReportLength,
+				MaxReportCount:       MaxReportCount,
 			},
 		}, nil
 }
@@ -250,7 +267,8 @@ type Plugin struct {
 	F                                int
 	ObservationCodec                 ObservationCodec
 	OutcomeCodec                     OutcomeCodec
-	Codecs                           map[llotypes.ReportFormat]ReportCodec
+	RetirementReportCodec            RetirementReportCodec
+	ReportCodecs                     map[llotypes.ReportFormat]ReportCodec
 }
 
 // Query creates a Query that is sent from the leader to all follower nodes
