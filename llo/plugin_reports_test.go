@@ -21,9 +21,10 @@ func Test_Reports(t *testing.T) {
 		Config:       Config{true},
 		OutcomeCodec: protoOutcomeCodec{},
 		Logger:       logger.Test(t),
-		Codecs: map[llotypes.ReportFormat]ReportCodec{
+		ReportCodecs: map[llotypes.ReportFormat]ReportCodec{
 			llotypes.ReportFormatJSON: JSONReportCodec{},
 		},
+		RetirementReportCodec: StandardRetirementReportCodec{},
 	}
 
 	t.Run("ignores seqnr=0", func(t *testing.T) {
@@ -59,7 +60,7 @@ func Test_Reports(t *testing.T) {
 			rwis, err := p.Reports(ctx, 2, encoded)
 			require.NoError(t, err)
 			require.Len(t, rwis, 1)
-			assert.Equal(t, llo.ReportInfo{LifeCycleStage: LifeCycleStageRetired, ReportFormat: llotypes.ReportFormatJSON}, rwis[0].ReportWithInfo.Info)
+			assert.Equal(t, llo.ReportInfo{LifeCycleStage: LifeCycleStageRetired, ReportFormat: llotypes.ReportFormatRetirement}, rwis[0].ReportWithInfo.Info)
 			assert.Equal(t, "{\"ValidAfterSeconds\":null}", string(rwis[0].ReportWithInfo.Report))
 		})
 	})
@@ -233,5 +234,40 @@ func Test_Reports(t *testing.T) {
 		assert.Equal(t, llo.ReportInfo{LifeCycleStage: "production", ReportFormat: llotypes.ReportFormatJSON}, rwis[0].ReportWithInfo.Info)
 		assert.Equal(t, `{"ConfigDigest":"0000000000000000000000000000000000000000000000000000000000000000","SeqNr":2,"ChannelID":2,"ValidAfterSeconds":100,"ObservationTimestampSeconds":200,"Values":[{"Type":0,"Value":"1.1"},{"Type":0,"Value":"2.2"},{"Type":1,"Value":"Q{Bid: 8.8, Benchmark: 7.7, Ask: 6.6}"}],"Specimen":false}`, string(rwis[1].ReportWithInfo.Report))
 		assert.Equal(t, llo.ReportInfo{LifeCycleStage: "production", ReportFormat: llotypes.ReportFormatJSON}, rwis[1].ReportWithInfo.Info)
+	})
+	t.Run("does not produce reports with overlapping timestamps (where IsReportable returns false)", func(t *testing.T) {
+		ctx := tests.Context(t)
+		outcome := Outcome{
+			LifeCycleStage:                   LifeCycleStageProduction,
+			ObservationsTimestampNanoseconds: int64(200 * time.Second),
+			ValidAfterSeconds: map[llotypes.ChannelID]uint32{
+				1: 200,
+				2: 100,
+			},
+			ChannelDefinitions: smallDefinitions,
+			StreamAggregates: map[llotypes.StreamID]map[llotypes.Aggregator]StreamValue{
+				1: {
+					llotypes.AggregatorMedian: ToDecimal(decimal.NewFromFloat(1.1)),
+				},
+				2: {
+					llotypes.AggregatorMedian: ToDecimal(decimal.NewFromFloat(2.2)),
+				},
+				3: {
+					llotypes.AggregatorQuote: &Quote{Ask: decimal.NewFromFloat(3.3), Benchmark: decimal.NewFromFloat(4.4), Bid: decimal.NewFromFloat(5.5)},
+				},
+				4: {
+					llotypes.AggregatorQuote: &Quote{Ask: decimal.NewFromFloat(6.6), Benchmark: decimal.NewFromFloat(7.7), Bid: decimal.NewFromFloat(8.8)},
+				},
+			},
+		}
+		encoded, err := p.OutcomeCodec.Encode(outcome)
+		require.NoError(t, err)
+		rwis, err := p.Reports(ctx, 2, encoded)
+		require.NoError(t, err)
+
+		// Only second channel is reported because first channel is not valid yet
+		require.Len(t, rwis, 1)
+		assert.Equal(t, `{"ConfigDigest":"0000000000000000000000000000000000000000000000000000000000000000","SeqNr":2,"ChannelID":2,"ValidAfterSeconds":100,"ObservationTimestampSeconds":200,"Values":[{"Type":0,"Value":"1.1"},{"Type":0,"Value":"2.2"},{"Type":1,"Value":"Q{Bid: 8.8, Benchmark: 7.7, Ask: 6.6}"}],"Specimen":false}`, string(rwis[0].ReportWithInfo.Report))
+		assert.Equal(t, llo.ReportInfo{LifeCycleStage: "production", ReportFormat: llotypes.ReportFormatJSON}, rwis[0].ReportWithInfo.Info)
 	})
 }
