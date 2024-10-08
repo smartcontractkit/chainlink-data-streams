@@ -237,11 +237,9 @@ func (p *Plugin) outcome(outctx ocr3types.OutcomeContext, query types.Query, aos
 				if p.Config.VerboseLogging {
 					p.Logger.Debugw("Channel is not reportable", "channelID", channelID, "err", err3, "stage", "Outcome", "seqNr", outctx.SeqNr)
 				}
-				// was reported based on previous outcome
-				outcome.ValidAfterSeconds[channelID] = previousObservationsTimestampSeconds
-			} else {
-				// was skipped based on previous outcome
 				outcome.ValidAfterSeconds[channelID] = previousValidAfterSeconds
+			} else {
+				outcome.ValidAfterSeconds[channelID] = previousObservationsTimestampSeconds
 			}
 		}
 	}
