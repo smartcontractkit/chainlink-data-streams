@@ -11,14 +11,17 @@ import (
 	"time"
 
 	"github.com/shopspring/decimal"
-	"github.com/smartcontractkit/chainlink-common/pkg/logger"
-	mercurytypes "github.com/smartcontractkit/chainlink-common/pkg/types/mercury"
-	v4 "github.com/smartcontractkit/chainlink-common/pkg/types/mercury/v4"
-	"github.com/smartcontractkit/libocr/commontypes"
-	"github.com/smartcontractkit/libocr/offchainreporting2plus/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
+
+	"github.com/smartcontractkit/libocr/commontypes"
+	"github.com/smartcontractkit/libocr/offchainreporting2plus/types"
+
+	"github.com/smartcontractkit/chainlink-common/pkg/logger"
+	mercurytypes "github.com/smartcontractkit/chainlink-common/pkg/types/mercury"
+	v4 "github.com/smartcontractkit/chainlink-common/pkg/types/mercury/v4"
+	"github.com/smartcontractkit/chainlink-common/pkg/utils/tests"
 
 	"github.com/smartcontractkit/chainlink-data-streams/mercury"
 )
@@ -39,21 +42,22 @@ type testReportCodec struct {
 	err               error
 }
 
-func (rc *testReportCodec) BuildReport(rf v4.ReportFields) (types.Report, error) {
+func (rc *testReportCodec) BuildReport(ctx context.Context, rf v4.ReportFields) (types.Report, error) {
 	rc.builtReportFields = &rf
 
 	return rc.builtReport, nil
 }
 
-func (rc testReportCodec) MaxReportLength(n int) (int, error) {
+func (rc testReportCodec) MaxReportLength(ctx context.Context, n int) (int, error) {
 	return 123, nil
 }
 
-func (rc testReportCodec) ObservationTimestampFromReport(types.Report) (uint32, error) {
+func (rc testReportCodec) ObservationTimestampFromReport(context.Context, types.Report) (uint32, error) {
 	return rc.observationTimestamp, rc.err
 }
 
 func newTestReportPlugin(t *testing.T, codec *testReportCodec, ds *testDataSource) *reportingPlugin {
+	ctx := tests.Context(t)
 	offchainConfig := mercury.OffchainConfig{
 		ExpirationWindow: 1,
 		BaseUSDFee:       decimal.NewFromInt32(1),
@@ -62,7 +66,7 @@ func newTestReportPlugin(t *testing.T, codec *testReportCodec, ds *testDataSourc
 		Min: big.NewInt(1),
 		Max: big.NewInt(1000),
 	}
-	maxReportLength, _ := codec.MaxReportLength(4)
+	maxReportLength, _ := codec.MaxReportLength(ctx, 4)
 	return &reportingPlugin{
 		offchainConfig:           offchainConfig,
 		onchainConfig:            onchainConfig,
@@ -176,22 +180,25 @@ func Test_Plugin_Report(t *testing.T) {
 
 	t.Run("when previous report is nil", func(t *testing.T) {
 		t.Run("errors if not enough attributed observations", func(t *testing.T) {
-			_, _, err := rp.Report(repts, nil, newValidAos(t)[0:1])
+			ctx := tests.Context(t)
+			_, _, err := rp.Report(ctx, repts, nil, newValidAos(t)[0:1])
 			assert.EqualError(t, err, "only received 1 valid attributed observations, but need at least f+1 (2)")
 		})
 
 		t.Run("errors if too many maxFinalizedTimestamp observations are invalid", func(t *testing.T) {
+			ctx := tests.Context(t)
 			ps := newValidProtos()
 			ps[0].MaxFinalizedTimestampValid = false
 			ps[1].MaxFinalizedTimestampValid = false
 			ps[2].MaxFinalizedTimestampValid = false
 			aos := newValidAos(t, ps...)
 
-			should, _, err := rp.Report(types.ReportTimestamp{}, nil, aos)
+			should, _, err := rp.Report(ctx, types.ReportTimestamp{}, nil, aos)
 			assert.False(t, should)
 			assert.EqualError(t, err, "fewer than f+1 observations have a valid maxFinalizedTimestamp (got: 1/4)")
 		})
 		t.Run("errors if maxFinalizedTimestamp is too large", func(t *testing.T) {
+			ctx := tests.Context(t)
 			ps := newValidProtos()
 			ps[0].MaxFinalizedTimestamp = math.MaxUint32
 			ps[1].MaxFinalizedTimestamp = math.MaxUint32
@@ -199,15 +206,16 @@ func Test_Plugin_Report(t *testing.T) {
 			ps[3].MaxFinalizedTimestamp = math.MaxUint32
 			aos := newValidAos(t, ps...)
 
-			should, _, err := rp.Report(types.ReportTimestamp{}, nil, aos)
+			should, _, err := rp.Report(ctx, types.ReportTimestamp{}, nil, aos)
 			assert.False(t, should)
 			assert.EqualError(t, err, "maxFinalizedTimestamp is too large, got: 4294967295")
 		})
 
 		t.Run("succeeds and generates validFromTimestamp from maxFinalizedTimestamp when maxFinalizedTimestamp is positive", func(t *testing.T) {
+			ctx := tests.Context(t)
 			aos := newValidAos(t)
 
-			should, report, err := rp.Report(types.ReportTimestamp{}, nil, aos)
+			should, report, err := rp.Report(ctx, types.ReportTimestamp{}, nil, aos)
 			assert.True(t, should)
 			assert.NoError(t, err)
 			assert.Equal(t, codec.builtReport, report)
@@ -223,13 +231,14 @@ func Test_Plugin_Report(t *testing.T) {
 			}, *codec.builtReportFields)
 		})
 		t.Run("succeeds and generates validFromTimestamp from maxFinalizedTimestamp when maxFinalizedTimestamp is zero", func(t *testing.T) {
+			ctx := tests.Context(t)
 			protos := newValidProtos()
 			for i := range protos {
 				protos[i].MaxFinalizedTimestamp = 0
 			}
 			aos := newValidAos(t, protos...)
 
-			should, report, err := rp.Report(types.ReportTimestamp{}, nil, aos)
+			should, report, err := rp.Report(ctx, types.ReportTimestamp{}, nil, aos)
 			assert.True(t, should)
 			assert.NoError(t, err)
 			assert.Equal(t, codec.builtReport, report)
@@ -245,13 +254,14 @@ func Test_Plugin_Report(t *testing.T) {
 			}, *codec.builtReportFields)
 		})
 		t.Run("succeeds and generates validFromTimestamp from maxFinalizedTimestamp when maxFinalizedTimestamp is -1 (missing feed)", func(t *testing.T) {
+			ctx := tests.Context(t)
 			protos := newValidProtos()
 			for i := range protos {
 				protos[i].MaxFinalizedTimestamp = -1
 			}
 			aos := newValidAos(t, protos...)
 
-			should, report, err := rp.Report(types.ReportTimestamp{}, nil, aos)
+			should, report, err := rp.Report(ctx, types.ReportTimestamp{}, nil, aos)
 			assert.True(t, should)
 			assert.NoError(t, err)
 			assert.Equal(t, codec.builtReport, report)
@@ -268,10 +278,11 @@ func Test_Plugin_Report(t *testing.T) {
 		})
 
 		t.Run("succeeds, ignoring unparseable attributed observation", func(t *testing.T) {
+			ctx := tests.Context(t)
 			aos := newValidAos(t)
 			aos[0] = newUnparseableAttributedObservation()
 
-			should, report, err := rp.Report(repts, nil, aos)
+			should, report, err := rp.Report(ctx, repts, nil, aos)
 			require.NoError(t, err)
 
 			assert.True(t, should)
@@ -297,6 +308,7 @@ func Test_Plugin_Report(t *testing.T) {
 		previousReport := types.Report{}
 
 		t.Run("succeeds and uses timestamp from previous report if valid", func(t *testing.T) {
+			ctx := tests.Context(t)
 			protos := newValidProtos()
 			ts := codec.observationTimestamp + 1
 			for i := range protos {
@@ -304,7 +316,7 @@ func Test_Plugin_Report(t *testing.T) {
 			}
 			aos := newValidAos(t, protos...)
 
-			should, report, err := rp.Report(repts, previousReport, aos)
+			should, report, err := rp.Report(ctx, repts, previousReport, aos)
 			require.NoError(t, err)
 
 			assert.True(t, should)
@@ -321,14 +333,16 @@ func Test_Plugin_Report(t *testing.T) {
 			}, *codec.builtReportFields)
 		})
 		t.Run("errors if cannot extract timestamp from previous report", func(t *testing.T) {
+			ctx := tests.Context(t)
 			codec.err = errors.New("something exploded trying to extract timestamp")
 			aos := newValidAos(t)
 
-			should, _, err := rp.Report(types.ReportTimestamp{}, previousReport, aos)
+			should, _, err := rp.Report(ctx, types.ReportTimestamp{}, previousReport, aos)
 			assert.False(t, should)
 			assert.EqualError(t, err, "something exploded trying to extract timestamp")
 		})
 		t.Run("does not report if observationTimestamp < validFromTimestamp", func(t *testing.T) {
+			ctx := tests.Context(t)
 			codec.observationTimestamp = 43
 			codec.err = nil
 
@@ -338,11 +352,12 @@ func Test_Plugin_Report(t *testing.T) {
 			}
 			aos := newValidAos(t, protos...)
 
-			should, _, err := rp.Report(types.ReportTimestamp{}, previousReport, aos)
+			should, _, err := rp.Report(ctx, types.ReportTimestamp{}, previousReport, aos)
 			assert.False(t, should)
 			assert.NoError(t, err)
 		})
 		t.Run("uses 0 values for link/native if they are invalid", func(t *testing.T) {
+			ctx := tests.Context(t)
 			codec.observationTimestamp = 42
 			codec.err = nil
 
@@ -353,7 +368,7 @@ func Test_Plugin_Report(t *testing.T) {
 			}
 			aos := newValidAos(t, protos...)
 
-			should, report, err := rp.Report(types.ReportTimestamp{}, previousReport, aos)
+			should, report, err := rp.Report(ctx, types.ReportTimestamp{}, previousReport, aos)
 			assert.True(t, should)
 			assert.NoError(t, err)
 
@@ -367,18 +382,20 @@ func Test_Plugin_Report(t *testing.T) {
 
 	t.Run("buildReport failures", func(t *testing.T) {
 		t.Run("Report errors when the report is too large", func(t *testing.T) {
+			ctx := tests.Context(t)
 			aos := newValidAos(t)
 			codec.builtReport = make([]byte, 1<<16)
 
-			_, _, err := rp.Report(types.ReportTimestamp{}, nil, aos)
+			_, _, err := rp.Report(ctx, types.ReportTimestamp{}, nil, aos)
 
 			assert.EqualError(t, err, "report with len 65536 violates MaxReportLength limit set by ReportCodec (123)")
 		})
 
 		t.Run("Report errors when the report length is 0", func(t *testing.T) {
+			ctx := tests.Context(t)
 			aos := newValidAos(t)
 			codec.builtReport = []byte{}
-			_, _, err := rp.Report(types.ReportTimestamp{}, nil, aos)
+			_, _, err := rp.Report(ctx, types.ReportTimestamp{}, nil, aos)
 
 			assert.EqualError(t, err, "report may not have zero length (invariant violation)")
 		})

@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/smartcontractkit/libocr/quorumhelper"
+
 	"github.com/smartcontractkit/chainlink-common/pkg/logger"
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
 
@@ -194,7 +196,7 @@ type PluginFactory struct {
 	Codecs                           map[llotypes.ReportFormat]ReportCodec
 }
 
-func (f *PluginFactory) NewReportingPlugin(cfg ocr3types.ReportingPluginConfig) (ocr3types.ReportingPlugin[llotypes.ReportInfo], ocr3types.ReportingPluginInfo, error) {
+func (f *PluginFactory) NewReportingPlugin(ctx context.Context, cfg ocr3types.ReportingPluginConfig) (ocr3types.ReportingPlugin[llotypes.ReportInfo], ocr3types.ReportingPluginInfo, error) {
 	offchainCfg, err := DecodeOffchainConfig(cfg.OffchainConfig)
 	if err != nil {
 		return nil, ocr3types.ReportingPluginInfo{}, fmt.Errorf("NewReportingPlugin failed to decode offchain config; got: 0x%x (len: %d); %w", cfg.OffchainConfig, len(cfg.OffchainConfig), err)
@@ -209,6 +211,7 @@ func (f *PluginFactory) NewReportingPlugin(cfg ocr3types.ReportingPluginConfig) 
 			f.ChannelDefinitionCache,
 			f.DataSource,
 			f.Logger,
+			cfg.N,
 			cfg.F,
 			protoObservationCodec{},
 			protoOutcomeCodec{},
@@ -231,7 +234,7 @@ type ReportCodec interface {
 	// Encode may be lossy, so no Decode function is expected
 	// Encode should handle nil stream aggregate values without panicking (it
 	// may return error instead)
-	Encode(Report, llotypes.ChannelDefinition) ([]byte, error)
+	Encode(context.Context, Report, llotypes.ChannelDefinition) ([]byte, error)
 }
 
 type Plugin struct {
@@ -243,6 +246,7 @@ type Plugin struct {
 	ChannelDefinitionCache           ChannelDefinitionCache
 	DataSource                       DataSource
 	Logger                           logger.Logger
+	N                                int
 	F                                int
 	ObservationCodec                 ObservationCodec
 	OutcomeCodec                     OutcomeCodec
@@ -287,7 +291,7 @@ func (p *Plugin) Observation(ctx context.Context, outctx ocr3types.OutcomeContex
 // *not* strictly) across the lifetime of a protocol instance and that
 // outctx.previousOutcome contains the consensus outcome with sequence
 // number (outctx.SeqNr-1).
-func (p *Plugin) ValidateObservation(outctx ocr3types.OutcomeContext, query types.Query, ao types.AttributedObservation) error {
+func (p *Plugin) ValidateObservation(ctx context.Context, outctx ocr3types.OutcomeContext, query types.Query, ao types.AttributedObservation) error {
 	if outctx.SeqNr < 1 {
 		return fmt.Errorf("Invalid SeqNr: %d", outctx.SeqNr)
 	} else if outctx.SeqNr == 1 {
@@ -340,7 +344,7 @@ func (p *Plugin) ValidateObservation(outctx ocr3types.OutcomeContext, query type
 //
 // libocr guarantees that this will always be called with at least 2f+1
 // AttributedObservations
-func (p *Plugin) Outcome(outctx ocr3types.OutcomeContext, query types.Query, aos []types.AttributedObservation) (ocr3types.Outcome, error) {
+func (p *Plugin) Outcome(ctx context.Context, outctx ocr3types.OutcomeContext, query types.Query, aos []types.AttributedObservation) (ocr3types.Outcome, error) {
 	return p.outcome(outctx, query, aos)
 }
 
@@ -357,8 +361,8 @@ func (p *Plugin) Outcome(outctx ocr3types.OutcomeContext, query types.Query, aos
 // *not* strictly) across the lifetime of a protocol instance and that
 // outctx.previousOutcome contains the consensus outcome with sequence
 // number (outctx.SeqNr-1).
-func (p *Plugin) Reports(seqNr uint64, rawOutcome ocr3types.Outcome) ([]ocr3types.ReportWithInfo[llotypes.ReportInfo], error) {
-	return p.reports(seqNr, rawOutcome)
+func (p *Plugin) Reports(ctx context.Context, seqNr uint64, rawOutcome ocr3types.Outcome) ([]ocr3types.ReportPlus[llotypes.ReportInfo], error) {
+	return p.reports(ctx, seqNr, rawOutcome)
 }
 
 func (p *Plugin) ShouldAcceptAttestedReport(context.Context, uint64, ocr3types.ReportWithInfo[llotypes.ReportInfo]) (bool, error) {
@@ -379,8 +383,8 @@ func (p *Plugin) ShouldTransmitAcceptedReport(context.Context, uint64, ocr3types
 // This is an advanced feature. The "default" approach (what OCR1 & OCR2
 // did) is to have an empty ValidateObservation function and return
 // QuorumTwoFPlusOne from this function.
-func (p *Plugin) ObservationQuorum(outctx ocr3types.OutcomeContext, query types.Query) (ocr3types.Quorum, error) {
-	return ocr3types.QuorumTwoFPlusOne, nil
+func (p *Plugin) ObservationQuorum(ctx context.Context, outctx ocr3types.OutcomeContext, query types.Query, aos []types.AttributedObservation) (bool, error) {
+	return quorumhelper.ObservationCountReachesObservationQuorum(quorumhelper.QuorumTwoFPlusOne, p.N, p.F, aos), nil
 }
 
 func (p *Plugin) Close() error {

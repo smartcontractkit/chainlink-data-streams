@@ -1,6 +1,7 @@
 package llo
 
 import (
+	"context"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -43,7 +44,7 @@ func UnmarshalJSONStreamValue(enc *JSONStreamValue) (StreamValue, error) {
 
 type JSONReportCodec struct{}
 
-func (cdc JSONReportCodec) Encode(r Report, _ llotypes.ChannelDefinition) ([]byte, error) {
+func (cdc JSONReportCodec) Encode(ctx context.Context, r Report, _ llotypes.ChannelDefinition) ([]byte, error) {
 	type encode struct {
 		ConfigDigest                types.ConfigDigest
 		SeqNr                       uint64
