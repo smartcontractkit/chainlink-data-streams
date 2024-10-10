@@ -16,18 +16,18 @@ var onchainConfigVersionBig = big.NewInt(onchainConfigVersion)
 
 const onchainConfigEncodedLength = 96 // 3x 32bit evm words, version + min + max
 
-var _ mercury.OnchainConfigCodec = StandardOnchainConfigCodec{}
+var _ mercury.OnchainConfigCodec = EVMOnchainConfigCodec{}
 
-// StandardOnchainConfigCodec provides a mercury-specific implementation of
+// EVMOnchainConfigCodec provides a mercury-specific implementation of
 // OnchainConfigCodec.
 //
 // An encoded onchain config is expected to be in the format
 // <version><min><max>
 // where version is a uint8 and min and max are in the format
 // returned by EncodeValueInt192.
-type StandardOnchainConfigCodec struct{}
+type EVMOnchainConfigCodec struct{}
 
-func (StandardOnchainConfigCodec) Decode(ctx context.Context, b []byte) (mercury.OnchainConfig, error) {
+func (EVMOnchainConfigCodec) Decode(ctx context.Context, b []byte) (mercury.OnchainConfig, error) {
 	if len(b) != onchainConfigEncodedLength {
 		return mercury.OnchainConfig{}, fmt.Errorf("unexpected length of OnchainConfig, expected %v, got %v", onchainConfigEncodedLength, len(b))
 	}
@@ -56,7 +56,7 @@ func (StandardOnchainConfigCodec) Decode(ctx context.Context, b []byte) (mercury
 	return mercury.OnchainConfig{Min: min, Max: max}, nil
 }
 
-func (StandardOnchainConfigCodec) Encode(ctx context.Context, c mercury.OnchainConfig) ([]byte, error) {
+func (EVMOnchainConfigCodec) Encode(ctx context.Context, c mercury.OnchainConfig) ([]byte, error) {
 	verBytes, err := bigbigendian.SerializeSigned(32, onchainConfigVersionBig)
 	if err != nil {
 		return nil, err
