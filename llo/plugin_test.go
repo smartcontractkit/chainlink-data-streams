@@ -18,7 +18,7 @@ type mockShouldRetireCache struct {
 	err          error
 }
 
-func (m *mockShouldRetireCache) ShouldRetire() (bool, error) {
+func (m *mockShouldRetireCache) ShouldRetire(types.ConfigDigest) (bool, error) {
 	return m.shouldRetire, m.err
 }
 

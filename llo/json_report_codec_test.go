@@ -41,4 +41,11 @@ func Test_JSONCodec(t *testing.T) {
 
 		assert.Equal(t, r, decoded)
 	})
+	t.Run("invalid input fails decode", func(t *testing.T) {
+		cdc := JSONReportCodec{}
+		_, err := cdc.Decode([]byte(`{}`))
+		assert.EqualError(t, err, "invalid ConfigDigest; cannot convert bytes to ConfigDigest. bytes have wrong length 0")
+		_, err = cdc.Decode([]byte(`{"ConfigDigest":"0102030000000000000000000000000000000000000000000000000000000000"}`))
+		assert.EqualError(t, err, "missing SeqNr")
+	})
 }
