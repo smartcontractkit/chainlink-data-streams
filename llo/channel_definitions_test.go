@@ -15,7 +15,7 @@ func Test_VerifyChannelDefinitions(t *testing.T) {
 			channelDefs[i] = llotypes.ChannelDefinition{}
 		}
 		err := VerifyChannelDefinitions(channelDefs)
-		assert.EqualError(t, err, "too many channels, got: 10001/10000")
+		assert.EqualError(t, err, "too many channels, got: 2001/2000")
 	})
 
 	t.Run("fails for channel with no streams", func(t *testing.T) {

@@ -10,10 +10,6 @@ import (
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
 )
 
-// TODO: probably ought to have fuzz testing to detect crashes
-// TODO: what about resource starvation attacks? maximum length? Does OCR
-// protect us from this?
-
 func Test_protoObservationCodec(t *testing.T) {
 	t.Run("encode and decode empty struct", func(t *testing.T) {
 		obs := Observation{}

@@ -19,10 +19,12 @@ func (p *Plugin) outcome(outctx ocr3types.OutcomeContext, query types.Query, aos
 		return nil, fmt.Errorf("invariant violation: expected at least 2f+1 attributed observations, got %d (f: %d)", len(aos), p.F)
 	}
 
-	// Initial outcome is kind of a "keystone" with minimum extra information
+	// Initial outcome is kind of a "cornerstone" with minimum extra information
 	if outctx.SeqNr <= 1 {
 		// Initial Outcome
 		var lifeCycleStage llotypes.LifeCycleStage
+		// NOTE: Staging instances **require** a predecessor config digest.
+		// This is enforced by the contract.
 		if p.PredecessorConfigDigest == nil {
 			// Start straight in production if we have no predecessor
 			lifeCycleStage = LifeCycleStageProduction
@@ -50,74 +52,7 @@ func (p *Plugin) outcome(outctx ocr3types.OutcomeContext, query types.Query, aos
 	/////////////////////////////////
 	// Decode observations
 	/////////////////////////////////
-
-	// a single valid retirement report is enough
-	var validPredecessorRetirementReport *RetirementReport
-
-	shouldRetireVotes := 0
-
-	timestampsNanoseconds := []int64{}
-
-	removeChannelVotesByID := map[llotypes.ChannelID]int{}
-
-	// for each channelId count number of votes that mention it and count number of votes that include it.
-	updateChannelVotesByHash := map[ChannelHash]int{}
-	updateChannelDefinitionsByHash := map[ChannelHash]ChannelDefinitionWithID{}
-
-	streamObservations := make(map[llotypes.StreamID][]StreamValue)
-
-	for _, ao := range aos {
-		// TODO: Put in a function
-		// MERC-3524
-		observation, err2 := p.ObservationCodec.Decode(ao.Observation)
-		if err2 != nil {
-			p.Logger.Warnw("ignoring invalid observation", "oracleID", ao.Observer, "error", err2)
-			continue
-		}
-
-		if len(observation.AttestedPredecessorRetirement) != 0 && validPredecessorRetirementReport == nil {
-			pcd := *p.PredecessorConfigDigest
-			retirementReport, err3 := p.PredecessorRetirementReportCache.CheckAttestedRetirementReport(pcd, observation.AttestedPredecessorRetirement)
-			if err3 != nil {
-				p.Logger.Warnw("ignoring observation with invalid attested predecessor retirement", "oracleID", ao.Observer, "error", err3, "predecessorConfigDigest", pcd)
-				continue
-			}
-			validPredecessorRetirementReport = &retirementReport
-		}
-
-		if observation.ShouldRetire {
-			shouldRetireVotes++
-		}
-
-		timestampsNanoseconds = append(timestampsNanoseconds, observation.UnixTimestampNanoseconds)
-
-		for channelID := range observation.RemoveChannelIDs {
-			removeChannelVotesByID[channelID]++
-		}
-
-		for channelID, channelDefinition := range observation.UpdateChannelDefinitions {
-			defWithID := ChannelDefinitionWithID{channelDefinition, channelID}
-			channelHash := MakeChannelHash(defWithID)
-			updateChannelVotesByHash[channelHash]++
-			updateChannelDefinitionsByHash[channelHash] = defWithID
-		}
-
-		var missingObservations []llotypes.StreamID
-		for id, sv := range observation.StreamValues {
-			if sv != nil { // FIXME: nil checks don't work here. Test this and figure out what to do (also, are there other cases?)
-				streamObservations[id] = append(streamObservations[id], sv)
-			} else {
-				missingObservations = append(missingObservations, id)
-			}
-		}
-		if p.Config.VerboseLogging {
-			if len(missingObservations) > 0 {
-				sort.Slice(missingObservations, func(i, j int) bool { return missingObservations[i] < missingObservations[j] })
-				p.Logger.Debugw("Peer was missing observations", "streamIDs", missingObservations, "oracleID", ao.Observer, "stage", "Outcome", "seqNr", outctx.SeqNr)
-			}
-			p.Logger.Debugw("Got observations from peer", "stage", "Outcome", "sv", streamObservations, "oracleID", ao.Observer, "seqNr", outctx.SeqNr)
-		}
-	}
+	timestampsNanoseconds, validPredecessorRetirementReport, shouldRetireVotes, removeChannelVotesByID, updateChannelDefinitionsByHash, updateChannelVotesByHash, streamObservations := p.decodeObservations(aos, outctx)
 
 	if len(timestampsNanoseconds) == 0 {
 		return nil, errors.New("no valid observations")
@@ -126,10 +61,16 @@ func (p *Plugin) outcome(outctx ocr3types.OutcomeContext, query types.Query, aos
 	var outcome Outcome
 
 	/////////////////////////////////
+	// outcome.ObservationsTimestampNanoseconds
+	/////////////////////////////////
+	outcome.ObservationsTimestampNanoseconds = medianTimestamp(timestampsNanoseconds)
+
+	/////////////////////////////////
 	// outcome.LifeCycleStage
 	/////////////////////////////////
 	if previousOutcome.LifeCycleStage == LifeCycleStageStaging && validPredecessorRetirementReport != nil {
 		// Promote this protocol instance to the production stage! 🚀
+		p.Logger.Infow("Promoting protocol instance from staging to production 🎖️", "seqNr", outctx.SeqNr, "stage", "Outcome", "validAfterSeconds", validPredecessorRetirementReport.ValidAfterSeconds)
 
 		// override ValidAfterSeconds with the value from the retirement report
 		// so that we have no gaps in the validity time range.
@@ -140,15 +81,9 @@ func (p *Plugin) outcome(outctx ocr3types.OutcomeContext, query types.Query, aos
 	}
 
 	if outcome.LifeCycleStage == LifeCycleStageProduction && shouldRetireVotes > p.F {
+		p.Logger.Infow("Retiring production protocol instance ⚰️", "seqNr", outctx.SeqNr, "stage", "Outcome")
 		outcome.LifeCycleStage = LifeCycleStageRetired
 	}
-
-	/////////////////////////////////
-	// outcome.ObservationsTimestampNanoseconds
-	// TODO: Refactor this into an aggregate function
-	// MERC-3524
-	sort.Slice(timestampsNanoseconds, func(i, j int) bool { return timestampsNanoseconds[i] < timestampsNanoseconds[j] })
-	outcome.ObservationsTimestampNanoseconds = timestampsNanoseconds[len(timestampsNanoseconds)/2]
 
 	/////////////////////////////////
 	// outcome.ChannelDefinitions
@@ -237,8 +172,10 @@ func (p *Plugin) outcome(outctx ocr3types.OutcomeContext, query types.Query, aos
 				if p.Config.VerboseLogging {
 					p.Logger.Debugw("Channel is not reportable", "channelID", channelID, "err", err3, "stage", "Outcome", "seqNr", outctx.SeqNr)
 				}
+				// previous outcome did not report; keep the same validAfterSeconds
 				outcome.ValidAfterSeconds[channelID] = previousValidAfterSeconds
 			} else {
+				// previous outcome reported; update validAfterSeconds to the previousObservationsTimestamp
 				outcome.ValidAfterSeconds[channelID] = previousObservationsTimestampSeconds
 			}
 		}
@@ -311,6 +248,68 @@ func (p *Plugin) outcome(outctx ocr3types.OutcomeContext, query types.Query, aos
 	return p.OutcomeCodec.Encode(outcome)
 }
 
+func (p *Plugin) decodeObservations(aos []types.AttributedObservation, outctx ocr3types.OutcomeContext) (timestampsNanoseconds []int64, validPredecessorRetirementReport *RetirementReport, shouldRetireVotes int, removeChannelVotesByID map[llotypes.ChannelID]int, updateChannelDefinitionsByHash map[ChannelHash]ChannelDefinitionWithID, updateChannelVotesByHash map[ChannelHash]int, streamObservations map[llotypes.StreamID][]StreamValue) {
+	removeChannelVotesByID = make(map[llotypes.ChannelID]int)
+	updateChannelDefinitionsByHash = make(map[ChannelHash]ChannelDefinitionWithID)
+	updateChannelVotesByHash = make(map[ChannelHash]int)
+	streamObservations = make(map[llotypes.StreamID][]StreamValue)
+
+	for _, ao := range aos {
+		observation, err2 := p.ObservationCodec.Decode(ao.Observation)
+		if err2 != nil {
+			p.Logger.Warnw("ignoring invalid observation", "oracleID", ao.Observer, "error", err2)
+			continue
+		}
+
+		if len(observation.AttestedPredecessorRetirement) != 0 && validPredecessorRetirementReport == nil {
+			// a single valid retirement report is enough
+			pcd := *p.PredecessorConfigDigest
+			retirementReport, err3 := p.PredecessorRetirementReportCache.CheckAttestedRetirementReport(pcd, observation.AttestedPredecessorRetirement)
+			if err3 != nil {
+				p.Logger.Warnw("ignoring observation with invalid attested predecessor retirement", "oracleID", ao.Observer, "error", err3, "predecessorConfigDigest", pcd)
+				continue
+			}
+			validPredecessorRetirementReport = &retirementReport
+		}
+
+		if observation.ShouldRetire {
+			shouldRetireVotes++
+		}
+
+		timestampsNanoseconds = append(timestampsNanoseconds, observation.UnixTimestampNanoseconds)
+
+		for channelID := range observation.RemoveChannelIDs {
+			removeChannelVotesByID[channelID]++
+		}
+
+		// for each channelId count number of votes that mention it and count number of votes that include it.
+		for channelID, channelDefinition := range observation.UpdateChannelDefinitions {
+			defWithID := ChannelDefinitionWithID{channelDefinition, channelID}
+			channelHash := MakeChannelHash(defWithID)
+			updateChannelVotesByHash[channelHash]++
+			updateChannelDefinitionsByHash[channelHash] = defWithID
+		}
+
+		var missingObservations []llotypes.StreamID
+		for id, sv := range observation.StreamValues {
+			if sv != nil { // FIXME: nil checks don't work here. Test this and figure out what to do (also, are there other cases?)
+				streamObservations[id] = append(streamObservations[id], sv)
+			} else {
+				missingObservations = append(missingObservations, id)
+			}
+		}
+		if p.Config.VerboseLogging {
+			if len(missingObservations) > 0 {
+				sort.Slice(missingObservations, func(i, j int) bool { return missingObservations[i] < missingObservations[j] })
+				p.Logger.Debugw("Peer was missing observations", "streamIDs", missingObservations, "oracleID", ao.Observer, "stage", "Outcome", "seqNr", outctx.SeqNr)
+			}
+			p.Logger.Debugw("Got observations from peer", "stage", "Outcome", "sv", streamObservations, "oracleID", ao.Observer, "seqNr", outctx.SeqNr)
+		}
+	}
+
+	return
+}
+
 type Outcome struct {
 	// LifeCycleStage the protocol is in
 	LifeCycleStage llotypes.LifeCycleStage
@@ -339,12 +338,17 @@ func (out *Outcome) ObservationsTimestampSeconds() (uint32, error) {
 	return uint32(result), nil
 }
 
+func (out *Outcome) GenRetirementReport() RetirementReport {
+	return RetirementReport{
+		ValidAfterSeconds: out.ValidAfterSeconds,
+	}
+}
+
 // Indicates whether a report can be generated for the given channel.
 // Returns nil if channel is reportable
 // NOTE: A channel is still reportable even if missing some or all stream
 // values. The report codec is expected to handle nils and act accordingly
 // (e.g. some values may be optional).
-// TODO: Test this function
 func (out *Outcome) IsReportable(channelID llotypes.ChannelID) *ErrUnreportableChannel {
 	if out.LifeCycleStage == LifeCycleStageRetired {
 		return &ErrUnreportableChannel{nil, "IsReportable=false; retired channel", channelID}
@@ -364,7 +368,6 @@ func (out *Outcome) IsReportable(channelID llotypes.ChannelID) *ErrUnreportableC
 		// No validAfterSeconds entry yet, this must be a new channel.
 		// validAfterSeconds will be populated in Outcome() so the channel
 		// becomes reportable in later protocol rounds.
-		// TODO: Test this case, haven't seen it in prod logs even though it would be expected
 		return &ErrUnreportableChannel{nil, "IsReportable=false; no validAfterSeconds entry yet, this must be a new channel", channelID}
 	}
 
@@ -377,7 +380,6 @@ func (out *Outcome) IsReportable(channelID llotypes.ChannelID) *ErrUnreportableC
 
 // List of reportable channels (according to IsReportable), sorted according
 // to a canonical ordering
-// TODO: test this
 func (out *Outcome) ReportableChannels() (reportable []llotypes.ChannelID, unreportable []*ErrUnreportableChannel) {
 	for channelID := range out.ChannelDefinitions {
 		if err := out.IsReportable(channelID); err != nil {
@@ -436,4 +438,9 @@ func MakeChannelHash(cd ChannelDefinitionWithID) ChannelHash {
 	var result [32]byte
 	h.Sum(result[:0])
 	return result
+}
+
+func medianTimestamp(timestampsNanoseconds []int64) int64 {
+	sort.Slice(timestampsNanoseconds, func(i, j int) bool { return timestampsNanoseconds[i] < timestampsNanoseconds[j] })
+	return timestampsNanoseconds[len(timestampsNanoseconds)/2]
 }
