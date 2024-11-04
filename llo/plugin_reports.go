@@ -114,6 +114,8 @@ type Report struct {
 	// Channel that is being reported on
 	ChannelID llotypes.ChannelID
 	// Report is only valid at t > ValidAfterSeconds
+	// ValidAfterSeconds < ObservationTimestampSeconds always, by enforcement
+	// in IsReportable
 	ValidAfterSeconds uint32
 	// ObservationTimestampSeconds is the median of all observation timestamps
 	// (note that this timestamp is taken immediately before we initiate any
