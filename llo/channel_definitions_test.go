@@ -52,6 +52,21 @@ func Test_VerifyChannelDefinitions(t *testing.T) {
 		err := VerifyChannelDefinitions(channelDefs)
 		assert.EqualError(t, err, "too many unique stream IDs, got: 10001/10000")
 	})
+	t.Run("fails for ReportFormatEVMPremiumLegacy without exactly three streams", func(t *testing.T) {
+		channelDefs := llotypes.ChannelDefinitions{
+			1: llotypes.ChannelDefinition{
+				ReportFormat: llotypes.ReportFormatEVMPremiumLegacy,
+				Streams: []llotypes.Stream{
+					llotypes.Stream{
+						StreamID:   1,
+						Aggregator: llotypes.AggregatorMedian,
+					},
+				},
+			},
+		}
+		err := VerifyChannelDefinitions(channelDefs)
+		assert.EqualError(t, err, "invalid ChannelDefinition with ID 1: ReportFormatEVMPremiumLegacy requires exactly 3 streams (NativePrice, LinkPrice, Quote); got: [{1 median}]")
+	})
 
 	t.Run("succeeds with valid channel definitions", func(t *testing.T) {
 		channelDefs := llotypes.ChannelDefinitions{
