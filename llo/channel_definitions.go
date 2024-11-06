@@ -27,6 +27,7 @@ func VerifyChannelDefinitions(channelDefs llotypes.ChannelDefinitions) error {
 			if err := VerifyEVMPremiumLegacyChannelDefinition(cd); err != nil {
 				return fmt.Errorf("invalid ChannelDefinition with ID %d: %v", channelID, err)
 			}
+		default:
 		}
 	}
 	if len(uniqueStreamIDs) > MaxObservationStreamValuesLength {
