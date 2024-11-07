@@ -22,9 +22,26 @@ func VerifyChannelDefinitions(channelDefs llotypes.ChannelDefinitions) error {
 			}
 			uniqueStreamIDs[strm.StreamID] = struct{}{}
 		}
+		switch cd.ReportFormat {
+		case llotypes.ReportFormatEVMPremiumLegacy:
+			if err := VerifyEVMPremiumLegacyChannelDefinition(cd); err != nil {
+				return fmt.Errorf("invalid ChannelDefinition with ID %d: %v", channelID, err)
+			}
+		default:
+		}
 	}
 	if len(uniqueStreamIDs) > MaxObservationStreamValuesLength {
 		return fmt.Errorf("too many unique stream IDs, got: %d/%d", len(uniqueStreamIDs), MaxObservationStreamValuesLength)
+	}
+	return nil
+}
+
+func VerifyEVMPremiumLegacyChannelDefinition(cd llotypes.ChannelDefinition) error {
+	if cd.ReportFormat != llotypes.ReportFormatEVMPremiumLegacy {
+		return fmt.Errorf("expected ReportFormatEVMPremiumLegacy, got: %v", cd.ReportFormat)
+	}
+	if len(cd.Streams) != 3 {
+		return fmt.Errorf("ReportFormatEVMPremiumLegacy requires exactly 3 streams (NativePrice, LinkPrice, Quote); got: %v", cd.Streams)
 	}
 	return nil
 }

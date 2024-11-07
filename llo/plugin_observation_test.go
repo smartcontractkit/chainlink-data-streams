@@ -193,7 +193,7 @@ func Test_Observation(t *testing.T) {
 	for i := 0; i < largeSize; i++ {
 		largeDefinitions[llotypes.ChannelID(i)] = llotypes.ChannelDefinition{
 			ReportFormat: llotypes.ReportFormatEVMPremiumLegacy,
-			Streams:      []llotypes.Stream{{StreamID: uint32(i), Aggregator: llotypes.AggregatorMedian}},
+			Streams:      []llotypes.Stream{{StreamID: uint32(i), Aggregator: llotypes.AggregatorMedian}, {StreamID: uint32(i * 10000), Aggregator: llotypes.AggregatorMedian}, {StreamID: uint32(i * 100000), Aggregator: llotypes.AggregatorMedian}},
 		}
 	}
 	cdc.definitions = largeDefinitions
@@ -293,7 +293,7 @@ func Test_Observation(t *testing.T) {
 			for i := 0; i < 2*MaxOutcomeChannelDefinitionsLength; i++ {
 				dfns[llotypes.ChannelID(i)] = llotypes.ChannelDefinition{
 					ReportFormat: llotypes.ReportFormatEVMPremiumLegacy,
-					Streams:      []llotypes.Stream{{StreamID: uint32(i), Aggregator: llotypes.AggregatorMedian}},
+					Streams:      []llotypes.Stream{{StreamID: uint32(i), Aggregator: llotypes.AggregatorMedian}, {StreamID: uint32(i * 10000), Aggregator: llotypes.AggregatorMedian}, {StreamID: uint32(i * 100000), Aggregator: llotypes.AggregatorMedian}},
 				}
 			}
 
@@ -325,7 +325,7 @@ func Test_Observation(t *testing.T) {
 			for i := 0; i < 2*MaxOutcomeChannelDefinitionsLength; i++ {
 				dfns[llotypes.ChannelID(i)] = llotypes.ChannelDefinition{
 					ReportFormat: llotypes.ReportFormatEVMPremiumLegacy,
-					Streams:      []llotypes.Stream{{StreamID: uint32(i), Aggregator: llotypes.AggregatorMedian}},
+					Streams:      []llotypes.Stream{{StreamID: uint32(i), Aggregator: llotypes.AggregatorMedian}, {StreamID: uint32(i * 10000), Aggregator: llotypes.AggregatorMedian}, {StreamID: uint32(i * 100000), Aggregator: llotypes.AggregatorMedian}},
 				}
 			}
 			cdc.definitions = dfns
