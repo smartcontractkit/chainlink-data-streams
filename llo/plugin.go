@@ -3,6 +3,7 @@ package llo
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/smartcontractkit/libocr/quorumhelper"
 
@@ -233,6 +234,7 @@ func (f *PluginFactory) NewReportingPlugin(ctx context.Context, cfg ocr3types.Re
 			protoOutcomeCodec{},
 			f.RetirementReportCodec,
 			f.ReportCodecs,
+			cfg.MaxDurationObservation,
 		}, ocr3types.ReportingPluginInfo{
 			Name: "LLO",
 			Limits: ocr3types.ReportingPluginLimits{
@@ -269,6 +271,8 @@ type Plugin struct {
 	OutcomeCodec                     OutcomeCodec
 	RetirementReportCodec            RetirementReportCodec
 	ReportCodecs                     map[llotypes.ReportFormat]ReportCodec
+
+	MaxDurationObservation time.Duration
 }
 
 // Query creates a Query that is sent from the leader to all follower nodes
