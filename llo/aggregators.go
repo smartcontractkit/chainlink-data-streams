@@ -31,6 +31,8 @@ func MedianAggregator(values []StreamValue, f int) (StreamValue, error) {
 		switch v := value.(type) {
 		case *Decimal:
 			observations = append(observations, v.Decimal())
+		case *Quote:
+			observations = append(observations, v.Benchmark)
 		default:
 			// Unexpected type, skip
 			continue
