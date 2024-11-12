@@ -34,13 +34,29 @@ func Test_MedianAggregator(t *testing.T) {
 		assert.Equal(t, "3.3", sv.(*Decimal).String())
 	})
 
+	t.Run("for stream values of type *Quote, uses the Benchmark value", func(t *testing.T) {
+		mixedValues := []StreamValue{
+			&Quote{Benchmark: decimal.NewFromFloat(1.1)},
+			&Quote{Benchmark: decimal.NewFromFloat(4.4)},
+			&Quote{Benchmark: decimal.NewFromFloat(2.2)},
+			&Quote{Benchmark: decimal.NewFromFloat(3.3)},
+			ToDecimal(decimal.NewFromFloat(6.6)),
+			ToDecimal(decimal.NewFromFloat(5.5)),
+		}
+
+		sv, err := MedianAggregator(mixedValues, f)
+		require.NoError(t, err)
+		assert.IsType(t, &Decimal{}, sv)
+		assert.Equal(t, "4.4", sv.(*Decimal).String())
+	})
+
 	t.Run("fails with fewer than f+1 values", func(t *testing.T) {
 		_, err := MedianAggregator(values[:2], 3)
 		assert.EqualError(t, err, "not enough observations to calculate median, expected at least f+1, got 2")
 	})
 
 	t.Run("fails with unsupported StreamValue type", func(t *testing.T) {
-		_, err := MedianAggregator([]StreamValue{&Quote{}, &Quote{}, &Quote{}}, 1)
+		_, err := MedianAggregator([]StreamValue{nil, nil, nil}, 1)
 		assert.EqualError(t, err, "not enough observations to calculate median, expected at least f+1, got 0")
 	})
 }
