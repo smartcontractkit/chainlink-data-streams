@@ -144,17 +144,8 @@ func (p *Plugin) observation(ctx context.Context, outctx ocr3types.OutcomeContex
 
 			// NOTE: Timeouts/context cancelations are likely to be rather
 			// common here, since Observe may have to query 100s of streams,
-			// any one of which could be slow. libocr will log a warning if
-			// Observation takes longer than MaxDurationObservation, so we
-			// limit the call to Observe to 25ms less than that, to allow some
-			// headroom for serialization and other operations.
-			maxDurationObserve := p.MaxDurationObservation - 25*time.Millisecond
-			if maxDurationObserve < 10*time.Millisecond {
-				// Don't ever allow LESS than 10ms for Observe even if it would
-				// log a warning
-				maxDurationObserve = 10 * time.Millisecond
-			}
-			observationCtx, cancel := context.WithTimeout(ctx, maxDurationObserve)
+			// any one of which could be slow.
+			observationCtx, cancel := context.WithTimeout(ctx, p.MaxDurationObservation)
 			defer cancel()
 			if err = p.DataSource.Observe(observationCtx, obs.StreamValues, dsOpts{p.Config.VerboseLogging, outctx, p.ConfigDigest}); err != nil {
 				return nil, fmt.Errorf("DataSource.Observe error: %w", err)
