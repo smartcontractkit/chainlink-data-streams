@@ -73,6 +73,10 @@ func (p *Plugin) reports(ctx context.Context, seqNr uint64, rawOutcome ocr3types
 			outcome.LifeCycleStage != LifeCycleStageProduction,
 		}
 
+		if p.Config.VerboseLogging {
+			p.Logger.Debugw("Emitting report", "lifeCycleStage", outcome.LifeCycleStage, "channelID", cid, "report", report, "stage", "Report", "seqNr", seqNr)
+		}
+
 		encoded, err := p.encodeReport(ctx, report, cd)
 		if err != nil {
 			if ctx.Err() != nil {
