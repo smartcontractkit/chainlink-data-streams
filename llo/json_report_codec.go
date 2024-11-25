@@ -138,7 +138,7 @@ func (cdc JSONReportCodec) Pack(digest types.ConfigDigest, seqNr uint64, report 
 	p := packed{
 		ConfigDigest: digest,
 		SeqNr:        seqNr,
-		Report:       json.RawMessage(report), // TODO: check if its valid JSON
+		Report:       json.RawMessage(report), // TODO: check if its valid JSON, MERC-3524
 		Sigs:         sigs,
 	}
 	return json.Marshal(p)
