@@ -28,6 +28,8 @@ func VerifyChannelDefinitions(channelDefs llotypes.ChannelDefinitions) error {
 				return fmt.Errorf("invalid ChannelDefinition with ID %d: %v", channelID, err)
 			}
 		default:
+			// NOTE: Could add further report-format-specific validation here
+			// for future report formats
 		}
 	}
 	if len(uniqueStreamIDs) > MaxObservationStreamValuesLength {

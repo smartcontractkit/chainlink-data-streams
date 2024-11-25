@@ -34,13 +34,14 @@ const (
 	MaxReportLength      = ocr3types.MaxMaxReportLength
 
 	// LLO-specific limits
-	// Maximum amount of channels that can be added per round (if more than
-	// this needs to be added, it will be added in batches until everything is
-	// up-to-date)
-	MaxObservationRemoveChannelIDsLength = 5
+	//
 	// Maximum amount of channels that can be removed per round (if more than
-	// this needs to be removed, it will be removed in batches until everything
-	// is up-to-date)
+	// this need to be removed, they will be removed in batches until
+	// everything is up-to-date)
+	MaxObservationRemoveChannelIDsLength = 5
+	// Maximum amount of channels that can be added/updated per round (if more
+	// than this need to be added, they will be added in batches until
+	// everything is up-to-date)
 	MaxObservationUpdateChannelDefinitionsLength = 5
 	// Maximum number of streams that can be observed per round
 	MaxObservationStreamValuesLength = 10_000

@@ -132,7 +132,6 @@ func (p *Plugin) outcome(outctx ocr3types.OutcomeContext, query types.Query, aos
 				"seqNr", outctx.SeqNr,
 				"stage", "Outcome",
 			)
-			outcome.ChannelDefinitions[defWithID.ChannelID] = defWithID.ChannelDefinition
 		} else if len(outcome.ChannelDefinitions) >= MaxOutcomeChannelDefinitionsLength {
 			p.Logger.Warnw("Adding channel FAILED. Cannot add channel, outcome already contains maximum number of channels",
 				"maxOutcomeChannelDefinitionsLength", MaxOutcomeChannelDefinitionsLength,
@@ -143,13 +142,14 @@ func (p *Plugin) outcome(outctx ocr3types.OutcomeContext, query types.Query, aos
 			// continue, don't break here because remaining channels might be a
 			// replacement rather than an addition, and this is still ok
 			continue
+		} else {
+			p.Logger.Debugw("Adding channel (new)",
+				"channelID", defWithID.ChannelID,
+				"addChannelDefinition", defWithID,
+				"seqNr", outctx.SeqNr,
+				"stage", "Outcome",
+			)
 		}
-		p.Logger.Debugw("Adding channel (new)",
-			"channelID", defWithID.ChannelID,
-			"addChannelDefinition", defWithID,
-			"seqNr", outctx.SeqNr,
-			"stage", "Outcome",
-		)
 		outcome.ChannelDefinitions[defWithID.ChannelID] = defWithID.ChannelDefinition
 	}
 
