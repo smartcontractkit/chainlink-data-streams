@@ -108,11 +108,12 @@ func (c protoObservationCodec) Decode(b types.Observation) (Observation, error) 
 	if len(pbuf.StreamValues) > 0 {
 		streamValues = make(StreamValues, len(pbuf.StreamValues))
 		for id, enc := range pbuf.StreamValues {
-			// StreamValues shouldn't have explicit nils, but for safety we
-			// ought to handle it anyway
 			sv, err := UnmarshalProtoStreamValue(enc)
 			if err != nil {
-				return Observation{}, err
+				// Byzantine behavior makes this observation invalid; a
+				// well-behaved node should never encode invalid or nil values
+				// here
+				return Observation{}, fmt.Errorf("failed to decode observation; invalid stream value for stream ID: %d; %w", id, err)
 			}
 			streamValues[id] = sv
 		}

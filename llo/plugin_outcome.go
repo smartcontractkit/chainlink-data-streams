@@ -291,19 +291,12 @@ func (p *Plugin) decodeObservations(aos []types.AttributedObservation, outctx oc
 			updateChannelDefinitionsByHash[channelHash] = defWithID
 		}
 
-		var missingObservations []llotypes.StreamID
 		for id, sv := range observation.StreamValues {
-			if sv != nil { // FIXME: nil checks don't work here. Test this and figure out what to do (also, are there other cases?)
-				streamObservations[id] = append(streamObservations[id], sv)
-			} else {
-				missingObservations = append(missingObservations, id)
-			}
+			// sv can never be nil here; validation is handled in the decoding
+			// of the observation
+			streamObservations[id] = append(streamObservations[id], sv)
 		}
 		if p.Config.VerboseLogging {
-			if len(missingObservations) > 0 {
-				sort.Slice(missingObservations, func(i, j int) bool { return missingObservations[i] < missingObservations[j] })
-				p.Logger.Debugw("Peer was missing observations", "streamIDs", missingObservations, "oracleID", ao.Observer, "stage", "Outcome", "seqNr", outctx.SeqNr)
-			}
 			p.Logger.Debugw("Got observations from peer", "stage", "Outcome", "sv", streamObservations, "oracleID", ao.Observer, "seqNr", outctx.SeqNr)
 		}
 	}
