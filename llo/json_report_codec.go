@@ -81,6 +81,7 @@ func (cdc JSONReportCodec) Encode(ctx context.Context, r Report, _ llotypes.Chan
 	return json.Marshal(e)
 }
 
+// Fuzz testing: MERC-6522
 func (cdc JSONReportCodec) Decode(b []byte) (r Report, err error) {
 	type decode struct {
 		ConfigDigest                string
