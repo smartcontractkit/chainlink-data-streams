@@ -399,6 +399,55 @@ func Test_Outcome(t *testing.T) {
 			assert.Equal(t, int64(102030410), int64(decoded.ValidAfterSeconds[1]))
 			assert.Equal(t, int64(102030410), int64(decoded.ValidAfterSeconds[2]))
 		})
+		t.Run("aggregation function returns error", func(t *testing.T) {
+			previousOutcome := Outcome{
+				LifeCycleStage:                   llotypes.LifeCycleStage("test"),
+				ObservationsTimestampNanoseconds: testStartTS.UnixNano(),
+				ChannelDefinitions:               cdc.definitions,
+			}
+			encodedPreviousOutcome, err := p.OutcomeCodec.Encode(previousOutcome)
+			require.NoError(t, err)
+			outctx := ocr3types.OutcomeContext{SeqNr: 2, PreviousOutcome: encodedPreviousOutcome}
+			aos := []types.AttributedObservation{}
+			for i := 0; i < 4; i++ {
+				var sv StreamValue
+				// only one reported a value; not enough
+				if i == 0 {
+					sv = ToDecimal(decimal.NewFromInt(100))
+				}
+				obs := Observation{
+					UnixTimestampNanoseconds: testStartTS.UnixNano() + int64(time.Second) + int64(i*100)*int64(time.Millisecond),
+					StreamValues: map[llotypes.StreamID]StreamValue{
+						1: sv,
+						// 2 and 3 ok
+						2: ToDecimal(decimal.NewFromInt(int64(220))),
+						3: &Quote{Bid: decimal.NewFromInt(int64(320)), Benchmark: decimal.NewFromInt(int64(330)), Ask: decimal.NewFromInt(int64(340))},
+					}}
+				encoded, err2 := p.ObservationCodec.Encode(obs)
+				require.NoError(t, err2)
+				aos = append(aos,
+					types.AttributedObservation{
+						Observation: encoded,
+						Observer:    commontypes.OracleID(i),
+					})
+			}
+			outcome, err := p.Outcome(ctx, outctx, types.Query{}, aos)
+			require.NoError(t, err)
+
+			decoded, err := p.OutcomeCodec.Decode(outcome)
+			require.NoError(t, err)
+
+			// NOTE: `1` is missing because of insufficient observations
+			assert.Len(t, decoded.StreamAggregates, 2)
+			assert.Contains(t, decoded.StreamAggregates, llotypes.StreamID(2))
+			assert.Contains(t, decoded.StreamAggregates, llotypes.StreamID(3))
+			assert.Equal(t, map[llotypes.Aggregator]StreamValue{
+				llotypes.AggregatorMedian: ToDecimal(decimal.NewFromInt(220)),
+			}, decoded.StreamAggregates[2])
+			assert.Equal(t, map[llotypes.Aggregator]StreamValue{
+				llotypes.AggregatorQuote: &Quote{Bid: decimal.NewFromInt(320), Benchmark: decimal.NewFromInt(330), Ask: decimal.NewFromInt(340)},
+			}, decoded.StreamAggregates[3])
+		})
 	})
 	t.Run("if previousOutcome is retired, returns outcome as normal", func(t *testing.T) {
 		previousOutcome := Outcome{

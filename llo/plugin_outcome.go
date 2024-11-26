@@ -216,6 +216,7 @@ func (p *Plugin) outcome(outctx ocr3types.OutcomeContext, query types.Query, aos
 		for _, strm := range cd.Streams {
 			sid, agg := strm.StreamID, strm.Aggregator
 			if _, exists := outcome.StreamAggregates[sid][agg]; exists {
+				p.Logger.Warnw("Invariant violation: unexpected duplicate stream/aggregator pair", "channelID", cid, "streamID", sid, "aggregator", agg, "stage", "Outcome", "seqNr", outctx.SeqNr)
 				// Should only happen in the unexpected case of duplicate
 				// streams, no need to aggregate twice
 				continue
@@ -234,8 +235,8 @@ func (p *Plugin) outcome(outctx ocr3types.OutcomeContext, query types.Query, aos
 				if p.Config.VerboseLogging {
 					p.Logger.Warnw("Aggregation failed", "aggregator", agg, "channelID", cid, "f", p.F, "streamID", sid, "observations", streamObservations[sid], "stage", "Outcome", "seqNr", outctx.SeqNr, "err", err)
 				}
-				// FIXME: Is this a complete failure?
-				// MERC-3524
+				// Ignore stream that cannot be aggregated; this stream
+				// ID/value will be missing from the outcome
 				continue
 			}
 			m[agg] = result
