@@ -81,6 +81,7 @@ func (cdc JSONReportCodec) Encode(ctx context.Context, r Report, _ llotypes.Chan
 	return json.Marshal(e)
 }
 
+// Fuzz testing: MERC-6522
 func (cdc JSONReportCodec) Decode(b []byte) (r Report, err error) {
 	type decode struct {
 		ConfigDigest                string
@@ -127,7 +128,6 @@ func (cdc JSONReportCodec) Decode(b []byte) (r Report, err error) {
 	}, err
 }
 
-// TODO: Needs tests, MERC-3524
 func (cdc JSONReportCodec) Pack(digest types.ConfigDigest, seqNr uint64, report ocr2types.Report, sigs []types.AttributedOnchainSignature) ([]byte, error) {
 	type packed struct {
 		ConfigDigest types.ConfigDigest                 `json:"configDigest"`
@@ -138,13 +138,12 @@ func (cdc JSONReportCodec) Pack(digest types.ConfigDigest, seqNr uint64, report 
 	p := packed{
 		ConfigDigest: digest,
 		SeqNr:        seqNr,
-		Report:       json.RawMessage(report), // TODO: check if its valid JSON, MERC-3524
+		Report:       json.RawMessage(report),
 		Sigs:         sigs,
 	}
 	return json.Marshal(p)
 }
 
-// TODO: Needs tests, MERC-3524
 func (cdc JSONReportCodec) Unpack(b []byte) (digest types.ConfigDigest, seqNr uint64, report ocr2types.Report, sigs []types.AttributedOnchainSignature, err error) {
 	type packed struct {
 		ConfigDigest string                             `json:"configDigest"`
@@ -168,7 +167,6 @@ func (cdc JSONReportCodec) Unpack(b []byte) (digest types.ConfigDigest, seqNr ui
 	return cd, p.SeqNr, ocr2types.Report(p.Report), p.Sigs, nil
 }
 
-// TODO: Needs tests, MERC-3524
 func (cdc JSONReportCodec) UnpackDecode(b []byte) (digest types.ConfigDigest, seqNr uint64, report Report, sigs []types.AttributedOnchainSignature, err error) {
 	var encodedReport []byte
 	digest, seqNr, encodedReport, sigs, err = cdc.Unpack(b)

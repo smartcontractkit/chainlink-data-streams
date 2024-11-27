@@ -41,7 +41,7 @@ func (c protoObservationCodec) Encode(obs Observation) (types.Observation, error
 				// Ignore nil values
 				continue
 			} else if err != nil {
-				return nil, err
+				return nil, fmt.Errorf("failed to encode observation: %w", err)
 			}
 			streamValues[id] = &LLOStreamValue{
 				Type:  sv.Type(),
@@ -84,7 +84,7 @@ func channelDefinitionsToProtoObservation(in llotypes.ChannelDefinitions) (out m
 }
 
 // TODO: Guard against untrusted inputs!
-// MERC-3524
+// MERC-6522
 func (c protoObservationCodec) Decode(b types.Observation) (Observation, error) {
 	pbuf := &LLOObservationProto{}
 	err := proto.Unmarshal(b, pbuf)
@@ -95,6 +95,11 @@ func (c protoObservationCodec) Decode(b types.Observation) (Observation, error) 
 	if len(pbuf.RemoveChannelIDs) > 0 {
 		removeChannelIDs = make(map[llotypes.ChannelID]struct{}, len(pbuf.RemoveChannelIDs))
 		for _, id := range pbuf.RemoveChannelIDs {
+			if _, exists := removeChannelIDs[id]; exists {
+				// Byzantine behavior makes this observation invalid; a
+				// well-behaved node should never encode duplicates here
+				return Observation{}, fmt.Errorf("failed to decode observation; duplicate channel ID in RemoveChannelIDs: %d", id)
+			}
 			removeChannelIDs[id] = struct{}{}
 		}
 	}
@@ -103,11 +108,12 @@ func (c protoObservationCodec) Decode(b types.Observation) (Observation, error) 
 	if len(pbuf.StreamValues) > 0 {
 		streamValues = make(StreamValues, len(pbuf.StreamValues))
 		for id, enc := range pbuf.StreamValues {
-			// StreamValues shouldn't have explicit nils, but for safety we
-			// ought to handle it anyway
 			sv, err := UnmarshalProtoStreamValue(enc)
 			if err != nil {
-				return Observation{}, err
+				// Byzantine behavior makes this observation invalid; a
+				// well-behaved node should never encode invalid or nil values
+				// here
+				return Observation{}, fmt.Errorf("failed to decode observation; invalid stream value for stream ID: %d; %w", id, err)
 			}
 			streamValues[id] = sv
 		}
@@ -124,7 +130,7 @@ func (c protoObservationCodec) Decode(b types.Observation) (Observation, error) 
 }
 
 // TODO: Needs fuzz testing
-// MERC-3524
+// MERC-6522
 func channelDefinitionsFromProtoObservation(channelDefinitions map[uint32]*LLOChannelDefinitionProto) llotypes.ChannelDefinitions {
 	if len(channelDefinitions) == 0 {
 		return nil
@@ -209,7 +215,7 @@ func channelDefinitionsToProtoOutcome(in llotypes.ChannelDefinitions) (out []*LL
 }
 
 // TODO: Needs thorough unit testing of all paths including nil handling
-// MERC-3524
+// MERC-6522
 func StreamAggregatesToProtoOutcome(in StreamAggregates) (out []*LLOStreamAggregate, err error) {
 	if len(in) > 0 {
 		out = make([]*LLOStreamAggregate, 0, len(in))
@@ -260,7 +266,7 @@ func validAfterSecondsToProtoOutcome(in map[llotypes.ChannelID]uint32) (out []*L
 }
 
 // TODO: Guard against untrusted inputs!
-// MERC-3524
+// MERC-6522
 func (protoOutcomeCodec) Decode(b ocr3types.Outcome) (outcome Outcome, err error) {
 	pbuf := &LLOOutcomeProto{}
 	err = proto.Unmarshal(b, pbuf)
@@ -284,7 +290,7 @@ func (protoOutcomeCodec) Decode(b ocr3types.Outcome) (outcome Outcome, err error
 }
 
 // TODO: Needs fuzz testing
-// MERC-3524
+// MERC-6522
 func channelDefinitionsFromProtoOutcome(in []*LLOChannelIDAndDefinitionProto) (out llotypes.ChannelDefinitions) {
 	if len(in) > 0 {
 		out = make(map[llotypes.ChannelID]llotypes.ChannelDefinition, len(in))
@@ -307,7 +313,7 @@ func channelDefinitionsFromProtoOutcome(in []*LLOChannelIDAndDefinitionProto) (o
 }
 
 // TODO: Needs fuzz testing
-// MERC-3524
+// MERC-6522
 func streamAggregatesFromProtoOutcome(in []*LLOStreamAggregate) (out StreamAggregates, err error) {
 	if len(in) > 0 {
 		out = make(StreamAggregates, len(in))
@@ -329,7 +335,7 @@ func streamAggregatesFromProtoOutcome(in []*LLOStreamAggregate) (out StreamAggre
 }
 
 // TODO: Needs fuzz testing
-// MERC-3524
+// MERC-6522
 func validAfterSecondsFromProtoOutcome(in []*LLOChannelIDAndValidAfterSecondsProto) (out map[llotypes.ChannelID]uint32) {
 	if len(in) > 0 {
 		out = make(map[llotypes.ChannelID]uint32, len(in))

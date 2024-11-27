@@ -6,6 +6,7 @@ import (
 	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/proto"
 
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
 )
@@ -56,6 +57,53 @@ func Test_protoObservationCodec(t *testing.T) {
 		delete(expectedObs.StreamValues, 7) // nils will be dropped
 
 		assert.Equal(t, expectedObs, obs2)
+	})
+	t.Run("decoding with invalid data", func(t *testing.T) {
+		t.Run("not a protobuf", func(t *testing.T) {
+			_, err := (protoObservationCodec{}).Decode([]byte("not a protobuf"))
+			require.Error(t, err)
+
+			assert.Contains(t, err.Error(), "cannot parse invalid wire-format data")
+		})
+		t.Run("duplicate RemoveChannelIDs", func(t *testing.T) {
+			pbuf := &LLOObservationProto{
+				RemoveChannelIDs: []uint32{1, 1},
+			}
+
+			obsBytes, err := proto.Marshal(pbuf)
+			require.NoError(t, err)
+
+			_, err = (protoObservationCodec{}).Decode(obsBytes)
+			require.EqualError(t, err, "failed to decode observation; duplicate channel ID in RemoveChannelIDs: 1")
+		})
+		t.Run("invalid LLOStreamValue", func(t *testing.T) {
+			t.Run("nil/missing value", func(t *testing.T) {
+				pbuf := &LLOObservationProto{
+					StreamValues: map[uint32]*LLOStreamValue{
+						1: &LLOStreamValue{Type: LLOStreamValue_Decimal, Value: nil},
+					},
+				}
+
+				obsBytes, err := proto.Marshal(pbuf)
+				require.NoError(t, err)
+
+				_, err = (protoObservationCodec{}).Decode(obsBytes)
+				require.EqualError(t, err, "failed to decode observation; invalid stream value for stream ID: 1; error decoding binary []: expected at least 4 bytes, got 0")
+			})
+			t.Run("unsupported type", func(t *testing.T) {
+				pbuf := &LLOObservationProto{
+					StreamValues: map[uint32]*LLOStreamValue{
+						1: &LLOStreamValue{Type: 1000001, Value: []byte("foo")},
+					},
+				}
+
+				obsBytes, err := proto.Marshal(pbuf)
+				require.NoError(t, err)
+
+				_, err = (protoObservationCodec{}).Decode(obsBytes)
+				require.EqualError(t, err, "failed to decode observation; invalid stream value for stream ID: 1; cannot unmarshal protobuf stream value; unknown StreamValueType 1000001")
+			})
+		})
 	})
 }
 
