@@ -6,6 +6,7 @@ toolchain go1.22.5
 
 require (
 	github.com/hashicorp/go-plugin v1.6.2-0.20240829161738-06afb6d7ae99
+	github.com/leanovate/gopter v0.2.10-0.20210127095200-9abe2343507a
 	github.com/shopspring/decimal v1.4.0
 	github.com/smartcontractkit/chainlink-common v0.3.1-0.20241106142051-c7bded1c08ae
 	github.com/smartcontractkit/libocr v0.0.0-20241007185508-adbe57025f12

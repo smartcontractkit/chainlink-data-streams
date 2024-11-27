@@ -45,7 +45,7 @@ func UnmarshalJSONStreamValue(enc *JSONStreamValue) (StreamValue, error) {
 
 type JSONReportCodec struct{}
 
-func (cdc JSONReportCodec) Encode(ctx context.Context, r Report, _ llotypes.ChannelDefinition) ([]byte, error) {
+func (cdc JSONReportCodec) Encode(_ context.Context, r Report, _ llotypes.ChannelDefinition) ([]byte, error) {
 	type encode struct {
 		ConfigDigest                types.ConfigDigest
 		SeqNr                       uint64
@@ -81,7 +81,6 @@ func (cdc JSONReportCodec) Encode(ctx context.Context, r Report, _ llotypes.Chan
 	return json.Marshal(e)
 }
 
-// Fuzz testing: MERC-6522
 func (cdc JSONReportCodec) Decode(b []byte) (r Report, err error) {
 	type decode struct {
 		ConfigDigest                string
@@ -97,6 +96,11 @@ func (cdc JSONReportCodec) Decode(b []byte) (r Report, err error) {
 	if err != nil {
 		return r, fmt.Errorf("failed to decode report: expected JSON (got: %s); %w", b, err)
 	}
+	if d.SeqNr == 0 {
+		// catch obviously bad inputs, since a valid report can never have SeqNr == 0
+		return r, fmt.Errorf("missing SeqNr")
+	}
+
 	cdBytes, err := hex.DecodeString(d.ConfigDigest)
 	if err != nil {
 		return r, fmt.Errorf("invalid ConfigDigest; %w", err)
@@ -111,10 +115,6 @@ func (cdc JSONReportCodec) Decode(b []byte) (r Report, err error) {
 		if err != nil {
 			return r, fmt.Errorf("failed to decode StreamValue: %w", err)
 		}
-	}
-	if d.SeqNr == 0 {
-		// catch obviously bad inputs, since a valid report can never have SeqNr == 0
-		return r, fmt.Errorf("missing SeqNr")
 	}
 
 	return Report{
