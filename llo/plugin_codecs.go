@@ -83,7 +83,6 @@ func channelDefinitionsToProtoObservation(in llotypes.ChannelDefinitions) (out m
 	return
 }
 
-// MERC-6522
 func (c protoObservationCodec) Decode(b types.Observation) (Observation, error) {
 	pbuf := &LLOObservationProto{}
 	err := proto.Unmarshal(b, pbuf)
@@ -260,7 +259,6 @@ func validAfterSecondsToProtoOutcome(in map[llotypes.ChannelID]uint32) (out []*L
 	return
 }
 
-// MERC-6522
 func (protoOutcomeCodec) Decode(b ocr3types.Outcome) (outcome Outcome, err error) {
 	pbuf := &LLOOutcomeProto{}
 	err = proto.Unmarshal(b, pbuf)
