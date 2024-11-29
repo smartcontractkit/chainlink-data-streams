@@ -17,7 +17,7 @@ import (
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
 )
 
-func Fuzz_protoObservationCodec_Decode(f *testing.F) {
+func FuzzprotoObservationCodec_Decode(f *testing.F) {
 	f.Add([]byte("not a protobuf"))
 	f.Add([]byte{0x0a, 0x00})             // empty protobuf
 	f.Add([]byte{0x0a, 0x02, 0x08, 0x01}) // invalid protobuf
@@ -70,7 +70,7 @@ func Fuzz_protoObservationCodec_Decode(f *testing.F) {
 	})
 }
 
-func Fuzz_protoOutcomeCodec_Decode(f *testing.F) {
+func FuzzprotoOutcomeCodec_Decode(f *testing.F) {
 	f.Add([]byte("not a protobuf"))
 	f.Add([]byte{0x0a, 0x00})             // empty protobuf
 	f.Add([]byte{0x0a, 0x02, 0x08, 0x01}) // invalid protobuf

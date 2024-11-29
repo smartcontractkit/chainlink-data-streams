@@ -25,7 +25,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func Fuzz_JSONCodec_Decode_Unpack(f *testing.F) {
+func FuzzJSONCodec_Decode_Unpack(f *testing.F) {
 	validJson := []byte(`{"foo":"bar"}`)
 	emptyInput := []byte(``)
 	nilInput := []byte(nil)
@@ -190,10 +190,12 @@ func equalStreamValues(sv, sv2 StreamValue) bool {
 	}
 	m1, err := sv.MarshalBinary()
 	if err != nil {
+		// should be impossible
 		panic(err)
 	}
 	m2, err := sv2.MarshalBinary()
 	if err != nil {
+		// should be impossible
 		panic(err)
 	}
 	return bytes.Equal(m1, m2)

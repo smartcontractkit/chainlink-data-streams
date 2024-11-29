@@ -13,7 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func Fuzz_EVMOnchainConfigCodec_Decode(f *testing.F) {
+func FuzzEVMOnchainConfigCodec_Decode(f *testing.F) {
 	c := EVMOnchainConfigCodec{}
 
 	f.Add([]byte{})
