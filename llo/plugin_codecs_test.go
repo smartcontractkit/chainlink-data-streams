@@ -17,7 +17,7 @@ import (
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
 )
 
-func FuzzprotoObservationCodec_Decode(f *testing.F) {
+func Fuzz_protoObservationCodec_Decode(f *testing.F) {
 	f.Add([]byte("not a protobuf"))
 	f.Add([]byte{0x0a, 0x00})             // empty protobuf
 	f.Add([]byte{0x0a, 0x02, 0x08, 0x01}) // invalid protobuf
@@ -66,11 +66,11 @@ func FuzzprotoObservationCodec_Decode(f *testing.F) {
 	var codec ObservationCodec = protoObservationCodec{}
 	f.Fuzz(func(t *testing.T, data []byte) {
 		// test that it doesn't panic, don't care about errors
-		codec.Decode(data)
+		codec.Decode(data) //nolint:errcheck
 	})
 }
 
-func FuzzprotoOutcomeCodec_Decode(f *testing.F) {
+func Fuzz_protoOutcomeCodec_Decode(f *testing.F) {
 	f.Add([]byte("not a protobuf"))
 	f.Add([]byte{0x0a, 0x00})             // empty protobuf
 	f.Add([]byte{0x0a, 0x02, 0x08, 0x01}) // invalid protobuf
@@ -130,7 +130,7 @@ func FuzzprotoOutcomeCodec_Decode(f *testing.F) {
 
 	f.Fuzz(func(t *testing.T, data []byte) {
 		// test that it doesn't panic, don't care about errors
-		codec.Decode(data)
+		codec.Decode(data) //nolint:errcheck
 	})
 }
 
@@ -213,7 +213,7 @@ func genStreamAggregates() gopter.Gen {
 			for k2, v2 := range v {
 				m3[llotypes.Aggregator(k2)] = v2
 			}
-			m2[llotypes.StreamID(k)] = m3
+			m2[k] = m3
 		}
 		return m2
 	})

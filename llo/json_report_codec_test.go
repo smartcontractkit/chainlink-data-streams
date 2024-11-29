@@ -4,10 +4,8 @@ import (
 	"bytes"
 	"fmt"
 	"math"
-	"math/rand"
 	reflect "reflect"
 	"testing"
-	"time"
 
 	"github.com/leanovate/gopter"
 	"github.com/leanovate/gopter/gen"
@@ -26,69 +24,66 @@ import (
 )
 
 func FuzzJSONCodec_Decode_Unpack(f *testing.F) {
-	validJson := []byte(`{"foo":"bar"}`)
+	validJSON := []byte(`{"foo":"bar"}`)
 	emptyInput := []byte(``)
 	nilInput := []byte(nil)
-	nullJson := []byte(`null`)
-	incompleteJson := []byte(`{`)
-	notJson := []byte(`"random string"`)
+	nullJSON := []byte(`null`)
+	incompleteJSON := []byte(`{`)
+	notJSON := []byte(`"random string"`)
 	unprintable := []byte{1, 2, 3}
-	validJsonReport := []byte(`{"ConfigDigest":"0102030000000000000000000000000000000000000000000000000000000000","SeqNr":43,"ChannelID":46,"ValidAfterSeconds":44,"ObservationTimestampSeconds":45,"Values":[{"Type":0,"Value":"1"},{"Type":0,"Value":"2"},{"Type":1,"Value":"Q{Bid: 3.13, Benchmark: 4.4, Ask: 5.12}"}],"Specimen":true}`)
+	validJSONReport := []byte(`{"ConfigDigest":"0102030000000000000000000000000000000000000000000000000000000000","SeqNr":43,"ChannelID":46,"ValidAfterSeconds":44,"ObservationTimestampSeconds":45,"Values":[{"Type":0,"Value":"1"},{"Type":0,"Value":"2"},{"Type":1,"Value":"Q{Bid: 3.13, Benchmark: 4.4, Ask: 5.12}"}],"Specimen":true}`)
 	invalidConfigDigest := []byte(`{"SeqNr":42,"ConfigDigest":"foo"}`)
 	invalidConfigDigestNotEnoughBytes := []byte(`{"SeqNr":42,"ConfigDigest":"0xdead"}`)
 	badStreamValues := []byte(`{"SeqNr":42,"ConfigDigest":"0102030000000000000000000000000000000000000000000000000000000000", "Values":[{"Type":0,"Value":null},{"Type":-1,"Value":"2"}]}`)
 
-	f.Add(validJson)
+	f.Add(validJSON)
 	f.Add(emptyInput)
 	f.Add(nilInput)
-	f.Add(nullJson)
-	f.Add(incompleteJson)
-	f.Add(notJson)
+	f.Add(nullJSON)
+	f.Add(incompleteJSON)
+	f.Add(notJSON)
 	f.Add(unprintable)
-	f.Add(validJsonReport)
+	f.Add(validJSONReport)
 	f.Add(invalidConfigDigest)
 	f.Add(invalidConfigDigestNotEnoughBytes)
 	f.Add(badStreamValues)
 
-	validPackedJsonTemplate := `{"configDigest":"0102030000000000000000000000000000000000000000000000000000000000","seqNr":43,"report":%s,"sigs":[{"Signature":"AgME","Signer":2}]}`
-	packedJsonReports := [][]byte{
-		[]byte(fmt.Sprintf(validPackedJsonTemplate, validJson)),
-		[]byte(fmt.Sprintf(validPackedJsonTemplate, emptyInput)),
-		[]byte(fmt.Sprintf(validPackedJsonTemplate, nilInput)),
-		[]byte(fmt.Sprintf(validPackedJsonTemplate, nullJson)),
-		[]byte(fmt.Sprintf(validPackedJsonTemplate, incompleteJson)),
-		[]byte(fmt.Sprintf(validPackedJsonTemplate, notJson)),
-		[]byte(fmt.Sprintf(validPackedJsonTemplate, unprintable)),
-		[]byte(fmt.Sprintf(validPackedJsonTemplate, validJsonReport)),
-		[]byte(fmt.Sprintf(validPackedJsonTemplate, invalidConfigDigest)),
-		[]byte(fmt.Sprintf(validPackedJsonTemplate, invalidConfigDigestNotEnoughBytes)),
-		[]byte(fmt.Sprintf(validPackedJsonTemplate, badStreamValues)),
+	validPackedJSONTemplate := `{"configDigest":"0102030000000000000000000000000000000000000000000000000000000000","seqNr":43,"report":%s,"sigs":[{"Signature":"AgME","Signer":2}]}`
+	packedJSONReports := [][]byte{
+		[]byte(fmt.Sprintf(validPackedJSONTemplate, validJSON)),
+		[]byte(fmt.Sprintf(validPackedJSONTemplate, emptyInput)),
+		[]byte(fmt.Sprintf(validPackedJSONTemplate, nilInput)),
+		[]byte(fmt.Sprintf(validPackedJSONTemplate, nullJSON)),
+		[]byte(fmt.Sprintf(validPackedJSONTemplate, incompleteJSON)),
+		[]byte(fmt.Sprintf(validPackedJSONTemplate, notJSON)),
+		[]byte(fmt.Sprintf(validPackedJSONTemplate, unprintable)),
+		[]byte(fmt.Sprintf(validPackedJSONTemplate, validJSONReport)),
+		[]byte(fmt.Sprintf(validPackedJSONTemplate, invalidConfigDigest)),
+		[]byte(fmt.Sprintf(validPackedJSONTemplate, invalidConfigDigestNotEnoughBytes)),
+		[]byte(fmt.Sprintf(validPackedJSONTemplate, badStreamValues)),
 	}
-	for _, packedJsonReport := range packedJsonReports {
-		f.Add(packedJsonReport)
+	for _, packedJSONReport := range packedJSONReports {
+		f.Add(packedJSONReport)
 	}
 
-	packedJsonSigTemplate := `{"configDigest":"0102030000000000000000000000000000000000000000000000000000000000","seqNr":43,"report":{},"sigs":[{"Signature":%s,"Signer":2}]}`
+	packedJSONSigTemplate := `{"configDigest":"0102030000000000000000000000000000000000000000000000000000000000","seqNr":43,"report":{},"sigs":[{"Signature":%s,"Signer":2}]}`
 	badSigs := [][]byte{
-		[]byte(fmt.Sprintf(packedJsonSigTemplate, `null`)),
-		[]byte(fmt.Sprintf(packedJsonSigTemplate, `""`)),
-		[]byte(fmt.Sprintf(packedJsonSigTemplate, `1`)),
-		[]byte(fmt.Sprintf(packedJsonSigTemplate, `[]`)),
-		[]byte(fmt.Sprintf(packedJsonSigTemplate, `"abc$def#ghi!"`)),
+		[]byte(fmt.Sprintf(packedJSONSigTemplate, `null`)),
+		[]byte(fmt.Sprintf(packedJSONSigTemplate, `""`)),
+		[]byte(fmt.Sprintf(packedJSONSigTemplate, `1`)),
+		[]byte(fmt.Sprintf(packedJSONSigTemplate, `[]`)),
+		[]byte(fmt.Sprintf(packedJSONSigTemplate, `"abc$def#ghi!"`)),
 	}
 	for _, badSig := range badSigs {
 		f.Add(badSig)
 	}
 
-	// Set up the random number generator
-	rand.Seed(time.Now().UnixNano())
-
 	var codec JSONReportCodec
 	f.Fuzz(func(t *testing.T, data []byte) {
 		// test that it doesn't panic, don't care about errors
-		codec.Decode(data)
-		codec.Unpack(data)
-		codec.UnpackDecode(data)
+		codec.Decode(data)       //nolint:errcheck
+		codec.Unpack(data)       //nolint:errcheck
+		codec.UnpackDecode(data) //nolint:errcheck
 	})
 }
 
@@ -106,7 +101,6 @@ func Test_JSONCodec_Properties(t *testing.T) {
 			r2, err := codec.Decode(b)
 			require.NoError(t, err)
 			return equalReports(r, r2)
-
 		},
 		gen.StrictStruct(reflect.TypeOf(&Report{}), map[string]gopter.Gen{
 			"ConfigDigest":                genConfigDigest(),
@@ -178,10 +172,7 @@ func equalReports(r, r2 Report) bool {
 			return false
 		}
 	}
-	if r.Specimen != r2.Specimen {
-		return false
-	}
-	return true
+	return r.Specimen == r2.Specimen
 }
 
 func equalStreamValues(sv, sv2 StreamValue) bool {
@@ -240,16 +231,14 @@ func genSigBytes() gopter.Gen {
 
 func genDecimalValue() gopter.Gen {
 	return func(p *gopter.GenParameters) *gopter.GenResult {
-		var sv StreamValue
-		sv = ToDecimal(decimal.NewFromFloat(p.Rng.Float64()))
+		var sv StreamValue = ToDecimal(decimal.NewFromFloat(p.Rng.Float64()))
 		return gopter.NewGenResult(sv, gopter.NoShrinker)
 	}
 }
 
 func genQuote() gopter.Gen {
 	return func(p *gopter.GenParameters) *gopter.GenResult {
-		var sv StreamValue
-		sv = &Quote{
+		var sv StreamValue = &Quote{
 			Bid:       decimal.NewFromFloat(p.Rng.Float64()),
 			Benchmark: decimal.NewFromFloat(p.Rng.Float64()),
 			Ask:       decimal.NewFromFloat(p.Rng.Float64()),
