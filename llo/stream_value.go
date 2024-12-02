@@ -31,6 +31,10 @@ var (
 )
 
 func UnmarshalProtoStreamValue(enc *LLOStreamValue) (sv StreamValue, err error) {
+	if enc == nil {
+		// Shouldn't ever happen except from byzantine node, but we must not panic
+		return nil, ErrNilStreamValue
+	}
 	switch enc.Type {
 	case LLOStreamValue_Quote:
 		sv = new(Quote)

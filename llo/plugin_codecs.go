@@ -83,8 +83,6 @@ func channelDefinitionsToProtoObservation(in llotypes.ChannelDefinitions) (out m
 	return
 }
 
-// TODO: Guard against untrusted inputs!
-// MERC-6522
 func (c protoObservationCodec) Decode(b types.Observation) (Observation, error) {
 	pbuf := &LLOObservationProto{}
 	err := proto.Unmarshal(b, pbuf)
@@ -129,8 +127,6 @@ func (c protoObservationCodec) Decode(b types.Observation) (Observation, error) 
 	return obs, nil
 }
 
-// TODO: Needs fuzz testing
-// MERC-6522
 func channelDefinitionsFromProtoObservation(channelDefinitions map[uint32]*LLOChannelDefinitionProto) llotypes.ChannelDefinitions {
 	if len(channelDefinitions) == 0 {
 		return nil
@@ -214,8 +210,6 @@ func channelDefinitionsToProtoOutcome(in llotypes.ChannelDefinitions) (out []*LL
 	return
 }
 
-// TODO: Needs thorough unit testing of all paths including nil handling
-// MERC-6522
 func StreamAggregatesToProtoOutcome(in StreamAggregates) (out []*LLOStreamAggregate, err error) {
 	if len(in) > 0 {
 		out = make([]*LLOStreamAggregate, 0, len(in))
@@ -265,15 +259,16 @@ func validAfterSecondsToProtoOutcome(in map[llotypes.ChannelID]uint32) (out []*L
 	return
 }
 
-// TODO: Guard against untrusted inputs!
-// MERC-6522
 func (protoOutcomeCodec) Decode(b ocr3types.Outcome) (outcome Outcome, err error) {
 	pbuf := &LLOOutcomeProto{}
 	err = proto.Unmarshal(b, pbuf)
 	if err != nil {
 		return Outcome{}, fmt.Errorf("failed to decode outcome: expected protobuf (got: 0x%x); %w", b, err)
 	}
-	dfns := channelDefinitionsFromProtoOutcome(pbuf.ChannelDefinitions)
+	dfns, err := channelDefinitionsFromProtoOutcome(pbuf.ChannelDefinitions)
+	if err != nil {
+		return Outcome{}, err
+	}
 	streamAggregates, err := streamAggregatesFromProtoOutcome(pbuf.StreamAggregates)
 	if err != nil {
 		return Outcome{}, err
@@ -289,12 +284,15 @@ func (protoOutcomeCodec) Decode(b ocr3types.Outcome) (outcome Outcome, err error
 	return outcome, nil
 }
 
-// TODO: Needs fuzz testing
-// MERC-6522
-func channelDefinitionsFromProtoOutcome(in []*LLOChannelIDAndDefinitionProto) (out llotypes.ChannelDefinitions) {
+func channelDefinitionsFromProtoOutcome(in []*LLOChannelIDAndDefinitionProto) (out llotypes.ChannelDefinitions, err error) {
 	if len(in) > 0 {
 		out = make(map[llotypes.ChannelID]llotypes.ChannelDefinition, len(in))
 		for _, d := range in {
+			if d.ChannelDefinition == nil {
+				// Byzantine behavior makes this outcome invalid; a well-behaved
+				// node should never encode nil definitions here
+				return out, errors.New("failed to decode outcome; nil channel definition")
+			}
 			streams := make([]llotypes.Stream, len(d.ChannelDefinition.Streams))
 			for i, strm := range d.ChannelDefinition.Streams {
 				streams[i] = llotypes.Stream{
@@ -309,11 +307,9 @@ func channelDefinitionsFromProtoOutcome(in []*LLOChannelIDAndDefinitionProto) (o
 			}
 		}
 	}
-	return
+	return out, nil
 }
 
-// TODO: Needs fuzz testing
-// MERC-6522
 func streamAggregatesFromProtoOutcome(in []*LLOStreamAggregate) (out StreamAggregates, err error) {
 	if len(in) > 0 {
 		out = make(StreamAggregates, len(in))
@@ -334,8 +330,6 @@ func streamAggregatesFromProtoOutcome(in []*LLOStreamAggregate) (out StreamAggre
 	return
 }
 
-// TODO: Needs fuzz testing
-// MERC-6522
 func validAfterSecondsFromProtoOutcome(in []*LLOChannelIDAndValidAfterSecondsProto) (out map[llotypes.ChannelID]uint32) {
 	if len(in) > 0 {
 		out = make(map[llotypes.ChannelID]uint32, len(in))

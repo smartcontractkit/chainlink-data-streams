@@ -35,7 +35,6 @@ var _ OnchainConfigCodec = EVMOnchainConfigCodec{}
 // returned by EncodeValueInt192.
 type EVMOnchainConfigCodec struct{}
 
-// TODO: Needs fuzz testing - MERC-6522
 func (EVMOnchainConfigCodec) Decode(b []byte) (OnchainConfig, error) {
 	if len(b) != onchainConfigEncodedLength {
 		return OnchainConfig{}, fmt.Errorf("unexpected length of OnchainConfig, expected %v, got %v", onchainConfigEncodedLength, len(b))
@@ -60,7 +59,6 @@ func (EVMOnchainConfigCodec) Decode(b []byte) (OnchainConfig, error) {
 	return o, nil
 }
 
-// TODO: Needs fuzz testing - MERC-6522
 func (EVMOnchainConfigCodec) Encode(c OnchainConfig) ([]byte, error) {
 	if c.Version != onchainConfigVersion {
 		return nil, fmt.Errorf("unexpected version of OnchainConfig, expected %v, got %v", onchainConfigVersion, c.Version)
