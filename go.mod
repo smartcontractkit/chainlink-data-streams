@@ -5,10 +5,10 @@ go 1.22.0
 toolchain go1.22.5
 
 require (
-	github.com/hashicorp/go-plugin v1.6.2-0.20240829161738-06afb6d7ae99
+	github.com/hashicorp/go-plugin v1.6.2
 	github.com/leanovate/gopter v0.2.11
 	github.com/shopspring/decimal v1.4.0
-	github.com/smartcontractkit/chainlink-common v0.3.1-0.20241106142051-c7bded1c08ae
+	github.com/smartcontractkit/chainlink-common v0.3.1-0.20241210195010-36d99fa35f9f
 	github.com/smartcontractkit/libocr v0.0.0-20241007185508-adbe57025f12
 	github.com/stretchr/testify v1.9.0
 	golang.org/x/exp v0.0.0-20240909161429-701f63a606c0
