@@ -216,9 +216,11 @@ func (p *Plugin) outcome(outctx ocr3types.OutcomeContext, query types.Query, aos
 		for _, strm := range cd.Streams {
 			sid, agg := strm.StreamID, strm.Aggregator
 			if _, exists := outcome.StreamAggregates[sid][agg]; exists {
-				p.Logger.Warnw("Invariant violation: unexpected duplicate stream/aggregator pair", "channelID", cid, "streamID", sid, "aggregator", agg, "stage", "Outcome", "seqNr", outctx.SeqNr)
-				// Should only happen in the unexpected case of duplicate
-				// streams, no need to aggregate twice
+				// Should only happen in the case of duplicate
+				// streams, no need to aggregate twice.
+				//
+				// This isn't an error, its possible for report formats to
+				// specify the same stream multiple times if they wish.
 				continue
 			}
 			aggF := GetAggregatorFunc(agg)
