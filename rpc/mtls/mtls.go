@@ -20,8 +20,6 @@ func (p StaticSizedPublicKey) String() string {
 	return fmt.Sprintf("%x", p[:])
 }
 
-// privKey ed25519.PrivateKey, pubKeys []ed25519.PublicKey
-
 // NewTransportCredentials creates a gRPC TransportCredentials from a PrivateKey and PublicKeys set.
 func NewTransportCredentials(privKey ed25519.PrivateKey, pubKeys []ed25519.PublicKey) (credentials.TransportCredentials, error) {
 	priv, err := ValidPrivateKeyFromEd25519(privKey)
