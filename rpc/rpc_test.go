@@ -1,17 +1,19 @@
 package rpc
 
 import (
-	context "context"
+	"context"
 	"crypto/ed25519"
+	"errors"
 	"net"
 	"testing"
 	"time"
 
-	"github.com/smartcontractkit/chainlink-data-streams/rpc/mtls"
 	"github.com/stretchr/testify/assert"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/backoff"
 	"google.golang.org/grpc/keepalive"
+
+	"github.com/smartcontractkit/chainlink-data-streams/rpc/mtls"
 )
 
 func TestClient(t *testing.T) {
@@ -28,10 +30,8 @@ func TestClient(t *testing.T) {
 	conn, err := net.Listen("tcp", "127.0.0.1:8080")
 	assert.NoError(t, err)
 	go func() {
-		err := s.Serve(conn)
-		if err != grpc.ErrServerStopped {
-			assert.NoError(t, err)
-		}
+		sErr := s.Serve(conn)
+		assert.True(t, errors.Is(sErr, grpc.ErrServerStopped))
 	}()
 
 	cMtls, err := mtls.NewTransportCredentials(cpriv, []ed25519.PublicKey{spub})
