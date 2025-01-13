@@ -60,12 +60,115 @@ func Test_MedianAggregator(t *testing.T) {
 		assert.EqualError(t, err, "not enough observations to calculate median, expected at least f+1, got 0")
 	})
 }
+
 func Test_ModeAggregator(t *testing.T) {
-	t.Run("not implemented, returns error", func(t *testing.T) {
-		_, err := ModeAggregator(nil, 1)
-		assert.EqualError(t, err, "not implemented")
-	})
+	tcs := []struct {
+		name   string
+		values []StreamValue
+		f      int
+		output StreamValue
+		errStr string
+	}{
+		{
+			name: "returns mode value with 3f+1 values in agreement",
+			values: []StreamValue{
+				ToDecimal(decimal.NewFromFloat(1.1)),
+				ToDecimal(decimal.NewFromFloat(1.1)),
+				ToDecimal(decimal.NewFromFloat(1.1)),
+				ToDecimal(decimal.NewFromFloat(1.1)),
+			},
+			f:      1,
+			output: ToDecimal(decimal.NewFromFloat(1.1)),
+		},
+		{
+			name: "returns mode value with 3f values in agreement",
+			values: []StreamValue{
+				ToDecimal(decimal.NewFromFloat(1.1)),
+				ToDecimal(decimal.NewFromFloat(1.1)),
+				ToDecimal(decimal.NewFromFloat(1.1)),
+				ToDecimal(decimal.NewFromFloat(2.2)),
+			},
+			f:      1,
+			output: ToDecimal(decimal.NewFromFloat(1.1)),
+		},
+		{
+			name: "returns mode value using tie-breaker with split agreement",
+			values: []StreamValue{
+				ToDecimal(decimal.NewFromFloat(1.1)),
+				ToDecimal(decimal.NewFromFloat(1.1)),
+				ToDecimal(decimal.NewFromFloat(2.2)),
+				ToDecimal(decimal.NewFromFloat(2.2)),
+			},
+			f:      1,
+			output: ToDecimal(decimal.NewFromFloat(1.1)),
+		},
+		{
+			name:   "returns error if not enough observations",
+			values: []StreamValue{},
+			f:      1,
+			errStr: "not enough observations in agreement to calculate mode, expected at least f+1, most common value had 0",
+		},
+		{
+			name: "returns error if less than f in agreement",
+			values: []StreamValue{
+				ToDecimal(decimal.NewFromFloat(1.1)),
+				ToDecimal(decimal.NewFromFloat(1.2)),
+				ToDecimal(decimal.NewFromFloat(2.2)),
+				ToDecimal(decimal.NewFromFloat(3.2)),
+			},
+			f:      1,
+			errStr: "not enough observations in agreement to calculate mode, expected at least f+1, most common value had 1",
+		},
+		{
+			name: "handles mixed types, tie-breaking on first type",
+			values: []StreamValue{
+				ToDecimal(decimal.NewFromFloat(1.1)),
+				ToDecimal(decimal.NewFromFloat(1.1)),
+				&Quote{Benchmark: decimal.NewFromFloat(1.2)},
+				&Quote{Benchmark: decimal.NewFromFloat(1.2)},
+			},
+			f:      1,
+			output: ToDecimal(decimal.NewFromFloat(1.1)),
+		},
+		{
+			name: "handles mixed types where Quote is most common",
+			values: []StreamValue{
+				ToDecimal(decimal.NewFromFloat(1.1)),
+				&Quote{Bid: decimal.NewFromFloat(1.2), Benchmark: decimal.NewFromFloat(2.2), Ask: decimal.NewFromFloat(3.2)},
+				&Quote{Bid: decimal.NewFromFloat(1.2), Benchmark: decimal.NewFromFloat(2.2), Ask: decimal.NewFromFloat(3.2)},
+				&Quote{Bid: decimal.NewFromFloat(1.2), Benchmark: decimal.NewFromFloat(2.2), Ask: decimal.NewFromFloat(3.2)},
+			},
+			f:      1,
+			output: &Quote{Bid: decimal.NewFromFloat(1.2), Benchmark: decimal.NewFromFloat(2.2), Ask: decimal.NewFromFloat(3.2)},
+		},
+		{
+			name: "nils are not counted",
+			values: []StreamValue{
+				ToDecimal(decimal.NewFromFloat(1.1)),
+				ToDecimal(decimal.NewFromFloat(1.1)),
+				ToDecimal(decimal.NewFromFloat(1.1)),
+				nil,
+				nil,
+				nil,
+				nil,
+			},
+			f:      2,
+			output: ToDecimal(decimal.NewFromFloat(1.1)),
+		},
+	}
+	for _, tc := range tcs {
+		t.Run(tc.name, func(t *testing.T) {
+			sv, err := ModeAggregator(tc.values, tc.f)
+			if tc.errStr == "" {
+				require.NoError(t, err)
+				assert.Equal(t, tc.output, sv)
+			} else {
+				assert.EqualError(t, err, tc.errStr)
+			}
+		})
+	}
 }
+
 func Test_QuoteAggregator(t *testing.T) {
 	t.Run("returns median values for bid, benchmark and ask", func(t *testing.T) {
 		values := []StreamValue{

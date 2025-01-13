@@ -1,7 +1,6 @@
 package llo
 
 import (
-	"errors"
 	"fmt"
 	"sort"
 
@@ -53,8 +52,65 @@ func MedianAggregator(values []StreamValue, f int) (StreamValue, error) {
 	return ToDecimal(observations[len(observations)/2]), nil
 }
 
+// ModeAggregator works on arbitrary StreamValue types
+// It picks the most common value
+// There must be at least f+1 observations in agreement in order to produce a value
+// nil observations are ignored
 func ModeAggregator(values []StreamValue, f int) (StreamValue, error) {
-	return nil, errors.New("not implemented")
+	// remove nils
+	var observations []StreamValue
+	for _, value := range values {
+		if value != nil {
+			observations = append(observations, value)
+		}
+	}
+
+	// bucket by type
+	buckets := make(map[LLOStreamValue_Type][]StreamValue)
+	for _, value := range observations {
+		buckets[value.Type()] = append(buckets[value.Type()], value)
+	}
+	// find the largest bucket
+	// tie-break on type alphabetical order
+	var largestBucket []StreamValue
+	var largestBucketType LLOStreamValue_Type
+	for bucketType, bucket := range buckets {
+		if len(bucket) > len(largestBucket) || (len(bucket) == len(largestBucket) && bucketType < largestBucketType) {
+			largestBucket = bucket
+			largestBucketType = bucketType
+		}
+	}
+
+	// find the most common value in the bucket
+	// use serialized representation for comparison/equality
+	counts := make(map[string]int)
+	for _, value := range largestBucket {
+		b, err := value.MarshalBinary()
+		if err != nil {
+			return nil, fmt.Errorf("failed to marshal value: %v", err)
+		}
+		counts[string(b)]++
+	}
+	var modeSerialized []byte
+	var modeCount int
+	for value, count := range counts {
+		if count > modeCount {
+			modeSerialized = []byte(value)
+			modeCount = count
+		}
+	}
+
+	if modeCount < f+1 {
+		return nil, fmt.Errorf("not enough observations in agreement to calculate mode, expected at least f+1, most common value had %d", modeCount)
+	}
+	if len(modeSerialized) == 0 {
+		return nil, nil
+	}
+	val, err := UnmarshalProtoStreamValue(&LLOStreamValue{Type: largestBucketType, Value: modeSerialized})
+	if err != nil {
+		return nil, fmt.Errorf("failed to unmarshal value: %v", err)
+	}
+	return val, nil
 }
 
 func QuoteAggregator(values []StreamValue, f int) (StreamValue, error) {
