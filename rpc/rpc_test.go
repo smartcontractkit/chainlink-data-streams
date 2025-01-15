@@ -26,7 +26,7 @@ func TestClient(t *testing.T) {
 	assert.NoError(t, err)
 	s := grpc.NewServer(grpc.Creds(sMtls))
 	srv := &server{}
-	RegisterMercuryServer(s, srv)
+	RegisterTransmitterServer(s, srv)
 	conn, err := net.Listen("tcp", "127.0.0.1:8080")
 	assert.NoError(t, err)
 	go func() {
@@ -61,7 +61,7 @@ func TestClient(t *testing.T) {
 		),
 	)
 	assert.NoError(t, err)
-	client := NewMercuryClient(clientConn)
+	client := NewTransmitterClient(clientConn)
 
 	r, err := client.Transmit(context.Background(), &TransmitRequest{})
 	assert.NoError(t, err)
@@ -70,7 +70,7 @@ func TestClient(t *testing.T) {
 }
 
 type server struct {
-	UnimplementedMercuryServer
+	UnimplementedTransmitterServer
 }
 
 func (s *server) Transmit(context.Context, *TransmitRequest) (*TransmitResponse, error) {

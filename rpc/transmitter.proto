@@ -2,9 +2,9 @@ syntax = "proto3";
 
 option go_package = " github.com/smartcontractkit/chainlink-data-streams/rpc";
 
-package pb;
+package rpc;
 
-service Mercury {
+service Transmitter {
     rpc Transmit(TransmitRequest) returns (TransmitResponse);
     rpc LatestReport(LatestReportRequest) returns (LatestReportResponse);
 }
