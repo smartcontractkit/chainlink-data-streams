@@ -32,10 +32,11 @@ func (p *Plugin) observation(ctx context.Context, outctx ocr3types.OutcomeContex
 		return nil, fmt.Errorf("error unmarshalling previous outcome: %w", err)
 	}
 
+	observationTimestamp := time.Now()
 	obs := Observation{
 		// QUESTION: is there a way to have this captured in EAs so we get something
 		// closer to the source?
-		UnixTimestampNanoseconds: time.Now().UnixNano(),
+		UnixTimestampNanoseconds: observationTimestamp.UnixNano(),
 	}
 
 	if previousOutcome.LifeCycleStage == LifeCycleStageRetired {
@@ -147,7 +148,7 @@ func (p *Plugin) observation(ctx context.Context, outctx ocr3types.OutcomeContex
 			// any one of which could be slow.
 			observationCtx, cancel := context.WithTimeout(ctx, p.MaxDurationObservation)
 			defer cancel()
-			if err = p.DataSource.Observe(observationCtx, obs.StreamValues, dsOpts{p.Config.VerboseLogging, outctx, p.ConfigDigest}); err != nil {
+			if err = p.DataSource.Observe(observationCtx, obs.StreamValues, &dsOpts{p.Config.VerboseLogging, outctx, p.ConfigDigest, observationTimestamp}); err != nil {
 				return nil, fmt.Errorf("DataSource.Observe error: %w", err)
 			}
 		}
