@@ -55,28 +55,34 @@ type DSOpts interface {
 	SeqNr() uint64
 	OutCtx() ocr3types.OutcomeContext
 	ConfigDigest() ocr2types.ConfigDigest
+	ObservationTimestamp() time.Time
 }
 
 type dsOpts struct {
-	verboseLogging bool
-	outCtx         ocr3types.OutcomeContext
-	configDigest   ocr2types.ConfigDigest
+	verboseLogging       bool
+	outCtx               ocr3types.OutcomeContext
+	configDigest         ocr2types.ConfigDigest
+	observationTimestamp time.Time
 }
 
-func (o dsOpts) VerboseLogging() bool {
+func (o *dsOpts) VerboseLogging() bool {
 	return o.verboseLogging
 }
 
-func (o dsOpts) SeqNr() uint64 {
+func (o *dsOpts) SeqNr() uint64 {
 	return o.outCtx.SeqNr
 }
 
-func (o dsOpts) OutCtx() ocr3types.OutcomeContext {
+func (o *dsOpts) OutCtx() ocr3types.OutcomeContext {
 	return o.outCtx
 }
 
-func (o dsOpts) ConfigDigest() ocr2types.ConfigDigest {
+func (o *dsOpts) ConfigDigest() ocr2types.ConfigDigest {
 	return o.configDigest
+}
+
+func (o *dsOpts) ObservationTimestamp() time.Time {
+	return o.observationTimestamp
 }
 
 type DataSource interface {
