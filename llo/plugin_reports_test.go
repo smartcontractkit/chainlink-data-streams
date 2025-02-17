@@ -21,7 +21,7 @@ func Test_Reports(t *testing.T) {
 		Config:       Config{true},
 		OutcomeCodec: protoOutcomeCodec{},
 		Logger:       logger.Test(t),
-		ReportCodecs: map[llotypes.ReportFormat]ReportCodec{
+		ReportEncoders: map[llotypes.ReportFormat]ReportEncoder{
 			llotypes.ReportFormatJSON: JSONReportCodec{},
 		},
 		RetirementReportCodec: StandardRetirementReportCodec{},

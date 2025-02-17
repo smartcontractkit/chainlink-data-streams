@@ -180,7 +180,7 @@ func (protoOutcomeCodec) Encode(outcome Outcome) (ocr3types.Outcome, error) {
 
 	// It's very important that Outcome serialization be deterministic across all nodes!
 	// Should be reliable since we don't use maps
-	return proto.MarshalOptions{Deterministic: true}.Marshal(pbuf)
+	return DeterministicMarshalOptions.Marshal(pbuf)
 }
 
 func channelDefinitionsToProtoOutcome(in llotypes.ChannelDefinitions) (out []*LLOChannelIDAndDefinitionProto) {

@@ -1,0 +1,28 @@
+syntax="proto3";
+
+package v1;
+option go_package = ".;llo";
+
+import "plugin_codecs.proto";
+
+message LLOReportProto {
+    bool specimen = 1;
+    uint32 channelId = 2;
+    uint32 validAfterSeconds = 3;
+    uint32 observationTimestampSeconds = 4;
+    // NOTE: You MUST use deterministic serialization here
+    // streamID => LLOStreamValue
+    map<uint32,LLOStreamValue> streamValues = 5; 
+}
+
+message LLOPayloadWithSigsProto {
+    bytes configDigest = 1;
+    uint64 seqNr = 2;
+    bytes report = 3;
+    repeated LLOAttributedOnchainSignature sigs = 4;
+}
+
+message LLOAttributedOnchainSignature {
+	bytes signature = 1;
+	uint32 signer = 2; // actually a uint8 but uint32 is the smallest supported by protobuf
+}

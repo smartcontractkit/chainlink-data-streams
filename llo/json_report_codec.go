@@ -12,7 +12,7 @@ import (
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
 )
 
-var _ ReportCodec = JSONReportCodec{}
+var _ ReportEncoder = JSONReportCodec{}
 
 type JSONStreamValue struct {
 	Type  LLOStreamValue_Type
@@ -52,8 +52,9 @@ func (cdc JSONReportCodec) Encode(_ context.Context, r Report, _ llotypes.Channe
 		ChannelID                   llotypes.ChannelID
 		ValidAfterSeconds           uint32
 		ObservationTimestampSeconds uint32
-		Values                      []JSONStreamValue
-		Specimen                    bool
+		// TODO: Should we make Values a map of streamID=>value?
+		Values   []JSONStreamValue
+		Specimen bool
 	}
 	values := make([]JSONStreamValue, len(r.Values))
 	for i, sv := range r.Values {

@@ -104,9 +104,9 @@ func (p *Plugin) reports(ctx context.Context, seqNr uint64, rawOutcome ocr3types
 }
 
 func (p *Plugin) encodeReport(ctx context.Context, r Report, cd llotypes.ChannelDefinition) (types.Report, error) {
-	codec, exists := p.ReportCodecs[cd.ReportFormat]
+	enc, exists := p.ReportEncoders[cd.ReportFormat]
 	if !exists {
-		return nil, fmt.Errorf("codec missing for ReportFormat=%q", cd.ReportFormat)
+		return nil, fmt.Errorf("encoder missing for ReportFormat=%q", cd.ReportFormat)
 	}
-	return codec.Encode(ctx, r, cd)
+	return enc.Encode(ctx, r, cd)
 }

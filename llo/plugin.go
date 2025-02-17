@@ -196,7 +196,7 @@ type ChannelDefinitionCache interface {
 // A ReportingPlugin instance will only ever serve a single protocol instance.
 var _ ocr3types.ReportingPluginFactory[llotypes.ReportInfo] = &PluginFactory{}
 
-func NewPluginFactory(cfg Config, prrc PredecessorRetirementReportCache, src ShouldRetireCache, rcodec RetirementReportCodec, cdc ChannelDefinitionCache, ds DataSource, lggr logger.Logger, oncc OnchainConfigCodec, reportCodecs map[llotypes.ReportFormat]ReportCodec) *PluginFactory {
+func NewPluginFactory(cfg Config, prrc PredecessorRetirementReportCache, src ShouldRetireCache, rcodec RetirementReportCodec, cdc ChannelDefinitionCache, ds DataSource, lggr logger.Logger, oncc OnchainConfigCodec, reportCodecs map[llotypes.ReportFormat]ReportEncoder) *PluginFactory {
 	return &PluginFactory{
 		cfg, prrc, src, rcodec, cdc, ds, lggr, oncc, reportCodecs,
 	}
@@ -217,7 +217,7 @@ type PluginFactory struct {
 	DataSource                       DataSource
 	Logger                           logger.Logger
 	OnchainConfigCodec               OnchainConfigCodec
-	ReportCodecs                     map[llotypes.ReportFormat]ReportCodec
+	ReportEncoders                   map[llotypes.ReportFormat]ReportEncoder
 }
 
 func (f *PluginFactory) NewReportingPlugin(ctx context.Context, cfg ocr3types.ReportingPluginConfig) (ocr3types.ReportingPlugin[llotypes.ReportInfo], ocr3types.ReportingPluginInfo, error) {
@@ -240,7 +240,7 @@ func (f *PluginFactory) NewReportingPlugin(ctx context.Context, cfg ocr3types.Re
 			protoObservationCodec{},
 			protoOutcomeCodec{},
 			f.RetirementReportCodec,
-			f.ReportCodecs,
+			f.ReportEncoders,
 			cfg.MaxDurationObservation,
 		}, ocr3types.ReportingPluginInfo{
 			Name: "LLO",
@@ -256,13 +256,6 @@ func (f *PluginFactory) NewReportingPlugin(ctx context.Context, cfg ocr3types.Re
 
 var _ ocr3types.ReportingPlugin[llotypes.ReportInfo] = &Plugin{}
 
-type ReportCodec interface {
-	// Encode may be lossy, so no Decode function is expected
-	// Encode should handle nil stream aggregate values without panicking (it
-	// may return error instead)
-	Encode(context.Context, Report, llotypes.ChannelDefinition) ([]byte, error)
-}
-
 type Plugin struct {
 	Config                           Config
 	PredecessorConfigDigest          *types.ConfigDigest
@@ -277,7 +270,7 @@ type Plugin struct {
 	ObservationCodec                 ObservationCodec
 	OutcomeCodec                     OutcomeCodec
 	RetirementReportCodec            RetirementReportCodec
-	ReportCodecs                     map[llotypes.ReportFormat]ReportCodec
+	ReportEncoders                   map[llotypes.ReportFormat]ReportEncoder
 
 	MaxDurationObservation time.Duration
 }

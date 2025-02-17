@@ -30,6 +30,8 @@ func VerifyChannelDefinitions(channelDefs llotypes.ChannelDefinitions) error {
 		default:
 			// NOTE: Could add further report-format-specific validation here
 			// for future report formats
+			//
+			// Generally speaking though we defer validation to the report encoding stage
 		}
 	}
 	if len(uniqueStreamIDs) > MaxObservationStreamValuesLength {
