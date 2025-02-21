@@ -48,7 +48,7 @@ jobs:
       actions: read
     steps:
       - name: ci-lint
-        uses: smartcontractkit/.github/actions/ci-lint-go@7ac9af09dda8c553593d2153a975b43b6958fa9f # ci-lint-go@0.2.2
+        uses: smartcontractkit/.github/actions/ci-lint-go@bfaf6327551cb73461928845c80e758c44d07b27  # version 0.3.1
         with:
           # grafana inputs
           metrics-job-name: ci-lint
@@ -62,7 +62,7 @@ jobs:
           use-go-cache: true
           go-cache-dep-path: "**/go.sum"
           go-version-file: go.mod
-          golangci-lint-version: "v1.55.2"
+          golangci-lint-version: "v1.64.5"
           golangci-lint-args: --out-format colored-line-number,checkstyle:golangci-lint-report.xml ${{ needs.init.outputs.lint_args_packages }}
 
   ci-lint-misc:
