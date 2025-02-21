@@ -30,6 +30,10 @@ func VerifyChannelDefinitions(channelDefs llotypes.ChannelDefinitions) error {
 		default:
 			// NOTE: Could add further report-format-specific validation here
 			// for future report formats
+			//
+			// Generally speaking we are lenient here since we don't know what
+			// future report codecs will want, so we defer and let the report
+			// codec error out on encode if the Opts are invalid
 		}
 	}
 	if len(uniqueStreamIDs) > MaxObservationStreamValuesLength {
