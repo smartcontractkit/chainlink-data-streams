@@ -81,6 +81,13 @@ func (cdc JSONReportCodec) Encode(_ context.Context, r Report, _ llotypes.Channe
 	return json.Marshal(e)
 }
 
+func (cdc JSONReportCodec) Verify(_ context.Context, cd llotypes.ChannelDefinition) error {
+	if len(cd.Opts) > 0 {
+		return fmt.Errorf("unexpected Opts in ChannelDefinition (JSONReportCodec expects no opts), got: %q", cd.Opts)
+	}
+	return nil
+}
+
 func (cdc JSONReportCodec) Decode(b []byte) (r Report, err error) {
 	type decode struct {
 		ConfigDigest                string

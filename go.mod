@@ -2,6 +2,8 @@ module github.com/smartcontractkit/chainlink-data-streams
 
 go 1.24
 
+toolchain go1.24.0
+
 require (
 	github.com/hashicorp/go-plugin v1.6.3
 	github.com/leanovate/gopter v0.2.11

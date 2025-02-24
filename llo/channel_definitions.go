@@ -1,53 +1,43 @@
 package llo
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"sort"
 
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
 )
 
-func VerifyChannelDefinitions(channelDefs llotypes.ChannelDefinitions) error {
+func VerifyChannelDefinitions(ctx context.Context, codecs map[llotypes.ReportFormat]ReportCodec, channelDefs llotypes.ChannelDefinitions) (merr error) {
 	if len(channelDefs) > MaxOutcomeChannelDefinitionsLength {
 		return fmt.Errorf("too many channels, got: %d/%d", len(channelDefs), MaxOutcomeChannelDefinitionsLength)
 	}
 	uniqueStreamIDs := make(map[llotypes.StreamID]struct{}, len(channelDefs))
 	for channelID, cd := range channelDefs {
 		if len(cd.Streams) == 0 {
-			return fmt.Errorf("ChannelDefinition with ID %d has no streams", channelID)
+			merr = errors.Join(merr, fmt.Errorf("ChannelDefinition with ID %d has no streams", channelID))
+			continue
 		}
 		for _, strm := range cd.Streams {
 			if strm.Aggregator == 0 {
-				return fmt.Errorf("ChannelDefinition with ID %d has stream %d with zero aggregator (this may indicate an uninitialized struct)", channelID, strm.StreamID)
+				merr = errors.Join(merr, fmt.Errorf("ChannelDefinition with ID %d has stream %d with zero aggregator (this may indicate an uninitialized struct)", channelID, strm.StreamID))
+				continue
 			}
 			uniqueStreamIDs[strm.StreamID] = struct{}{}
 		}
-		switch cd.ReportFormat {
-		case llotypes.ReportFormatEVMPremiumLegacy:
-			if err := VerifyEVMPremiumLegacyChannelDefinition(cd); err != nil {
-				return fmt.Errorf("invalid ChannelDefinition with ID %d: %v", channelID, err)
+		if codec, ok := codecs[cd.ReportFormat]; ok {
+			if err := codec.Verify(ctx, cd); err != nil {
+				merr = errors.Join(merr, fmt.Errorf("invalid ChannelDefinition with ID %d: %v", channelID, err))
+				continue
 			}
-		default:
-			// NOTE: Could add further report-format-specific validation here
-			// for future report formats
-			//
-			// Generally speaking we are lenient here since we don't know what
-			// future report codecs will want, so we defer and let the report
-			// codec error out on encode if the Opts are invalid
 		}
+	}
+	if merr != nil {
+		return merr
 	}
 	if len(uniqueStreamIDs) > MaxObservationStreamValuesLength {
 		return fmt.Errorf("too many unique stream IDs, got: %d/%d", len(uniqueStreamIDs), MaxObservationStreamValuesLength)
-	}
-	return nil
-}
-
-func VerifyEVMPremiumLegacyChannelDefinition(cd llotypes.ChannelDefinition) error {
-	if cd.ReportFormat != llotypes.ReportFormatEVMPremiumLegacy {
-		return fmt.Errorf("expected ReportFormatEVMPremiumLegacy, got: %v", cd.ReportFormat)
-	}
-	if len(cd.Streams) != 3 {
-		return fmt.Errorf("ReportFormatEVMPremiumLegacy requires exactly 3 streams (NativePrice, LinkPrice, Quote); got: %v", cd.Streams)
 	}
 	return nil
 }
