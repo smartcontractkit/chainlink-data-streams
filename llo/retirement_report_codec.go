@@ -1,6 +1,8 @@
 package llo
 
-import "encoding/json"
+import (
+	"encoding/json"
+)
 
 type RetirementReportCodec interface {
 	Encode(RetirementReport) ([]byte, error)

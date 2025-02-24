@@ -2,7 +2,6 @@ package llo
 
 import (
 	"fmt"
-	"math"
 	"testing"
 	"time"
 
@@ -20,13 +19,23 @@ import (
 )
 
 func Test_Outcome(t *testing.T) {
+	for _, codec := range []OutcomeCodec{protoOutcomeCodecV0{}, protoOutcomeCodecV1{}} {
+		t.Run(fmt.Sprintf("OutcomeCodec: %T", codec), func(t *testing.T) {
+			testOutcome(t, codec)
+		})
+	}
+}
+
+func testOutcome(t *testing.T, outcomeCodec OutcomeCodec) {
 	ctx := tests.Context(t)
 	p := &Plugin{
 		Config:           Config{true},
-		OutcomeCodec:     protoOutcomeCodec{},
+		OutcomeCodec:     outcomeCodec,
 		Logger:           logger.Test(t),
 		ObservationCodec: protoObservationCodec{},
 	}
+	testStartTS := time.Now()
+	testStartNanos := uint64(testStartTS.UnixNano()) //nolint:gosec // safe cast in tests
 
 	t.Run("if number of observers < 2f+1, errors", func(t *testing.T) {
 		_, err := p.Outcome(ctx, ocr3types.OutcomeContext{SeqNr: 1}, types.Query{}, []types.AttributedObservation{})
@@ -78,7 +87,7 @@ func Test_Outcome(t *testing.T) {
 			})
 			require.NoError(t, err)
 			aos := []types.AttributedObservation{}
-			for i := 0; i < 4; i++ {
+			for i := uint8(0); i < 4; i++ {
 				aos = append(aos,
 					types.AttributedObservation{
 						Observation: obs,
@@ -106,7 +115,7 @@ func Test_Outcome(t *testing.T) {
 			})
 			require.NoError(t, err)
 			aos := []types.AttributedObservation{}
-			for i := 0; i < 4; i++ {
+			for i := uint8(0); i < 4; i++ {
 				aos = append(aos,
 					types.AttributedObservation{
 						Observation: obs,
@@ -139,13 +148,13 @@ func Test_Outcome(t *testing.T) {
 				Streams:      []llotypes.Stream{{StreamID: 1, Aggregator: llotypes.AggregatorMedian}, {StreamID: 2, Aggregator: llotypes.AggregatorMedian}, {StreamID: 3, Aggregator: llotypes.AggregatorMedian}},
 			}
 			obs := Observation{UpdateChannelDefinitions: map[llotypes.ChannelID]llotypes.ChannelDefinition{}}
-			for i := 0; i < MaxOutcomeChannelDefinitionsLength+10; i++ {
-				obs.UpdateChannelDefinitions[llotypes.ChannelID(i)] = newCd
+			for i := uint32(0); i < MaxOutcomeChannelDefinitionsLength+10; i++ {
+				obs.UpdateChannelDefinitions[i] = newCd
 			}
 			encoded, err := p.ObservationCodec.Encode(obs)
 			require.NoError(t, err)
 			aos := []types.AttributedObservation{}
-			for i := 0; i < 4; i++ {
+			for i := uint8(0); i < 4; i++ {
 				aos = append(aos,
 					types.AttributedObservation{
 						Observation: encoded,
@@ -169,7 +178,6 @@ func Test_Outcome(t *testing.T) {
 	})
 
 	t.Run("stream observations", func(t *testing.T) {
-		testStartTS := time.Now()
 		smallDefinitions := map[llotypes.ChannelID]llotypes.ChannelDefinition{
 			1: {
 				ReportFormat: llotypes.ReportFormatJSON,
@@ -184,11 +192,11 @@ func Test_Outcome(t *testing.T) {
 
 		t.Run("aggregates values when all stream values are present from all observers", func(t *testing.T) {
 			previousOutcome := Outcome{
-				LifeCycleStage:                   llotypes.LifeCycleStage("test"),
-				ObservationsTimestampNanoseconds: testStartTS.UnixNano(),
-				ChannelDefinitions:               cdc.definitions,
-				ValidAfterSeconds:                nil,
-				StreamAggregates:                 nil,
+				LifeCycleStage:                  llotypes.LifeCycleStage("test"),
+				ObservationTimestampNanoseconds: testStartNanos,
+				ChannelDefinitions:              cdc.definitions,
+				ValidAfterNanoseconds:           nil,
+				StreamAggregates:                nil,
 			}
 			encodedPreviousOutcome, err := p.OutcomeCodec.Encode(previousOutcome)
 			require.NoError(t, err)
@@ -196,7 +204,7 @@ func Test_Outcome(t *testing.T) {
 			aos := []types.AttributedObservation{}
 			for i := 0; i < 4; i++ {
 				obs := Observation{
-					UnixTimestampNanoseconds: testStartTS.UnixNano() + int64(time.Second) + int64(i*100)*int64(time.Millisecond),
+					UnixTimestampNanoseconds: testStartNanos + uint64(time.Second) + uint64(i*100)*uint64(time.Millisecond), //nolint:gosec // safe cast in tests
 					StreamValues: map[llotypes.StreamID]StreamValue{
 						1: ToDecimal(decimal.NewFromInt(int64(100 + i*10))),
 						2: ToDecimal(decimal.NewFromInt(int64(200 + i*10))),
@@ -207,7 +215,7 @@ func Test_Outcome(t *testing.T) {
 				aos = append(aos,
 					types.AttributedObservation{
 						Observation: encoded,
-						Observer:    commontypes.OracleID(i),
+						Observer:    commontypes.OracleID(i), //nolint:gosec // will never be > 4
 					})
 			}
 			outcome, err := p.Outcome(ctx, outctx, types.Query{}, aos)
@@ -216,16 +224,24 @@ func Test_Outcome(t *testing.T) {
 			decoded, err := p.OutcomeCodec.Decode(outcome)
 			require.NoError(t, err)
 
-			observationsTs := decoded.ObservationsTimestampNanoseconds
-			assert.GreaterOrEqual(t, observationsTs, testStartTS.UnixNano()+1_200_000_000)
+			observationsTs := decoded.ObservationTimestampNanoseconds
+			assert.GreaterOrEqual(t, observationsTs, uint64(testStartTS.UnixNano()+1_200_000_000)) // nolint:gosec // time won't be negative
+
+			// NOTE: In protoOutcomeCodecV0 precision is lost on timestamp
+			// serialization, so validAfterNanoseconds will be truncated to
+			// seconds
+			expectedValidAfterSeconds := observationsTs
+			if _, ok := p.OutcomeCodec.(protoOutcomeCodecV0); ok {
+				expectedValidAfterSeconds = (observationsTs / 1e9) * 1e9
+			}
 
 			assert.Equal(t, Outcome{
-				LifeCycleStage:                   "test",
-				ObservationsTimestampNanoseconds: observationsTs,
-				ChannelDefinitions:               cdc.definitions,
-				ValidAfterSeconds: map[llotypes.ChannelID]uint32{
-					1: uint32(observationsTs / int64(time.Second)), // set to median observation timestamp
-					2: uint32(observationsTs / int64(time.Second)),
+				LifeCycleStage:                  "test",
+				ObservationTimestampNanoseconds: observationsTs,
+				ChannelDefinitions:              cdc.definitions,
+				ValidAfterNanoseconds: map[llotypes.ChannelID]uint64{
+					1: expectedValidAfterSeconds, // set to median observation timestamp
+					2: expectedValidAfterSeconds,
 				},
 				StreamAggregates: map[llotypes.StreamID]map[llotypes.Aggregator]StreamValue{
 					1: map[llotypes.Aggregator]StreamValue{
@@ -240,14 +256,14 @@ func Test_Outcome(t *testing.T) {
 				},
 			}, decoded)
 		})
-		t.Run("unreportable channels from the previous outcome re-use the same previous ValidAfterSeconds", func(t *testing.T) {
+		t.Run("unreportable channels from the previous outcome re-use the same previous ValidAfterNanoseconds", func(t *testing.T) {
 			previousOutcome := Outcome{
-				LifeCycleStage:                   llotypes.LifeCycleStage("test"),
-				ObservationsTimestampNanoseconds: int64(102030410 * time.Second),
-				ChannelDefinitions:               nil, // nil channel definitions makes all channels unreportable
-				ValidAfterSeconds: map[llotypes.ChannelID]uint32{
-					1: uint32(102030405),
-					2: uint32(102030400),
+				LifeCycleStage:                  llotypes.LifeCycleStage("test"),
+				ObservationTimestampNanoseconds: uint64(102030410 * time.Second),
+				ChannelDefinitions:              nil, // nil channel definitions makes all channels unreportable
+				ValidAfterNanoseconds: map[llotypes.ChannelID]uint64{
+					1: uint64(102030405 * time.Second),
+					2: uint64(102030400 * time.Second),
 				},
 				StreamAggregates: map[llotypes.StreamID]map[llotypes.Aggregator]StreamValue{
 					1: map[llotypes.Aggregator]StreamValue{
@@ -267,7 +283,7 @@ func Test_Outcome(t *testing.T) {
 			aos := []types.AttributedObservation{}
 			for i := 0; i < 4; i++ {
 				obs := Observation{
-					UnixTimestampNanoseconds: int64(102030415 * time.Second),
+					UnixTimestampNanoseconds: uint64(102030415 * time.Second),
 					StreamValues: map[llotypes.StreamID]StreamValue{
 						1: ToDecimal(decimal.NewFromInt(int64(120))),
 						2: ToDecimal(decimal.NewFromInt(int64(220))),
@@ -279,7 +295,7 @@ func Test_Outcome(t *testing.T) {
 				aos = append(aos,
 					types.AttributedObservation{
 						Observation: encoded,
-						Observer:    commontypes.OracleID(i),
+						Observer:    commontypes.OracleID(i), //nolint:gosec // will never be > 4
 					})
 			}
 			outcome, err := p.Outcome(ctx, ocr3types.OutcomeContext{SeqNr: 2, PreviousOutcome: encodedPreviousOutcome}, types.Query{}, aos)
@@ -288,19 +304,19 @@ func Test_Outcome(t *testing.T) {
 			decoded, err := p.OutcomeCodec.Decode(outcome)
 			require.NoError(t, err)
 
-			assert.Equal(t, int64(102030415*time.Second), decoded.ObservationsTimestampNanoseconds)
-			require.Len(t, decoded.ValidAfterSeconds, 2)
-			assert.Equal(t, int64(102030405), int64(decoded.ValidAfterSeconds[1]))
-			assert.Equal(t, int64(102030400), int64(decoded.ValidAfterSeconds[2]))
+			assert.Equal(t, uint64(102030415*time.Second), decoded.ObservationTimestampNanoseconds)
+			require.Len(t, decoded.ValidAfterNanoseconds, 2)
+			assert.Equal(t, uint64(102030405*time.Second), decoded.ValidAfterNanoseconds[1])
+			assert.Equal(t, uint64(102030400*time.Second), decoded.ValidAfterNanoseconds[2])
 		})
-		t.Run("ValidAfterSeconds is set based on the previous observation timestamp such that reports never overlap", func(t *testing.T) {
+		t.Run("ValidAfterNanoseconds is set based on the previous observation timestamp such that reports never overlap", func(t *testing.T) {
 			previousOutcome := Outcome{
-				LifeCycleStage:                   llotypes.LifeCycleStage("test"),
-				ObservationsTimestampNanoseconds: int64(102030410 * time.Second),
-				ChannelDefinitions:               cdc.definitions,
-				ValidAfterSeconds: map[llotypes.ChannelID]uint32{
-					1: uint32(102030405),
-					2: uint32(102030400),
+				LifeCycleStage:                  llotypes.LifeCycleStage("test"),
+				ObservationTimestampNanoseconds: uint64(102030410 * time.Second),
+				ChannelDefinitions:              cdc.definitions,
+				ValidAfterNanoseconds: map[llotypes.ChannelID]uint64{
+					1: uint64(102030405 * time.Second),
+					2: uint64(102030400 * time.Second),
 				},
 				StreamAggregates: map[llotypes.StreamID]map[llotypes.Aggregator]StreamValue{
 					1: map[llotypes.Aggregator]StreamValue{
@@ -320,7 +336,7 @@ func Test_Outcome(t *testing.T) {
 			aos := []types.AttributedObservation{}
 			for i := 0; i < 4; i++ {
 				obs := Observation{
-					UnixTimestampNanoseconds: int64(102030415 * time.Second),
+					UnixTimestampNanoseconds: uint64(102030415 * time.Second),
 					StreamValues: map[llotypes.StreamID]StreamValue{
 						1: ToDecimal(decimal.NewFromInt(int64(120))),
 						2: ToDecimal(decimal.NewFromInt(int64(220))),
@@ -332,7 +348,7 @@ func Test_Outcome(t *testing.T) {
 				aos = append(aos,
 					types.AttributedObservation{
 						Observation: encoded,
-						Observer:    commontypes.OracleID(i),
+						Observer:    commontypes.OracleID(i), //nolint:gosec // will never be > 4
 					})
 			}
 			outcome, err := p.Outcome(ctx, ocr3types.OutcomeContext{SeqNr: 2, PreviousOutcome: encodedPreviousOutcome}, types.Query{}, aos)
@@ -341,19 +357,19 @@ func Test_Outcome(t *testing.T) {
 			decoded, err := p.OutcomeCodec.Decode(outcome)
 			require.NoError(t, err)
 
-			assert.Equal(t, int64(102030415*time.Second), decoded.ObservationsTimestampNanoseconds)
-			require.Len(t, decoded.ValidAfterSeconds, 2)
-			assert.Equal(t, int64(102030410), int64(decoded.ValidAfterSeconds[1]))
-			assert.Equal(t, int64(102030410), int64(decoded.ValidAfterSeconds[2]))
+			assert.Equal(t, uint64(102030415*time.Second), decoded.ObservationTimestampNanoseconds)
+			require.Len(t, decoded.ValidAfterNanoseconds, 2)
+			assert.Equal(t, uint64(102030410*time.Second), decoded.ValidAfterNanoseconds[1])
+			assert.Equal(t, uint64(102030410*time.Second), decoded.ValidAfterNanoseconds[2])
 		})
 		t.Run("does generate outcome for reports that would overlap on a seconds-basis (allows duplicate reports)", func(t *testing.T) {
 			previousOutcome := Outcome{
-				LifeCycleStage:                   llotypes.LifeCycleStage("test"),
-				ObservationsTimestampNanoseconds: int64(102030410 * time.Second),
-				ChannelDefinitions:               cdc.definitions,
-				ValidAfterSeconds: map[llotypes.ChannelID]uint32{
-					1: uint32(102030409),
-					2: uint32(102030409),
+				LifeCycleStage:                  llotypes.LifeCycleStage("test"),
+				ObservationTimestampNanoseconds: uint64(102030410 * time.Second),
+				ChannelDefinitions:              cdc.definitions,
+				ValidAfterNanoseconds: map[llotypes.ChannelID]uint64{
+					1: uint64(102030409 * time.Second),
+					2: uint64(102030409 * time.Second),
 				},
 				StreamAggregates: map[llotypes.StreamID]map[llotypes.Aggregator]StreamValue{
 					1: map[llotypes.Aggregator]StreamValue{
@@ -373,7 +389,7 @@ func Test_Outcome(t *testing.T) {
 			aos := []types.AttributedObservation{}
 			for i := 0; i < 4; i++ {
 				obs := Observation{
-					UnixTimestampNanoseconds: int64((102030410 * time.Second) + 100*time.Millisecond), // 100ms after previous outcome
+					UnixTimestampNanoseconds: uint64((102030410 * time.Second) + 100*time.Millisecond), // 100ms after previous outcome
 					StreamValues: map[llotypes.StreamID]StreamValue{
 						1: ToDecimal(decimal.NewFromInt(int64(120))),
 						2: ToDecimal(decimal.NewFromInt(int64(220))),
@@ -385,7 +401,7 @@ func Test_Outcome(t *testing.T) {
 				aos = append(aos,
 					types.AttributedObservation{
 						Observation: encoded,
-						Observer:    commontypes.OracleID(i),
+						Observer:    commontypes.OracleID(i), //nolint:gosec // will never be > 4
 					})
 			}
 			outcome, err := p.Outcome(ctx, ocr3types.OutcomeContext{SeqNr: 2, PreviousOutcome: encodedPreviousOutcome}, types.Query{}, aos)
@@ -394,16 +410,16 @@ func Test_Outcome(t *testing.T) {
 			decoded, err := p.OutcomeCodec.Decode(outcome)
 			require.NoError(t, err)
 
-			assert.Equal(t, int64(102030410*time.Second+100*time.Millisecond), decoded.ObservationsTimestampNanoseconds)
-			require.Len(t, decoded.ValidAfterSeconds, 2)
-			assert.Equal(t, int64(102030410), int64(decoded.ValidAfterSeconds[1]))
-			assert.Equal(t, int64(102030410), int64(decoded.ValidAfterSeconds[2]))
+			assert.Equal(t, uint64(102030410*time.Second+100*time.Millisecond), decoded.ObservationTimestampNanoseconds)
+			require.Len(t, decoded.ValidAfterNanoseconds, 2)
+			assert.Equal(t, uint64(102030410*time.Second), decoded.ValidAfterNanoseconds[1])
+			assert.Equal(t, uint64(102030410*time.Second), decoded.ValidAfterNanoseconds[2])
 		})
 		t.Run("aggregation function returns error", func(t *testing.T) {
 			previousOutcome := Outcome{
-				LifeCycleStage:                   llotypes.LifeCycleStage("test"),
-				ObservationsTimestampNanoseconds: testStartTS.UnixNano(),
-				ChannelDefinitions:               cdc.definitions,
+				LifeCycleStage:                  llotypes.LifeCycleStage("test"),
+				ObservationTimestampNanoseconds: testStartNanos,
+				ChannelDefinitions:              cdc.definitions,
 			}
 			encodedPreviousOutcome, err := p.OutcomeCodec.Encode(previousOutcome)
 			require.NoError(t, err)
@@ -416,7 +432,7 @@ func Test_Outcome(t *testing.T) {
 					sv = ToDecimal(decimal.NewFromInt(100))
 				}
 				obs := Observation{
-					UnixTimestampNanoseconds: testStartTS.UnixNano() + int64(time.Second) + int64(i*100)*int64(time.Millisecond),
+					UnixTimestampNanoseconds: testStartNanos + uint64(time.Second) + uint64(i*100)*uint64(time.Millisecond), //nolint:gosec // safe cast in tests
 					StreamValues: map[llotypes.StreamID]StreamValue{
 						1: sv,
 						// 2 and 3 ok
@@ -428,7 +444,7 @@ func Test_Outcome(t *testing.T) {
 				aos = append(aos,
 					types.AttributedObservation{
 						Observation: encoded,
-						Observer:    commontypes.OracleID(i),
+						Observer:    commontypes.OracleID(i), //nolint:gosec // will never be > 4
 					})
 			}
 			outcome, err := p.Outcome(ctx, outctx, types.Query{}, aos)
@@ -452,9 +468,9 @@ func Test_Outcome(t *testing.T) {
 	t.Run("if previousOutcome is retired, returns outcome as normal", func(t *testing.T) {
 		previousOutcome := Outcome{
 			LifeCycleStage: llotypes.LifeCycleStage("retired"),
-			ValidAfterSeconds: map[llotypes.ChannelID]uint32{
-				1: uint32(102030409),
-				2: uint32(102030409),
+			ValidAfterNanoseconds: map[llotypes.ChannelID]uint64{
+				1: uint64(102030409 * time.Second),
+				2: uint64(102030409 * time.Second),
 			},
 		}
 		encodedPreviousOutcome, err := p.OutcomeCodec.Encode(previousOutcome)
@@ -463,14 +479,14 @@ func Test_Outcome(t *testing.T) {
 		aos := []types.AttributedObservation{}
 		for i := 0; i < 4; i++ {
 			obs := Observation{
-				UnixTimestampNanoseconds: int64(102030415 * time.Second),
+				UnixTimestampNanoseconds: uint64(102030415 * time.Second),
 			}
 			encoded, err2 := p.ObservationCodec.Encode(obs)
 			require.NoError(t, err2)
 			aos = append(aos,
 				types.AttributedObservation{
 					Observation: encoded,
-					Observer:    commontypes.OracleID(i),
+					Observer:    commontypes.OracleID(i), //nolint:gosec // will never be > 4
 				})
 		}
 		outcome, err := p.Outcome(ctx, ocr3types.OutcomeContext{SeqNr: 2, PreviousOutcome: encodedPreviousOutcome}, types.Query{}, aos)
@@ -479,10 +495,10 @@ func Test_Outcome(t *testing.T) {
 		decoded, err := p.OutcomeCodec.Decode(outcome)
 		require.NoError(t, err)
 
-		assert.Equal(t, int64(102030415000000000), decoded.ObservationsTimestampNanoseconds)
-		require.Len(t, decoded.ValidAfterSeconds, 2)
-		assert.Equal(t, int64(102030409), int64(decoded.ValidAfterSeconds[1]))
-		assert.Equal(t, int64(102030409), int64(decoded.ValidAfterSeconds[2]))
+		assert.Equal(t, uint64(102030415000000000), decoded.ObservationTimestampNanoseconds)
+		require.Len(t, decoded.ValidAfterNanoseconds, 2)
+		assert.Equal(t, uint64(102030409*time.Second), decoded.ValidAfterNanoseconds[1])
+		assert.Equal(t, uint64(102030409*time.Second), decoded.ValidAfterNanoseconds[2])
 	})
 }
 
@@ -570,50 +586,151 @@ func Test_MakeChannelHash(t *testing.T) {
 }
 
 func Test_Outcome_Methods(t *testing.T) {
-	t.Run("IsReportable", func(t *testing.T) {
-		outcome := Outcome{}
-		cid := llotypes.ChannelID(1)
+	t.Run("protocol version 0", func(t *testing.T) {
+		t.Run("IsReportable", func(t *testing.T) {
+			outcome := Outcome{}
+			cid := llotypes.ChannelID(1)
 
-		// Not reportable if retired
-		outcome.LifeCycleStage = LifeCycleStageRetired
-		assert.EqualError(t, outcome.IsReportable(cid), "ChannelID: 1; Reason: IsReportable=false; retired channel")
+			// Not reportable if retired
+			outcome.LifeCycleStage = LifeCycleStageRetired
+			assert.EqualError(t, outcome.IsReportable(cid, 0, 0), "ChannelID: 1; Reason: IsReportable=false; retired channel")
 
-		// Timestamp overflow
-		outcome.LifeCycleStage = LifeCycleStageProduction
-		outcome.ObservationsTimestampNanoseconds = time.Unix(math.MaxInt64, 0).UnixNano()
-		outcome.ChannelDefinitions = map[llotypes.ChannelID]llotypes.ChannelDefinition{}
-		assert.EqualError(t, outcome.IsReportable(cid), "ChannelID: 1; Reason: IsReportable=false; invalid observations timestamp; Err: timestamp doesn't fit into uint32: -1")
+			// No channel definition with ID
+			outcome.LifeCycleStage = LifeCycleStageProduction
+			outcome.ObservationTimestampNanoseconds = uint64(time.Unix(1726670490, 0).UnixNano()) // nolint:gosec // time won't be negative
+			outcome.ChannelDefinitions = map[llotypes.ChannelID]llotypes.ChannelDefinition{}
+			assert.EqualError(t, outcome.IsReportable(cid, 0, 0), "ChannelID: 1; Reason: IsReportable=false; no channel definition with this ID")
 
-		// No channel definition with ID
-		outcome.LifeCycleStage = LifeCycleStageProduction
-		outcome.ObservationsTimestampNanoseconds = time.Unix(1726670490, 0).UnixNano()
-		outcome.ChannelDefinitions = map[llotypes.ChannelID]llotypes.ChannelDefinition{}
-		assert.EqualError(t, outcome.IsReportable(cid), "ChannelID: 1; Reason: IsReportable=false; no channel definition with this ID")
+			// No ValidAfterNanoseconds yet
+			outcome.ChannelDefinitions = map[llotypes.ChannelID]llotypes.ChannelDefinition{
+				cid: {},
+			}
+			assert.EqualError(t, outcome.IsReportable(cid, 0, 0), "ChannelID: 1; Reason: IsReportable=false; no ValidAfterNanoseconds entry yet, this must be a new channel")
 
-		// No ValidAfterSeconds yet
-		outcome.ChannelDefinitions[cid] = llotypes.ChannelDefinition{}
-		assert.EqualError(t, outcome.IsReportable(cid), "ChannelID: 1; Reason: IsReportable=false; no validAfterSeconds entry yet, this must be a new channel")
+			// ValidAfterNanoseconds is in the future
+			outcome.ValidAfterNanoseconds = map[llotypes.ChannelID]uint64{cid: uint64(1726670491 * time.Second)}
+			assert.EqualError(t, outcome.IsReportable(cid, 0, 0), "ChannelID: 1; Reason: ChannelID: 1; Reason: IsReportable=false; not valid yet (observationsTimestampSeconds=1726670490, validAfterSeconds=1726670491)")
 
-		// ValidAfterSeconds is in the future
-		outcome.ValidAfterSeconds = map[llotypes.ChannelID]uint32{cid: uint32(1726670491)}
-		assert.EqualError(t, outcome.IsReportable(cid), "ChannelID: 1; Reason: IsReportable=false; not valid yet (observationsTimestampSeconds=1726670490 < validAfterSeconds=1726670491)")
+			// ValidAfterSeconds=ObservationTimestampSeconds; IsReportable=false
+			outcome.ValidAfterNanoseconds = map[llotypes.ChannelID]uint64{cid: uint64(1726670490 * time.Second)}
+			assert.EqualError(t, outcome.IsReportable(cid, 0, 0), "ChannelID: 1; Reason: ChannelID: 1; Reason: IsReportable=false; not valid yet (observationsTimestampSeconds=1726670490, validAfterSeconds=1726670490)")
+
+			// ValidAfterSeconds<ObservationTimestampSeconds; IsReportable=false
+			outcome.ValidAfterNanoseconds = map[llotypes.ChannelID]uint64{cid: uint64(1726670489 * time.Second)}
+			require.Nil(t, outcome.IsReportable(cid, 0, 0))
+		})
+		t.Run("ReportableChannels", func(t *testing.T) {
+			outcome := Outcome{
+				ObservationTimestampNanoseconds: uint64(time.Unix(1726670490, 0).UnixNano()), // nolint:gosec // time won't be negative
+				ChannelDefinitions: map[llotypes.ChannelID]llotypes.ChannelDefinition{
+					1: {},
+					2: {},
+					3: {},
+				},
+				ValidAfterNanoseconds: map[llotypes.ChannelID]uint64{
+					1: uint64(1726670489 * time.Second),
+					3: uint64(1726670489 * time.Second),
+				},
+			}
+			reportable, unreportable := outcome.ReportableChannels(0, 0)
+			assert.Equal(t, []llotypes.ChannelID{1, 3}, reportable)
+			require.Len(t, unreportable, 1)
+			assert.Equal(t, "ChannelID: 2; Reason: IsReportable=false; no ValidAfterNanoseconds entry yet, this must be a new channel", unreportable[0].Error())
+		})
 	})
-	t.Run("ReportableChannels", func(t *testing.T) {
-		outcome := Outcome{
-			ObservationsTimestampNanoseconds: time.Unix(1726670490, 0).UnixNano(),
-			ChannelDefinitions: map[llotypes.ChannelID]llotypes.ChannelDefinition{
-				1: {},
-				2: {},
-				3: {},
-			},
-			ValidAfterSeconds: map[llotypes.ChannelID]uint32{
-				1: 1726670489,
-				3: 1726670489,
-			},
-		}
-		reportable, unreportable := outcome.ReportableChannels()
-		assert.Equal(t, []llotypes.ChannelID{1, 3}, reportable)
-		require.Len(t, unreportable, 1)
-		assert.Equal(t, "ChannelID: 2; Reason: IsReportable=false; no validAfterSeconds entry yet, this must be a new channel", unreportable[0].Error())
+	t.Run("protocol version > 0", func(t *testing.T) {
+		t.Run("IsReportable", func(t *testing.T) {
+			defaultMinReportInterval := uint64(100 * time.Millisecond)
+
+			outcome := Outcome{}
+			cid := llotypes.ChannelID(1)
+
+			// Not reportable if retired
+			outcome.LifeCycleStage = LifeCycleStageRetired
+			assert.EqualError(t, outcome.IsReportable(cid, 1, defaultMinReportInterval), "ChannelID: 1; Reason: IsReportable=false; retired channel")
+
+			obsTSNanos := uint64(time.Unix(1726670490, 1000).UnixNano()) // nolint:gosec // time won't be negative
+
+			// No channel definition with ID
+			outcome.LifeCycleStage = LifeCycleStageProduction
+			outcome.ObservationTimestampNanoseconds = obsTSNanos
+			outcome.ChannelDefinitions = map[llotypes.ChannelID]llotypes.ChannelDefinition{}
+			assert.EqualError(t, outcome.IsReportable(cid, 1, defaultMinReportInterval), "ChannelID: 1; Reason: IsReportable=false; no channel definition with this ID")
+
+			// No ValidAfterNanoseconds yet
+			outcome.ChannelDefinitions[cid] = llotypes.ChannelDefinition{}
+			assert.EqualError(t, outcome.IsReportable(cid, 1, defaultMinReportInterval), "ChannelID: 1; Reason: IsReportable=false; no ValidAfterNanoseconds entry yet, this must be a new channel")
+
+			// ValidAfterNanoseconds is 1ns in the future; IsReportable=false
+			outcome.ValidAfterNanoseconds = map[llotypes.ChannelID]uint64{cid: obsTSNanos + 1}
+			assert.EqualError(t, outcome.IsReportable(cid, 1, defaultMinReportInterval), "ChannelID: 1; Reason: IsReportable=false; not valid yet (ObservationTimestampNanoseconds=1726670490000001000, validAfterNanoseconds=1726670490000001001, minReportInterval=100000000); 0.100000 seconds (100000001ns) until reportable")
+
+			// ValidAfterNanoseconds is 1s in the future; IsReportable=false
+			outcome.ValidAfterNanoseconds = map[llotypes.ChannelID]uint64{cid: obsTSNanos + uint64(1*time.Second)}
+			assert.EqualError(t, outcome.IsReportable(cid, 1, defaultMinReportInterval), "ChannelID: 1; Reason: IsReportable=false; not valid yet (ObservationTimestampNanoseconds=1726670490000001000, validAfterNanoseconds=1726670491000001000, minReportInterval=100000000); 1.100000 seconds (1100000000ns) until reportable")
+
+			// ValidAfterNanoseconds is 100ms-1ns in the past; IsReportable=false
+			outcome.ValidAfterNanoseconds = map[llotypes.ChannelID]uint64{cid: obsTSNanos - uint64(100*time.Millisecond) + 1}
+			assert.EqualError(t, outcome.IsReportable(cid, 1, defaultMinReportInterval), "ChannelID: 1; Reason: IsReportable=false; not valid yet (ObservationTimestampNanoseconds=1726670490000001000, validAfterNanoseconds=1726670489900001001, minReportInterval=100000000); 0.000000 seconds (1ns) until reportable")
+
+			// ValidAfterNanoseconds is exactly 100ms in the past; IsReportable=true
+			outcome.ValidAfterNanoseconds = map[llotypes.ChannelID]uint64{cid: obsTSNanos - uint64(100*time.Millisecond)}
+			require.Nil(t, outcome.IsReportable(cid, 1, defaultMinReportInterval))
+
+			// ValidAfterNanoseconds is 100ms+1ns in the past; IsReportable=true
+			outcome.ValidAfterNanoseconds = map[llotypes.ChannelID]uint64{cid: obsTSNanos - uint64(100*time.Millisecond) - 1}
+			require.Nil(t, outcome.IsReportable(cid, 1, defaultMinReportInterval))
+
+			// zero report cadence allows overlaps
+			outcome.ValidAfterNanoseconds = map[llotypes.ChannelID]uint64{cid: obsTSNanos}
+			require.Nil(t, outcome.IsReportable(cid, 1, 0))
+		})
+		t.Run("IsReportable with ReportFormatEVMPremiumLegacy", func(t *testing.T) {
+			outcome := Outcome{}
+			cid := llotypes.ChannelID(1)
+
+			obsTSNanos := uint64(time.Unix(1726670490, 1e9-1).UnixNano()) // nolint:gosec // time won't be negative
+
+			outcome.LifeCycleStage = LifeCycleStageProduction
+			outcome.ObservationTimestampNanoseconds = obsTSNanos
+			outcome.ChannelDefinitions = map[llotypes.ChannelID]llotypes.ChannelDefinition{
+				cid: {ReportFormat: llotypes.ReportFormatEVMPremiumLegacy},
+			}
+			outcome.ValidAfterNanoseconds = map[llotypes.ChannelID]uint64{
+				cid: obsTSNanos - uint64(500*time.Millisecond),
+			}
+
+			// if cadence is 0, but time is < 1s, does not report to avoid overlap
+			assert.EqualError(t, outcome.IsReportable(cid, 1, uint64(0)), "ChannelID: 1; Reason: ChannelID: 1; Reason: IsReportable=false; not valid yet (observationsTimestampSeconds=1726670490, validAfterSeconds=1726670490)")
+			// if cadence is < 1s, if time is < 1s, does not report to avoid overlap
+			assert.EqualError(t, outcome.IsReportable(cid, 1, uint64(100*time.Millisecond)), "ChannelID: 1; Reason: ChannelID: 1; Reason: IsReportable=false; not valid yet (observationsTimestampSeconds=1726670490, validAfterSeconds=1726670490)")
+			// if cadence is < 1s, if time is >= 1s, does report
+			outcome.ValidAfterNanoseconds[cid] = obsTSNanos - uint64(1*time.Second)
+			assert.Nil(t, outcome.IsReportable(cid, 1, uint64(100*time.Millisecond)))
+			// if cadence is exactly 1s, if time is >= 1s, does report
+			assert.Nil(t, outcome.IsReportable(cid, 1, uint64(1*time.Second)))
+			// if cadence is 5s, if time is < 5s, does not report because cadence hasn't elapsed
+			assert.EqualError(t, outcome.IsReportable(cid, 1, uint64(5*time.Second)), "ChannelID: 1; Reason: IsReportable=false; not valid yet (ObservationTimestampNanoseconds=1726670490999999999, validAfterNanoseconds=1726670489999999999, minReportInterval=5000000000); 4.000000 seconds (4000000000ns) until reportable")
+		})
+		t.Run("ReportableChannels", func(t *testing.T) {
+			defaultMinReportInterval := uint64(1 * time.Second)
+
+			outcome := Outcome{
+				ObservationTimestampNanoseconds: uint64(time.Unix(1726670490, 0).UnixNano()), // nolint:gosec // time won't be negative
+				ChannelDefinitions: map[llotypes.ChannelID]llotypes.ChannelDefinition{
+					1: {},
+					2: {},
+					3: {},
+				},
+				ValidAfterNanoseconds: map[llotypes.ChannelID]uint64{
+					1: uint64(1726670489 * time.Second),
+					3: uint64(1726670489 * time.Second),
+				},
+			}
+			reportable, unreportable := outcome.ReportableChannels(1, defaultMinReportInterval)
+			assert.Equal(t, []llotypes.ChannelID{1, 3}, reportable)
+			require.Len(t, unreportable, 1)
+			assert.Equal(t, "ChannelID: 2; Reason: IsReportable=false; no ValidAfterNanoseconds entry yet, this must be a new channel", unreportable[0].Error())
+		})
 	})
 }

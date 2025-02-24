@@ -32,7 +32,7 @@ func FuzzJSONCodec_Decode_Unpack(f *testing.F) {
 	incompleteJSON := []byte(`{`)
 	notJSON := []byte(`"random string"`)
 	unprintable := []byte{1, 2, 3}
-	validJSONReport := []byte(`{"ConfigDigest":"0102030000000000000000000000000000000000000000000000000000000000","SeqNr":43,"ChannelID":46,"ValidAfterSeconds":44,"ObservationTimestampSeconds":45,"Values":[{"Type":0,"Value":"1"},{"Type":0,"Value":"2"},{"Type":1,"Value":"Q{Bid: 3.13, Benchmark: 4.4, Ask: 5.12}"}],"Specimen":true}`)
+	validJSONReport := []byte(`{"ConfigDigest":"0102030000000000000000000000000000000000000000000000000000000000","SeqNr":43,"ChannelID":46,"ValidAfterNanoseconds":44,"ObservationTimestampNanoseconds":45,"Values":[{"Type":0,"Value":"1"},{"Type":0,"Value":"2"},{"Type":1,"Value":"Q{Bid: 3.13, Benchmark: 4.4, Ask: 5.12}"}],"Specimen":true}`)
 	invalidConfigDigest := []byte(`{"SeqNr":42,"ConfigDigest":"foo"}`)
 	invalidConfigDigestNotEnoughBytes := []byte(`{"SeqNr":42,"ConfigDigest":"0xdead"}`)
 	badStreamValues := []byte(`{"SeqNr":42,"ConfigDigest":"0102030000000000000000000000000000000000000000000000000000000000", "Values":[{"Type":0,"Value":null},{"Type":-1,"Value":"2"}]}`)
@@ -104,13 +104,13 @@ func Test_JSONCodec_Properties(t *testing.T) {
 			return equalReports(r, r2)
 		},
 		gen.StrictStruct(reflect.TypeOf(&Report{}), map[string]gopter.Gen{
-			"ConfigDigest":                genConfigDigest(),
-			"SeqNr":                       genSeqNr(),
-			"ChannelID":                   gen.UInt32(),
-			"ValidAfterSeconds":           gen.UInt32(),
-			"ObservationTimestampSeconds": gen.UInt32(),
-			"Values":                      genStreamValues(),
-			"Specimen":                    gen.Bool(),
+			"ConfigDigest":                    genConfigDigest(),
+			"SeqNr":                           genSeqNr(),
+			"ChannelID":                       gen.UInt32(),
+			"ValidAfterNanoseconds":           gen.UInt64(),
+			"ObservationTimestampNanoseconds": gen.UInt64(),
+			"Values":                          genStreamValues(),
+			"Specimen":                        gen.Bool(),
 		}),
 	))
 
@@ -159,10 +159,10 @@ func equalReports(r, r2 Report) bool {
 	if r.ChannelID != r2.ChannelID {
 		return false
 	}
-	if r.ValidAfterSeconds != r2.ValidAfterSeconds {
+	if r.ValidAfterNanoseconds != r2.ValidAfterNanoseconds {
 		return false
 	}
-	if r.ObservationTimestampSeconds != r2.ObservationTimestampSeconds {
+	if r.ObservationTimestampNanoseconds != r2.ObservationTimestampNanoseconds {
 		return false
 	}
 	if len(r.Values) != len(r2.Values) {
@@ -272,13 +272,13 @@ func Test_JSONCodec(t *testing.T) {
 	t.Run("Encode=>Decode", func(t *testing.T) {
 		ctx := tests.Context(t)
 		r := Report{
-			ConfigDigest:                types.ConfigDigest([32]byte{1, 2, 3}),
-			SeqNr:                       43,
-			ChannelID:                   llotypes.ChannelID(46),
-			ValidAfterSeconds:           44,
-			ObservationTimestampSeconds: 45,
-			Values:                      []StreamValue{ToDecimal(decimal.NewFromInt(1)), ToDecimal(decimal.NewFromInt(2)), &Quote{Bid: decimal.NewFromFloat(3.13), Benchmark: decimal.NewFromFloat(4.4), Ask: decimal.NewFromFloat(5.12)}},
-			Specimen:                    true,
+			ConfigDigest:                    types.ConfigDigest([32]byte{1, 2, 3}),
+			SeqNr:                           43,
+			ChannelID:                       llotypes.ChannelID(46),
+			ValidAfterNanoseconds:           44,
+			ObservationTimestampNanoseconds: 45,
+			Values:                          []StreamValue{ToDecimal(decimal.NewFromInt(1)), ToDecimal(decimal.NewFromInt(2)), &Quote{Bid: decimal.NewFromFloat(3.13), Benchmark: decimal.NewFromFloat(4.4), Ask: decimal.NewFromFloat(5.12)}},
+			Specimen:                        true,
 		}
 
 		cdc := JSONReportCodec{}
@@ -286,7 +286,7 @@ func Test_JSONCodec(t *testing.T) {
 		encoded, err := cdc.Encode(ctx, r, llo.ChannelDefinition{})
 		require.NoError(t, err)
 
-		assert.Equal(t, `{"ConfigDigest":"0102030000000000000000000000000000000000000000000000000000000000","SeqNr":43,"ChannelID":46,"ValidAfterSeconds":44,"ObservationTimestampSeconds":45,"Values":[{"Type":0,"Value":"1"},{"Type":0,"Value":"2"},{"Type":1,"Value":"Q{Bid: 3.13, Benchmark: 4.4, Ask: 5.12}"}],"Specimen":true}`, string(encoded))
+		assert.Equal(t, `{"ConfigDigest":"0102030000000000000000000000000000000000000000000000000000000000","SeqNr":43,"ChannelID":46,"ValidAfterNanoseconds":44,"ObservationTimestampNanoseconds":45,"Values":[{"Type":0,"Value":"1"},{"Type":0,"Value":"2"},{"Type":1,"Value":"Q{Bid: 3.13, Benchmark: 4.4, Ask: 5.12}"}],"Specimen":true}`, string(encoded))
 
 		decoded, err := cdc.Decode(encoded)
 		require.NoError(t, err)
@@ -326,7 +326,7 @@ func Test_JSONCodec(t *testing.T) {
 		})
 	})
 	t.Run("UnpackDecode unpacks and decodes report", func(t *testing.T) {
-		b := []byte(`{"configDigest":"0102030000000000000000000000000000000000000000000000000000000000","seqNr":43,"report":{"ConfigDigest":"0102030000000000000000000000000000000000000000000000000000000000","SeqNr":43,"ChannelID":46,"ValidAfterSeconds":44,"ObservationTimestampSeconds":45,"Values":[{"Type":0,"Value":"1"},{"Type":0,"Value":"2"},{"Type":1,"Value":"Q{Bid: 3.13, Benchmark: 4.4, Ask: 5.12}"}],"Specimen":true},"sigs":[{"Signature":"AgME","Signer":2}]}`)
+		b := []byte(`{"configDigest":"0102030000000000000000000000000000000000000000000000000000000000","seqNr":43,"report":{"ConfigDigest":"0102030000000000000000000000000000000000000000000000000000000000","SeqNr":43,"ChannelID":46,"ValidAfterNanoseconds":44,"ObservationTimestampNanoseconds":45,"Values":[{"Type":0,"Value":"1"},{"Type":0,"Value":"2"},{"Type":1,"Value":"Q{Bid: 3.13, Benchmark: 4.4, Ask: 5.12}"}],"Specimen":true},"sigs":[{"Signature":"AgME","Signer":2}]}`)
 
 		cdc := JSONReportCodec{}
 		digest, seqNr, report, sigs, err := cdc.UnpackDecode(b)
@@ -335,13 +335,13 @@ func Test_JSONCodec(t *testing.T) {
 		assert.Equal(t, types.ConfigDigest([32]byte{1, 2, 3}), digest)
 		assert.Equal(t, uint64(43), seqNr)
 		assert.Equal(t, Report{
-			ConfigDigest:                types.ConfigDigest([32]byte{1, 2, 3}),
-			SeqNr:                       43,
-			ChannelID:                   llotypes.ChannelID(46),
-			ValidAfterSeconds:           44,
-			ObservationTimestampSeconds: 45,
-			Values:                      []StreamValue{ToDecimal(decimal.NewFromInt(1)), ToDecimal(decimal.NewFromInt(2)), &Quote{Bid: decimal.NewFromFloat(3.13), Benchmark: decimal.NewFromFloat(4.4), Ask: decimal.NewFromFloat(5.12)}},
-			Specimen:                    true,
+			ConfigDigest:                    types.ConfigDigest([32]byte{1, 2, 3}),
+			SeqNr:                           43,
+			ChannelID:                       llotypes.ChannelID(46),
+			ValidAfterNanoseconds:           44,
+			ObservationTimestampNanoseconds: 45,
+			Values:                          []StreamValue{ToDecimal(decimal.NewFromInt(1)), ToDecimal(decimal.NewFromInt(2)), &Quote{Bid: decimal.NewFromFloat(3.13), Benchmark: decimal.NewFromFloat(4.4), Ask: decimal.NewFromFloat(5.12)}},
+			Specimen:                        true,
 		}, report)
 		assert.Equal(t, []types.AttributedOnchainSignature{{Signature: []byte{2, 3, 4}, Signer: 2}}, sigs)
 	})

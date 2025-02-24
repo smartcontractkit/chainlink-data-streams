@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"sort"
-	"time"
 
 	"github.com/smartcontractkit/libocr/offchainreporting2/types"
 	"github.com/smartcontractkit/libocr/offchainreporting2plus/ocr3types"
@@ -61,20 +60,20 @@ func (p *Plugin) outcome(outctx ocr3types.OutcomeContext, query types.Query, aos
 	var outcome Outcome
 
 	/////////////////////////////////
-	// outcome.ObservationsTimestampNanoseconds
+	// outcome.ObservationTimestampNanoseconds
 	/////////////////////////////////
-	outcome.ObservationsTimestampNanoseconds = medianTimestamp(timestampsNanoseconds)
+	outcome.ObservationTimestampNanoseconds = medianTimestamp(timestampsNanoseconds)
 
 	/////////////////////////////////
 	// outcome.LifeCycleStage
 	/////////////////////////////////
 	if previousOutcome.LifeCycleStage == LifeCycleStageStaging && validPredecessorRetirementReport != nil {
 		// Promote this protocol instance to the production stage! 🚀
-		p.Logger.Infow("Promoting protocol instance from staging to production 🎖️", "seqNr", outctx.SeqNr, "stage", "Outcome", "validAfterSeconds", validPredecessorRetirementReport.ValidAfterSeconds)
+		p.Logger.Infow("Promoting protocol instance from staging to production 🎖️", "seqNr", outctx.SeqNr, "stage", "Outcome", "validAfterNanoseconds", validPredecessorRetirementReport.ValidAfterNanoseconds)
 
-		// override ValidAfterSeconds with the value from the retirement report
+		// override ValidAfterNanoseconds with the value from the retirement report
 		// so that we have no gaps in the validity time range.
-		outcome.ValidAfterSeconds = validPredecessorRetirementReport.ValidAfterSeconds
+		outcome.ValidAfterNanoseconds = validPredecessorRetirementReport.ValidAfterNanoseconds
 		outcome.LifeCycleStage = LifeCycleStageProduction
 	} else {
 		outcome.LifeCycleStage = previousOutcome.LifeCycleStage
@@ -154,54 +153,44 @@ func (p *Plugin) outcome(outctx ocr3types.OutcomeContext, query types.Query, aos
 	}
 
 	/////////////////////////////////
-	// outcome.ValidAfterSeconds
+	// outcome.ValidAfterNanoseconds
 	/////////////////////////////////
 
-	// ValidAfterSeconds can be non-nil here if earlier code already
-	// populated ValidAfterSeconds during promotion to production. In this
+	// ValidAfterNanoseconds can be non-nil here if earlier code already
+	// populated ValidAfterNanoseconds during promotion to production. In this
 	// case, nothing to do.
-	if outcome.ValidAfterSeconds == nil {
-		previousObservationsTimestampSeconds, err2 := previousOutcome.ObservationsTimestampSeconds()
-		if err2 != nil {
-			return nil, fmt.Errorf("error getting previous outcome's observations timestamp: %v", err2)
-		}
-
-		outcome.ValidAfterSeconds = map[llotypes.ChannelID]uint32{}
-		for channelID, previousValidAfterSeconds := range previousOutcome.ValidAfterSeconds {
-			if err3 := previousOutcome.IsReportable(channelID); err3 != nil {
+	if outcome.ValidAfterNanoseconds == nil {
+		outcome.ValidAfterNanoseconds = map[llotypes.ChannelID]uint64{}
+		for channelID, previousValidAfterNanoseconds := range previousOutcome.ValidAfterNanoseconds {
+			if err3 := previousOutcome.IsReportable(channelID, p.ProtocolVersion, p.DefaultMinReportIntervalNanoseconds); err3 != nil {
 				if p.Config.VerboseLogging {
 					p.Logger.Debugw("Channel is not reportable", "channelID", channelID, "err", err3, "stage", "Outcome", "seqNr", outctx.SeqNr)
 				}
-				// previous outcome did not report; keep the same validAfterSeconds
-				outcome.ValidAfterSeconds[channelID] = previousValidAfterSeconds
+				// previous outcome did not report; keep the same ValidAfterNanoseconds
+				outcome.ValidAfterNanoseconds[channelID] = previousValidAfterNanoseconds
 			} else {
-				// previous outcome reported; update validAfterSeconds to the previousObservationsTimestamp
-				outcome.ValidAfterSeconds[channelID] = previousObservationsTimestampSeconds
+				// previous outcome reported; update ValidAfterNanoseconds to the previousObservationTimestamp
+				outcome.ValidAfterNanoseconds[channelID] = previousOutcome.ObservationTimestampNanoseconds
 			}
 		}
 	}
 
-	observationsTimestampSeconds, err := outcome.ObservationsTimestampSeconds()
-	if err != nil {
-		return nil, fmt.Errorf("error getting outcome's observations timestamp: %w", err)
-	}
-
 	for channelID := range outcome.ChannelDefinitions {
-		if _, ok := outcome.ValidAfterSeconds[channelID]; !ok {
-			// new channel, set validAfterSeconds to observations timestamp
-			outcome.ValidAfterSeconds[channelID] = observationsTimestampSeconds
+		if _, ok := outcome.ValidAfterNanoseconds[channelID]; !ok {
+			// new channel, set ValidAfterNanoseconds to observations timestamp
+			outcome.ValidAfterNanoseconds[channelID] = outcome.ObservationTimestampNanoseconds
 		}
 	}
 
 	// One might think that we should simply delete any channel from
-	// ValidAfterSeconds that is not mentioned in the ChannelDefinitions. This
+	// ValidAfterNanoseconds that is not mentioned in the ChannelDefinitions. This
 	// could, however, lead to gaps being created if this protocol instance is
 	// promoted from staging to production while we're still "ramping up" the
 	// full set of channels. We do the "safe" thing (i.e. minimizing occurrence
 	// of gaps) here and only remove channels if there has been an explicit vote
 	// to remove them.
 	for _, channelID := range removedChannelIDs {
-		delete(outcome.ValidAfterSeconds, channelID)
+		delete(outcome.ValidAfterNanoseconds, channelID)
 	}
 
 	/////////////////////////////////
@@ -251,7 +240,7 @@ func (p *Plugin) outcome(outctx ocr3types.OutcomeContext, query types.Query, aos
 	return p.OutcomeCodec.Encode(outcome)
 }
 
-func (p *Plugin) decodeObservations(aos []types.AttributedObservation, outctx ocr3types.OutcomeContext) (timestampsNanoseconds []int64, validPredecessorRetirementReport *RetirementReport, shouldRetireVotes int, removeChannelVotesByID map[llotypes.ChannelID]int, updateChannelDefinitionsByHash map[ChannelHash]ChannelDefinitionWithID, updateChannelVotesByHash map[ChannelHash]int, streamObservations map[llotypes.StreamID][]StreamValue) {
+func (p *Plugin) decodeObservations(aos []types.AttributedObservation, outctx ocr3types.OutcomeContext) (timestampsNanoseconds []uint64, validPredecessorRetirementReport *RetirementReport, shouldRetireVotes int, removeChannelVotesByID map[llotypes.ChannelID]int, updateChannelDefinitionsByHash map[ChannelHash]ChannelDefinitionWithID, updateChannelVotesByHash map[ChannelHash]int, streamObservations map[llotypes.StreamID][]StreamValue) {
 	removeChannelVotesByID = make(map[llotypes.ChannelID]int)
 	updateChannelDefinitionsByHash = make(map[ChannelHash]ChannelDefinitionWithID)
 	updateChannelVotesByHash = make(map[ChannelHash]int)
@@ -309,15 +298,15 @@ func (p *Plugin) decodeObservations(aos []types.AttributedObservation, outctx oc
 type Outcome struct {
 	// LifeCycleStage the protocol is in
 	LifeCycleStage llotypes.LifeCycleStage
-	// ObservationsTimestampNanoseconds is the median timestamp from the
+	// ObservationTimestampNanoseconds is the median timestamp from the
 	// latest set of observations
-	ObservationsTimestampNanoseconds int64
+	ObservationTimestampNanoseconds uint64
 	// ChannelDefinitions defines the set & structure of channels for which we
 	// generate reports
 	ChannelDefinitions llotypes.ChannelDefinitions
-	// Latest ValidAfterSeconds value for each channel, reports for each channel
-	// span from ValidAfterSeconds to ObservationTimestampSeconds
-	ValidAfterSeconds map[llotypes.ChannelID]uint32
+	// Latest ValidAfterNanoseconds value for each channel, reports for each channel
+	// span from ValidAfterNanoseconds to ObservationTimestampNanoseconds
+	ValidAfterNanoseconds map[llotypes.ChannelID]uint64
 	// StreamAggregates contains stream IDs mapped to various aggregations.
 	// Usually you will only have one aggregation type per stream but since
 	// channels can define different aggregation methods, sometimes we will
@@ -325,60 +314,87 @@ type Outcome struct {
 	StreamAggregates StreamAggregates
 }
 
-// The Outcome's ObservationsTimestamp rounded down to seconds precision
-func (out *Outcome) ObservationsTimestampSeconds() (uint32, error) {
-	result := time.Unix(0, out.ObservationsTimestampNanoseconds).Unix()
-	if int64(uint32(result)) != result {
-		return 0, fmt.Errorf("timestamp doesn't fit into uint32: %v", result)
+func (out *Outcome) GenRetirementReport(protocolVersion uint32) RetirementReport {
+	return RetirementReport{
+		ProtocolVersion:       protocolVersion,
+		ValidAfterNanoseconds: out.ValidAfterNanoseconds,
 	}
-	return uint32(result), nil
 }
 
-func (out *Outcome) GenRetirementReport() RetirementReport {
-	return RetirementReport{
-		ValidAfterSeconds: out.ValidAfterSeconds,
-	}
-}
+// Channel becomes reportable when:
+// ObservationTimestampNanoseconds > ValidAfterNanoseconds(previous observation timestamp)+MinReportInterval
 
 // Indicates whether a report can be generated for the given channel.
 // Returns nil if channel is reportable
 // NOTE: A channel is still reportable even if missing some or all stream
 // values. The report codec is expected to handle nils and act accordingly
 // (e.g. some values may be optional).
-func (out *Outcome) IsReportable(channelID llotypes.ChannelID) *ErrUnreportableChannel {
+func (out *Outcome) IsReportable(channelID llotypes.ChannelID, protocolVersion uint32, minReportInterval uint64) *ErrUnreportableChannel {
 	if out.LifeCycleStage == LifeCycleStageRetired {
 		return &ErrUnreportableChannel{nil, "IsReportable=false; retired channel", channelID}
 	}
 
-	observationsTimestampSeconds, err := out.ObservationsTimestampSeconds()
-	if err != nil {
-		return &ErrUnreportableChannel{err, "IsReportable=false; invalid observations timestamp", channelID}
-	}
-
-	_, exists := out.ChannelDefinitions[channelID]
+	cd, exists := out.ChannelDefinitions[channelID]
 	if !exists {
 		return &ErrUnreportableChannel{nil, "IsReportable=false; no channel definition with this ID", channelID}
 	}
 
-	if _, ok := out.ValidAfterSeconds[channelID]; !ok {
-		// No validAfterSeconds entry yet, this must be a new channel.
-		// validAfterSeconds will be populated in Outcome() so the channel
+	validAfterNanos, ok := out.ValidAfterNanoseconds[channelID]
+	if !ok {
+		// No ValidAfterNanoseconds entry yet, this must be a new channel.
+		// ValidAfterNanoseconds will be populated in Outcome() so the channel
 		// becomes reportable in later protocol rounds.
-		return &ErrUnreportableChannel{nil, "IsReportable=false; no validAfterSeconds entry yet, this must be a new channel", channelID}
+		return &ErrUnreportableChannel{nil, "IsReportable=false; no ValidAfterNanoseconds entry yet, this must be a new channel", channelID}
+	}
+	obsTsNanos := out.ObservationTimestampNanoseconds
+
+	// Enforce minReportInterval
+	if protocolVersion > 0 {
+		// observation timestamp must be at least validAfterNanoseconds-1 +
+		// minReportInterval in order to report (i.e. reports are separated by a
+		// minimum of minReportInterval nanoseconds)
+		if obsTsNanos < validAfterNanos+minReportInterval {
+			nsUntilReportable := (validAfterNanos + minReportInterval) - obsTsNanos
+			return &ErrUnreportableChannel{nil, fmt.Sprintf("IsReportable=false; not valid yet (ObservationTimestampNanoseconds=%d, validAfterNanoseconds=%d, minReportInterval=%d); %f seconds (%dns) until reportable", obsTsNanos, validAfterNanos, minReportInterval, float64(nsUntilReportable)/1e9, nsUntilReportable), channelID}
+		}
 	}
 
-	if validAfterSeconds := out.ValidAfterSeconds[channelID]; validAfterSeconds >= observationsTimestampSeconds {
-		return &ErrUnreportableChannel{nil, fmt.Sprintf("IsReportable=false; not valid yet (observationsTimestampSeconds=%d < validAfterSeconds=%d)", observationsTimestampSeconds, validAfterSeconds), channelID}
+	// Prevent overlaps or reports not valid yet based on time resolution
+	//
+	// Truncate timestamps to second resolution for version 0
+	// This keeps compatibility with old nodes that may not have nanosecond resolution
+	//
+	// Also use seconds resolution for report formats that require it to prevent overlap
+	if protocolVersion == 0 || IsSecondsResolution(cd.ReportFormat) {
+		validAfterSeconds := validAfterNanos / 1e9
+		obsTsSeconds := obsTsNanos / 1e9
+		if validAfterSeconds >= obsTsSeconds {
+			return &ErrUnreportableChannel{nil, fmt.Sprintf("ChannelID: 1; Reason: IsReportable=false; not valid yet (observationsTimestampSeconds=%d, validAfterSeconds=%d)", obsTsSeconds, validAfterSeconds), channelID}
+		}
 	}
 
 	return nil
 }
 
+func IsSecondsResolution(reportFormat llotypes.ReportFormat) bool {
+	switch reportFormat {
+	// TODO: Might be cleaner to expose a TimeResolution() uint64 field on the
+	// ReportCodec so that the plugin doesn't have to have special knowledge of
+	// the report format details
+	case llotypes.ReportFormatEVMPremiumLegacy, llotypes.ReportFormatEVMABIEncodeUnpacked:
+		return true
+	default:
+		return false
+	}
+}
+
 // List of reportable channels (according to IsReportable), sorted according
 // to a canonical ordering
-func (out *Outcome) ReportableChannels() (reportable []llotypes.ChannelID, unreportable []*ErrUnreportableChannel) {
+func (out *Outcome) ReportableChannels(protocolVersion uint32, defaultMinReportInterval uint64) (reportable []llotypes.ChannelID, unreportable []*ErrUnreportableChannel) {
 	for channelID := range out.ChannelDefinitions {
-		if err := out.IsReportable(channelID); err != nil {
+		// In theory in future, minReportInterval could be overridden on a
+		// per-channel basis in the ChannelDefinitions
+		if err := out.IsReportable(channelID, protocolVersion, defaultMinReportInterval); err != nil {
 			unreportable = append(unreportable, err)
 		} else {
 			reportable = append(reportable, channelID)
@@ -420,7 +436,7 @@ func MakeChannelHash(cd ChannelDefinitionWithID) ChannelHash {
 	merr := errors.Join(
 		binary.Write(h, binary.BigEndian, cd.ChannelID),
 		binary.Write(h, binary.BigEndian, cd.ReportFormat),
-		binary.Write(h, binary.BigEndian, uint32(len(cd.Streams))),
+		binary.Write(h, binary.BigEndian, uint32(len(cd.Streams))), // nolint:gosec // number of streams is limited by MaxStreamsPerChannel
 	)
 	for _, strm := range cd.Streams {
 		merr = errors.Join(merr, binary.Write(h, binary.BigEndian, strm.StreamID))
@@ -436,7 +452,7 @@ func MakeChannelHash(cd ChannelDefinitionWithID) ChannelHash {
 	return result
 }
 
-func medianTimestamp(timestampsNanoseconds []int64) int64 {
+func medianTimestamp(timestampsNanoseconds []uint64) uint64 {
 	sort.Slice(timestampsNanoseconds, func(i, j int) bool { return timestampsNanoseconds[i] < timestampsNanoseconds[j] })
 	return timestampsNanoseconds[len(timestampsNanoseconds)/2]
 }

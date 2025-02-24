@@ -32,11 +32,17 @@ func (p *Plugin) observation(ctx context.Context, outctx ocr3types.OutcomeContex
 		return nil, fmt.Errorf("error unmarshalling previous outcome: %w", err)
 	}
 
+	var obs Observation
+	// QUESTION: is there a way to have this captured in EAs so we get something
+	// closer to the source?
 	observationTimestamp := time.Now()
-	obs := Observation{
-		// QUESTION: is there a way to have this captured in EAs so we get something
-		// closer to the source?
-		UnixTimestampNanoseconds: observationTimestamp.UnixNano(),
+	{
+		obsTSNanos := observationTimestamp.UnixNano()
+		if obsTSNanos < 0 {
+			// Invariant violation; we should never see a negative time
+			return nil, fmt.Errorf("negative observation timestamps are not supported, got: %d", obsTSNanos)
+		}
+		obs.UnixTimestampNanoseconds = uint64(obsTSNanos)
 	}
 
 	if previousOutcome.LifeCycleStage == LifeCycleStageRetired {
@@ -171,7 +177,7 @@ type Observation struct {
 	// Timestamp from when observation is made
 	// Note that this is the timestamp immediately before we initiate any
 	// observations
-	UnixTimestampNanoseconds int64
+	UnixTimestampNanoseconds uint64
 	// Votes to remove/add channels. Subject to MAX_OBSERVATION_*_LENGTH limits
 	RemoveChannelIDs map[llotypes.ChannelID]struct{}
 	// Votes to add or replace channel definitions

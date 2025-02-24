@@ -3,4 +3,7 @@ syntax="proto3";
 package v1;
 option go_package = ".;llo";
 
-message LLOOffchainConfigProto {}
+message LLOOffchainConfigProto {
+    uint32 protocolVersion = 1;
+    uint64 defaultMinReportIntervalNanoseconds = 2;
+}

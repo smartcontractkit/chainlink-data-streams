@@ -47,13 +47,13 @@ type JSONReportCodec struct{}
 
 func (cdc JSONReportCodec) Encode(_ context.Context, r Report, _ llotypes.ChannelDefinition) ([]byte, error) {
 	type encode struct {
-		ConfigDigest                types.ConfigDigest
-		SeqNr                       uint64
-		ChannelID                   llotypes.ChannelID
-		ValidAfterSeconds           uint32
-		ObservationTimestampSeconds uint32
-		Values                      []JSONStreamValue
-		Specimen                    bool
+		ConfigDigest                    types.ConfigDigest
+		SeqNr                           uint64
+		ChannelID                       llotypes.ChannelID
+		ValidAfterNanoseconds           uint64
+		ObservationTimestampNanoseconds uint64
+		Values                          []JSONStreamValue
+		Specimen                        bool
 	}
 	values := make([]JSONStreamValue, len(r.Values))
 	for i, sv := range r.Values {
@@ -70,13 +70,13 @@ func (cdc JSONReportCodec) Encode(_ context.Context, r Report, _ llotypes.Channe
 		}
 	}
 	e := encode{
-		ConfigDigest:                r.ConfigDigest,
-		SeqNr:                       r.SeqNr,
-		ChannelID:                   r.ChannelID,
-		ValidAfterSeconds:           r.ValidAfterSeconds,
-		ObservationTimestampSeconds: r.ObservationTimestampSeconds,
-		Values:                      values,
-		Specimen:                    r.Specimen,
+		ConfigDigest:                    r.ConfigDigest,
+		SeqNr:                           r.SeqNr,
+		ChannelID:                       r.ChannelID,
+		ValidAfterNanoseconds:           r.ValidAfterNanoseconds,
+		ObservationTimestampNanoseconds: r.ObservationTimestampNanoseconds,
+		Values:                          values,
+		Specimen:                        r.Specimen,
 	}
 	return json.Marshal(e)
 }
@@ -90,13 +90,13 @@ func (cdc JSONReportCodec) Verify(_ context.Context, cd llotypes.ChannelDefiniti
 
 func (cdc JSONReportCodec) Decode(b []byte) (r Report, err error) {
 	type decode struct {
-		ConfigDigest                string
-		SeqNr                       uint64
-		ChannelID                   llotypes.ChannelID
-		ValidAfterSeconds           uint32
-		ObservationTimestampSeconds uint32
-		Values                      []JSONStreamValue
-		Specimen                    bool
+		ConfigDigest                    string
+		SeqNr                           uint64
+		ChannelID                       llotypes.ChannelID
+		ValidAfterNanoseconds           uint64
+		ObservationTimestampNanoseconds uint64
+		Values                          []JSONStreamValue
+		Specimen                        bool
 	}
 	d := decode{}
 	err = json.Unmarshal(b, &d)
@@ -125,13 +125,13 @@ func (cdc JSONReportCodec) Decode(b []byte) (r Report, err error) {
 	}
 
 	return Report{
-		ConfigDigest:                cd,
-		SeqNr:                       d.SeqNr,
-		ChannelID:                   d.ChannelID,
-		ValidAfterSeconds:           d.ValidAfterSeconds,
-		ObservationTimestampSeconds: d.ObservationTimestampSeconds,
-		Values:                      values,
-		Specimen:                    d.Specimen,
+		ConfigDigest:                    cd,
+		SeqNr:                           d.SeqNr,
+		ChannelID:                       d.ChannelID,
+		ValidAfterNanoseconds:           d.ValidAfterNanoseconds,
+		ObservationTimestampNanoseconds: d.ObservationTimestampNanoseconds,
+		Values:                          values,
+		Specimen:                        d.Specimen,
 	}, err
 }
 

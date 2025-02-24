@@ -19,6 +19,10 @@ func VerifyChannelDefinitions(ctx context.Context, codecs map[llotypes.ReportFor
 			merr = errors.Join(merr, fmt.Errorf("ChannelDefinition with ID %d has no streams", channelID))
 			continue
 		}
+		if len(cd.Streams) > MaxStreamsPerChannel {
+			merr = errors.Join(merr, fmt.Errorf("ChannelDefinition with ID %d has too many streams, got: %d/%d", channelID, len(cd.Streams), MaxStreamsPerChannel))
+			continue
+		}
 		for _, strm := range cd.Streams {
 			if strm.Aggregator == 0 {
 				merr = errors.Join(merr, fmt.Errorf("ChannelDefinition with ID %d has stream %d with zero aggregator (this may indicate an uninitialized struct)", channelID, strm.StreamID))
