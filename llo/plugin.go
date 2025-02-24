@@ -256,13 +256,6 @@ func (f *PluginFactory) NewReportingPlugin(ctx context.Context, cfg ocr3types.Re
 
 var _ ocr3types.ReportingPlugin[llotypes.ReportInfo] = &Plugin{}
 
-type ReportCodec interface {
-	// Encode may be lossy, so no Decode function is expected
-	// Encode should handle nil stream aggregate values without panicking (it
-	// may return error instead)
-	Encode(context.Context, Report, llotypes.ChannelDefinition) ([]byte, error)
-}
-
 type Plugin struct {
 	Config                           Config
 	PredecessorConfigDigest          *types.ConfigDigest
@@ -349,7 +342,7 @@ func (p *Plugin) ValidateObservation(ctx context.Context, outctx ocr3types.Outco
 		return fmt.Errorf("RemoveChannelIDs is too long: %v vs %v", len(observation.RemoveChannelIDs), MaxObservationRemoveChannelIDsLength)
 	}
 
-	if err := VerifyChannelDefinitions(observation.UpdateChannelDefinitions); err != nil {
+	if err := VerifyChannelDefinitions(ctx, p.ReportCodecs, observation.UpdateChannelDefinitions); err != nil {
 		return fmt.Errorf("UpdateChannelDefinitions is invalid: %w", err)
 	}
 

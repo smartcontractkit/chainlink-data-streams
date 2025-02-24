@@ -42,7 +42,7 @@ func (p *Plugin) observation(ctx context.Context, outctx ocr3types.OutcomeContex
 	if previousOutcome.LifeCycleStage == LifeCycleStageRetired {
 		p.Logger.Debugw("Node is retired, will generate empty observation", "stage", "Observation", "seqNr", outctx.SeqNr)
 	} else {
-		if err = VerifyChannelDefinitions(previousOutcome.ChannelDefinitions); err != nil {
+		if err = VerifyChannelDefinitions(ctx, p.ReportCodecs, previousOutcome.ChannelDefinitions); err != nil {
 			// This is not expected, unless the majority of nodes are using a
 			// different verification method than this one.
 			//
@@ -81,7 +81,7 @@ func (p *Plugin) observation(ctx context.Context, outctx ocr3types.OutcomeContex
 			//
 			// ChannelIDs should always be sorted the same way (channel ID ascending).
 			expectedChannelDefs := p.ChannelDefinitionCache.Definitions()
-			if err = VerifyChannelDefinitions(expectedChannelDefs); err != nil {
+			if err = VerifyChannelDefinitions(ctx, p.ReportCodecs, expectedChannelDefs); err != nil {
 				// If channel definitions is invalid, do not error out but instead
 				// don't vote on any new channels.
 				//

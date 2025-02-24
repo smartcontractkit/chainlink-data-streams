@@ -1,6 +1,8 @@
 package llo
 
 import (
+	"context"
+	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -8,13 +10,30 @@ import (
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
 )
 
+type mockReportCodec struct {
+	err error
+}
+
+func (m mockReportCodec) Encode(context.Context, Report, llotypes.ChannelDefinition) ([]byte, error) {
+	return nil, nil
+}
+
+func (m mockReportCodec) Verify(context.Context, llotypes.ChannelDefinition) error {
+	return m.err
+}
+
 func Test_VerifyChannelDefinitions(t *testing.T) {
+	ctx := context.Background()
+	mockReportFormat := llotypes.ReportFormat(0)
+	codecs := make(map[llotypes.ReportFormat]ReportCodec)
+	codecs[mockReportFormat] = mockReportCodec{}
+
 	t.Run("fails with too many channels", func(t *testing.T) {
 		channelDefs := make(llotypes.ChannelDefinitions, MaxOutcomeChannelDefinitionsLength+1)
 		for i := uint32(0); i < MaxOutcomeChannelDefinitionsLength+1; i++ {
 			channelDefs[i] = llotypes.ChannelDefinition{}
 		}
-		err := VerifyChannelDefinitions(channelDefs)
+		err := VerifyChannelDefinitions(ctx, codecs, channelDefs)
 		assert.EqualError(t, err, "too many channels, got: 2001/2000")
 	})
 
@@ -22,7 +41,7 @@ func Test_VerifyChannelDefinitions(t *testing.T) {
 		channelDefs := llotypes.ChannelDefinitions{
 			1: llotypes.ChannelDefinition{},
 		}
-		err := VerifyChannelDefinitions(channelDefs)
+		err := VerifyChannelDefinitions(ctx, codecs, channelDefs)
 		assert.EqualError(t, err, "ChannelDefinition with ID 1 has no streams")
 	})
 
@@ -32,7 +51,7 @@ func Test_VerifyChannelDefinitions(t *testing.T) {
 				Streams: []llotypes.Stream{llotypes.Stream{}},
 			},
 		}
-		err := VerifyChannelDefinitions(channelDefs)
+		err := VerifyChannelDefinitions(ctx, codecs, channelDefs)
 		assert.EqualError(t, err, "ChannelDefinition with ID 1 has stream 0 with zero aggregator (this may indicate an uninitialized struct)")
 	})
 
@@ -49,13 +68,15 @@ func Test_VerifyChannelDefinitions(t *testing.T) {
 				Streams: []llotypes.Stream{llotypes.Stream{StreamID: MaxObservationStreamValuesLength + 1, Aggregator: llotypes.AggregatorMedian}},
 			},
 		}
-		err := VerifyChannelDefinitions(channelDefs)
+		err := VerifyChannelDefinitions(ctx, codecs, channelDefs)
 		assert.EqualError(t, err, "too many unique stream IDs, got: 10001/10000")
 	})
-	t.Run("fails for ReportFormatEVMPremiumLegacy without exactly three streams", func(t *testing.T) {
+	t.Run("fails if codec.Verify fails", func(t *testing.T) {
+		failingCodecs := make(map[llotypes.ReportFormat]ReportCodec)
+		failingCodecs[mockReportFormat] = mockReportCodec{err: errors.New("codec error")}
 		channelDefs := llotypes.ChannelDefinitions{
 			1: llotypes.ChannelDefinition{
-				ReportFormat: llotypes.ReportFormatEVMPremiumLegacy,
+				ReportFormat: mockReportFormat,
 				Streams: []llotypes.Stream{
 					llotypes.Stream{
 						StreamID:   1,
@@ -64,10 +85,9 @@ func Test_VerifyChannelDefinitions(t *testing.T) {
 				},
 			},
 		}
-		err := VerifyChannelDefinitions(channelDefs)
-		assert.EqualError(t, err, "invalid ChannelDefinition with ID 1: ReportFormatEVMPremiumLegacy requires exactly 3 streams (NativePrice, LinkPrice, Quote); got: [{1 median}]")
+		err := VerifyChannelDefinitions(ctx, failingCodecs, channelDefs)
+		assert.EqualError(t, err, "invalid ChannelDefinition with ID 1: codec error")
 	})
-
 	t.Run("succeeds with valid channel definitions", func(t *testing.T) {
 		channelDefs := llotypes.ChannelDefinitions{
 			1: llotypes.ChannelDefinition{
@@ -79,7 +99,7 @@ func Test_VerifyChannelDefinitions(t *testing.T) {
 				},
 			},
 		}
-		err := VerifyChannelDefinitions(channelDefs)
+		err := VerifyChannelDefinitions(ctx, codecs, channelDefs)
 		assert.NoError(t, err)
 	})
 
@@ -92,7 +112,7 @@ func Test_VerifyChannelDefinitions(t *testing.T) {
 		for i := uint32(0); i < MaxOutcomeChannelDefinitionsLength; i++ {
 			channelDefs[i] = llotypes.ChannelDefinition{Streams: streams}
 		}
-		err := VerifyChannelDefinitions(channelDefs)
+		err := VerifyChannelDefinitions(ctx, codecs, channelDefs)
 		assert.NoError(t, err)
 	})
 }

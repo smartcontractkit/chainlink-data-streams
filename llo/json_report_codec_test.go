@@ -2,6 +2,7 @@ package llo
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"math"
 	reflect "reflect"
@@ -350,5 +351,26 @@ func Test_JSONCodec(t *testing.T) {
 		assert.EqualError(t, err, "missing SeqNr")
 		_, err = cdc.Decode([]byte(`{"seqNr":1}`))
 		assert.EqualError(t, err, "invalid ConfigDigest; cannot convert bytes to ConfigDigest. bytes have wrong length 0")
+	})
+}
+
+func Test_JSONCodec_Verify(t *testing.T) {
+	t.Run("valid", func(t *testing.T) {
+		cdc := JSONReportCodec{}
+		err := cdc.Verify(context.Background(), llo.ChannelDefinition{
+			Opts: llotypes.ChannelOpts([]byte{}),
+		})
+		require.NoError(t, err)
+	})
+	t.Run("does not accept any options", func(t *testing.T) {
+		cdc := JSONReportCodec{}
+		err := cdc.Verify(context.Background(), llo.ChannelDefinition{
+			Opts: llotypes.ChannelOpts([]byte{1}),
+		})
+		assert.EqualError(t, err, "unexpected Opts in ChannelDefinition (JSONReportCodec expects no opts), got: \"\\x01\"")
+		err = cdc.Verify(context.Background(), llo.ChannelDefinition{
+			Opts: llotypes.ChannelOpts([]byte("{}")),
+		})
+		assert.EqualError(t, err, "unexpected Opts in ChannelDefinition (JSONReportCodec expects no opts), got: \"{}\"")
 	})
 }

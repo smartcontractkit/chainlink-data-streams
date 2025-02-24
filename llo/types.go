@@ -1,10 +1,26 @@
 package llo
 
 import (
+	"context"
+
 	"github.com/smartcontractkit/libocr/offchainreporting2plus/ocr3types"
 
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
 )
+
+type ReportCodec interface {
+	// Encode may be lossy, so no Decode function is expected
+	// Encode should handle nil stream aggregate values without panicking (it
+	// may return error instead)
+	Encode(context.Context, Report, llotypes.ChannelDefinition) ([]byte, error)
+	// Verify may optionally verify a channel definition to ensure it is valid
+	// for the given report codec. If a codec does not wish to implement
+	// validation it may simply return nil here. If any definition fails
+	// validation, the entire channel definitions file will be rejected.
+	// This can be useful to ensure that e.g. options aren't changed
+	// accidentally to something that would later break a report on encoding.
+	Verify(context.Context, llotypes.ChannelDefinition) error
+}
 
 type ChannelDefinitionWithID struct {
 	llotypes.ChannelDefinition
