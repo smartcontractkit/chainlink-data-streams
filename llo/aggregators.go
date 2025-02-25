@@ -2,9 +2,11 @@ package llo
 
 import (
 	"fmt"
+	"slices"
 	"sort"
 
 	"github.com/shopspring/decimal"
+	"golang.org/x/exp/maps"
 
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
 )
@@ -93,7 +95,11 @@ func ModeAggregator(values []StreamValue, f int) (StreamValue, error) {
 	}
 	var modeSerialized []byte
 	var modeCount int
-	for value, count := range counts {
+	// tie-break selecting lowest "key"
+	keys := maps.Keys(counts)
+	slices.Sort(keys)
+	for _, value := range keys {
+		count := counts[value]
 		if count > modeCount {
 			modeSerialized = []byte(value)
 			modeCount = count
