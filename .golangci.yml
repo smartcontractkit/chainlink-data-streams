@@ -15,6 +15,7 @@ linters:
     - whitespace
     - depguard
     - containedctx
+    - copyloopvar
 linters-settings:
   exhaustive:
     default-signifies-exhaustive: true
