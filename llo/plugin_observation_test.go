@@ -3,6 +3,7 @@ package llo
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -34,6 +35,17 @@ func (p *mockPredecessorRetirementReportCache) CheckAttestedRetirementReport(pre
 }
 
 func Test_Observation(t *testing.T) {
+	for _, codec := range []OutcomeCodec{protoOutcomeCodecV0{}, protoOutcomeCodecV1{}} {
+		t.Run(fmt.Sprintf("OutcomeCodec: %T", codec), func(t *testing.T) {
+			testObservation(t, codec)
+		})
+	}
+}
+
+func testObservation(t *testing.T, outcomeCodec OutcomeCodec) {
+	testStartTS := time.Now()
+	testStartTSNanos := uint64(testStartTS.UnixNano()) //nolint:gosec // safe cast in tests
+
 	smallDefinitions := map[llotypes.ChannelID]llotypes.ChannelDefinition{
 		1: {
 			ReportFormat: llotypes.ReportFormatJSON,
@@ -57,7 +69,7 @@ func Test_Observation(t *testing.T) {
 
 	p := &Plugin{
 		Config:                 Config{true},
-		OutcomeCodec:           protoOutcomeCodec{},
+		OutcomeCodec:           outcomeCodec,
 		ShouldRetireCache:      &mockShouldRetireCache{},
 		ChannelDefinitionCache: cdc,
 		Logger:                 logger.Test(t),
@@ -80,8 +92,6 @@ func Test_Observation(t *testing.T) {
 	})
 
 	t.Run("observes timestamp and channel definitions on seqNr=2", func(t *testing.T) {
-		testStartTS := time.Now()
-
 		outctx := ocr3types.OutcomeContext{SeqNr: 2}
 		obs, err := p.Observation(context.Background(), outctx, query)
 		require.NoError(t, err)
@@ -93,18 +103,16 @@ func Test_Observation(t *testing.T) {
 		assert.Len(t, decoded.RemoveChannelIDs, 0)
 		assert.Len(t, decoded.StreamValues, 0)
 		assert.Equal(t, cdc.definitions, decoded.UpdateChannelDefinitions)
-		assert.GreaterOrEqual(t, decoded.UnixTimestampNanoseconds, testStartTS.UnixNano())
+		assert.GreaterOrEqual(t, decoded.UnixTimestampNanoseconds, testStartTSNanos)
 	})
 
 	t.Run("observes streams on seqNr=2", func(t *testing.T) {
-		testStartTS := time.Now()
-
 		previousOutcome := Outcome{
-			LifeCycleStage:                   llotypes.LifeCycleStage("test"),
-			ObservationsTimestampNanoseconds: testStartTS.UnixNano(),
-			ChannelDefinitions:               cdc.definitions,
-			ValidAfterSeconds:                nil,
-			StreamAggregates:                 nil,
+			LifeCycleStage:                  llotypes.LifeCycleStage("test"),
+			ObservationTimestampNanoseconds: testStartTSNanos,
+			ChannelDefinitions:              cdc.definitions,
+			ValidAfterNanoseconds:           nil,
+			StreamAggregates:                nil,
 		}
 		encodedPreviousOutcome, err := p.OutcomeCodec.Encode(previousOutcome)
 		require.NoError(t, err)
@@ -119,7 +127,7 @@ func Test_Observation(t *testing.T) {
 		assert.False(t, decoded.ShouldRetire)
 		assert.Len(t, decoded.UpdateChannelDefinitions, 0)
 		assert.Len(t, decoded.RemoveChannelIDs, 0)
-		assert.GreaterOrEqual(t, decoded.UnixTimestampNanoseconds, testStartTS.UnixNano())
+		assert.GreaterOrEqual(t, decoded.UnixTimestampNanoseconds, testStartTSNanos)
 		assert.Equal(t, ds.s, decoded.StreamValues)
 	})
 
@@ -149,14 +157,12 @@ func Test_Observation(t *testing.T) {
 	cdc.definitions = mediumDefinitions
 
 	t.Run("votes to increase channel amount by a small amount, and remove one", func(t *testing.T) {
-		testStartTS := time.Now()
-
 		previousOutcome := Outcome{
-			LifeCycleStage:                   llotypes.LifeCycleStage("test"),
-			ObservationsTimestampNanoseconds: testStartTS.UnixNano(),
-			ChannelDefinitions:               smallDefinitions,
-			ValidAfterSeconds:                nil,
-			StreamAggregates:                 nil,
+			LifeCycleStage:                  llotypes.LifeCycleStage("test"),
+			ObservationTimestampNanoseconds: testStartTSNanos,
+			ChannelDefinitions:              smallDefinitions,
+			ValidAfterNanoseconds:           nil,
+			StreamAggregates:                nil,
 		}
 		encodedPreviousOutcome, err := p.OutcomeCodec.Encode(previousOutcome)
 		require.NoError(t, err)
@@ -183,31 +189,29 @@ func Test_Observation(t *testing.T) {
 		assert.Len(t, decoded.RemoveChannelIDs, 1)
 		assert.Equal(t, map[uint32]struct{}{2: {}}, decoded.RemoveChannelIDs)
 
-		assert.GreaterOrEqual(t, decoded.UnixTimestampNanoseconds, testStartTS.UnixNano())
+		assert.GreaterOrEqual(t, decoded.UnixTimestampNanoseconds, testStartTSNanos)
 		assert.Equal(t, ds.s, decoded.StreamValues)
 	})
 
-	largeSize := 100
-	require.Greater(t, largeSize, MaxObservationUpdateChannelDefinitionsLength)
+	largeSize := uint32(100)
+	require.Greater(t, int(largeSize), MaxObservationUpdateChannelDefinitionsLength)
 	largeDefinitions := make(map[llotypes.ChannelID]llotypes.ChannelDefinition, largeSize)
-	for i := 0; i < largeSize; i++ {
-		largeDefinitions[llotypes.ChannelID(i)] = llotypes.ChannelDefinition{
+	for i := uint32(0); i < largeSize; i++ {
+		largeDefinitions[i] = llotypes.ChannelDefinition{
 			ReportFormat: llotypes.ReportFormatEVMPremiumLegacy,
-			Streams:      []llotypes.Stream{{StreamID: uint32(i), Aggregator: llotypes.AggregatorMedian}, {StreamID: uint32(i * 10000), Aggregator: llotypes.AggregatorMedian}, {StreamID: uint32(i * 100000), Aggregator: llotypes.AggregatorMedian}},
+			Streams:      []llotypes.Stream{{StreamID: i, Aggregator: llotypes.AggregatorMedian}, {StreamID: (i * 10000), Aggregator: llotypes.AggregatorMedian}, {StreamID: (i * 100000), Aggregator: llotypes.AggregatorMedian}},
 		}
 	}
 	cdc.definitions = largeDefinitions
 
 	t.Run("votes to add channels when channel definitions increases by a large amount, and replace some existing channels with different definitions", func(t *testing.T) {
 		t.Run("first round of additions", func(t *testing.T) {
-			testStartTS := time.Now()
-
 			previousOutcome := Outcome{
-				LifeCycleStage:                   llotypes.LifeCycleStage("test"),
-				ObservationsTimestampNanoseconds: testStartTS.UnixNano(),
-				ChannelDefinitions:               smallDefinitions,
-				ValidAfterSeconds:                nil,
-				StreamAggregates:                 nil,
+				LifeCycleStage:                  llotypes.LifeCycleStage("test"),
+				ObservationTimestampNanoseconds: testStartTSNanos,
+				ChannelDefinitions:              smallDefinitions,
+				ValidAfterNanoseconds:           nil,
+				StreamAggregates:                nil,
 			}
 			encodedPreviousOutcome, err := p.OutcomeCodec.Encode(previousOutcome)
 			require.NoError(t, err)
@@ -225,8 +229,8 @@ func Test_Observation(t *testing.T) {
 			// only add/replace MaxObservationUpdateChannelDefinitionsLength at a time
 			assert.Len(t, decoded.UpdateChannelDefinitions, MaxObservationUpdateChannelDefinitionsLength)
 			expected := make(llotypes.ChannelDefinitions)
-			for i := 0; i < MaxObservationUpdateChannelDefinitionsLength; i++ {
-				expected[llotypes.ChannelID(i)] = largeDefinitions[llotypes.ChannelID(i)]
+			for i := uint32(0); i < MaxObservationUpdateChannelDefinitionsLength; i++ {
+				expected[i] = largeDefinitions[i]
 			}
 
 			// 1 and 2 are actually replaced since definition is different from the one in smallDefinitions
@@ -236,25 +240,24 @@ func Test_Observation(t *testing.T) {
 			// Nothing removed
 			assert.Len(t, decoded.RemoveChannelIDs, 0)
 
-			assert.GreaterOrEqual(t, decoded.UnixTimestampNanoseconds, testStartTS.UnixNano())
+			assert.GreaterOrEqual(t, decoded.UnixTimestampNanoseconds, testStartTSNanos)
 			assert.Equal(t, ds.s, decoded.StreamValues)
 		})
 
 		t.Run("second round of additions", func(t *testing.T) {
-			testStartTS := time.Now()
-			offset := MaxObservationUpdateChannelDefinitionsLength * 2
+			offset := uint32(MaxObservationUpdateChannelDefinitionsLength * 2)
 
 			subsetDfns := make(llotypes.ChannelDefinitions)
-			for i := 0; i < offset; i++ {
-				subsetDfns[llotypes.ChannelID(i)] = largeDefinitions[llotypes.ChannelID(i)]
+			for i := uint32(0); i < offset; i++ {
+				subsetDfns[i] = largeDefinitions[i]
 			}
 
 			previousOutcome := Outcome{
-				LifeCycleStage:                   llotypes.LifeCycleStage("test"),
-				ObservationsTimestampNanoseconds: testStartTS.UnixNano(),
-				ChannelDefinitions:               subsetDfns,
-				ValidAfterSeconds:                nil,
-				StreamAggregates:                 nil,
+				LifeCycleStage:                  llotypes.LifeCycleStage("test"),
+				ObservationTimestampNanoseconds: testStartTSNanos,
+				ChannelDefinitions:              subsetDfns,
+				ValidAfterNanoseconds:           nil,
+				StreamAggregates:                nil,
 			}
 			encodedPreviousOutcome, err := p.OutcomeCodec.Encode(previousOutcome)
 			require.NoError(t, err)
@@ -273,9 +276,9 @@ func Test_Observation(t *testing.T) {
 			assert.Len(t, decoded.UpdateChannelDefinitions, MaxObservationUpdateChannelDefinitionsLength)
 			expected := make(llotypes.ChannelDefinitions)
 			expectedChannelIDs := []uint32{}
-			for i := 0; i < MaxObservationUpdateChannelDefinitionsLength; i++ {
-				expectedChannelIDs = append(expectedChannelIDs, uint32(i+offset))
-				expected[llotypes.ChannelID(i+offset)] = largeDefinitions[llotypes.ChannelID(i+offset)]
+			for i := uint32(0); i < MaxObservationUpdateChannelDefinitionsLength; i++ {
+				expectedChannelIDs = append(expectedChannelIDs, i+offset)
+				expected[i+offset] = largeDefinitions[i+offset]
 			}
 			assert.Equal(t, expected, decoded.UpdateChannelDefinitions)
 
@@ -284,16 +287,16 @@ func Test_Observation(t *testing.T) {
 			// Nothing removed
 			assert.Len(t, decoded.RemoveChannelIDs, 0)
 
-			assert.GreaterOrEqual(t, decoded.UnixTimestampNanoseconds, testStartTS.UnixNano())
+			assert.GreaterOrEqual(t, decoded.UnixTimestampNanoseconds, testStartTSNanos)
 			assert.Equal(t, ds.s, decoded.StreamValues)
 		})
 
 		t.Run("in case previous outcome channel definitions is invalid, returns error", func(t *testing.T) {
 			dfns := make(llotypes.ChannelDefinitions)
-			for i := 0; i < 2*MaxOutcomeChannelDefinitionsLength; i++ {
-				dfns[llotypes.ChannelID(i)] = llotypes.ChannelDefinition{
+			for i := uint32(0); i < 2*MaxOutcomeChannelDefinitionsLength; i++ {
+				dfns[i] = llotypes.ChannelDefinition{
 					ReportFormat: llotypes.ReportFormatEVMPremiumLegacy,
-					Streams:      []llotypes.Stream{{StreamID: uint32(i), Aggregator: llotypes.AggregatorMedian}, {StreamID: uint32(i * 10000), Aggregator: llotypes.AggregatorMedian}, {StreamID: uint32(i * 100000), Aggregator: llotypes.AggregatorMedian}},
+					Streams:      []llotypes.Stream{{StreamID: i, Aggregator: llotypes.AggregatorMedian}, {StreamID: (i * 10000), Aggregator: llotypes.AggregatorMedian}, {StreamID: (i * 100000), Aggregator: llotypes.AggregatorMedian}},
 				}
 			}
 
@@ -309,23 +312,21 @@ func Test_Observation(t *testing.T) {
 		})
 
 		t.Run("in case ChannelDefinitionsCache returns invalid definitions, does not vote to change anything", func(t *testing.T) {
-			testStartTS := time.Now()
-
 			previousOutcome := Outcome{
-				LifeCycleStage:                   llotypes.LifeCycleStage("test"),
-				ObservationsTimestampNanoseconds: testStartTS.UnixNano(),
-				ChannelDefinitions:               smallDefinitions,
-				ValidAfterSeconds:                nil,
-				StreamAggregates:                 nil,
+				LifeCycleStage:                  llotypes.LifeCycleStage("test"),
+				ObservationTimestampNanoseconds: testStartTSNanos,
+				ChannelDefinitions:              smallDefinitions,
+				ValidAfterNanoseconds:           nil,
+				StreamAggregates:                nil,
 			}
 			encodedPreviousOutcome, err := p.OutcomeCodec.Encode(previousOutcome)
 			require.NoError(t, err)
 
 			dfns := make(llotypes.ChannelDefinitions)
-			for i := 0; i < 2*MaxOutcomeChannelDefinitionsLength; i++ {
-				dfns[llotypes.ChannelID(i)] = llotypes.ChannelDefinition{
+			for i := uint32(0); i < 2*MaxOutcomeChannelDefinitionsLength; i++ {
+				dfns[i] = llotypes.ChannelDefinition{
 					ReportFormat: llotypes.ReportFormatEVMPremiumLegacy,
-					Streams:      []llotypes.Stream{{StreamID: uint32(i), Aggregator: llotypes.AggregatorMedian}, {StreamID: uint32(i * 10000), Aggregator: llotypes.AggregatorMedian}, {StreamID: uint32(i * 100000), Aggregator: llotypes.AggregatorMedian}},
+					Streams:      []llotypes.Stream{{StreamID: i, Aggregator: llotypes.AggregatorMedian}, {StreamID: (i * 10000), Aggregator: llotypes.AggregatorMedian}, {StreamID: (i * 100000), Aggregator: llotypes.AggregatorMedian}},
 				}
 			}
 			cdc.definitions = dfns
@@ -345,14 +346,12 @@ func Test_Observation(t *testing.T) {
 
 	t.Run("votes to remove channel IDs", func(t *testing.T) {
 		t.Run("first round of removals", func(t *testing.T) {
-			testStartTS := time.Now()
-
 			previousOutcome := Outcome{
-				LifeCycleStage:                   llotypes.LifeCycleStage("test"),
-				ObservationsTimestampNanoseconds: testStartTS.UnixNano(),
-				ChannelDefinitions:               largeDefinitions,
-				ValidAfterSeconds:                nil,
-				StreamAggregates:                 nil,
+				LifeCycleStage:                  llotypes.LifeCycleStage("test"),
+				ObservationTimestampNanoseconds: testStartTSNanos,
+				ChannelDefinitions:              largeDefinitions,
+				ValidAfterNanoseconds:           nil,
+				StreamAggregates:                nil,
 			}
 			encodedPreviousOutcome, err := p.OutcomeCodec.Encode(previousOutcome)
 			require.NoError(t, err)
@@ -373,24 +372,23 @@ func Test_Observation(t *testing.T) {
 			assert.Len(t, decoded.RemoveChannelIDs, MaxObservationRemoveChannelIDsLength)
 			assert.ElementsMatch(t, []uint32{0, 3, 4, 5, 6}, maps.Keys(decoded.RemoveChannelIDs))
 
-			assert.GreaterOrEqual(t, decoded.UnixTimestampNanoseconds, testStartTS.UnixNano())
+			assert.GreaterOrEqual(t, decoded.UnixTimestampNanoseconds, testStartTSNanos)
 			assert.Equal(t, ds.s, decoded.StreamValues)
 		})
 		t.Run("second round of removals", func(t *testing.T) {
-			testStartTS := time.Now()
-			offset := MaxObservationUpdateChannelDefinitionsLength * 2
+			offset := uint32(MaxObservationUpdateChannelDefinitionsLength * 2)
 
 			subsetDfns := maps.Clone(largeDefinitions)
-			for i := 0; i < offset; i++ {
-				delete(subsetDfns, llotypes.ChannelID(i))
+			for i := uint32(0); i < offset; i++ {
+				delete(subsetDfns, i)
 			}
 
 			previousOutcome := Outcome{
-				LifeCycleStage:                   llotypes.LifeCycleStage("test"),
-				ObservationsTimestampNanoseconds: testStartTS.UnixNano(),
-				ChannelDefinitions:               subsetDfns,
-				ValidAfterSeconds:                nil,
-				StreamAggregates:                 nil,
+				LifeCycleStage:                  llotypes.LifeCycleStage("test"),
+				ObservationTimestampNanoseconds: testStartTSNanos,
+				ChannelDefinitions:              subsetDfns,
+				ValidAfterNanoseconds:           nil,
+				StreamAggregates:                nil,
 			}
 			encodedPreviousOutcome, err := p.OutcomeCodec.Encode(previousOutcome)
 			require.NoError(t, err)
@@ -411,7 +409,7 @@ func Test_Observation(t *testing.T) {
 			assert.Len(t, decoded.RemoveChannelIDs, MaxObservationRemoveChannelIDsLength)
 			assert.ElementsMatch(t, []uint32{10, 11, 12, 13, 14}, maps.Keys(decoded.RemoveChannelIDs))
 
-			assert.GreaterOrEqual(t, decoded.UnixTimestampNanoseconds, testStartTS.UnixNano())
+			assert.GreaterOrEqual(t, decoded.UnixTimestampNanoseconds, testStartTSNanos)
 			assert.Equal(t, ds.s, decoded.StreamValues)
 		})
 	})
@@ -433,7 +431,6 @@ func Test_Observation(t *testing.T) {
 	})
 
 	t.Run("when predecessor config digest is set", func(t *testing.T) {
-		testStartTS := time.Now()
 		cd := types.ConfigDigest{2, 3, 4, 5, 6}
 		p.PredecessorConfigDigest = &cd
 		t.Run("in staging lifecycle stage, adds attestedRetirementReport to observation", func(t *testing.T) {
@@ -444,11 +441,11 @@ func Test_Observation(t *testing.T) {
 			}
 			p.PredecessorRetirementReportCache = prrc
 			previousOutcome := Outcome{
-				LifeCycleStage:                   LifeCycleStageStaging,
-				ObservationsTimestampNanoseconds: testStartTS.UnixNano(),
-				ChannelDefinitions:               cdc.definitions,
-				ValidAfterSeconds:                nil,
-				StreamAggregates:                 nil,
+				LifeCycleStage:                  LifeCycleStageStaging,
+				ObservationTimestampNanoseconds: testStartTSNanos,
+				ChannelDefinitions:              cdc.definitions,
+				ValidAfterNanoseconds:           nil,
+				StreamAggregates:                nil,
 			}
 			encodedPreviousOutcome, err := p.OutcomeCodec.Encode(previousOutcome)
 			require.NoError(t, err)
@@ -467,11 +464,11 @@ func Test_Observation(t *testing.T) {
 			}
 			p.PredecessorRetirementReportCache = prrc
 			previousOutcome := Outcome{
-				LifeCycleStage:                   LifeCycleStageStaging,
-				ObservationsTimestampNanoseconds: testStartTS.UnixNano(),
-				ChannelDefinitions:               cdc.definitions,
-				ValidAfterSeconds:                nil,
-				StreamAggregates:                 nil,
+				LifeCycleStage:                  LifeCycleStageStaging,
+				ObservationTimestampNanoseconds: testStartTSNanos,
+				ChannelDefinitions:              cdc.definitions,
+				ValidAfterNanoseconds:           nil,
+				StreamAggregates:                nil,
 			}
 			encodedPreviousOutcome, err := p.OutcomeCodec.Encode(previousOutcome)
 			require.NoError(t, err)
@@ -489,11 +486,11 @@ func Test_Observation(t *testing.T) {
 			}
 			p.PredecessorRetirementReportCache = prrc
 			previousOutcome := Outcome{
-				LifeCycleStage:                   LifeCycleStageProduction,
-				ObservationsTimestampNanoseconds: testStartTS.UnixNano(),
-				ChannelDefinitions:               cdc.definitions,
-				ValidAfterSeconds:                nil,
-				StreamAggregates:                 nil,
+				LifeCycleStage:                  LifeCycleStageProduction,
+				ObservationTimestampNanoseconds: testStartTSNanos,
+				ChannelDefinitions:              cdc.definitions,
+				ValidAfterNanoseconds:           nil,
+				StreamAggregates:                nil,
 			}
 			encodedPreviousOutcome, err := p.OutcomeCodec.Encode(previousOutcome)
 			require.NoError(t, err)
@@ -508,7 +505,6 @@ func Test_Observation(t *testing.T) {
 		})
 	})
 	t.Run("if previous outcome is retired, returns observation with only timestamp", func(t *testing.T) {
-		testStartTS := time.Now()
 		previousOutcome := Outcome{
 			LifeCycleStage: LifeCycleStageRetired,
 		}
@@ -523,7 +519,7 @@ func Test_Observation(t *testing.T) {
 
 		assert.Zero(t, decoded.AttestedPredecessorRetirement)
 		assert.False(t, decoded.ShouldRetire)
-		assert.GreaterOrEqual(t, decoded.UnixTimestampNanoseconds, testStartTS.UnixNano())
+		assert.GreaterOrEqual(t, decoded.UnixTimestampNanoseconds, testStartTSNanos)
 		assert.Len(t, decoded.UpdateChannelDefinitions, 0)
 		assert.Len(t, decoded.RemoveChannelIDs, 0)
 		assert.Len(t, decoded.StreamValues, 0)
@@ -537,7 +533,6 @@ func Test_Observation(t *testing.T) {
 		},
 	}
 	t.Run("if channel definitions file is invalid, does not vote to add or remove any channels and only submits observations", func(t *testing.T) {
-		testStartTS := time.Now()
 		previousOutcome := Outcome{
 			LifeCycleStage:     LifeCycleStageStaging,
 			ChannelDefinitions: smallDefinitions,
@@ -555,7 +550,7 @@ func Test_Observation(t *testing.T) {
 
 		assert.Len(t, decoded.UpdateChannelDefinitions, 0)
 		assert.Len(t, decoded.RemoveChannelIDs, 0)
-		assert.GreaterOrEqual(t, decoded.UnixTimestampNanoseconds, testStartTS.UnixNano())
+		assert.GreaterOrEqual(t, decoded.UnixTimestampNanoseconds, testStartTSNanos)
 		assert.Equal(t, ds.s, decoded.StreamValues)
 	})
 }

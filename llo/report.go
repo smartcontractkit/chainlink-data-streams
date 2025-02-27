@@ -12,14 +12,14 @@ type Report struct {
 	SeqNr uint64
 	// Channel that is being reported on
 	ChannelID llotypes.ChannelID
-	// Report is only valid at t > ValidAfterSeconds
-	// ValidAfterSeconds < ObservationTimestampSeconds always, by enforcement
+	// Report is only valid at t > ValidAfterNanoseconds
+	// ValidAfterNanoseconds < ObservationTimestampNanoseconds always, by enforcement
 	// in IsReportable
-	ValidAfterSeconds uint32
-	// ObservationTimestampSeconds is the median of all observation timestamps
+	ValidAfterNanoseconds uint64
+	// ObservationTimestampNanoseconds is the median of all observation timestamps
 	// (note that this timestamp is taken immediately before we initiate any
 	// observations)
-	ObservationTimestampSeconds uint32
+	ObservationTimestampNanoseconds uint64
 	// Values for every stream in the channel
 	Values []StreamValue
 	// The contract onchain will only validate non-specimen reports. A staging

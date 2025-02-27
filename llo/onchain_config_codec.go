@@ -2,6 +2,7 @@ package llo
 
 import (
 	"fmt"
+	"math"
 	"math/big"
 
 	"github.com/smartcontractkit/libocr/bigbigendian"
@@ -47,9 +48,13 @@ func (EVMOnchainConfigCodec) Decode(b []byte) (OnchainConfig, error) {
 	if v.Cmp(onchainConfigVersionBig) != 0 {
 		return OnchainConfig{}, fmt.Errorf("unexpected version of OnchainConfig, expected %v, got %v", onchainConfigVersion, v)
 	}
+	version := v.Uint64()
+	if version > math.MaxUint8 {
+		return OnchainConfig{}, fmt.Errorf("version of OnchainConfig is too large, expected <= %v, got %v", math.MaxUint8, v)
+	}
 
 	o := OnchainConfig{
-		Version: uint8(v.Uint64()),
+		Version: uint8(version),
 	}
 
 	cd := types.ConfigDigest(b[32:64])

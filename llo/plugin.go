@@ -45,6 +45,8 @@ const (
 	MaxObservationUpdateChannelDefinitionsLength = 5
 	// Maximum number of streams that can be observed per round
 	MaxObservationStreamValuesLength = 10_000
+	// Maximum allowed number of streams per channel
+	MaxStreamsPerChannel = 10_000
 	// MaxOutcomeChannelDefinitionsLength is the maximum number of channels that
 	// can be supported
 	MaxOutcomeChannelDefinitionsLength = MaxReportCount
@@ -103,9 +105,12 @@ const (
 )
 
 type RetirementReport struct {
+	// Retirement reports are not guaranteed to be compatible across different
+	// protocol versions
+	ProtocolVersion uint32
 	// Carries validity time stamps between protocol instances to ensure there
 	// are no gaps
-	ValidAfterSeconds map[llotypes.ChannelID]uint32
+	ValidAfterNanoseconds map[llotypes.ChannelID]uint64
 }
 
 type ShouldRetireCache interface { // reads asynchronously from onchain ConfigurationStore
@@ -225,6 +230,10 @@ func (f *PluginFactory) NewReportingPlugin(ctx context.Context, cfg ocr3types.Re
 	if err != nil {
 		return nil, ocr3types.ReportingPluginInfo{}, fmt.Errorf("NewReportingPlugin failed to decode onchain config; got: 0x%x (len: %d); %w", cfg.OnchainConfig, len(cfg.OnchainConfig), err)
 	}
+	offchainConfig, err := DecodeOffchainConfig(cfg.OffchainConfig)
+	if err != nil {
+		return nil, ocr3types.ReportingPluginInfo{}, fmt.Errorf("NewReportingPlugin failed to decode offchain config; got: 0x%x (len: %d); %w", cfg.OffchainConfig, len(cfg.OffchainConfig), err)
+	}
 
 	return &Plugin{
 			f.Config,
@@ -234,14 +243,16 @@ func (f *PluginFactory) NewReportingPlugin(ctx context.Context, cfg ocr3types.Re
 			f.ShouldRetireCache,
 			f.ChannelDefinitionCache,
 			f.DataSource,
-			f.Logger,
+			logger.Sugared(f.Logger).With("lloProtocolVersion", offchainConfig.ProtocolVersion),
 			cfg.N,
 			cfg.F,
 			protoObservationCodec{},
-			protoOutcomeCodec{},
+			offchainConfig.GetOutcomeCodec(),
 			f.RetirementReportCodec,
 			f.ReportCodecs,
 			cfg.MaxDurationObservation,
+			offchainConfig.ProtocolVersion,
+			offchainConfig.DefaultMinReportIntervalNanoseconds,
 		}, ocr3types.ReportingPluginInfo{
 			Name: "LLO",
 			Limits: ocr3types.ReportingPluginLimits{
@@ -272,7 +283,12 @@ type Plugin struct {
 	RetirementReportCodec            RetirementReportCodec
 	ReportCodecs                     map[llotypes.ReportFormat]ReportCodec
 
+	// From ReportingPluginConfig
 	MaxDurationObservation time.Duration
+
+	// From offchain config
+	ProtocolVersion                     uint32
+	DefaultMinReportIntervalNanoseconds uint64
 }
 
 // Query creates a Query that is sent from the leader to all follower nodes

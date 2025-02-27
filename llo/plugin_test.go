@@ -7,10 +7,12 @@ import (
 	"github.com/smartcontractkit/libocr/offchainreporting2/types"
 	"github.com/smartcontractkit/libocr/offchainreporting2plus/ocr3types"
 
+	"github.com/smartcontractkit/chainlink-common/pkg/logger"
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
 	"github.com/smartcontractkit/chainlink-common/pkg/utils/tests"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 type mockShouldRetireCache struct {
@@ -56,5 +58,51 @@ func Test_ValidateObservation(t *testing.T) {
 		ctx := tests.Context(t)
 		err := p.ValidateObservation(ctx, ocr3types.OutcomeContext{SeqNr: 1}, types.Query{}, types.AttributedObservation{Observation: []byte{1}})
 		assert.EqualError(t, err, "Expected empty observation for first round, got: 0x01")
+	})
+}
+
+type mockOnchainConfigCodec struct{}
+
+func (m *mockOnchainConfigCodec) Decode(b []byte) (OnchainConfig, error) {
+	return OnchainConfig{}, nil
+}
+
+func (m *mockOnchainConfigCodec) Encode(OnchainConfig) ([]byte, error) {
+	return nil, nil
+}
+
+func Test_NewReportingPlugin_setsValues(t *testing.T) {
+	f := &PluginFactory{
+		OnchainConfigCodec: &mockOnchainConfigCodec{},
+		Logger:             logger.Test(t),
+	}
+	t.Run("outputs correct plugin info", func(t *testing.T) {
+		_, pInfo, err := f.NewReportingPlugin(context.Background(), ocr3types.ReportingPluginConfig{})
+		require.NoError(t, err)
+
+		assert.Equal(t, ocr3types.ReportingPluginInfo{Name: "LLO", Limits: ocr3types.ReportingPluginLimits{MaxQueryLength: 0, MaxObservationLength: 1048576, MaxOutcomeLength: 5242880, MaxReportLength: 5242880, MaxReportCount: 2000}}, pInfo)
+	})
+
+	t.Run("with empty offchain config", func(t *testing.T) {
+		p, _, err := f.NewReportingPlugin(context.Background(), ocr3types.ReportingPluginConfig{})
+		require.NoError(t, err)
+
+		assert.Equal(t, uint32(0), p.(*Plugin).ProtocolVersion)
+		assert.Equal(t, uint64(0), p.(*Plugin).DefaultMinReportIntervalNanoseconds)
+	})
+
+	t.Run("with version 1 offchain config", func(t *testing.T) {
+		encodedOffchainConfig, err := OffchainConfig{
+			ProtocolVersion:                     1,
+			DefaultMinReportIntervalNanoseconds: 12345,
+		}.Encode()
+		require.NoError(t, err)
+		p, _, err := f.NewReportingPlugin(context.Background(), ocr3types.ReportingPluginConfig{
+			OffchainConfig: encodedOffchainConfig,
+		})
+		require.NoError(t, err)
+
+		assert.Equal(t, uint32(1), p.(*Plugin).ProtocolVersion)
+		assert.Equal(t, uint64(12345), p.(*Plugin).DefaultMinReportIntervalNanoseconds)
 	})
 }

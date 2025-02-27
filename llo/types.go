@@ -3,10 +3,26 @@ package llo
 import (
 	"context"
 
+	"github.com/smartcontractkit/libocr/offchainreporting2/types"
 	"github.com/smartcontractkit/libocr/offchainreporting2plus/ocr3types"
+	"google.golang.org/protobuf/proto"
 
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
 )
+
+var (
+	DeterministicMarshalOptions = proto.MarshalOptions{Deterministic: true}
+)
+
+type ObservationCodec interface {
+	Encode(obs Observation) (types.Observation, error)
+	Decode(encoded types.Observation) (obs Observation, err error)
+}
+
+type OutcomeCodec interface {
+	Encode(outcome Outcome) (ocr3types.Outcome, error)
+	Decode(encoded ocr3types.Outcome) (outcome Outcome, err error)
+}
 
 type ReportCodec interface {
 	// Encode may be lossy, so no Decode function is expected

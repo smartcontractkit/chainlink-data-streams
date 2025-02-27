@@ -8,10 +8,18 @@ option go_package = ".;llo";
 // All changes MUST be backwards compatible
 // If the format changes in a backwards incompatible way, active DONs can
 // become stuck permanently
+
+// Observation CAN be changed as long as it doesn't break decode for legacy
+// versions.
+//
+// i.e. adding new fields is ok
 message LLOObservationProto {
     bytes attestedPredecessorRetirement = 1;
     bool shouldRetire = 2;
-    int64 unixTimestampNanoseconds = 3;
+    // TODO: unixTimestampNanosecondsLegacy can be removed after this version
+    // is rolled out everywhere
+    int64 unixTimestampNanosecondsLegacy = 3;
+    uint64 unixTimestampNanoseconds = 7;
     repeated uint32 removeChannelIDs = 4;
     // Maps are safe to use here because Observation serialization does not
     // need to be deterministic. Non-deterministic map serialization is
@@ -39,7 +47,7 @@ message LLOStreamValueQuote{
 
 message LLOChannelDefinitionProto {
     uint32 reportFormat = 1;
-    LLOStreamDefinition streams = 2;
+    repeated LLOStreamDefinition streams = 2;
     bytes opts = 3;
 }
 
@@ -53,12 +61,24 @@ message LLOStreamObservationProto {
     bytes value = 2;
 }
 
+// Outcome CANNOT be changed in a backwards compatible way.
+// Changes to outcome necessitate a new version of the protocol.
+
 // NOTE: Outcome must serialize deterministically, hence use of repeated tuple instead of maps
-message LLOOutcomeProto {
+message LLOOutcomeProtoV0 {
     string lifeCycleStage = 1;
-    int64 observationsTimestampNanoseconds = 2;
+    int64 observationTimestampNanoseconds = 2;
     repeated LLOChannelIDAndDefinitionProto channelDefinitions = 3;
     repeated LLOChannelIDAndValidAfterSecondsProto validAfterSeconds = 4;
+    repeated LLOStreamAggregate streamAggregates = 5;
+}
+
+// NOTE: Outcome must serialize deterministically, hence use of repeated tuple instead of maps
+message LLOOutcomeProtoV1 {
+    string lifeCycleStage = 1;
+    uint64 observationTimestampNanoseconds = 2;
+    repeated LLOChannelIDAndDefinitionProto channelDefinitions = 3;
+    repeated LLOChannelIDAndValidAfterNanosecondsProto validAfterNanoseconds = 4;
     repeated LLOStreamAggregate streamAggregates = 5;
 }
 
@@ -70,6 +90,11 @@ message LLOChannelIDAndDefinitionProto {
 message LLOChannelIDAndValidAfterSecondsProto {
     uint32 channelID = 1;
     uint32 validAfterSeconds = 2;
+}
+
+message LLOChannelIDAndValidAfterNanosecondsProto {
+    uint32 channelID = 1;
+    uint64 validAfterNanoseconds = 2;
 }
 
 message LLOStreamAggregate {

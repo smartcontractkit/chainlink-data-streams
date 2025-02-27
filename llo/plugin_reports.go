@@ -21,18 +21,13 @@ func (p *Plugin) reports(ctx context.Context, seqNr uint64, rawOutcome ocr3types
 		return nil, fmt.Errorf("error unmarshalling outcome: %w", err)
 	}
 
-	observationsTimestampSeconds, err := outcome.ObservationsTimestampSeconds()
-	if err != nil {
-		return nil, fmt.Errorf("error getting observations timestamp: %w", err)
-	}
-
 	rwis := []ocr3types.ReportPlus[llotypes.ReportInfo]{}
 
 	if outcome.LifeCycleStage == LifeCycleStageRetired {
 		// if we're retired, emit special retirement report to transfer
-		// ValidAfterSeconds part of state to the new protocol instance for a
+		// ValidAfterNanoseconds part of state to the new protocol instance for a
 		// "gapless" handover
-		retirementReport := outcome.GenRetirementReport()
+		retirementReport := outcome.GenRetirementReport(p.ProtocolVersion)
 		p.Logger.Infow("Emitting retirement report", "lifeCycleStage", outcome.LifeCycleStage, "retirementReport", retirementReport, "stage", "Report", "seqNr", seqNr)
 
 		encoded, err := p.RetirementReportCodec.Encode(retirementReport)
@@ -51,7 +46,7 @@ func (p *Plugin) reports(ctx context.Context, seqNr uint64, rawOutcome ocr3types
 		})
 	}
 
-	reportableChannels, unreportableChannels := outcome.ReportableChannels()
+	reportableChannels, unreportableChannels := outcome.ReportableChannels(p.ProtocolVersion, p.DefaultMinReportIntervalNanoseconds)
 	if p.Config.VerboseLogging {
 		p.Logger.Debugw("Reportable channels", "lifeCycleStage", outcome.LifeCycleStage, "reportableChannels", reportableChannels, "unreportableChannels", unreportableChannels, "stage", "Report", "seqNr", seqNr)
 	}
@@ -67,8 +62,8 @@ func (p *Plugin) reports(ctx context.Context, seqNr uint64, rawOutcome ocr3types
 			p.ConfigDigest,
 			seqNr,
 			cid,
-			outcome.ValidAfterSeconds[cid],
-			observationsTimestampSeconds,
+			outcome.ValidAfterNanoseconds[cid],
+			outcome.ObservationTimestampNanoseconds,
 			values,
 			outcome.LifeCycleStage != LifeCycleStageProduction,
 		}

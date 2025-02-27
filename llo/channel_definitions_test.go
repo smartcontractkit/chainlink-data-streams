@@ -36,7 +36,15 @@ func Test_VerifyChannelDefinitions(t *testing.T) {
 		err := VerifyChannelDefinitions(ctx, codecs, channelDefs)
 		assert.EqualError(t, err, "too many channels, got: 2001/2000")
 	})
-
+	t.Run("fails if channel has too many streams", func(t *testing.T) {
+		channelDefs := llotypes.ChannelDefinitions{
+			1: llotypes.ChannelDefinition{
+				Streams: make([]llotypes.Stream, MaxStreamsPerChannel+1),
+			},
+		}
+		err := VerifyChannelDefinitions(ctx, codecs, channelDefs)
+		assert.EqualError(t, err, "ChannelDefinition with ID 1 has too many streams, got: 10001/10000")
+	})
 	t.Run("fails for channel with no streams", func(t *testing.T) {
 		channelDefs := llotypes.ChannelDefinitions{
 			1: llotypes.ChannelDefinition{},
@@ -57,8 +65,8 @@ func Test_VerifyChannelDefinitions(t *testing.T) {
 
 	t.Run("fails if too many total unique stream IDs", func(t *testing.T) {
 		streams := make([]llotypes.Stream, MaxObservationStreamValuesLength)
-		for i := 0; i < MaxObservationStreamValuesLength; i++ {
-			streams[i] = llotypes.Stream{StreamID: uint32(i), Aggregator: llotypes.AggregatorMedian}
+		for i := uint32(0); i < MaxObservationStreamValuesLength; i++ {
+			streams[i] = llotypes.Stream{StreamID: i, Aggregator: llotypes.AggregatorMedian}
 		}
 		channelDefs := llotypes.ChannelDefinitions{
 			1: llotypes.ChannelDefinition{
@@ -105,8 +113,8 @@ func Test_VerifyChannelDefinitions(t *testing.T) {
 
 	t.Run("succeeds with exact maxes", func(t *testing.T) {
 		streams := make([]llotypes.Stream, MaxObservationStreamValuesLength)
-		for i := 0; i < MaxObservationStreamValuesLength; i++ {
-			streams[i] = llotypes.Stream{StreamID: uint32(i), Aggregator: llotypes.AggregatorMedian}
+		for i := uint32(0); i < MaxObservationStreamValuesLength; i++ {
+			streams[i] = llotypes.Stream{StreamID: i, Aggregator: llotypes.AggregatorMedian}
 		}
 		channelDefs := make(llotypes.ChannelDefinitions, MaxOutcomeChannelDefinitionsLength)
 		for i := uint32(0); i < MaxOutcomeChannelDefinitionsLength; i++ {
