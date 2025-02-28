@@ -42,7 +42,7 @@ func Test_NewClientTLSConfig(t *testing.T) {
 	spubs, err := ValidPublicKeysFromEd25519(spub)
 	require.NoError(t, err)
 
-	tlsCfg, err := newMutualTLSConfig(cpriv, spubs)
+	tlsCfg, err := newMutualTLSConfig(cpriv.key, spubs)
 	require.NoError(t, err)
 	require.Len(t, tlsCfg.Certificates, 1)
 
@@ -51,7 +51,7 @@ func Test_NewClientTLSConfig(t *testing.T) {
 	assert.Equal(t, uint16(tls.VersionTLS13), tlsCfg.MaxVersion)
 
 	// Test a valid server certificate
-	scert, err := newMinimalX509Cert(spriv)
+	scert, err := newMinimalX509Cert(spriv.key)
 	require.NoError(t, err)
 
 	err = tlsCfg.VerifyPeerCertificate(scert.Certificate, [][]*x509.Certificate{})
@@ -64,7 +64,7 @@ func Test_NewClientTLSConfig(t *testing.T) {
 	invspriv, err := ValidPrivateKeyFromEd25519(ed25519invspriv)
 	require.NoError(t, err)
 
-	invscert, err := newMinimalX509Cert(invspriv)
+	invscert, err := newMinimalX509Cert(invspriv.key)
 	require.NoError(t, err)
 
 	err = tlsCfg.VerifyPeerCertificate(invscert.Certificate, [][]*x509.Certificate{})

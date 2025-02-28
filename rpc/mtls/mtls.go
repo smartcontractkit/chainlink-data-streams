@@ -1,6 +1,7 @@
 package mtls
 
 import (
+	"crypto"
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/subtle"
@@ -26,13 +27,16 @@ func NewTransportCredentials(privKey ed25519.PrivateKey, pubKeys []ed25519.Publi
 	if err != nil {
 		return nil, err
 	}
+	return NewTransportSigner(priv.key, pubKeys)
+}
 
+func NewTransportSigner(signer crypto.Signer, pubKeys []ed25519.PublicKey) (credentials.TransportCredentials, error) {
 	pubs, err := ValidPublicKeysFromEd25519(pubKeys...)
 	if err != nil {
 		return nil, err
 	}
 
-	c, err := newMutualTLSConfig(priv, pubs)
+	c, err := newMutualTLSConfig(signer, pubs)
 	c.ClientAuth = tls.RequireAnyClientCert
 	if err != nil {
 		return nil, err
@@ -49,8 +53,8 @@ func NewTransportCredentials(privKey ed25519.PrivateKey, pubKeys []ed25519.Publi
 //
 // Certificates are currently used similarly to GPG keys and only functionally
 // as certificates to support the crypto/tls go module.
-func newMutualTLSConfig(priv *PrivateKey, pubs *PublicKeys) (*tls.Config, error) {
-	cert, err := newMinimalX509Cert(priv)
+func newMutualTLSConfig(signer crypto.Signer, pubs *PublicKeys) (*tls.Config, error) {
+	cert, err := newMinimalX509Cert(signer)
 	if err != nil {
 		return nil, err
 	}
@@ -75,21 +79,19 @@ func newMutualTLSConfig(priv *PrivateKey, pubs *PublicKeys) (*tls.Config, error)
 
 // Generates a minimal certificate (that wouldn't be considered valid outside of
 // this networking protocol) from an Ed25519 private key.
-func newMinimalX509Cert(priv *PrivateKey) (tls.Certificate, error) {
-	ed25519Priv := priv.key
-
+func newMinimalX509Cert(signer crypto.Signer) (tls.Certificate, error) {
 	template := x509.Certificate{
 		SerialNumber: big.NewInt(0), // serial number must be set, so we set it to 0
 	}
 
-	encodedCert, err := x509.CreateCertificate(rand.Reader, &template, &template, ed25519Priv.Public(), ed25519Priv)
+	encodedCert, err := x509.CreateCertificate(rand.Reader, &template, &template, signer.Public(), signer)
 	if err != nil {
 		return tls.Certificate{}, err
 	}
 
 	return tls.Certificate{
 		Certificate:                  [][]byte{encodedCert},
-		PrivateKey:                   ed25519Priv,
+		PrivateKey:                   signer,
 		SupportedSignatureAlgorithms: []tls.SignatureScheme{tls.Ed25519},
 	}, nil
 }
