@@ -40,7 +40,7 @@ jobs:
       actions: read
     steps:
       - name: ci-lint
-        uses: smartcontractkit/.github/actions/ci-lint-go@7ac9af09dda8c553593d2153a975b43b6958fa9f # ci-lint-go@0.2.2
+        uses: smartcontractkit/.github/actions/ci-lint-go@99032332f15a09cdf038dabd7a2407094595de7a # ci-lint-go@0.2.2
         with:
           # grafana inputs
           metrics-job-name: ci-lint
@@ -66,7 +66,7 @@ jobs:
       actions: read
     steps:
       - name: ci-test
-        uses: smartcontractkit/.github/actions/ci-test-go@f8efc6bb91480713ddd64eaabd63d4b97ae6f088 # ci-test-go@0.1.4
+        uses: smartcontractkit/.github/actions/ci-test-go@99032332f15a09cdf038dabd7a2407094595de7a # ci-test-go@0.1.4
         with:
           # grafana inputs
           metrics-job-name: ci-test
@@ -92,7 +92,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: ci-sonarqube
-        uses: smartcontractkit/.github/actions/ci-sonarqube-go@3e11dbc45e4c8b18dd996fb417ccf22056176388 # ci-sonarqube-go@0.1.0
+        uses: smartcontractkit/.github/actions/ci-sonarqube-go@99032332f15a09cdf038dabd7a2407094595de7a # ci-sonarqube-go@0.1.0
         with:
           # grafana inputs
           metrics-job-name: ci-sonarqube
@@ -115,7 +115,7 @@ jobs:
     steps:
       - name: cd-release
         id: cd-release
-        uses: smartcontractkit/.github/actions/cicd-changesets@6da79c7b9f14bec077df2c1ad40d53823b409d9c # cicd-changesets@0.3.3
+        uses: smartcontractkit/.github/actions/cicd-changesets@99032332f15a09cdf038dabd7a2407094595de7a # cicd-changesets@0.3.3
         with:
           # general inputs
           git-user: app-token-issuer-foundations[bot]
