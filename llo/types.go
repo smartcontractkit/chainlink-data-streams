@@ -52,3 +52,8 @@ type Transmitter interface {
 	// - FromAccount() should return CSA public key
 	ocr3types.ContractTransmitter[llotypes.ReportInfo]
 }
+
+type ReportTelemetry struct {
+	Report            *Report
+	ChannelDefinition *llotypes.ChannelDefinition
+}

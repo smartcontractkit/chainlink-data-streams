@@ -201,9 +201,33 @@ type ChannelDefinitionCache interface {
 // A ReportingPlugin instance will only ever serve a single protocol instance.
 var _ ocr3types.ReportingPluginFactory[llotypes.ReportInfo] = &PluginFactory{}
 
-func NewPluginFactory(cfg Config, prrc PredecessorRetirementReportCache, src ShouldRetireCache, rcodec RetirementReportCodec, cdc ChannelDefinitionCache, ds DataSource, lggr logger.Logger, oncc OnchainConfigCodec, reportCodecs map[llotypes.ReportFormat]ReportCodec) *PluginFactory {
+type PluginFactoryParams struct {
+	Config
+	PredecessorRetirementReportCache
+	ShouldRetireCache
+	RetirementReportCodec
+	ChannelDefinitionCache
+	DataSource
+	logger.Logger
+	OnchainConfigCodec
+	ReportCodecs map[llotypes.ReportFormat]ReportCodec
+	// ReportTelemetryCh if set will be used to send one telemetry struct per
+	// channel in the Report stage
+	ReportTelemetryCh chan<- ReportTelemetry
+}
+
+func NewPluginFactory(p PluginFactoryParams) *PluginFactory {
 	return &PluginFactory{
-		cfg, prrc, src, rcodec, cdc, ds, lggr, oncc, reportCodecs,
+		p.Config,
+		p.PredecessorRetirementReportCache,
+		p.ShouldRetireCache,
+		p.RetirementReportCodec,
+		p.ChannelDefinitionCache,
+		p.DataSource,
+		p.Logger,
+		p.OnchainConfigCodec,
+		p.ReportCodecs,
+		p.ReportTelemetryCh,
 	}
 }
 
@@ -223,6 +247,7 @@ type PluginFactory struct {
 	Logger                           logger.Logger
 	OnchainConfigCodec               OnchainConfigCodec
 	ReportCodecs                     map[llotypes.ReportFormat]ReportCodec
+	ReportTelemetryCh                chan<- ReportTelemetry
 }
 
 func (f *PluginFactory) NewReportingPlugin(ctx context.Context, cfg ocr3types.ReportingPluginConfig) (ocr3types.ReportingPlugin[llotypes.ReportInfo], ocr3types.ReportingPluginInfo, error) {
@@ -250,6 +275,7 @@ func (f *PluginFactory) NewReportingPlugin(ctx context.Context, cfg ocr3types.Re
 			offchainConfig.GetOutcomeCodec(),
 			f.RetirementReportCodec,
 			f.ReportCodecs,
+			f.ReportTelemetryCh,
 			cfg.MaxDurationObservation,
 			offchainConfig.ProtocolVersion,
 			offchainConfig.DefaultMinReportIntervalNanoseconds,
@@ -282,6 +308,7 @@ type Plugin struct {
 	OutcomeCodec                     OutcomeCodec
 	RetirementReportCodec            RetirementReportCodec
 	ReportCodecs                     map[llotypes.ReportFormat]ReportCodec
+	ReportTelemetryCh                chan<- ReportTelemetry
 
 	// From ReportingPluginConfig
 	MaxDurationObservation time.Duration

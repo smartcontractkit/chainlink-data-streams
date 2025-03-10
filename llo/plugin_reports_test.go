@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/shopspring/decimal"
+	"github.com/smartcontractkit/libocr/offchainreporting2/types"
 	"github.com/smartcontractkit/libocr/offchainreporting2plus/ocr3types"
 
 	"github.com/smartcontractkit/chainlink-common/pkg/logger"
@@ -26,6 +27,7 @@ func Test_Reports(t *testing.T) {
 }
 
 func testReports(t *testing.T, outcomeCodec OutcomeCodec) {
+	ctx := tests.Context(t)
 	var protocolVersion uint32 = 1
 	minReportInterval := 100 * time.Millisecond
 	if _, ok := outcomeCodec.(protoOutcomeCodecV0); ok {
@@ -45,21 +47,18 @@ func testReports(t *testing.T, outcomeCodec OutcomeCodec) {
 	}
 
 	t.Run("ignores seqnr=0", func(t *testing.T) {
-		ctx := tests.Context(t)
 		rwi, err := p.Reports(ctx, 0, ocr3types.Outcome{})
 		assert.NoError(t, err)
 		assert.Nil(t, rwi)
 	})
 
 	t.Run("does not return reports for initial round", func(t *testing.T) {
-		ctx := tests.Context(t)
 		rwi, err := p.Reports(ctx, 1, ocr3types.Outcome{})
 		assert.NoError(t, err)
 		assert.Nil(t, rwi)
 	})
 
 	t.Run("returns error if unmarshalling outcome fails", func(t *testing.T) {
-		ctx := tests.Context(t)
 		rwi, err := p.Reports(ctx, 2, []byte("invalid"))
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "failed to decode outcome: expected protobuf")
@@ -68,7 +67,6 @@ func testReports(t *testing.T, outcomeCodec OutcomeCodec) {
 
 	t.Run("emits 'retirement report' if lifecycle state is retired", func(t *testing.T) {
 		t.Run("with null ValidAfterNanoseconds", func(t *testing.T) {
-			ctx := tests.Context(t)
 			outcome := Outcome{
 				LifeCycleStage: LifeCycleStageRetired,
 			}
@@ -81,7 +79,6 @@ func testReports(t *testing.T, outcomeCodec OutcomeCodec) {
 			assert.Equal(t, fmt.Sprintf(`{"ProtocolVersion":%d,"ValidAfterNanoseconds":null}`, p.ProtocolVersion), string(rwis[0].ReportWithInfo.Report))
 		})
 		t.Run("with ValidAfterNanoseconds", func(t *testing.T) {
-			ctx := tests.Context(t)
 			outcome := Outcome{
 				LifeCycleStage: LifeCycleStageRetired,
 				ValidAfterNanoseconds: map[llotypes.ChannelID]uint64{
@@ -118,7 +115,6 @@ func testReports(t *testing.T, outcomeCodec OutcomeCodec) {
 	}
 
 	t.Run("does not report if observations are not valid yet", func(t *testing.T) {
-		ctx := tests.Context(t)
 		outcome := Outcome{
 			ObservationTimestampNanoseconds: 0,
 			ValidAfterNanoseconds: map[llotypes.ChannelID]uint64{
@@ -145,7 +141,6 @@ func testReports(t *testing.T, outcomeCodec OutcomeCodec) {
 	})
 
 	t.Run("does not produce report if an aggregate is missing", func(t *testing.T) {
-		ctx := tests.Context(t)
 		outcome := Outcome{
 			ObservationTimestampNanoseconds: uint64(200 * time.Second),
 			ValidAfterNanoseconds: map[llotypes.ChannelID]uint64{
@@ -172,7 +167,6 @@ func testReports(t *testing.T, outcomeCodec OutcomeCodec) {
 	})
 
 	t.Run("skips reports if codec is missing", func(t *testing.T) {
-		ctx := tests.Context(t)
 		dfns := map[llotypes.ChannelID]llotypes.ChannelDefinition{
 			1: {
 				ReportFormat: llotypes.ReportFormatEVMPremiumLegacy,
@@ -206,7 +200,6 @@ func testReports(t *testing.T, outcomeCodec OutcomeCodec) {
 	})
 
 	t.Run("generates specimen report for non-production LifeCycleStage", func(t *testing.T) {
-		ctx := tests.Context(t)
 		outcome := Outcome{
 			LifeCycleStage:                  LifeCycleStageStaging,
 			ObservationTimestampNanoseconds: uint64(200 * time.Second),
@@ -242,7 +235,6 @@ func testReports(t *testing.T, outcomeCodec OutcomeCodec) {
 	})
 
 	t.Run("generates non-specimen reports for production", func(t *testing.T) {
-		ctx := tests.Context(t)
 		outcome := Outcome{
 			LifeCycleStage:                  LifeCycleStageProduction,
 			ObservationTimestampNanoseconds: uint64(200 * time.Second),
@@ -277,7 +269,6 @@ func testReports(t *testing.T, outcomeCodec OutcomeCodec) {
 		assert.Equal(t, llo.ReportInfo{LifeCycleStage: "production", ReportFormat: llotypes.ReportFormatJSON}, rwis[1].ReportWithInfo.Info)
 	})
 	t.Run("does not produce reports with overlapping timestamps (where IsReportable returns false)", func(t *testing.T) {
-		ctx := tests.Context(t)
 		outcome := Outcome{
 			LifeCycleStage:                  LifeCycleStageProduction,
 			ObservationTimestampNanoseconds: uint64(200 * time.Second),
@@ -311,4 +302,79 @@ func testReports(t *testing.T, outcomeCodec OutcomeCodec) {
 		assert.Equal(t, `{"ConfigDigest":"0000000000000000000000000000000000000000000000000000000000000000","SeqNr":2,"ChannelID":2,"ValidAfterNanoseconds":100000000000,"ObservationTimestampNanoseconds":200000000000,"Values":[{"Type":0,"Value":"1.1"},{"Type":0,"Value":"2.2"},{"Type":1,"Value":"Q{Bid: 8.8, Benchmark: 7.7, Ask: 6.6}"}],"Specimen":false}`, string(rwis[0].ReportWithInfo.Report))
 		assert.Equal(t, llo.ReportInfo{LifeCycleStage: "production", ReportFormat: llotypes.ReportFormatJSON}, rwis[0].ReportWithInfo.Info)
 	})
+	t.Run("sends telemetry on telemetry channel if set, and does not block on full channel", func(t *testing.T) {
+		ch := make(chan ReportTelemetry, 2)
+		p.ReportTelemetryCh = ch
+		p.ConfigDigest = types.ConfigDigest{1, 2, 3}
+		seqNr := uint64(42)
+
+		outcome := Outcome{
+			LifeCycleStage:                  LifeCycleStageProduction,
+			ObservationTimestampNanoseconds: uint64(200 * time.Second),
+			ValidAfterNanoseconds: map[llotypes.ChannelID]uint64{
+				1: uint64(100 * time.Second),
+				2: uint64(101 * time.Second),
+				3: uint64(102 * time.Second),
+				4: uint64(103 * time.Second),
+			},
+			ChannelDefinitions: smallDefinitions,
+			StreamAggregates: map[llotypes.StreamID]map[llotypes.Aggregator]StreamValue{
+				1: {
+					llotypes.AggregatorMedian: ToDecimal(decimal.NewFromFloat(1.1)),
+				},
+				2: {
+					llotypes.AggregatorMedian: ToDecimal(decimal.NewFromFloat(2.2)),
+				},
+				3: {
+					llotypes.AggregatorQuote: &Quote{Ask: decimal.NewFromFloat(3.3), Benchmark: decimal.NewFromFloat(4.4), Bid: decimal.NewFromFloat(5.5)},
+				},
+				4: {
+					llotypes.AggregatorQuote: &Quote{Ask: decimal.NewFromFloat(6.6), Benchmark: decimal.NewFromFloat(7.7), Bid: decimal.NewFromFloat(8.8)},
+				},
+			},
+		}
+		encoded, err := p.OutcomeCodec.Encode(outcome)
+		require.NoError(t, err)
+		_, err = p.Reports(ctx, seqNr, encoded)
+		require.NoError(t, err)
+		close(ch)
+
+		var telemetries []ReportTelemetry
+		for telemetry := range ch {
+			telemetries = append(telemetries, telemetry)
+		}
+		require.Len(t, telemetries, 2)
+
+		t0 := telemetries[0]
+		assert.Equal(t, p.ConfigDigest, t0.Report.ConfigDigest)
+		assert.Equal(t, seqNr, t0.Report.SeqNr)
+		assert.Equal(t, uint32(1), t0.Report.ChannelID)
+		assert.Equal(t, uint64(100*time.Second), t0.Report.ValidAfterNanoseconds)
+		assert.Equal(t, uint64(200*time.Second), t0.Report.ObservationTimestampNanoseconds)
+		require.Len(t, t0.Report.Values, 3)
+		assert.Equal(t, ToDecimal(decimal.NewFromFloat(1.1)), t0.Report.Values[0])
+		assert.Equal(t, ToDecimal(decimal.NewFromFloat(2.2)), t0.Report.Values[1])
+		assert.Equal(t, "Q{Bid: 5.5, Benchmark: 4.4, Ask: 3.3}", mustMarshalText(t, t0.Report.Values[2]))
+		assert.False(t, t0.Report.Specimen)
+		assert.Equal(t, smallDefinitions[1], *t0.ChannelDefinition)
+
+		t1 := telemetries[1]
+		assert.Equal(t, p.ConfigDigest, t1.Report.ConfigDigest)
+		assert.Equal(t, seqNr, t1.Report.SeqNr)
+		assert.Equal(t, uint32(2), t1.Report.ChannelID)
+		assert.Equal(t, uint64(101*time.Second), t1.Report.ValidAfterNanoseconds)
+		assert.Equal(t, uint64(200*time.Second), t1.Report.ObservationTimestampNanoseconds)
+		require.Len(t, t1.Report.Values, 3)
+		assert.Equal(t, ToDecimal(decimal.NewFromFloat(1.1)), t1.Report.Values[0])
+		assert.Equal(t, ToDecimal(decimal.NewFromFloat(2.2)), t1.Report.Values[1])
+		assert.Equal(t, "Q{Bid: 8.8, Benchmark: 7.7, Ask: 6.6}", mustMarshalText(t, t1.Report.Values[2]))
+		assert.False(t, t1.Report.Specimen)
+		assert.Equal(t, smallDefinitions[2], *t1.ChannelDefinition)
+	})
+}
+
+func mustMarshalText(t *testing.T, v StreamValue) string {
+	b, err := v.MarshalText()
+	require.NoError(t, err)
+	return string(b)
 }
