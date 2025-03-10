@@ -303,7 +303,7 @@ func testReports(t *testing.T, outcomeCodec OutcomeCodec) {
 		assert.Equal(t, llo.ReportInfo{LifeCycleStage: "production", ReportFormat: llotypes.ReportFormatJSON}, rwis[0].ReportWithInfo.Info)
 	})
 	t.Run("sends telemetry on telemetry channel if set, and does not block on full channel", func(t *testing.T) {
-		ch := make(chan ReportTelemetry, 2)
+		ch := make(chan *LLOReportTelemetry, 2)
 		p.ReportTelemetryCh = ch
 		p.ConfigDigest = types.ConfigDigest{1, 2, 3}
 		seqNr := uint64(42)
@@ -339,42 +339,61 @@ func testReports(t *testing.T, outcomeCodec OutcomeCodec) {
 		require.NoError(t, err)
 		close(ch)
 
-		var telemetries []ReportTelemetry
+		var telemetries []*LLOReportTelemetry
 		for telemetry := range ch {
 			telemetries = append(telemetries, telemetry)
 		}
 		require.Len(t, telemetries, 2)
 
 		t0 := telemetries[0]
-		assert.Equal(t, p.ConfigDigest, t0.Report.ConfigDigest)
-		assert.Equal(t, seqNr, t0.Report.SeqNr)
-		assert.Equal(t, uint32(1), t0.Report.ChannelID)
-		assert.Equal(t, uint64(100*time.Second), t0.Report.ValidAfterNanoseconds)
-		assert.Equal(t, uint64(200*time.Second), t0.Report.ObservationTimestampNanoseconds)
-		require.Len(t, t0.Report.Values, 3)
-		assert.Equal(t, ToDecimal(decimal.NewFromFloat(1.1)), t0.Report.Values[0])
-		assert.Equal(t, ToDecimal(decimal.NewFromFloat(2.2)), t0.Report.Values[1])
-		assert.Equal(t, "Q{Bid: 5.5, Benchmark: 4.4, Ask: 3.3}", mustMarshalText(t, t0.Report.Values[2]))
-		assert.False(t, t0.Report.Specimen)
-		assert.Equal(t, smallDefinitions[1], *t0.ChannelDefinition)
+		assert.Equal(t, uint32(1), t0.ChannelId)
+		assert.Equal(t, uint64(100*time.Second), t0.ValidAfterNanoseconds)
+		assert.Equal(t, uint64(200*time.Second), t0.ObservationTimestampNanoseconds)
+		assert.Equal(t, uint32(smallDefinitions[1].ReportFormat), t0.ReportFormat)
+		assert.False(t, t0.Specimen)
+
+		require.Len(t, t0.StreamDefinitions, 3)
+		for i, s := range smallDefinitions[1].Streams {
+			assert.Equal(t, s.StreamID, t0.StreamDefinitions[i].StreamID)
+			assert.Equal(t, uint32(s.Aggregator), t0.StreamDefinitions[i].Aggregator)
+		}
+
+		require.Len(t, t0.StreamValues, 3)
+		assert.Equal(t, "1.1", mustToString(t, t0.StreamValues[0]))
+		assert.Equal(t, "2.2", mustToString(t, t0.StreamValues[1]))
+		assert.Equal(t, "Q{Bid: 5.5, Benchmark: 4.4, Ask: 3.3}", mustToString(t, t0.StreamValues[2]))
+
+		assert.Equal(t, seqNr, t0.SeqNr)
+		assert.Equal(t, p.ConfigDigest[:], t0.ConfigDigest)
 
 		t1 := telemetries[1]
-		assert.Equal(t, p.ConfigDigest, t1.Report.ConfigDigest)
-		assert.Equal(t, seqNr, t1.Report.SeqNr)
-		assert.Equal(t, uint32(2), t1.Report.ChannelID)
-		assert.Equal(t, uint64(101*time.Second), t1.Report.ValidAfterNanoseconds)
-		assert.Equal(t, uint64(200*time.Second), t1.Report.ObservationTimestampNanoseconds)
-		require.Len(t, t1.Report.Values, 3)
-		assert.Equal(t, ToDecimal(decimal.NewFromFloat(1.1)), t1.Report.Values[0])
-		assert.Equal(t, ToDecimal(decimal.NewFromFloat(2.2)), t1.Report.Values[1])
-		assert.Equal(t, "Q{Bid: 8.8, Benchmark: 7.7, Ask: 6.6}", mustMarshalText(t, t1.Report.Values[2]))
-		assert.False(t, t1.Report.Specimen)
-		assert.Equal(t, smallDefinitions[2], *t1.ChannelDefinition)
+		assert.Equal(t, uint32(2), t1.ChannelId)
+		assert.Equal(t, uint64(101*time.Second), t1.ValidAfterNanoseconds)
+		assert.Equal(t, uint64(200*time.Second), t1.ObservationTimestampNanoseconds)
+		assert.Equal(t, uint32(smallDefinitions[1].ReportFormat), t1.ReportFormat)
+		assert.False(t, t1.Specimen)
+
+		require.Len(t, t1.StreamDefinitions, 3)
+		for i, s := range smallDefinitions[2].Streams {
+			assert.Equal(t, s.StreamID, t1.StreamDefinitions[i].StreamID)
+			assert.Equal(t, uint32(s.Aggregator), t1.StreamDefinitions[i].Aggregator)
+		}
+
+		require.Len(t, t1.StreamValues, 3)
+		assert.Equal(t, "1.1", mustToString(t, t1.StreamValues[0]))
+		assert.Equal(t, "2.2", mustToString(t, t1.StreamValues[1]))
+		assert.Equal(t, "Q{Bid: 8.8, Benchmark: 7.7, Ask: 6.6}", mustToString(t, t1.StreamValues[2]))
+
+		assert.Equal(t, seqNr, t1.SeqNr)
+		assert.Equal(t, p.ConfigDigest[:], t1.ConfigDigest)
 	})
 }
 
-func mustMarshalText(t *testing.T, v StreamValue) string {
-	b, err := v.MarshalText()
+func mustToString(t *testing.T, p *LLOStreamValue) string {
+	t.Helper()
+	sv, err := UnmarshalProtoStreamValue(p)
+	require.NoError(t, err)
+	b, err := sv.MarshalText()
 	require.NoError(t, err)
 	return string(b)
 }

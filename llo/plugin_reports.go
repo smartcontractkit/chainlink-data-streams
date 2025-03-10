@@ -103,15 +103,55 @@ func (p *Plugin) encodeReport(ctx context.Context, r Report, cd llotypes.Channel
 	if !exists {
 		return nil, fmt.Errorf("codec missing for ReportFormat=%q", cd.ReportFormat)
 	}
+	p.captureReportTelemetry(r, cd)
+	return codec.Encode(ctx, r, cd)
+}
+
+func (p *Plugin) captureReportTelemetry(r Report, cd llotypes.ChannelDefinition) {
 	if p.ReportTelemetryCh != nil {
-		select {
-		case p.ReportTelemetryCh <- ReportTelemetry{
-			Report:            &r,
-			ChannelDefinition: &cd,
-		}:
-		default:
-			p.Logger.Warn("ReportTelemetryCh is full, dropping telemetry")
+		rt, err := makeReportTelemetry(r, cd)
+		if err != nil {
+			p.Logger.Warnw("Error making report telemetry", "err", err)
+		} else {
+			select {
+			case p.ReportTelemetryCh <- rt:
+			default:
+				p.Logger.Warn("ReportTelemetryCh is full, dropping telemetry")
+			}
 		}
 	}
-	return codec.Encode(ctx, r, cd)
+}
+
+func makeReportTelemetry(r Report, cd llotypes.ChannelDefinition) (*LLOReportTelemetry, error) {
+	streams := make([]*LLOStreamDefinition, len(cd.Streams))
+	for i, s := range cd.Streams {
+		streams[i] = &LLOStreamDefinition{
+			StreamID:   s.StreamID,
+			Aggregator: uint32(s.Aggregator),
+		}
+	}
+	svs := make([]*LLOStreamValue, len(r.Values))
+	for i, v := range r.Values {
+		b, err := v.MarshalBinary()
+		if err != nil {
+			return nil, fmt.Errorf("error marshalling stream value: %w", err)
+		}
+		svs[i] = &LLOStreamValue{
+			Type:  v.Type(),
+			Value: b,
+		}
+	}
+	rt := &LLOReportTelemetry{
+		ChannelId:                       r.ChannelID,
+		ValidAfterNanoseconds:           r.ValidAfterNanoseconds,
+		ObservationTimestampNanoseconds: r.ObservationTimestampNanoseconds,
+		ReportFormat:                    uint32(cd.ReportFormat),
+		Specimen:                        r.Specimen,
+		StreamDefinitions:               streams,
+		StreamValues:                    svs,
+		ChannelOpts:                     cd.Opts,
+		SeqNr:                           r.SeqNr,
+		ConfigDigest:                    r.ConfigDigest[:],
+	}
+	return rt, nil
 }
