@@ -103,5 +103,15 @@ func (p *Plugin) encodeReport(ctx context.Context, r Report, cd llotypes.Channel
 	if !exists {
 		return nil, fmt.Errorf("codec missing for ReportFormat=%q", cd.ReportFormat)
 	}
+	if p.ReportTelemetryCh != nil {
+		select {
+		case p.ReportTelemetryCh <- ReportTelemetry{
+			Report:            &r,
+			ChannelDefinition: &cd,
+		}:
+		default:
+			p.Logger.Warn("ReportTelemetryCh is full, dropping telemetry")
+		}
+	}
 	return codec.Encode(ctx, r, cd)
 }
