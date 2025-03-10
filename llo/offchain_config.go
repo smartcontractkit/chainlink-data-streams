@@ -8,7 +8,15 @@ import (
 )
 
 type OffchainConfig struct {
-	ProtocolVersion                     uint32
+	ProtocolVersion uint32
+	// DefaultMinReportIntervalNanoseconds is the default minimum report interval in nanoseconds.
+	// It must be set to 0 for protocol version 0.
+	// It must be set to 1 or greater for protocol version 1+.
+	//
+	// NOTE: This merely controls the _minimum_ interval between reports. It
+	// does not guarantee a maximum interval. If you want reports to be
+	// produced quickly, you are still limited by OCR3's DeltaRound and
+	// DeltaGrace params, as well as networking latency.
 	DefaultMinReportIntervalNanoseconds uint64
 }
 
