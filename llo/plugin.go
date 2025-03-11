@@ -211,27 +211,18 @@ type PluginFactoryParams struct {
 	logger.Logger
 	OnchainConfigCodec
 	ReportCodecs map[llotypes.ReportFormat]ReportCodec
+	// LLOOutcomeTelemetryCh if set will be used to send one telemetry struct per
+	// round in the Outcome stage
+	OutcomeTelemetryCh chan<- *LLOOutcomeTelemetry
 	// ReportTelemetryCh if set will be used to send one telemetry struct per
-	// channel in the Report stage
+	// transmissible report in the Report stage
 	ReportTelemetryCh chan<- *LLOReportTelemetry
 	// DonID is optional and used only for telemetry and logging
 	DonID uint32
 }
 
 func NewPluginFactory(p PluginFactoryParams) *PluginFactory {
-	return &PluginFactory{
-		p.Config,
-		p.PredecessorRetirementReportCache,
-		p.ShouldRetireCache,
-		p.RetirementReportCodec,
-		p.ChannelDefinitionCache,
-		p.DataSource,
-		p.Logger,
-		p.OnchainConfigCodec,
-		p.ReportCodecs,
-		p.ReportTelemetryCh,
-		p.DonID,
-	}
+	return &PluginFactory{p}
 }
 
 type Config struct {
@@ -241,17 +232,7 @@ type Config struct {
 }
 
 type PluginFactory struct {
-	Config                           Config
-	PredecessorRetirementReportCache PredecessorRetirementReportCache
-	ShouldRetireCache                ShouldRetireCache
-	RetirementReportCodec            RetirementReportCodec
-	ChannelDefinitionCache           ChannelDefinitionCache
-	DataSource                       DataSource
-	Logger                           logger.Logger
-	OnchainConfigCodec               OnchainConfigCodec
-	ReportCodecs                     map[llotypes.ReportFormat]ReportCodec
-	ReportTelemetryCh                chan<- *LLOReportTelemetry
-	DonID                            uint32
+	PluginFactoryParams
 }
 
 func (f *PluginFactory) NewReportingPlugin(ctx context.Context, cfg ocr3types.ReportingPluginConfig) (ocr3types.ReportingPlugin[llotypes.ReportInfo], ocr3types.ReportingPluginInfo, error) {
@@ -279,6 +260,7 @@ func (f *PluginFactory) NewReportingPlugin(ctx context.Context, cfg ocr3types.Re
 			offchainConfig.GetOutcomeCodec(),
 			f.RetirementReportCodec,
 			f.ReportCodecs,
+			f.OutcomeTelemetryCh,
 			f.ReportTelemetryCh,
 			f.DonID,
 			cfg.MaxDurationObservation,
@@ -313,6 +295,7 @@ type Plugin struct {
 	OutcomeCodec                     OutcomeCodec
 	RetirementReportCodec            RetirementReportCodec
 	ReportCodecs                     map[llotypes.ReportFormat]ReportCodec
+	OutcomeTelemetryCh               chan<- *LLOOutcomeTelemetry
 	ReportTelemetryCh                chan<- *LLOReportTelemetry
 	DonID                            uint32
 

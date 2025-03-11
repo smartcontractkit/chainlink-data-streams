@@ -73,8 +73,10 @@ func (m *mockOnchainConfigCodec) Encode(OnchainConfig) ([]byte, error) {
 
 func Test_NewReportingPlugin_setsValues(t *testing.T) {
 	f := &PluginFactory{
-		OnchainConfigCodec: &mockOnchainConfigCodec{},
-		Logger:             logger.Test(t),
+		PluginFactoryParams{
+			OnchainConfigCodec: &mockOnchainConfigCodec{},
+			Logger:             logger.Test(t),
+		},
 	}
 	t.Run("outputs correct plugin info", func(t *testing.T) {
 		_, pInfo, err := f.NewReportingPlugin(context.Background(), ocr3types.ReportingPluginConfig{})

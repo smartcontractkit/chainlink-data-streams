@@ -237,6 +237,7 @@ func (p *Plugin) outcome(outctx ocr3types.OutcomeContext, query types.Query, aos
 	if p.Config.VerboseLogging {
 		p.Logger.Debugw("Generated outcome", "outcome", outcome, "stage", "Outcome", "seqNr", outctx.SeqNr)
 	}
+	p.captureOutcomeTelemetry(&outcome, &outctx)
 	return p.OutcomeCodec.Encode(outcome)
 }
 
@@ -455,4 +456,53 @@ func MakeChannelHash(cd ChannelDefinitionWithID) ChannelHash {
 func medianTimestamp(timestampsNanoseconds []uint64) uint64 {
 	sort.Slice(timestampsNanoseconds, func(i, j int) bool { return timestampsNanoseconds[i] < timestampsNanoseconds[j] })
 	return timestampsNanoseconds[len(timestampsNanoseconds)/2]
+}
+
+func (p *Plugin) captureOutcomeTelemetry(outcome *Outcome, outctx *ocr3types.OutcomeContext) {
+	if p.OutcomeTelemetryCh != nil {
+		ot, err := makeOutcomeTelemetry(outcome, p.ConfigDigest, outctx.SeqNr, p.DonID)
+		if err != nil {
+			p.Logger.Warnw("Error making outcome telemetry", "err", err)
+		} else {
+			select {
+			case p.OutcomeTelemetryCh <- ot:
+			default:
+				p.Logger.Warn("OutcomeTelemetryCh is full, dropping telemetry")
+			}
+		}
+	}
+}
+
+func makeOutcomeTelemetry(outcome *Outcome, configDigest types.ConfigDigest, seqNr uint64, donID uint32) (*LLOOutcomeTelemetry, error) {
+	ot := &LLOOutcomeTelemetry{
+		LifeCycleStage:                  string(outcome.LifeCycleStage),
+		ObservationTimestampNanoseconds: outcome.ObservationTimestampNanoseconds,
+		ChannelDefinitions:              make(map[uint32]*LLOChannelDefinitionProto, len(outcome.ChannelDefinitions)),
+		ValidAfterNanoseconds:           make(map[uint32]uint64, len(outcome.ValidAfterNanoseconds)),
+		StreamAggregates:                make(map[uint32]*LLOAggregatorStreamValue, len(outcome.StreamAggregates)),
+		SeqNr:                           seqNr,
+		ConfigDigest:                    configDigest[:],
+		DonId:                           donID,
+	}
+	for id, cd := range outcome.ChannelDefinitions {
+		ot.ChannelDefinitions[uint32(id)] = makeChannelDefinitionProto(cd)
+	}
+	for id, va := range outcome.ValidAfterNanoseconds {
+		ot.ValidAfterNanoseconds[uint32(id)] = va
+	}
+	for sid, aggMap := range outcome.StreamAggregates {
+		if len(aggMap) == 0 {
+			continue
+		}
+		aggVals := make(map[uint32]*LLOStreamValue, len(aggMap))
+		for agg, sv := range aggMap {
+			v, err := makeLLOStreamValue(sv)
+			if err != nil {
+				return nil, fmt.Errorf("failed to make outcome telemetry; %w", err)
+			}
+			aggVals[uint32(agg)] = v
+		}
+		ot.StreamAggregates[uint32(sid)] = &LLOAggregatorStreamValue{AggregatorValues: aggVals}
+	}
+	return ot, nil
 }

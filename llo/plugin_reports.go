@@ -103,11 +103,11 @@ func (p *Plugin) encodeReport(ctx context.Context, r Report, cd llotypes.Channel
 	if !exists {
 		return nil, fmt.Errorf("codec missing for ReportFormat=%q", cd.ReportFormat)
 	}
-	p.captureReportTelemetry(r, cd)
+	p.captureReportTelemetry(&r, cd)
 	return codec.Encode(ctx, r, cd)
 }
 
-func (p *Plugin) captureReportTelemetry(r Report, cd llotypes.ChannelDefinition) {
+func (p *Plugin) captureReportTelemetry(r *Report, cd llotypes.ChannelDefinition) {
 	if p.ReportTelemetryCh != nil {
 		rt, err := makeReportTelemetry(r, cd, p.DonID)
 		if err != nil {
@@ -122,7 +122,7 @@ func (p *Plugin) captureReportTelemetry(r Report, cd llotypes.ChannelDefinition)
 	}
 }
 
-func makeReportTelemetry(r Report, cd llotypes.ChannelDefinition, donID uint32) (*LLOReportTelemetry, error) {
+func makeReportTelemetry(r *Report, cd llotypes.ChannelDefinition, donID uint32) (*LLOReportTelemetry, error) {
 	streams := make([]*LLOStreamDefinition, len(cd.Streams))
 	for i, s := range cd.Streams {
 		streams[i] = &LLOStreamDefinition{
