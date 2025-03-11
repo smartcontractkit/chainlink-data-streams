@@ -109,7 +109,7 @@ func (p *Plugin) encodeReport(ctx context.Context, r Report, cd llotypes.Channel
 
 func (p *Plugin) captureReportTelemetry(r Report, cd llotypes.ChannelDefinition) {
 	if p.ReportTelemetryCh != nil {
-		rt, err := makeReportTelemetry(r, cd)
+		rt, err := makeReportTelemetry(r, cd, p.DonID)
 		if err != nil {
 			p.Logger.Warnw("Error making report telemetry", "err", err)
 		} else {
@@ -122,7 +122,7 @@ func (p *Plugin) captureReportTelemetry(r Report, cd llotypes.ChannelDefinition)
 	}
 }
 
-func makeReportTelemetry(r Report, cd llotypes.ChannelDefinition) (*LLOReportTelemetry, error) {
+func makeReportTelemetry(r Report, cd llotypes.ChannelDefinition, donID uint32) (*LLOReportTelemetry, error) {
 	streams := make([]*LLOStreamDefinition, len(cd.Streams))
 	for i, s := range cd.Streams {
 		streams[i] = &LLOStreamDefinition{
@@ -152,6 +152,7 @@ func makeReportTelemetry(r Report, cd llotypes.ChannelDefinition) (*LLOReportTel
 		ChannelOpts:                     cd.Opts,
 		SeqNr:                           r.SeqNr,
 		ConfigDigest:                    r.ConfigDigest[:],
+		DonId:                           donID,
 	}
 	return rt, nil
 }

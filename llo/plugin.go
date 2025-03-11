@@ -214,6 +214,8 @@ type PluginFactoryParams struct {
 	// ReportTelemetryCh if set will be used to send one telemetry struct per
 	// channel in the Report stage
 	ReportTelemetryCh chan<- *LLOReportTelemetry
+	// DonID is optional and used only for telemetry and logging
+	DonID uint32
 }
 
 func NewPluginFactory(p PluginFactoryParams) *PluginFactory {
@@ -228,6 +230,7 @@ func NewPluginFactory(p PluginFactoryParams) *PluginFactory {
 		p.OnchainConfigCodec,
 		p.ReportCodecs,
 		p.ReportTelemetryCh,
+		p.DonID,
 	}
 }
 
@@ -248,6 +251,7 @@ type PluginFactory struct {
 	OnchainConfigCodec               OnchainConfigCodec
 	ReportCodecs                     map[llotypes.ReportFormat]ReportCodec
 	ReportTelemetryCh                chan<- *LLOReportTelemetry
+	DonID                            uint32
 }
 
 func (f *PluginFactory) NewReportingPlugin(ctx context.Context, cfg ocr3types.ReportingPluginConfig) (ocr3types.ReportingPlugin[llotypes.ReportInfo], ocr3types.ReportingPluginInfo, error) {
@@ -276,6 +280,7 @@ func (f *PluginFactory) NewReportingPlugin(ctx context.Context, cfg ocr3types.Re
 			f.RetirementReportCodec,
 			f.ReportCodecs,
 			f.ReportTelemetryCh,
+			f.DonID,
 			cfg.MaxDurationObservation,
 			offchainConfig.ProtocolVersion,
 			offchainConfig.DefaultMinReportIntervalNanoseconds,
@@ -309,6 +314,7 @@ type Plugin struct {
 	RetirementReportCodec            RetirementReportCodec
 	ReportCodecs                     map[llotypes.ReportFormat]ReportCodec
 	ReportTelemetryCh                chan<- *LLOReportTelemetry
+	DonID                            uint32
 
 	// From ReportingPluginConfig
 	MaxDurationObservation time.Duration

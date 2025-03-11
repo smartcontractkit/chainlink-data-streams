@@ -304,6 +304,7 @@ func testReports(t *testing.T, outcomeCodec OutcomeCodec) {
 	})
 	t.Run("sends telemetry on telemetry channel if set, and does not block on full channel", func(t *testing.T) {
 		ch := make(chan *LLOReportTelemetry, 2)
+		p.DonID = 1001
 		p.ReportTelemetryCh = ch
 		p.ConfigDigest = types.ConfigDigest{1, 2, 3}
 		seqNr := uint64(42)
@@ -365,6 +366,7 @@ func testReports(t *testing.T, outcomeCodec OutcomeCodec) {
 
 		assert.Equal(t, seqNr, t0.SeqNr)
 		assert.Equal(t, p.ConfigDigest[:], t0.ConfigDigest)
+		assert.Equal(t, uint32(1001), t0.DonId)
 
 		t1 := telemetries[1]
 		assert.Equal(t, uint32(2), t1.ChannelId)
@@ -386,6 +388,7 @@ func testReports(t *testing.T, outcomeCodec OutcomeCodec) {
 
 		assert.Equal(t, seqNr, t1.SeqNr)
 		assert.Equal(t, p.ConfigDigest[:], t1.ConfigDigest)
+		assert.Equal(t, uint32(1001), t0.DonId)
 	})
 }
 
