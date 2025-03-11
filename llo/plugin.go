@@ -213,7 +213,7 @@ type PluginFactoryParams struct {
 	ReportCodecs map[llotypes.ReportFormat]ReportCodec
 	// ReportTelemetryCh if set will be used to send one telemetry struct per
 	// channel in the Report stage
-	ReportTelemetryCh chan<- ReportTelemetry
+	ReportTelemetryCh chan<- *LLOReportTelemetry
 }
 
 func NewPluginFactory(p PluginFactoryParams) *PluginFactory {
@@ -247,7 +247,7 @@ type PluginFactory struct {
 	Logger                           logger.Logger
 	OnchainConfigCodec               OnchainConfigCodec
 	ReportCodecs                     map[llotypes.ReportFormat]ReportCodec
-	ReportTelemetryCh                chan<- ReportTelemetry
+	ReportTelemetryCh                chan<- *LLOReportTelemetry
 }
 
 func (f *PluginFactory) NewReportingPlugin(ctx context.Context, cfg ocr3types.ReportingPluginConfig) (ocr3types.ReportingPlugin[llotypes.ReportInfo], ocr3types.ReportingPluginInfo, error) {
@@ -308,7 +308,7 @@ type Plugin struct {
 	OutcomeCodec                     OutcomeCodec
 	RetirementReportCodec            RetirementReportCodec
 	ReportCodecs                     map[llotypes.ReportFormat]ReportCodec
-	ReportTelemetryCh                chan<- ReportTelemetry
+	ReportTelemetryCh                chan<- *LLOReportTelemetry
 
 	// From ReportingPluginConfig
 	MaxDurationObservation time.Duration
