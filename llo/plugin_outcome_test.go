@@ -33,6 +33,8 @@ func testOutcome(t *testing.T, outcomeCodec OutcomeCodec) {
 		OutcomeCodec:     outcomeCodec,
 		Logger:           logger.Test(t),
 		ObservationCodec: protoObservationCodec{},
+		DonID:            10000043,
+		ConfigDigest:     types.ConfigDigest{1, 2, 3, 4},
 	}
 	testStartTS := time.Now()
 	testStartNanos := uint64(testStartTS.UnixNano()) //nolint:gosec // safe cast in tests
@@ -463,6 +465,51 @@ func testOutcome(t *testing.T, outcomeCodec OutcomeCodec) {
 			assert.Equal(t, map[llotypes.Aggregator]StreamValue{
 				llotypes.AggregatorQuote: &Quote{Bid: decimal.NewFromInt(320), Benchmark: decimal.NewFromInt(330), Ask: decimal.NewFromInt(340)},
 			}, decoded.StreamAggregates[3])
+		})
+		t.Run("sends outcome telemetry if channel is specified", func(t *testing.T) {
+			ch := make(chan *LLOOutcomeTelemetry, 10000)
+			p.OutcomeTelemetryCh = ch
+			previousOutcome := Outcome{
+				LifeCycleStage:                  llotypes.LifeCycleStage("test"),
+				ObservationTimestampNanoseconds: testStartNanos,
+				ChannelDefinitions:              cdc.definitions,
+				ValidAfterNanoseconds:           nil,
+				StreamAggregates:                nil,
+			}
+			encodedPreviousOutcome, err := p.OutcomeCodec.Encode(previousOutcome)
+			require.NoError(t, err)
+			outctx := ocr3types.OutcomeContext{SeqNr: 2, PreviousOutcome: encodedPreviousOutcome}
+			aos := []types.AttributedObservation{}
+			for i := 0; i < 4; i++ {
+				obs := Observation{
+					UnixTimestampNanoseconds: testStartNanos + uint64(time.Second) + uint64(i*100)*uint64(time.Millisecond), //nolint:gosec // safe cast in tests
+					StreamValues: map[llotypes.StreamID]StreamValue{
+						1: ToDecimal(decimal.NewFromInt(int64(100 + i*10))),
+						2: ToDecimal(decimal.NewFromInt(int64(200 + i*10))),
+						3: &Quote{Bid: decimal.NewFromInt(int64(300 + i*10)), Benchmark: decimal.NewFromInt(int64(310 + i*10)), Ask: decimal.NewFromInt(int64(320 + i*10))},
+					}}
+				encoded, err2 := p.ObservationCodec.Encode(obs)
+				require.NoError(t, err2)
+				aos = append(aos,
+					types.AttributedObservation{
+						Observation: encoded,
+						Observer:    commontypes.OracleID(i), //nolint:gosec // will never be > 4
+					})
+			}
+			outcome, err := p.Outcome(ctx, outctx, types.Query{}, aos)
+			require.NoError(t, err)
+			decoded, err := p.OutcomeCodec.Decode(outcome)
+			require.NoError(t, err)
+
+			telem := <-ch
+			assert.Equal(t, string(decoded.LifeCycleStage), telem.LifeCycleStage)
+			assert.Equal(t, decoded.ObservationTimestampNanoseconds, telem.ObservationTimestampNanoseconds)
+			assert.Equal(t, len(decoded.ChannelDefinitions), len(telem.ChannelDefinitions))
+			assert.Equal(t, len(decoded.ValidAfterNanoseconds), len(telem.ValidAfterNanoseconds))
+			assert.Equal(t, len(decoded.StreamAggregates), len(telem.StreamAggregates))
+			assert.Equal(t, uint64(2), telem.SeqNr)
+			assert.Equal(t, p.ConfigDigest[:], telem.ConfigDigest)
+			assert.Equal(t, p.DonID, telem.DonId)
 		})
 	})
 	t.Run("if previousOutcome is retired, returns outcome as normal", func(t *testing.T) {
