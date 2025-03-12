@@ -48,7 +48,7 @@ jobs:
       actions: read
     steps:
       - name: ci-lint
-        uses: smartcontractkit/.github/actions/ci-lint-go@bfaf6327551cb73461928845c80e758c44d07b27  # version 0.3.1
+        uses: smartcontractkit/.github/actions/ci-lint-go@81d53d6ed52fdd02ce7f6cf14634f06419b3a6e6  # version 0.3.1
         with:
           # grafana inputs
           metrics-job-name: ci-lint
@@ -69,7 +69,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: ci-lint-misc
-        uses: smartcontractkit/.github/actions/ci-lint-misc@6b08487b176ef7cad086526d0b54ddff6691c044 # ci-lint-misc@0.1.1
+        uses: smartcontractkit/.github/actions/ci-lint-misc@81d53d6ed52fdd02ce7f6cf14634f06419b3a6e6 # ci-lint-misc@0.1.1
         with:
           # grafana inputs
           metrics-job-name: ci-lint-misc
@@ -86,7 +86,7 @@ jobs:
       actions: read
     steps:
       - name: ci-test
-        uses: smartcontractkit/.github/actions/ci-test-go@f8efc6bb91480713ddd64eaabd63d4b97ae6f088 # ci-test-go@0.1.4
+        uses: smartcontractkit/.github/actions/ci-test-go@81d53d6ed52fdd02ce7f6cf14634f06419b3a6e6 # ci-test-go@0.1.4
         with:
           # grafana inputs
           metrics-job-name: ci-test
@@ -111,7 +111,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: ci-sonarqube
-        uses: smartcontractkit/.github/actions/ci-sonarqube-go@3e11dbc45e4c8b18dd996fb417ccf22056176388 # ci-sonarqube-go@0.1.0
+        uses: smartcontractkit/.github/actions/ci-sonarqube-go@81d53d6ed52fdd02ce7f6cf14634f06419b3a6e6 # ci-sonarqube-go@0.1.0
         with:
           # grafana inputs
           metrics-job-name: ci-sonarqube
