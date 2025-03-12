@@ -24,7 +24,16 @@ func DecodeOffchainConfig(b []byte) (o OffchainConfig, err error) {
 	pbuf := &LLOOffchainConfigProto{}
 	err = proto.Unmarshal(b, pbuf)
 	if err != nil {
-		return o, fmt.Errorf("failed to decode offchain config: expected protobuf (got: 0x%x); %w", b, err)
+		// HACK: We have actual invalid bytes written on-chain, which we have
+		// to handle to be compatible with older builds which ignored offchain
+		// config.
+		//
+		// FIXME: Return error instead after v0 is fully decomissioned and all
+		// contracts have been updated with proper v1 config.
+		//
+		// MERC-2272
+		return o, nil
+		// return o, fmt.Errorf("failed to decode offchain config: expected protobuf (got: 0x%x); %w", b, err)
 	}
 	if err := o.Validate(); err != nil {
 		return o, fmt.Errorf("failed to decode offchain config: %w", err)
