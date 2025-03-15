@@ -50,11 +50,6 @@ jobs:
       - name: ci-lint
         uses: smartcontractkit/.github/actions/ci-lint-go@bfaf6327551cb73461928845c80e758c44d07b27  # version 0.3.1
         with:
-          # grafana inputs
-          metrics-job-name: ci-lint
-          gc-basic-auth: ${{ secrets.GRAFANA_INTERNAL_BASIC_AUTH }}
-          gc-host: ${{ secrets.GRAFANA_INTERNAL_HOST }}
-          gc-org-id: ${{ secrets.GRAFANA_INTERNAL_TENANT_ID }}
           # env inputs
           use-env-files: "true"
           env-files: ./tools/env/ci.env
@@ -70,13 +65,6 @@ jobs:
     steps:
       - name: ci-lint-misc
         uses: smartcontractkit/.github/actions/ci-lint-misc@6b08487b176ef7cad086526d0b54ddff6691c044 # ci-lint-misc@0.1.1
-        with:
-          # grafana inputs
-          metrics-job-name: ci-lint-misc
-          gc-basic-auth: ${{ secrets.GRAFANA_INTERNAL_BASIC_AUTH }}
-          gc-host: ${{ secrets.GRAFANA_INTERNAL_HOST }}
-          gc-org-id: ${{ secrets.GRAFANA_INTERNAL_TENANT_ID }}
-
 
   ci-test:
     runs-on: ubuntu-latest
@@ -86,13 +74,8 @@ jobs:
       actions: read
     steps:
       - name: ci-test
-        uses: smartcontractkit/.github/actions/ci-test-go@f8efc6bb91480713ddd64eaabd63d4b97ae6f088 # ci-test-go@0.1.4
+        uses: smartcontractkit/.github/actions/ci-test-go@ci-test-go/0.3.5
         with:
-          # grafana inputs
-          metrics-job-name: ci-test
-          gc-basic-auth: ${{ secrets.GRAFANA_INTERNAL_BASIC_AUTH }}
-          gc-host: ${{ secrets.GRAFANA_INTERNAL_HOST }}
-          gc-org-id: ${{ secrets.GRAFANA_INTERNAL_TENANT_ID }}
           # docker inputs
           use-docker-compose: "true"
           docker-compose-workdir: ./tools/docker/setup-postgres
@@ -113,11 +96,6 @@ jobs:
       - name: ci-sonarqube
         uses: smartcontractkit/.github/actions/ci-sonarqube-go@3e11dbc45e4c8b18dd996fb417ccf22056176388 # ci-sonarqube-go@0.1.0
         with:
-          # grafana inputs
-          metrics-job-name: ci-sonarqube
-          gc-basic-auth: ${{ secrets.GRAFANA_INTERNAL_BASIC_AUTH }}
-          gc-host: ${{ secrets.GRAFANA_INTERNAL_HOST }}
-          gc-org-id: ${{ secrets.GRAFANA_INTERNAL_TENANT_ID }}
           # sonarqube inputs
           sonar-token: ${{ secrets.SONAR_TOKEN }}
           sonar-host-url: ${{ secrets.SONAR_HOST_URL }}
