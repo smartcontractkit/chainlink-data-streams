@@ -2,6 +2,7 @@ package llo
 
 import (
 	"encoding"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"regexp"
@@ -40,10 +41,53 @@ func UnmarshalProtoStreamValue(enc *LLOStreamValue) (sv StreamValue, err error) 
 		sv = new(Quote)
 	case LLOStreamValue_Decimal:
 		sv = new(Decimal)
+	case LLOStreamValue_TimestampedStreamValue:
+		sv = new(TimestampedStreamValue)
 	default:
 		return nil, fmt.Errorf("cannot unmarshal protobuf stream value; unknown StreamValueType %d", enc.Type)
 	}
 	if err := sv.UnmarshalBinary(enc.Value); err != nil {
+		return nil, err
+	}
+	return sv, nil
+}
+
+func NewTypedTextStreamValue(sv StreamValue) (TypedTextStreamValue, error) {
+	if sv == nil {
+		return TypedTextStreamValue{}, ErrNilStreamValue
+	}
+	b, err := sv.MarshalText()
+	if err != nil {
+		return TypedTextStreamValue{}, fmt.Errorf("failed to encode StreamValue: %w", err)
+	}
+	return TypedTextStreamValue{
+		Type:  sv.Type(),
+		Value: string(b),
+	}, nil
+}
+
+type TypedTextStreamValue struct {
+	Type  LLOStreamValue_Type `json:"Type"`
+	Value string              `json:"Value"`
+}
+
+func UnmarshalTypedTextStreamValue(enc *TypedTextStreamValue) (StreamValue, error) {
+	if enc == nil {
+		// Shouldn't ever happen except from byzantine node, but we must not panic
+		return nil, ErrNilStreamValue
+	}
+	var sv StreamValue
+	switch enc.Type {
+	case LLOStreamValue_Decimal:
+		sv = new(Decimal)
+	case LLOStreamValue_Quote:
+		sv = new(Quote)
+	case LLOStreamValue_TimestampedStreamValue:
+		sv = new(TimestampedStreamValue)
+	default:
+		return nil, fmt.Errorf("unknown StreamValueType %d", enc.Type)
+	}
+	if err := (sv).UnmarshalText([]byte(enc.Value)); err != nil {
 		return nil, err
 	}
 	return sv, nil
@@ -187,4 +231,100 @@ func (v *Decimal) UnmarshalText(data []byte) error {
 
 func (v *Decimal) Type() LLOStreamValue_Type {
 	return LLOStreamValue_Decimal
+}
+
+// TimestampedStreamValue is a StreamValue with an associated timestamp
+type TimestampedStreamValue struct {
+	ObservedAtNanoseconds uint64
+	StreamValue           StreamValue
+}
+
+var _ StreamValue = (*TimestampedStreamValue)(nil)
+
+func (v *TimestampedStreamValue) MarshalBinary() ([]byte, error) {
+	if v == nil {
+		return nil, ErrNilStreamValue
+	}
+	t := LLOTimestampedStreamValue{}
+	t.ObservedAtNanoseconds = v.ObservedAtNanoseconds
+	if v.StreamValue == nil {
+		return nil, ErrNilStreamValue
+	}
+	sv, err := v.StreamValue.MarshalBinary()
+	if err != nil {
+		return nil, err
+	}
+	t.StreamValue = &LLOStreamValue{
+		Type:  v.StreamValue.Type(),
+		Value: sv,
+	}
+	return proto.Marshal(&t)
+}
+
+func (v *TimestampedStreamValue) UnmarshalBinary(data []byte) error {
+	t := new(LLOTimestampedStreamValue)
+	if err := proto.Unmarshal(data, t); err != nil {
+		return err
+	}
+	v.ObservedAtNanoseconds = t.ObservedAtNanoseconds
+	sv, err := UnmarshalProtoStreamValue(t.StreamValue)
+	if err != nil {
+		return err
+	}
+	v.StreamValue = sv
+	return nil
+}
+
+func (v *TimestampedStreamValue) MarshalText() ([]byte, error) {
+	if v == nil {
+		return nil, ErrNilStreamValue
+	}
+	serializedSv, err := v.StreamValue.MarshalText()
+	if err != nil {
+		return nil, err
+	}
+	t := TypedTextStreamValue{
+		Type:  v.StreamValue.Type(),
+		Value: string(serializedSv),
+	}
+	serializedT, err := json.Marshal(t)
+	if err != nil {
+		return nil, err
+	}
+	return []byte(fmt.Sprintf("TSV{ObservedAt: %d, Value: %s}", v.ObservedAtNanoseconds, serializedT)), nil
+}
+
+var timestampedStreamValueRegex = regexp.MustCompile(`^TSV\{ObservedAt: ([0-9]+), Value: (.+)\}$`)
+
+func (v *TimestampedStreamValue) UnmarshalText(data []byte) error {
+	if v == nil {
+		return ErrNilStreamValue
+	}
+
+	matches := timestampedStreamValueRegex.FindStringSubmatch(string(data))
+	if len(matches) != 3 {
+		return fmt.Errorf("unexpected input for timestamped stream value, expected format TSV{ObservedAt: <timestamp>, Value: <value>}, got %s", string(data))
+	}
+
+	timestamp := matches[1]
+	serializedT := matches[2]
+	if _, err := fmt.Sscanf(timestamp, "%d", &v.ObservedAtNanoseconds); err != nil {
+		return fmt.Errorf("failed to parse timestamp: %w", err)
+	}
+
+	tSv := new(TypedTextStreamValue)
+	if err := json.Unmarshal([]byte(serializedT), tSv); err != nil {
+		return fmt.Errorf("failed to unmarshal text stream value: %w", err)
+	}
+
+	sv, err := UnmarshalTypedTextStreamValue(tSv)
+	if err != nil {
+		return fmt.Errorf("failed to unmarshal text stream value: %w", err)
+	}
+	v.StreamValue = sv
+	return nil
+}
+
+func (v *TimestampedStreamValue) Type() LLOStreamValue_Type {
+	return LLOStreamValue_TimestampedStreamValue
 }

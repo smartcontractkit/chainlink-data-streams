@@ -109,7 +109,7 @@ func Test_JSONCodec_Properties(t *testing.T) {
 			"ChannelID":                       gen.UInt32(),
 			"ValidAfterNanoseconds":           gen.UInt64(),
 			"ObservationTimestampNanoseconds": gen.UInt64(),
-			"Values":                          genStreamValues(),
+			"Values":                          genStreamValues(true),
 			"Specimen":                        gen.Bool(),
 		}),
 	))
@@ -248,15 +248,41 @@ func genQuote() gopter.Gen {
 	}
 }
 
-func genStreamValue() gopter.Gen {
+func genTimestampedStreamValue() gopter.Gen {
+	return gopter.CombineGens(
+		gen.UInt64(),
+		genStreamValue(false), // must disallow nesting here to avoid infinite loops
+	).Map(func(values []any) any {
+		var sv StreamValue = &TimestampedStreamValue{
+			ObservedAtNanoseconds: values[0].(uint64),
+			StreamValue:           values[1].(StreamValue),
+		}
+		return gopter.NewGenResult(sv, gopter.NoShrinker)
+	})
+}
+
+func genStreamValue(allowNesting bool) gopter.Gen {
 	return func(p *gopter.GenParameters) *gopter.GenResult {
-		switch p.Rng.Intn(3) {
-		case 0:
-			return genDecimalValue()(p)
-		case 1:
-			return genQuote()(p)
-		case 2:
-			return gopter.NewGenResult((StreamValue)(nil), gopter.NoShrinker)
+		if allowNesting {
+			switch p.Rng.Intn(4) {
+			case 0:
+				return genDecimalValue()(p)
+			case 1:
+				return genQuote()(p)
+			case 2:
+				return genTimestampedStreamValue()(p)
+			case 3:
+				return gopter.NewGenResult((StreamValue)(nil), gopter.NoShrinker)
+			}
+		} else {
+			switch p.Rng.Intn(3) {
+			case 0:
+				return genDecimalValue()(p)
+			case 1:
+				return genQuote()(p)
+			case 2:
+				return gopter.NewGenResult((StreamValue)(nil), gopter.NoShrinker)
+			}
 		}
 		return nil
 	}
@@ -264,8 +290,8 @@ func genStreamValue() gopter.Gen {
 
 var streamValueSliceType = reflect.TypeOf((*StreamValue)(nil)).Elem()
 
-func genStreamValues() gopter.Gen {
-	return gen.SliceOf(genStreamValue(), streamValueSliceType)
+func genStreamValues(allowNesting bool) gopter.Gen {
+	return gen.SliceOf(genStreamValue(allowNesting), streamValueSliceType)
 }
 
 func Test_JSONCodec(t *testing.T) {
