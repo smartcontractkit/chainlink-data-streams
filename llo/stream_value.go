@@ -61,14 +61,14 @@ func NewTypedTextStreamValue(sv StreamValue) (TypedTextStreamValue, error) {
 		return TypedTextStreamValue{}, fmt.Errorf("failed to encode StreamValue: %w", err)
 	}
 	return TypedTextStreamValue{
-		Type:  sv.Type(),
-		Value: string(b),
+		Type:                  sv.Type(),
+		SerializedStreamValue: string(b),
 	}, nil
 }
 
 type TypedTextStreamValue struct {
-	Type  LLOStreamValue_Type `json:"Type"`
-	Value string              `json:"Value"`
+	Type                  LLOStreamValue_Type `json:"t"`
+	SerializedStreamValue string              `json:"v"`
 }
 
 func UnmarshalTypedTextStreamValue(enc *TypedTextStreamValue) (StreamValue, error) {
@@ -87,7 +87,7 @@ func UnmarshalTypedTextStreamValue(enc *TypedTextStreamValue) (StreamValue, erro
 	default:
 		return nil, fmt.Errorf("unknown StreamValueType %d", enc.Type)
 	}
-	if err := (sv).UnmarshalText([]byte(enc.Value)); err != nil {
+	if err := (sv).UnmarshalText([]byte(enc.SerializedStreamValue)); err != nil {
 		return nil, err
 	}
 	return sv, nil
@@ -235,8 +235,8 @@ func (v *Decimal) Type() LLOStreamValue_Type {
 
 // TimestampedStreamValue is a StreamValue with an associated timestamp
 type TimestampedStreamValue struct {
-	ObservedAtNanoseconds uint64
-	StreamValue           StreamValue
+	ObservedAtNanoseconds uint64      `json:"observedAtNanoseconds"`
+	StreamValue           StreamValue `json:"streamValue"`
 }
 
 var _ StreamValue = (*TimestampedStreamValue)(nil)
@@ -284,17 +284,17 @@ func (v *TimestampedStreamValue) MarshalText() ([]byte, error) {
 		return nil, err
 	}
 	t := TypedTextStreamValue{
-		Type:  v.StreamValue.Type(),
-		Value: string(serializedSv),
+		Type:                  v.StreamValue.Type(),
+		SerializedStreamValue: string(serializedSv),
 	}
 	serializedT, err := json.Marshal(t)
 	if err != nil {
 		return nil, err
 	}
-	return []byte(fmt.Sprintf("TSV{ObservedAt: %d, Value: %s}", v.ObservedAtNanoseconds, serializedT)), nil
+	return []byte(fmt.Sprintf("TSV{ObservedAtNanoseconds: %d, StreamValue: %s}", v.ObservedAtNanoseconds, serializedT)), nil
 }
 
-var timestampedStreamValueRegex = regexp.MustCompile(`^TSV\{ObservedAt: ([0-9]+), Value: (.+)\}$`)
+var timestampedStreamValueRegex = regexp.MustCompile(`^TSV\{ObservedAtNanoseconds: ([0-9]+), StreamValue: (.+)\}$`)
 
 func (v *TimestampedStreamValue) UnmarshalText(data []byte) error {
 	if v == nil {
