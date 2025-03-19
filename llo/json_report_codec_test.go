@@ -32,10 +32,10 @@ func FuzzJSONCodec_Decode_Unpack(f *testing.F) {
 	incompleteJSON := []byte(`{`)
 	notJSON := []byte(`"random string"`)
 	unprintable := []byte{1, 2, 3}
-	validJSONReport := []byte(`{"ConfigDigest":"0102030000000000000000000000000000000000000000000000000000000000","SeqNr":43,"ChannelID":46,"ValidAfterNanoseconds":44,"ObservationTimestampNanoseconds":45,"Values":[{"Type":0,"Value":"1"},{"Type":0,"Value":"2"},{"Type":1,"Value":"Q{Bid: 3.13, Benchmark: 4.4, Ask: 5.12}"}],"Specimen":true}`)
+	validJSONReport := []byte(`{"ConfigDigest":"0102030000000000000000000000000000000000000000000000000000000000","SeqNr":43,"ChannelID":46,"ValidAfterNanoseconds":44,"ObservationTimestampNanoseconds":45,"Values":[{"t":0,"v":"1"},{"t":0,"v":"2"},{"t":1,"v":"Q{Bid: 3.13, Benchmark: 4.4, Ask: 5.12}"}],"Specimen":true}`)
 	invalidConfigDigest := []byte(`{"SeqNr":42,"ConfigDigest":"foo"}`)
 	invalidConfigDigestNotEnoughBytes := []byte(`{"SeqNr":42,"ConfigDigest":"0xdead"}`)
-	badStreamValues := []byte(`{"SeqNr":42,"ConfigDigest":"0102030000000000000000000000000000000000000000000000000000000000", "Values":[{"Type":0,"Value":null},{"Type":-1,"Value":"2"}]}`)
+	badStreamValues := []byte(`{"SeqNr":42,"ConfigDigest":"0102030000000000000000000000000000000000000000000000000000000000", "Values":[{"t":0,"v":null},{"t":-1,"v":"2"}]}`)
 
 	f.Add(validJSON)
 	f.Add(emptyInput)
@@ -109,7 +109,7 @@ func Test_JSONCodec_Properties(t *testing.T) {
 			"ChannelID":                       gen.UInt32(),
 			"ValidAfterNanoseconds":           gen.UInt64(),
 			"ObservationTimestampNanoseconds": gen.UInt64(),
-			"Values":                          genStreamValues(),
+			"Values":                          genStreamValues(true),
 			"Specimen":                        gen.Bool(),
 		}),
 	))
@@ -248,15 +248,41 @@ func genQuote() gopter.Gen {
 	}
 }
 
-func genStreamValue() gopter.Gen {
+func genTimestampedStreamValue() gopter.Gen {
+	return gopter.CombineGens(
+		gen.UInt64(),
+		genStreamValue(false), // must disallow nesting here to avoid infinite loops
+	).Map(func(values []any) any {
+		var sv StreamValue = &TimestampedStreamValue{
+			ObservedAtNanoseconds: values[0].(uint64),
+			StreamValue:           values[1].(StreamValue),
+		}
+		return gopter.NewGenResult(sv, gopter.NoShrinker)
+	})
+}
+
+func genStreamValue(allowNesting bool) gopter.Gen {
 	return func(p *gopter.GenParameters) *gopter.GenResult {
-		switch p.Rng.Intn(3) {
-		case 0:
-			return genDecimalValue()(p)
-		case 1:
-			return genQuote()(p)
-		case 2:
-			return gopter.NewGenResult((StreamValue)(nil), gopter.NoShrinker)
+		if allowNesting {
+			switch p.Rng.Intn(4) {
+			case 0:
+				return genDecimalValue()(p)
+			case 1:
+				return genQuote()(p)
+			case 2:
+				return genTimestampedStreamValue()(p)
+			case 3:
+				return gopter.NewGenResult((StreamValue)(nil), gopter.NoShrinker)
+			}
+		} else {
+			switch p.Rng.Intn(3) {
+			case 0:
+				return genDecimalValue()(p)
+			case 1:
+				return genQuote()(p)
+			case 2:
+				return gopter.NewGenResult((StreamValue)(nil), gopter.NoShrinker)
+			}
 		}
 		return nil
 	}
@@ -264,8 +290,8 @@ func genStreamValue() gopter.Gen {
 
 var streamValueSliceType = reflect.TypeOf((*StreamValue)(nil)).Elem()
 
-func genStreamValues() gopter.Gen {
-	return gen.SliceOf(genStreamValue(), streamValueSliceType)
+func genStreamValues(allowNesting bool) gopter.Gen {
+	return gen.SliceOf(genStreamValue(allowNesting), streamValueSliceType)
 }
 
 func Test_JSONCodec(t *testing.T) {
@@ -286,7 +312,7 @@ func Test_JSONCodec(t *testing.T) {
 		encoded, err := cdc.Encode(ctx, r, llo.ChannelDefinition{})
 		require.NoError(t, err)
 
-		assert.Equal(t, `{"ConfigDigest":"0102030000000000000000000000000000000000000000000000000000000000","SeqNr":43,"ChannelID":46,"ValidAfterNanoseconds":44,"ObservationTimestampNanoseconds":45,"Values":[{"Type":0,"Value":"1"},{"Type":0,"Value":"2"},{"Type":1,"Value":"Q{Bid: 3.13, Benchmark: 4.4, Ask: 5.12}"}],"Specimen":true}`, string(encoded))
+		assert.Equal(t, `{"ConfigDigest":"0102030000000000000000000000000000000000000000000000000000000000","SeqNr":43,"ChannelID":46,"ValidAfterNanoseconds":44,"ObservationTimestampNanoseconds":45,"Values":[{"t":0,"v":"1"},{"t":0,"v":"2"},{"t":1,"v":"Q{Bid: 3.13, Benchmark: 4.4, Ask: 5.12}"}],"Specimen":true}`, string(encoded))
 
 		decoded, err := cdc.Decode(encoded)
 		require.NoError(t, err)
@@ -326,7 +352,7 @@ func Test_JSONCodec(t *testing.T) {
 		})
 	})
 	t.Run("UnpackDecode unpacks and decodes report", func(t *testing.T) {
-		b := []byte(`{"configDigest":"0102030000000000000000000000000000000000000000000000000000000000","seqNr":43,"report":{"ConfigDigest":"0102030000000000000000000000000000000000000000000000000000000000","SeqNr":43,"ChannelID":46,"ValidAfterNanoseconds":44,"ObservationTimestampNanoseconds":45,"Values":[{"Type":0,"Value":"1"},{"Type":0,"Value":"2"},{"Type":1,"Value":"Q{Bid: 3.13, Benchmark: 4.4, Ask: 5.12}"}],"Specimen":true},"sigs":[{"Signature":"AgME","Signer":2}]}`)
+		b := []byte(`{"configDigest":"0102030000000000000000000000000000000000000000000000000000000000","seqNr":43,"report":{"ConfigDigest":"0102030000000000000000000000000000000000000000000000000000000000","SeqNr":43,"ChannelID":46,"ValidAfterNanoseconds":44,"ObservationTimestampNanoseconds":45,"Values":[{"t":0,"v":"1"},{"t":0,"v":"2"},{"t":1,"v":"Q{Bid: 3.13, Benchmark: 4.4, Ask: 5.12}"}],"Specimen":true},"sigs":[{"Signature":"AgME","Signer":2}]}`)
 
 		cdc := JSONReportCodec{}
 		digest, seqNr, report, sigs, err := cdc.UnpackDecode(b)

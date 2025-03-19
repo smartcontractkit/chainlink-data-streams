@@ -356,9 +356,6 @@ func (p *Plugin) ValidateObservation(ctx context.Context, outctx ocr3types.Outco
 
 	observation, err := p.ObservationCodec.Decode(ao.Observation)
 	if err != nil {
-		// Critical error
-		// If the previous outcome cannot be decoded for whatever reason, the
-		// protocol will become permanently stuck at this point
 		return fmt.Errorf("Observation decode error (got: 0x%x): %w", ao.Observation, err)
 	}
 
@@ -380,6 +377,20 @@ func (p *Plugin) ValidateObservation(ctx context.Context, outctx ocr3types.Outco
 
 	if len(observation.StreamValues) > MaxObservationStreamValuesLength {
 		return fmt.Errorf("StreamValues is too long: %v vs %v", len(observation.StreamValues), MaxObservationStreamValuesLength)
+	}
+
+	for _, streamValue := range observation.StreamValues {
+		switch v := streamValue.(type) {
+		case *TimestampedStreamValue:
+			switch v.StreamValue.Type() {
+			case LLOStreamValue_Decimal:
+			default:
+				return fmt.Errorf("nested stream value on TimestampedStreamValue must be a Decimal, got: %v", v.StreamValue.Type())
+			}
+			// TODO: verify that TimestampedStreamValues are not ridiculously far into the future?
+		default:
+			// Can add additional type-specific validation here, if needed
+		}
 	}
 
 	return nil

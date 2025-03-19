@@ -212,25 +212,85 @@ func (p *Plugin) outcome(outctx ocr3types.OutcomeContext, query types.Query, aos
 				// specify the same stream multiple times if they wish.
 				continue
 			}
-			aggF := GetAggregatorFunc(agg)
-			if aggF == nil {
-				return nil, fmt.Errorf("no aggregator function defined for aggregator of type %v", agg)
-			}
+
+			// Create the aggregator => stream ID map if it doesn't already exist
 			m, exists := outcome.StreamAggregates[sid]
 			if !exists {
 				m = make(map[llotypes.Aggregator]StreamValue)
 				outcome.StreamAggregates[sid] = m
 			}
-			result, err := aggF(streamObservations[sid], p.F)
-			if err != nil {
-				if p.Config.VerboseLogging {
-					p.Logger.Warnw("Aggregation failed", "aggregator", agg, "channelID", cid, "f", p.F, "streamID", sid, "observations", streamObservations[sid], "stage", "Outcome", "seqNr", outctx.SeqNr, "err", err)
+
+			// Copy over previous results if its a TimestampedStreamValue
+			// This may be replaced later if we get an observation with a newer timestamp
+			if prev, exists := previousOutcome.StreamAggregates[sid]; exists {
+				if prevValue, exists := prev[agg]; exists {
+					if timestampedValue, is := prevValue.(*TimestampedStreamValue); is {
+						m[agg] = timestampedValue
+					}
 				}
-				// Ignore stream that cannot be aggregated; this stream
-				// ID/value will be missing from the outcome
-				continue
 			}
-			m[agg] = result
+
+			// Perform the aggregation
+			aggF := GetAggregatorFunc(agg)
+			if aggF == nil {
+				return nil, fmt.Errorf("no aggregator function defined for aggregator of type %v", agg)
+			}
+			result, err := aggF(streamObservations[sid], p.F)
+
+			// Handle aggregation results
+			switch v := result.(type) {
+			case *TimestampedStreamValue:
+				// In case of failed aggregation, keep the copied value from
+				// last time.
+				if err != nil {
+					if p.Config.VerboseLogging {
+						p.Logger.Debugw("Aggregation failed for TimestampedStreamValue, carrying forwards previous value", "aggregator", agg, "channelID", cid, "f", p.F, "streamID", sid, "observations", streamObservations[sid], "stage", "Outcome", "seqNr", outctx.SeqNr, "err", err, "previousValue", m[agg])
+					}
+					continue
+				}
+				// If timestamp is later than the one in previous outcome,
+				// update, otherwise keep the one from the previous outcome
+				// copied over.
+				//
+				// In other words, we never overwrite a newer value with an
+				// older one, guaranteeing monotonicity.
+				prevValue, exists := m[agg]
+				if !exists {
+					// It may not exist in case we never had a successful
+					// aggregation on this timestamped stream before, e.g.
+					// for a brand new stream.
+					// In which case, always write the value.
+					m[agg] = v
+					continue
+				}
+				prevTSV, is := prevValue.(*TimestampedStreamValue)
+				if !is {
+					// If the copied previous value is nil or not a
+					// TimestampedStreamValue, always write the new value.
+					m[agg] = v
+					continue
+				}
+				if v.ObservedAtNanoseconds <= prevTSV.ObservedAtNanoseconds {
+					if p.Config.VerboseLogging {
+						p.Logger.Debugw("Aggregation result is older than previous value, keeping previous value", "aggregator", agg, "channelID", cid, "f", p.F, "streamID", sid, "observations", streamObservations[sid], "stage", "Outcome", "seqNr", outctx.SeqNr, "previousValue", prevTSV, "newValue", v)
+					}
+					continue
+				}
+				// Overwrite if newer
+				m[agg] = v
+			default:
+				if err != nil {
+					if p.Config.VerboseLogging {
+						p.Logger.Warnw("Aggregation failed", "aggregator", agg, "channelID", cid, "f", p.F, "streamID", sid, "observations", streamObservations[sid], "stage", "Outcome", "seqNr", outctx.SeqNr, "err", err)
+					}
+					// Ignore stream that cannot be aggregated; this stream
+					// ID/value will be missing from the outcome
+					continue
+				}
+
+				// Update the value in the outcome
+				m[agg] = result
+			}
 		}
 	}
 
@@ -485,10 +545,10 @@ func makeOutcomeTelemetry(outcome *Outcome, configDigest types.ConfigDigest, seq
 		DonId:                           donID,
 	}
 	for id, cd := range outcome.ChannelDefinitions {
-		ot.ChannelDefinitions[uint32(id)] = makeChannelDefinitionProto(cd)
+		ot.ChannelDefinitions[id] = makeChannelDefinitionProto(cd)
 	}
 	for id, va := range outcome.ValidAfterNanoseconds {
-		ot.ValidAfterNanoseconds[uint32(id)] = va
+		ot.ValidAfterNanoseconds[id] = va
 	}
 	for sid, aggMap := range outcome.StreamAggregates {
 		if len(aggMap) == 0 {
@@ -502,7 +562,7 @@ func makeOutcomeTelemetry(outcome *Outcome, configDigest types.ConfigDigest, seq
 			}
 			aggVals[uint32(agg)] = v
 		}
-		ot.StreamAggregates[uint32(sid)] = &LLOAggregatorStreamValue{AggregatorValues: aggVals}
+		ot.StreamAggregates[sid] = &LLOAggregatorStreamValue{AggregatorValues: aggVals}
 	}
 	return ot, nil
 }

@@ -34,6 +34,7 @@ message LLOStreamValue {
     {
         Decimal = 0;
         Quote = 1;
+        TimestampedStreamValue = 2;
     }
     Type type = 1;
     bytes value = 2;
@@ -44,6 +45,12 @@ message LLOStreamValueQuote{
     bytes benchmark = 2;
     bytes ask = 3;
 }
+
+message LLOTimestampedStreamValue {
+  uint64 observedAtNanoseconds = 1;
+  LLOStreamValue streamValue = 2;
+}
+
 
 message LLOChannelDefinitionProto {
     uint32 reportFormat = 1;

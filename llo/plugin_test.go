@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/shopspring/decimal"
 	"github.com/smartcontractkit/libocr/offchainreporting2/types"
 	"github.com/smartcontractkit/libocr/offchainreporting2plus/ocr3types"
 
@@ -46,7 +47,8 @@ func (m *mockDataSource) Observe(ctx context.Context, streamValues StreamValues,
 
 func Test_ValidateObservation(t *testing.T) {
 	p := &Plugin{
-		Config: Config{true},
+		ObservationCodec: protoObservationCodec{},
+		Config:           Config{true},
 	}
 
 	t.Run("SeqNr < 1 is not valid", func(t *testing.T) {
@@ -58,6 +60,24 @@ func Test_ValidateObservation(t *testing.T) {
 		ctx := tests.Context(t)
 		err := p.ValidateObservation(ctx, ocr3types.OutcomeContext{SeqNr: 1}, types.Query{}, types.AttributedObservation{Observation: []byte{1}})
 		assert.EqualError(t, err, "Expected empty observation for first round, got: 0x01")
+	})
+	t.Run("nested stream value on TimestampedStreamValue must be a Decimal", func(t *testing.T) {
+		ctx := tests.Context(t)
+		obs := Observation{
+			StreamValues: map[uint32]StreamValue{
+				1: &TimestampedStreamValue{
+					StreamValue: &TimestampedStreamValue{
+						StreamValue: ToDecimal(decimal.NewFromInt(1)),
+					},
+				},
+			},
+		}
+
+		serializedObs, err := protoObservationCodec{}.Encode(obs)
+		require.NoError(t, err)
+
+		err = p.ValidateObservation(ctx, ocr3types.OutcomeContext{SeqNr: 2}, types.Query{}, types.AttributedObservation{Observation: serializedObs})
+		assert.EqualError(t, err, "nested stream value on TimestampedStreamValue must be a Decimal, got: TimestampedStreamValue")
 	})
 }
 

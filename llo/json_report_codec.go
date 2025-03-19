@@ -14,33 +14,6 @@ import (
 
 var _ ReportCodec = JSONReportCodec{}
 
-type JSONStreamValue struct {
-	Type  LLOStreamValue_Type
-	Value string
-}
-
-func UnmarshalJSONStreamValue(enc *JSONStreamValue) (StreamValue, error) {
-	if enc == nil {
-		return nil, ErrNilStreamValue
-	}
-	switch enc.Type {
-	case LLOStreamValue_Decimal:
-		sv := new(Decimal)
-		if err := (sv).UnmarshalText([]byte(enc.Value)); err != nil {
-			return nil, err
-		}
-		return sv, nil
-	case LLOStreamValue_Quote:
-		sv := new(Quote)
-		if err := (sv).UnmarshalText([]byte(enc.Value)); err != nil {
-			return nil, err
-		}
-		return sv, nil
-	default:
-		return nil, fmt.Errorf("unknown StreamValueType %d", enc.Type)
-	}
-}
-
 // JSONReportCodec is a chain-agnostic reference implementation
 
 type JSONReportCodec struct{}
@@ -52,22 +25,16 @@ func (cdc JSONReportCodec) Encode(_ context.Context, r Report, _ llotypes.Channe
 		ChannelID                       llotypes.ChannelID
 		ValidAfterNanoseconds           uint64
 		ObservationTimestampNanoseconds uint64
-		Values                          []JSONStreamValue
+		Values                          []TypedTextStreamValue
 		Specimen                        bool
 	}
-	values := make([]JSONStreamValue, len(r.Values))
+	values := make([]TypedTextStreamValue, len(r.Values))
 	for i, sv := range r.Values {
-		if sv == nil {
-			return nil, ErrNilStreamValue
-		}
-		b, err := sv.MarshalText()
+		t, err := NewTypedTextStreamValue(sv)
 		if err != nil {
 			return nil, fmt.Errorf("failed to encode StreamValue: %w", err)
 		}
-		values[i] = JSONStreamValue{
-			Type:  sv.Type(),
-			Value: string(b),
-		}
+		values[i] = t
 	}
 	e := encode{
 		ConfigDigest:                    r.ConfigDigest,
@@ -95,7 +62,7 @@ func (cdc JSONReportCodec) Decode(b []byte) (r Report, err error) {
 		ChannelID                       llotypes.ChannelID
 		ValidAfterNanoseconds           uint64
 		ObservationTimestampNanoseconds uint64
-		Values                          []JSONStreamValue
+		Values                          []TypedTextStreamValue
 		Specimen                        bool
 	}
 	d := decode{}
@@ -118,7 +85,7 @@ func (cdc JSONReportCodec) Decode(b []byte) (r Report, err error) {
 	}
 	values := make([]StreamValue, len(d.Values))
 	for i := range d.Values {
-		values[i], err = UnmarshalJSONStreamValue(&d.Values[i])
+		values[i], err = UnmarshalTypedTextStreamValue(&d.Values[i])
 		if err != nil {
 			return r, fmt.Errorf("failed to decode StreamValue: %w", err)
 		}

@@ -49,7 +49,7 @@ func genMapOfAggregatorStreamValue() gopter.Gen {
 }
 
 func genStreamValuesMap() gopter.Gen {
-	return genStreamValues().Map(func(values []StreamValue) map[llotypes.StreamID]StreamValue {
+	return genStreamValues(true).Map(func(values []StreamValue) map[llotypes.StreamID]StreamValue {
 		m := make(map[llotypes.StreamID]StreamValue)
 		for i, v := range values {
 			m[llotypes.StreamID(i)] = v // nolint:gosec // don't care if it overflows

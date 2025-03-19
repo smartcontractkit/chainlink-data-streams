@@ -50,6 +50,23 @@ func Test_MedianAggregator(t *testing.T) {
 		assert.Equal(t, "4.4", sv.(*Decimal).String())
 	})
 
+	t.Run("for stream values of type *TimestampedStreamValue, applies median to the StreamValue values and timestamps separately", func(t *testing.T) {
+		// TODO: This is a simplistic approach but has problems; we may need to revisit
+		mixedValues := []StreamValue{
+			&TimestampedStreamValue{ObservedAtNanoseconds: 100, StreamValue: ToDecimal(decimal.NewFromFloat(2.6))},
+			&TimestampedStreamValue{ObservedAtNanoseconds: 102, StreamValue: ToDecimal(decimal.NewFromFloat(10.6))},
+			&TimestampedStreamValue{ObservedAtNanoseconds: 104, StreamValue: ToDecimal(decimal.NewFromFloat(4.6))},
+			&TimestampedStreamValue{ObservedAtNanoseconds: 95, StreamValue: ToDecimal(decimal.NewFromFloat(6.6))},
+			&TimestampedStreamValue{ObservedAtNanoseconds: 106, StreamValue: ToDecimal(decimal.NewFromFloat(5.6))},
+		}
+
+		sv, err := MedianAggregator(mixedValues, f)
+		require.NoError(t, err)
+		assert.IsType(t, &TimestampedStreamValue{}, sv)
+		assert.Equal(t, "5.6", sv.(*TimestampedStreamValue).StreamValue.(*Decimal).String())
+		assert.Equal(t, uint64(102), sv.(*TimestampedStreamValue).ObservedAtNanoseconds)
+	})
+
 	t.Run("fails with fewer than f+1 values", func(t *testing.T) {
 		_, err := MedianAggregator(values[:2], 3)
 		assert.EqualError(t, err, "not enough observations to calculate median, expected at least f+1, got 2")

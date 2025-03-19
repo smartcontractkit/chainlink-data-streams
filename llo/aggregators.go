@@ -25,33 +25,68 @@ func GetAggregatorFunc(a llotypes.Aggregator) AggregatorFunc {
 		return nil
 	}
 }
-
 func MedianAggregator(values []StreamValue, f int) (StreamValue, error) {
-	observations := make([]decimal.Decimal, 0, len(values))
-	for _, value := range values {
-		switch v := value.(type) {
-		case *Decimal:
-			observations = append(observations, v.Decimal())
-		case *Quote:
-			observations = append(observations, v.Benchmark)
-		default:
-			// Unexpected type, skip
-			continue
+	typ, typValues := mostCommonType(values)
+
+	switch typ {
+	case LLOStreamValue_TimestampedStreamValue:
+		svalues := make([]StreamValue, len(typValues))
+		timestamps := make([]uint64, len(typValues))
+		for i, value := range typValues {
+			v, is := value.(*TimestampedStreamValue)
+			if !is {
+				return nil, fmt.Errorf("invariant violation, expected TimestampedStreamValue, got %T", value)
+			}
+			if v.StreamValue.Type() != LLOStreamValue_Decimal {
+				// Only decimal is allowed for now, for simplicity.
+				//
+				// NOTE: This could get into an infinite loop if a malicious node sends
+				// a TimestampedStreamValue with nested TimestampedStreamValues inside
+				// it, so you definitely want to discard those.
+				continue
+			}
+			svalues[i] = v.StreamValue
+			timestamps[i] = v.ObservedAtNanoseconds
 		}
+
+		medianValue, err := MedianAggregator(svalues, f)
+		if err != nil {
+			return nil, err
+		}
+		sort.Slice(timestamps, func(i, j int) bool { return timestamps[i] < timestamps[j] })
+		return &TimestampedStreamValue{
+			ObservedAtNanoseconds: (timestamps[len(timestamps)/2]),
+			StreamValue:           medianValue,
+		}, nil
+	case LLOStreamValue_Decimal, LLOStreamValue_Quote:
+		observations := make([]decimal.Decimal, 0, len(values))
+		for _, value := range values {
+			switch v := value.(type) {
+			case *Decimal:
+				observations = append(observations, v.Decimal())
+			case *Quote:
+				observations = append(observations, v.Benchmark)
+			default:
+				// Unexpected type, skip
+				continue
+			}
+		}
+		if len(observations) <= f {
+			// In the worst case, we have 2f+1 observations, of which up to f
+			// are allowed to be invalid/missing. If we have less than f+1
+			// usable observations, we cannot securely generate a median at
+			// all.
+			return nil, fmt.Errorf("not enough observations to calculate median, expected at least f+1, got %d", len(observations))
+		}
+		sort.Slice(observations, func(i, j int) bool { return observations[i].Cmp(observations[j]) < 0 })
+		// We use a "rank-k" median here, instead one could average in case of
+		// an even number of observations.
+		// In the case of an even number, the higher value is chosen.
+		// e.g. [1, 2, 3, 4] -> 3
+		return ToDecimal(observations[len(observations)/2]), nil
+	default:
+		return nil, fmt.Errorf("cannot take median of unsupported StreamValue type %v", typ)
 	}
-	if len(observations) <= f {
-		// In the worst case, we have 2f+1 observations, of which up to f
-		// are allowed to be invalid/missing. If we have less than f+1
-		// usable observations, we cannot securely generate a median at
-		// all.
-		return nil, fmt.Errorf("not enough observations to calculate median, expected at least f+1, got %d", len(observations))
-	}
-	sort.Slice(observations, func(i, j int) bool { return observations[i].Cmp(observations[j]) < 0 })
-	// We use a "rank-k" median here, instead one could average in case of
-	// an even number of observations.
-	// In the case of an even number, the higher value is chosen.
-	// e.g. [1, 2, 3, 4] -> 3
-	return ToDecimal(observations[len(observations)/2]), nil
 }
 
 // ModeAggregator works on arbitrary StreamValue types
@@ -59,29 +94,7 @@ func MedianAggregator(values []StreamValue, f int) (StreamValue, error) {
 // There must be at least f+1 observations in agreement in order to produce a value
 // nil observations are ignored
 func ModeAggregator(values []StreamValue, f int) (StreamValue, error) {
-	// remove nils
-	var observations []StreamValue
-	for _, value := range values {
-		if value != nil {
-			observations = append(observations, value)
-		}
-	}
-
-	// bucket by type
-	buckets := make(map[LLOStreamValue_Type][]StreamValue)
-	for _, value := range observations {
-		buckets[value.Type()] = append(buckets[value.Type()], value)
-	}
-	// find the largest bucket
-	// tie-break on type alphabetical order
-	var largestBucket []StreamValue
-	var largestBucketType LLOStreamValue_Type
-	for bucketType, bucket := range buckets {
-		if len(bucket) > len(largestBucket) || (len(bucket) == len(largestBucket) && bucketType < largestBucketType) {
-			largestBucket = bucket
-			largestBucketType = bucketType
-		}
-	}
+	largestBucketType, largestBucket := mostCommonType(values)
 
 	// find the most common value in the bucket
 	// use serialized representation for comparison/equality
@@ -117,6 +130,27 @@ func ModeAggregator(values []StreamValue, f int) (StreamValue, error) {
 		return nil, fmt.Errorf("failed to unmarshal value: %v", err)
 	}
 	return val, nil
+}
+
+func mostCommonType(values []StreamValue) (LLOStreamValue_Type, []StreamValue) {
+	// Initialize variables to track the most common type
+	buckets := make(map[LLOStreamValue_Type][]StreamValue)
+	var mostCommonType LLOStreamValue_Type
+	var largestBucket []StreamValue
+
+	// Remove nils, bucket by type, and find the most common type
+	for _, value := range values {
+		if value != nil {
+			bucketType := value.Type()
+			buckets[bucketType] = append(buckets[bucketType], value)
+			if len(buckets[bucketType]) > len(largestBucket) || (len(buckets[bucketType]) == len(largestBucket) && bucketType < mostCommonType) {
+				largestBucket = buckets[bucketType]
+				mostCommonType = bucketType
+			}
+		}
+	}
+
+	return mostCommonType, largestBucket
 }
 
 func QuoteAggregator(values []StreamValue, f int) (StreamValue, error) {
