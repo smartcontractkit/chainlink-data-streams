@@ -1,7 +1,6 @@
 package llo
 
 import (
-	"context"
 	"errors"
 	"testing"
 
@@ -14,16 +13,15 @@ type mockReportCodec struct {
 	err error
 }
 
-func (m mockReportCodec) Encode(context.Context, Report, llotypes.ChannelDefinition) ([]byte, error) {
+func (m mockReportCodec) Encode(Report, llotypes.ChannelDefinition) ([]byte, error) {
 	return nil, nil
 }
 
-func (m mockReportCodec) Verify(context.Context, llotypes.ChannelDefinition) error {
+func (m mockReportCodec) Verify(llotypes.ChannelDefinition) error {
 	return m.err
 }
 
 func Test_VerifyChannelDefinitions(t *testing.T) {
-	ctx := context.Background()
 	mockReportFormat := llotypes.ReportFormat(0)
 	codecs := make(map[llotypes.ReportFormat]ReportCodec)
 	codecs[mockReportFormat] = mockReportCodec{}
@@ -33,7 +31,7 @@ func Test_VerifyChannelDefinitions(t *testing.T) {
 		for i := uint32(0); i < MaxOutcomeChannelDefinitionsLength+1; i++ {
 			channelDefs[i] = llotypes.ChannelDefinition{}
 		}
-		err := VerifyChannelDefinitions(ctx, codecs, channelDefs)
+		err := VerifyChannelDefinitions(codecs, channelDefs)
 		assert.EqualError(t, err, "too many channels, got: 2001/2000")
 	})
 	t.Run("fails if channel has too many streams", func(t *testing.T) {
@@ -42,14 +40,14 @@ func Test_VerifyChannelDefinitions(t *testing.T) {
 				Streams: make([]llotypes.Stream, MaxStreamsPerChannel+1),
 			},
 		}
-		err := VerifyChannelDefinitions(ctx, codecs, channelDefs)
+		err := VerifyChannelDefinitions(codecs, channelDefs)
 		assert.EqualError(t, err, "ChannelDefinition with ID 1 has too many streams, got: 10001/10000")
 	})
 	t.Run("fails for channel with no streams", func(t *testing.T) {
 		channelDefs := llotypes.ChannelDefinitions{
 			1: llotypes.ChannelDefinition{},
 		}
-		err := VerifyChannelDefinitions(ctx, codecs, channelDefs)
+		err := VerifyChannelDefinitions(codecs, channelDefs)
 		assert.EqualError(t, err, "ChannelDefinition with ID 1 has no streams")
 	})
 
@@ -59,7 +57,7 @@ func Test_VerifyChannelDefinitions(t *testing.T) {
 				Streams: []llotypes.Stream{llotypes.Stream{}},
 			},
 		}
-		err := VerifyChannelDefinitions(ctx, codecs, channelDefs)
+		err := VerifyChannelDefinitions(codecs, channelDefs)
 		assert.EqualError(t, err, "ChannelDefinition with ID 1 has stream 0 with zero aggregator (this may indicate an uninitialized struct)")
 	})
 
@@ -76,7 +74,7 @@ func Test_VerifyChannelDefinitions(t *testing.T) {
 				Streams: []llotypes.Stream{llotypes.Stream{StreamID: MaxObservationStreamValuesLength + 1, Aggregator: llotypes.AggregatorMedian}},
 			},
 		}
-		err := VerifyChannelDefinitions(ctx, codecs, channelDefs)
+		err := VerifyChannelDefinitions(codecs, channelDefs)
 		assert.EqualError(t, err, "too many unique stream IDs, got: 10001/10000")
 	})
 	t.Run("fails if codec.Verify fails", func(t *testing.T) {
@@ -93,7 +91,7 @@ func Test_VerifyChannelDefinitions(t *testing.T) {
 				},
 			},
 		}
-		err := VerifyChannelDefinitions(ctx, failingCodecs, channelDefs)
+		err := VerifyChannelDefinitions(failingCodecs, channelDefs)
 		assert.EqualError(t, err, "invalid ChannelDefinition with ID 1: codec error")
 	})
 	t.Run("succeeds with valid channel definitions", func(t *testing.T) {
@@ -107,7 +105,7 @@ func Test_VerifyChannelDefinitions(t *testing.T) {
 				},
 			},
 		}
-		err := VerifyChannelDefinitions(ctx, codecs, channelDefs)
+		err := VerifyChannelDefinitions(codecs, channelDefs)
 		assert.NoError(t, err)
 	})
 
@@ -120,7 +118,7 @@ func Test_VerifyChannelDefinitions(t *testing.T) {
 		for i := uint32(0); i < MaxOutcomeChannelDefinitionsLength; i++ {
 			channelDefs[i] = llotypes.ChannelDefinition{Streams: streams}
 		}
-		err := VerifyChannelDefinitions(ctx, codecs, channelDefs)
+		err := VerifyChannelDefinitions(codecs, channelDefs)
 		assert.NoError(t, err)
 	})
 }

@@ -2,7 +2,6 @@ package llo
 
 import (
 	"bytes"
-	"context"
 	"fmt"
 	"math"
 	reflect "reflect"
@@ -18,7 +17,6 @@ import (
 
 	"github.com/smartcontractkit/chainlink-common/pkg/types/llo"
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
-	"github.com/smartcontractkit/chainlink-common/pkg/utils/tests"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -91,13 +89,12 @@ func FuzzJSONCodec_Decode_Unpack(f *testing.F) {
 func Test_JSONCodec_Properties(t *testing.T) {
 	properties := gopter.NewProperties(nil)
 
-	ctx := tests.Context(t)
 	cd := llotypes.ChannelDefinition{}
 	codec := JSONReportCodec{}
 
 	properties.Property("Encode/Decode", prop.ForAll(
 		func(r Report) bool {
-			b, err := codec.Encode(ctx, r, cd)
+			b, err := codec.Encode(r, cd)
 			require.NoError(t, err)
 			r2, err := codec.Decode(b)
 			require.NoError(t, err)
@@ -296,7 +293,6 @@ func genStreamValues(allowNesting bool) gopter.Gen {
 
 func Test_JSONCodec(t *testing.T) {
 	t.Run("Encode=>Decode", func(t *testing.T) {
-		ctx := tests.Context(t)
 		r := Report{
 			ConfigDigest:                    types.ConfigDigest([32]byte{1, 2, 3}),
 			SeqNr:                           43,
@@ -309,7 +305,7 @@ func Test_JSONCodec(t *testing.T) {
 
 		cdc := JSONReportCodec{}
 
-		encoded, err := cdc.Encode(ctx, r, llo.ChannelDefinition{})
+		encoded, err := cdc.Encode(r, llo.ChannelDefinition{})
 		require.NoError(t, err)
 
 		assert.Equal(t, `{"ConfigDigest":"0102030000000000000000000000000000000000000000000000000000000000","SeqNr":43,"ChannelID":46,"ValidAfterNanoseconds":44,"ObservationTimestampNanoseconds":45,"Values":[{"t":0,"v":"1"},{"t":0,"v":"2"},{"t":1,"v":"Q{Bid: 3.13, Benchmark: 4.4, Ask: 5.12}"}],"Specimen":true}`, string(encoded))
@@ -383,18 +379,18 @@ func Test_JSONCodec(t *testing.T) {
 func Test_JSONCodec_Verify(t *testing.T) {
 	t.Run("valid", func(t *testing.T) {
 		cdc := JSONReportCodec{}
-		err := cdc.Verify(context.Background(), llo.ChannelDefinition{
+		err := cdc.Verify(llo.ChannelDefinition{
 			Opts: llotypes.ChannelOpts([]byte{}),
 		})
 		require.NoError(t, err)
 	})
 	t.Run("does not accept any options", func(t *testing.T) {
 		cdc := JSONReportCodec{}
-		err := cdc.Verify(context.Background(), llo.ChannelDefinition{
+		err := cdc.Verify(llo.ChannelDefinition{
 			Opts: llotypes.ChannelOpts([]byte{1}),
 		})
 		assert.EqualError(t, err, "unexpected Opts in ChannelDefinition (JSONReportCodec expects no opts), got: \"\\x01\"")
-		err = cdc.Verify(context.Background(), llo.ChannelDefinition{
+		err = cdc.Verify(llo.ChannelDefinition{
 			Opts: llotypes.ChannelOpts([]byte("{}")),
 		})
 		assert.EqualError(t, err, "unexpected Opts in ChannelDefinition (JSONReportCodec expects no opts), got: \"{}\"")

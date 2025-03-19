@@ -245,6 +245,10 @@ func (f *PluginFactory) NewReportingPlugin(ctx context.Context, cfg ocr3types.Re
 		return nil, ocr3types.ReportingPluginInfo{}, fmt.Errorf("NewReportingPlugin failed to decode offchain config; got: 0x%x (len: %d); %w", cfg.OffchainConfig, len(cfg.OffchainConfig), err)
 	}
 
+	l := logger.Sugared(f.Logger).With("lloProtocolVersion", offchainConfig.ProtocolVersion, "configDigest", cfg.ConfigDigest)
+
+	l.Infow("llo.NewReportingPlugin", "onchainConfig", onchainConfig, "offchainConfig", offchainConfig)
+
 	return &Plugin{
 			f.Config,
 			onchainConfig.PredecessorConfigDigest,
@@ -253,7 +257,7 @@ func (f *PluginFactory) NewReportingPlugin(ctx context.Context, cfg ocr3types.Re
 			f.ShouldRetireCache,
 			f.ChannelDefinitionCache,
 			f.DataSource,
-			logger.Sugared(f.Logger).With("lloProtocolVersion", offchainConfig.ProtocolVersion),
+			l,
 			cfg.N,
 			cfg.F,
 			protoObservationCodec{},
@@ -371,7 +375,7 @@ func (p *Plugin) ValidateObservation(ctx context.Context, outctx ocr3types.Outco
 		return fmt.Errorf("RemoveChannelIDs is too long: %v vs %v", len(observation.RemoveChannelIDs), MaxObservationRemoveChannelIDsLength)
 	}
 
-	if err := VerifyChannelDefinitions(ctx, p.ReportCodecs, observation.UpdateChannelDefinitions); err != nil {
+	if err := VerifyChannelDefinitions(p.ReportCodecs, observation.UpdateChannelDefinitions); err != nil {
 		return fmt.Errorf("UpdateChannelDefinitions is invalid: %w", err)
 	}
 
