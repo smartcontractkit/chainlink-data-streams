@@ -33,7 +33,7 @@ func getSchema() abi.Arguments {
 }
 
 type Report struct {
-	FeedId                [32]byte
+	FeedId                [32]byte //nolint:revive // Legacy naming
 	ObservationsTimestamp uint32
 	BenchmarkPrice        *big.Int
 	Bid                   *big.Int

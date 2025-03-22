@@ -28,7 +28,7 @@ func DecodeOffchainConfig(b []byte) (o OffchainConfig, err error) {
 		// to handle to be compatible with older builds which ignored offchain
 		// config.
 		//
-		// FIXME: Return error instead after v0 is fully decomissioned and all
+		// FIXME: Return error instead after v0 is fully decommissioned and all
 		// contracts have been updated with proper v1 config.
 		//
 		// MERC-2272

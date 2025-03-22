@@ -8,12 +8,10 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/smartcontractkit/libocr/offchainreporting2plus/types"
-
-	v3 "github.com/smartcontractkit/chainlink-common/pkg/types/mercury/v3"
 )
 
-func newValidReportFields() v3.ReportFields {
-	return v3.ReportFields{
+func newValidReportFields() ReportFields {
+	return ReportFields{
 		Timestamp:          242,
 		BenchmarkPrice:     big.NewInt(243),
 		Bid:                big.NewInt(244),
@@ -29,7 +27,7 @@ func Test_ReportCodec_BuildReport(t *testing.T) {
 	r := ReportCodec{}
 
 	t.Run("BuildReport errors on zero values", func(t *testing.T) {
-		_, err := r.BuildReport(v3.ReportFields{})
+		_, err := r.BuildReport(ReportFields{})
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "benchmarkPrice may not be nil")
 		assert.Contains(t, err.Error(), "linkFee may not be nil")
@@ -97,22 +95,4 @@ func Test_ReportCodec_BuildReport(t *testing.T) {
 		_, err = r.Decode(longBad)
 		assert.EqualError(t, err, "failed to decode report: abi: improperly encoded uint32 value")
 	})
-}
-
-func buildSampleReport(ts int64) []byte {
-	feedID := [32]byte{'f', 'o', 'o'}
-	timestamp := uint32(ts)
-	bp := big.NewInt(242)
-	bid := big.NewInt(243)
-	ask := big.NewInt(244)
-	validFromTimestamp := uint32(123)
-	expiresAt := uint32(456)
-	linkFee := big.NewInt(3334455)
-	nativeFee := big.NewInt(556677)
-
-	b, err := Schema.Pack(feedID, validFromTimestamp, timestamp, nativeFee, linkFee, expiresAt, bp, bid, ask)
-	if err != nil {
-		panic(err)
-	}
-	return b
 }

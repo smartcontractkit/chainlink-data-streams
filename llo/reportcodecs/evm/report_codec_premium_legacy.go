@@ -11,14 +11,12 @@ import (
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/shopspring/decimal"
-
 	"github.com/smartcontractkit/libocr/offchainreporting2/chains/evmutil"
 	"github.com/smartcontractkit/libocr/offchainreporting2/types"
 	ocr2types "github.com/smartcontractkit/libocr/offchainreporting2plus/types"
 
 	"github.com/smartcontractkit/chainlink-common/pkg/logger"
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
-	commonv3 "github.com/smartcontractkit/chainlink-common/pkg/types/mercury/v3"
 	"github.com/smartcontractkit/chainlink-data-streams/llo"
 	ubig "github.com/smartcontractkit/chainlink-data-streams/llo/reportcodecs/evm/utils"
 	v3 "github.com/smartcontractkit/chainlink-data-streams/llo/reportcodecs/evm/v3"
@@ -91,7 +89,7 @@ func (r ReportCodecPremiumLegacy) Encode(report llo.Report, cd llotypes.ChannelD
 	// not sure how to avoid it. Should be negligible performance hit as long
 	// as Opts is small.
 	opts := ReportFormatEVMPremiumLegacyOpts{}
-	if err := (&opts).Decode(cd.Opts); err != nil {
+	if err = (&opts).Decode(cd.Opts); err != nil {
 		return nil, fmt.Errorf("failed to decode opts; got: '%s'; %w", cd.Opts, err)
 	}
 	var multiplier decimal.Decimal
@@ -108,7 +106,7 @@ func (r ReportCodecPremiumLegacy) Encode(report llo.Report, cd llotypes.ChannelD
 		return nil, fmt.Errorf("failed to extract timestamps; %w", err)
 	}
 
-	rf := commonv3.ReportFields{
+	rf := v3.ReportFields{
 		ValidFromTimestamp: validAfterSeconds + 1,
 		Timestamp:          observationTimestampSeconds,
 		NativeFee:          CalculateFee(nativePrice, opts.BaseUSDFee),
@@ -153,7 +151,7 @@ func (r ReportCodecPremiumLegacy) Pack(digest types.ConfigDigest, seqNr uint64, 
 	var ss [][32]byte
 	var vs [32]byte
 	for i, as := range sigs {
-		r, s, v, err := evmutil.SplitSignature(as.Signature)
+		r, s, v, err := evmutil.SplitSignature(as.Signature) //nolint:revive // This has always worked before; no need to change it
 		if err != nil {
 			return nil, fmt.Errorf("eventTransmit(ev): error in SplitSignature: %w", err)
 		}
