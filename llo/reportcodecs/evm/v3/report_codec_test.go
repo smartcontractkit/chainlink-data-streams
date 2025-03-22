@@ -86,13 +86,13 @@ func Test_ReportCodec_BuildReport(t *testing.T) {
 
 	t.Run("Decode errors on invalid report", func(t *testing.T) {
 		_, err := r.Decode([]byte{1, 2, 3})
-		assert.EqualError(t, err, "failed to decode report: abi: cannot marshal in to go type: length insufficient 3 require 32")
+		require.EqualError(t, err, "failed to decode report: abi: cannot marshal in to go type: length insufficient 3 require 32")
 
 		longBad := make([]byte, 64)
 		for i := 0; i < len(longBad); i++ {
 			longBad[i] = byte(i)
 		}
 		_, err = r.Decode(longBad)
-		assert.EqualError(t, err, "failed to decode report: abi: improperly encoded uint32 value")
+		require.EqualError(t, err, "failed to decode report: abi: improperly encoded uint32 value")
 	})
 }

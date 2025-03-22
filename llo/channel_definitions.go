@@ -31,7 +31,7 @@ func VerifyChannelDefinitions(codecs map[llotypes.ReportFormat]ReportCodec, chan
 		}
 		if codec, ok := codecs[cd.ReportFormat]; ok {
 			if err := codec.Verify(cd); err != nil {
-				merr = errors.Join(merr, fmt.Errorf("invalid ChannelDefinition with ID %d: %v", channelID, err))
+				merr = errors.Join(merr, fmt.Errorf("invalid ChannelDefinition with ID %d: %w", channelID, err))
 				continue
 			}
 		}

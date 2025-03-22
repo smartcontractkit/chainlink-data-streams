@@ -242,11 +242,11 @@ func Test_AggregateFunctions(t *testing.T) {
 				paos[i].MarketStatus = uint32(i)
 			}
 			_, err := GetConsensusMarketStatus(convertMarketStatus(convertTestPAOsToPAOs(paos)), f)
-			assert.EqualError(t, err, "market status has fewer than f+1 observations (status 0 got 1/4)")
+			require.EqualError(t, err, "market status has fewer than f+1 observations (status 0 got 1/4)")
 		})
 		t.Run("fails when all observations are invalid", func(t *testing.T) {
 			_, err := GetConsensusMarketStatus(convertMarketStatus(convertTestPAOsToPAOs(invalidPaos)), f)
-			assert.EqualError(t, err, "market status has fewer than f+1 observations (status 0 got 0/4)")
+			require.EqualError(t, err, "market status has fewer than f+1 observations (status 0 got 0/4)")
 		})
 	})
 }

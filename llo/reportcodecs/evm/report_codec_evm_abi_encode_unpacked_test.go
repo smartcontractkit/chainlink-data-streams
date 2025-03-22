@@ -702,7 +702,7 @@ func TestReportCodecEVMABIEncodeUnpacked_Verify(t *testing.T) {
 		}
 		err := c.Verify(cd)
 		require.Error(t, err)
-		assert.EqualError(t, err, "invalid Opts, got: \"\\\"invalid\\\"\"; json: cannot unmarshal string into Go value of type evm.ReportFormatEVMABIEncodeOpts")
+		require.EqualError(t, err, "invalid Opts, got: \"\\\"invalid\\\"\"; json: cannot unmarshal string into Go value of type evm.ReportFormatEVMABIEncodeOpts")
 	})
 	t.Run("negative BaseUSDFee", func(t *testing.T) {
 		cd := llotypes.ChannelDefinition{
@@ -766,7 +766,7 @@ func TestReportCodecEVMABIEncodeUnpacked_Verify(t *testing.T) {
 		}
 		err := c.Verify(cd)
 		require.Error(t, err)
-		assert.EqualError(t, err, "invalid Opts, got: \"{\\\"baseUSDFee\\\":\\\"1\\\",\\\"feedID\\\":\\\"0x\\\"}\"; hex string has length 0, want 64 for common.Hash")
+		require.EqualError(t, err, "invalid Opts, got: \"{\\\"baseUSDFee\\\":\\\"1\\\",\\\"feedID\\\":\\\"0x\\\"}\"; hex string has length 0, want 64 for common.Hash")
 	})
 	t.Run("valid", func(t *testing.T) {
 		cd := llotypes.ChannelDefinition{

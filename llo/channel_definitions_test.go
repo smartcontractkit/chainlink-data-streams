@@ -4,7 +4,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
 )
@@ -32,7 +32,7 @@ func Test_VerifyChannelDefinitions(t *testing.T) {
 			channelDefs[i] = llotypes.ChannelDefinition{}
 		}
 		err := VerifyChannelDefinitions(codecs, channelDefs)
-		assert.EqualError(t, err, "too many channels, got: 2001/2000")
+		require.EqualError(t, err, "too many channels, got: 2001/2000")
 	})
 	t.Run("fails if channel has too many streams", func(t *testing.T) {
 		channelDefs := llotypes.ChannelDefinitions{
@@ -41,14 +41,14 @@ func Test_VerifyChannelDefinitions(t *testing.T) {
 			},
 		}
 		err := VerifyChannelDefinitions(codecs, channelDefs)
-		assert.EqualError(t, err, "ChannelDefinition with ID 1 has too many streams, got: 10001/10000")
+		require.EqualError(t, err, "ChannelDefinition with ID 1 has too many streams, got: 10001/10000")
 	})
 	t.Run("fails for channel with no streams", func(t *testing.T) {
 		channelDefs := llotypes.ChannelDefinitions{
 			1: llotypes.ChannelDefinition{},
 		}
 		err := VerifyChannelDefinitions(codecs, channelDefs)
-		assert.EqualError(t, err, "ChannelDefinition with ID 1 has no streams")
+		require.EqualError(t, err, "ChannelDefinition with ID 1 has no streams")
 	})
 
 	t.Run("fails for channel with zero aggregator", func(t *testing.T) {
@@ -58,7 +58,7 @@ func Test_VerifyChannelDefinitions(t *testing.T) {
 			},
 		}
 		err := VerifyChannelDefinitions(codecs, channelDefs)
-		assert.EqualError(t, err, "ChannelDefinition with ID 1 has stream 0 with zero aggregator (this may indicate an uninitialized struct)")
+		require.EqualError(t, err, "ChannelDefinition with ID 1 has stream 0 with zero aggregator (this may indicate an uninitialized struct)")
 	})
 
 	t.Run("fails if too many total unique stream IDs", func(t *testing.T) {
@@ -75,7 +75,7 @@ func Test_VerifyChannelDefinitions(t *testing.T) {
 			},
 		}
 		err := VerifyChannelDefinitions(codecs, channelDefs)
-		assert.EqualError(t, err, "too many unique stream IDs, got: 10001/10000")
+		require.EqualError(t, err, "too many unique stream IDs, got: 10001/10000")
 	})
 	t.Run("fails if codec.Verify fails", func(t *testing.T) {
 		failingCodecs := make(map[llotypes.ReportFormat]ReportCodec)
@@ -92,7 +92,7 @@ func Test_VerifyChannelDefinitions(t *testing.T) {
 			},
 		}
 		err := VerifyChannelDefinitions(failingCodecs, channelDefs)
-		assert.EqualError(t, err, "invalid ChannelDefinition with ID 1: codec error")
+		require.EqualError(t, err, "invalid ChannelDefinition with ID 1: codec error")
 	})
 	t.Run("succeeds with valid channel definitions", func(t *testing.T) {
 		channelDefs := llotypes.ChannelDefinitions{
@@ -106,7 +106,7 @@ func Test_VerifyChannelDefinitions(t *testing.T) {
 			},
 		}
 		err := VerifyChannelDefinitions(codecs, channelDefs)
-		assert.NoError(t, err)
+		require.NoError(t, err)
 	})
 
 	t.Run("succeeds with exact maxes", func(t *testing.T) {
@@ -119,6 +119,6 @@ func Test_VerifyChannelDefinitions(t *testing.T) {
 			channelDefs[i] = llotypes.ChannelDefinition{Streams: streams}
 		}
 		err := VerifyChannelDefinitions(codecs, channelDefs)
-		assert.NoError(t, err)
+		require.NoError(t, err)
 	})
 }

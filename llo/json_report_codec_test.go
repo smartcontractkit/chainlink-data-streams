@@ -80,9 +80,9 @@ func FuzzJSONCodec_Decode_Unpack(f *testing.F) {
 	var codec JSONReportCodec
 	f.Fuzz(func(t *testing.T, data []byte) {
 		// test that it doesn't panic, don't care about errors
-		codec.Decode(data)       //nolint:errcheck
-		codec.Unpack(data)       //nolint:errcheck
-		codec.UnpackDecode(data) //nolint:errcheck
+		codec.Decode(data)       //nolint:errcheck // test
+		codec.Unpack(data)       //nolint:errcheck // test
+		codec.UnpackDecode(data) //nolint:errcheck // test
 	})
 }
 
@@ -308,7 +308,7 @@ func Test_JSONCodec(t *testing.T) {
 		encoded, err := cdc.Encode(r, llo.ChannelDefinition{})
 		require.NoError(t, err)
 
-		assert.Equal(t, `{"ConfigDigest":"0102030000000000000000000000000000000000000000000000000000000000","SeqNr":43,"ChannelID":46,"ValidAfterNanoseconds":44,"ObservationTimestampNanoseconds":45,"Values":[{"t":0,"v":"1"},{"t":0,"v":"2"},{"t":1,"v":"Q{Bid: 3.13, Benchmark: 4.4, Ask: 5.12}"}],"Specimen":true}`, string(encoded))
+		assert.JSONEq(t, `{"ConfigDigest":"0102030000000000000000000000000000000000000000000000000000000000","SeqNr":43,"ChannelID":46,"ValidAfterNanoseconds":44,"ObservationTimestampNanoseconds":45,"Values":[{"t":0,"v":"1"},{"t":0,"v":"2"},{"t":1,"v":"Q{Bid: 3.13, Benchmark: 4.4, Ask: 5.12}"}],"Specimen":true}`, string(encoded))
 
 		decoded, err := cdc.Decode(encoded)
 		require.NoError(t, err)
@@ -337,7 +337,7 @@ func Test_JSONCodec(t *testing.T) {
 
 			packed, err := cdc.Pack(digest, seqNr, report, sigs)
 			require.NoError(t, err)
-			assert.Equal(t, `{"configDigest":"0102030000000000000000000000000000000000000000000000000000000000","seqNr":43,"report":{"foo":"bar"},"sigs":[{"Signature":"AgME","Signer":2}]}`, string(packed))
+			assert.JSONEq(t, `{"configDigest":"0102030000000000000000000000000000000000000000000000000000000000","seqNr":43,"report":{"foo":"bar"},"sigs":[{"Signature":"AgME","Signer":2}]}`, string(packed))
 
 			digest2, seqNr2, report2, sigs2, err := cdc.Unpack(packed)
 			require.NoError(t, err)
@@ -370,9 +370,9 @@ func Test_JSONCodec(t *testing.T) {
 	t.Run("invalid input fails decode", func(t *testing.T) {
 		cdc := JSONReportCodec{}
 		_, err := cdc.Decode([]byte(`{}`))
-		assert.EqualError(t, err, "missing SeqNr")
+		require.EqualError(t, err, "missing SeqNr")
 		_, err = cdc.Decode([]byte(`{"seqNr":1}`))
-		assert.EqualError(t, err, "invalid ConfigDigest; cannot convert bytes to ConfigDigest. bytes have wrong length 0")
+		require.EqualError(t, err, "invalid ConfigDigest; cannot convert bytes to ConfigDigest. bytes have wrong length 0")
 	})
 }
 
@@ -389,10 +389,10 @@ func Test_JSONCodec_Verify(t *testing.T) {
 		err := cdc.Verify(llo.ChannelDefinition{
 			Opts: llotypes.ChannelOpts([]byte{1}),
 		})
-		assert.EqualError(t, err, "unexpected Opts in ChannelDefinition (JSONReportCodec expects no opts), got: \"\\x01\"")
+		require.EqualError(t, err, "unexpected Opts in ChannelDefinition (JSONReportCodec expects no opts), got: \"\\x01\"")
 		err = cdc.Verify(llo.ChannelDefinition{
 			Opts: llotypes.ChannelOpts([]byte("{}")),
 		})
-		assert.EqualError(t, err, "unexpected Opts in ChannelDefinition (JSONReportCodec expects no opts), got: \"{}\"")
+		require.EqualError(t, err, "unexpected Opts in ChannelDefinition (JSONReportCodec expects no opts), got: \"{}\"")
 	})
 }

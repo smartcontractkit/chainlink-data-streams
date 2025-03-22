@@ -45,7 +45,7 @@ func (p *Plugin) outcome(outctx ocr3types.OutcomeContext, query types.Query, aos
 	/////////////////////////////////
 	previousOutcome, err := p.OutcomeCodec.Decode(outctx.PreviousOutcome)
 	if err != nil {
-		return nil, fmt.Errorf("error decoding previous outcome: %v", err)
+		return nil, fmt.Errorf("error decoding previous outcome: %w", err)
 	}
 
 	/////////////////////////////////
@@ -97,7 +97,7 @@ func (p *Plugin) outcome(outctx ocr3types.OutcomeContext, query types.Query, aos
 		removeChannelVotesByID, updateChannelDefinitionsByHash = nil, nil
 	}
 
-	var removedChannelIDs []llotypes.ChannelID
+	removedChannelIDs := make([]llotypes.ChannelID, 0, len(removeChannelVotesByID))
 	for channelID, voteCount := range removeChannelVotesByID {
 		if voteCount <= p.F {
 			continue
@@ -390,14 +390,14 @@ func (out *Outcome) GenRetirementReport(protocolVersion uint32) RetirementReport
 // NOTE: A channel is still reportable even if missing some or all stream
 // values. The report codec is expected to handle nils and act accordingly
 // (e.g. some values may be optional).
-func (out *Outcome) IsReportable(channelID llotypes.ChannelID, protocolVersion uint32, minReportInterval uint64) *ErrUnreportableChannel {
+func (out *Outcome) IsReportable(channelID llotypes.ChannelID, protocolVersion uint32, minReportInterval uint64) *UnreportableChannelError {
 	if out.LifeCycleStage == LifeCycleStageRetired {
-		return &ErrUnreportableChannel{nil, "IsReportable=false; retired channel", channelID}
+		return &UnreportableChannelError{nil, "IsReportable=false; retired channel", channelID}
 	}
 
 	cd, exists := out.ChannelDefinitions[channelID]
 	if !exists {
-		return &ErrUnreportableChannel{nil, "IsReportable=false; no channel definition with this ID", channelID}
+		return &UnreportableChannelError{nil, "IsReportable=false; no channel definition with this ID", channelID}
 	}
 
 	validAfterNanos, ok := out.ValidAfterNanoseconds[channelID]
@@ -405,7 +405,7 @@ func (out *Outcome) IsReportable(channelID llotypes.ChannelID, protocolVersion u
 		// No ValidAfterNanoseconds entry yet, this must be a new channel.
 		// ValidAfterNanoseconds will be populated in Outcome() so the channel
 		// becomes reportable in later protocol rounds.
-		return &ErrUnreportableChannel{nil, "IsReportable=false; no ValidAfterNanoseconds entry yet, this must be a new channel", channelID}
+		return &UnreportableChannelError{nil, "IsReportable=false; no ValidAfterNanoseconds entry yet, this must be a new channel", channelID}
 	}
 	obsTsNanos := out.ObservationTimestampNanoseconds
 
@@ -416,7 +416,7 @@ func (out *Outcome) IsReportable(channelID llotypes.ChannelID, protocolVersion u
 		// minimum of minReportInterval nanoseconds)
 		if obsTsNanos < validAfterNanos+minReportInterval {
 			nsUntilReportable := (validAfterNanos + minReportInterval) - obsTsNanos
-			return &ErrUnreportableChannel{nil, fmt.Sprintf("IsReportable=false; not valid yet (ObservationTimestampNanoseconds=%d, validAfterNanoseconds=%d, minReportInterval=%d); %f seconds (%dns) until reportable", obsTsNanos, validAfterNanos, minReportInterval, float64(nsUntilReportable)/1e9, nsUntilReportable), channelID}
+			return &UnreportableChannelError{nil, fmt.Sprintf("IsReportable=false; not valid yet (ObservationTimestampNanoseconds=%d, validAfterNanoseconds=%d, minReportInterval=%d); %f seconds (%dns) until reportable", obsTsNanos, validAfterNanos, minReportInterval, float64(nsUntilReportable)/1e9, nsUntilReportable), channelID}
 		}
 	}
 
@@ -430,7 +430,7 @@ func (out *Outcome) IsReportable(channelID llotypes.ChannelID, protocolVersion u
 		validAfterSeconds := validAfterNanos / 1e9
 		obsTsSeconds := obsTsNanos / 1e9
 		if validAfterSeconds >= obsTsSeconds {
-			return &ErrUnreportableChannel{nil, fmt.Sprintf("ChannelID: 1; Reason: IsReportable=false; not valid yet (observationsTimestampSeconds=%d, validAfterSeconds=%d)", obsTsSeconds, validAfterSeconds), channelID}
+			return &UnreportableChannelError{nil, fmt.Sprintf("ChannelID: 1; Reason: IsReportable=false; not valid yet (observationsTimestampSeconds=%d, validAfterSeconds=%d)", obsTsSeconds, validAfterSeconds), channelID}
 		}
 	}
 
@@ -451,7 +451,7 @@ func IsSecondsResolution(reportFormat llotypes.ReportFormat) bool {
 
 // List of reportable channels (according to IsReportable), sorted according
 // to a canonical ordering
-func (out *Outcome) ReportableChannels(protocolVersion uint32, defaultMinReportInterval uint64) (reportable []llotypes.ChannelID, unreportable []*ErrUnreportableChannel) {
+func (out *Outcome) ReportableChannels(protocolVersion uint32, defaultMinReportInterval uint64) (reportable []llotypes.ChannelID, unreportable []*UnreportableChannelError) {
 	for channelID := range out.ChannelDefinitions {
 		// In theory in future, minReportInterval could be overridden on a
 		// per-channel basis in the ChannelDefinitions
@@ -469,13 +469,13 @@ func (out *Outcome) ReportableChannels(protocolVersion uint32, defaultMinReportI
 	return
 }
 
-type ErrUnreportableChannel struct {
+type UnreportableChannelError struct {
 	Inner     error `json:",omitempty"`
 	Reason    string
 	ChannelID llotypes.ChannelID
 }
 
-func (e *ErrUnreportableChannel) Error() string {
+func (e *UnreportableChannelError) Error() string {
 	s := fmt.Sprintf("ChannelID: %d; Reason: %s", e.ChannelID, e.Reason)
 	if e.Inner != nil {
 		s += fmt.Sprintf("; Err: %v", e.Inner)
@@ -483,11 +483,11 @@ func (e *ErrUnreportableChannel) Error() string {
 	return s
 }
 
-func (e *ErrUnreportableChannel) String() string {
+func (e *UnreportableChannelError) String() string {
 	return e.Error()
 }
 
-func (e *ErrUnreportableChannel) Unwrap() error {
+func (e *UnreportableChannelError) Unwrap() error {
 	return e.Inner
 }
 
@@ -497,7 +497,7 @@ func MakeChannelHash(cd ChannelDefinitionWithID) ChannelHash {
 	merr := errors.Join(
 		binary.Write(h, binary.BigEndian, cd.ChannelID),
 		binary.Write(h, binary.BigEndian, cd.ReportFormat),
-		binary.Write(h, binary.BigEndian, uint32(len(cd.Streams))), // nolint:gosec // number of streams is limited by MaxStreamsPerChannel
+		binary.Write(h, binary.BigEndian, uint32(len(cd.Streams))), //nolint:gosec // number of streams is limited by MaxStreamsPerChannel
 	)
 	for _, strm := range cd.Streams {
 		merr = errors.Join(merr, binary.Write(h, binary.BigEndian, strm.StreamID))

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/test-go/testify/require"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/backoff"
 	"google.golang.org/grpc/keepalive"
@@ -18,24 +19,24 @@ import (
 
 func TestClient(t *testing.T) {
 	spub, spriv, err := ed25519.GenerateKey(nil)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	cpub, cpriv, err := ed25519.GenerateKey(nil)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	sMtls, err := mtls.NewTransportCredentials(spriv, []ed25519.PublicKey{cpub})
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	s := grpc.NewServer(grpc.Creds(sMtls))
 	srv := &server{}
 	RegisterTransmitterServer(s, srv)
 	conn, err := net.Listen("tcp", "127.0.0.1:8080")
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	go func() {
 		sErr := s.Serve(conn)
 		assert.True(t, errors.Is(sErr, grpc.ErrServerStopped))
 	}()
 
 	cMtls, err := mtls.NewTransportCredentials(cpriv, []ed25519.PublicKey{spub})
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	clientConn, err := grpc.NewClient(
 		"127.0.0.1:8080",
 		grpc.WithTransportCredentials(cMtls),
@@ -60,11 +61,11 @@ func TestClient(t *testing.T) {
 			grpc.WaitForReady(true),
 		),
 	)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	client := NewTransmitterClient(clientConn)
 
 	r, err := client.Transmit(context.Background(), &TransmitRequest{})
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	assert.NotNil(t, r)
 }

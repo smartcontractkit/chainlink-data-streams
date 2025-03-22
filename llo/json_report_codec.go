@@ -3,6 +3,7 @@ package llo
 import (
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"github.com/smartcontractkit/libocr/offchainreporting2/types"
@@ -71,7 +72,7 @@ func (cdc JSONReportCodec) Decode(b []byte) (r Report, err error) {
 	}
 	if d.SeqNr == 0 {
 		// catch obviously bad inputs, since a valid report can never have SeqNr == 0
-		return r, fmt.Errorf("missing SeqNr")
+		return r, errors.New("missing SeqNr")
 	}
 
 	cdBytes, err := hex.DecodeString(d.ConfigDigest)

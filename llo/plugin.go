@@ -2,6 +2,7 @@ package llo
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -364,7 +365,7 @@ func (p *Plugin) ValidateObservation(ctx context.Context, outctx ocr3types.Outco
 	}
 
 	if p.PredecessorConfigDigest == nil && len(observation.AttestedPredecessorRetirement) != 0 {
-		return fmt.Errorf("AttestedPredecessorRetirement is not empty even though this instance has no predecessor")
+		return errors.New("AttestedPredecessorRetirement is not empty even though this instance has no predecessor")
 	}
 
 	if len(observation.UpdateChannelDefinitions) > MaxObservationUpdateChannelDefinitionsLength {

@@ -196,7 +196,7 @@ func Fuzz_protoObservationCodec_Decode(f *testing.F) {
 	var codec ObservationCodec = protoObservationCodec{}
 	f.Fuzz(func(t *testing.T, data []byte) {
 		// test that it doesn't panic, don't care about errors
-		codec.Decode(data) //nolint:errcheck
+		codec.Decode(data) //nolint:errcheck // test
 	})
 }
 

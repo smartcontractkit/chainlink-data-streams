@@ -102,7 +102,7 @@ func ModeAggregator(values []StreamValue, f int) (StreamValue, error) {
 	for _, value := range largestBucket {
 		b, err := value.MarshalBinary()
 		if err != nil {
-			return nil, fmt.Errorf("failed to marshal value: %v", err)
+			return nil, fmt.Errorf("failed to marshal value: %w", err)
 		}
 		counts[string(b)]++
 	}
@@ -127,7 +127,7 @@ func ModeAggregator(values []StreamValue, f int) (StreamValue, error) {
 	}
 	val, err := UnmarshalProtoStreamValue(&LLOStreamValue{Type: largestBucketType, Value: modeSerialized})
 	if err != nil {
-		return nil, fmt.Errorf("failed to unmarshal value: %v", err)
+		return nil, fmt.Errorf("failed to unmarshal value: %w", err)
 	}
 	return val, nil
 }

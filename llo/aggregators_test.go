@@ -69,12 +69,12 @@ func Test_MedianAggregator(t *testing.T) {
 
 	t.Run("fails with fewer than f+1 values", func(t *testing.T) {
 		_, err := MedianAggregator(values[:2], 3)
-		assert.EqualError(t, err, "not enough observations to calculate median, expected at least f+1, got 2")
+		require.EqualError(t, err, "not enough observations to calculate median, expected at least f+1, got 2")
 	})
 
 	t.Run("fails with unsupported StreamValue type", func(t *testing.T) {
 		_, err := MedianAggregator([]StreamValue{nil, nil, nil}, 1)
-		assert.EqualError(t, err, "not enough observations to calculate median, expected at least f+1, got 0")
+		require.EqualError(t, err, "not enough observations to calculate median, expected at least f+1, got 0")
 	})
 }
 
@@ -180,7 +180,7 @@ func Test_ModeAggregator(t *testing.T) {
 				require.NoError(t, err)
 				assert.Equal(t, tc.output, sv)
 			} else {
-				assert.EqualError(t, err, tc.errStr)
+				require.EqualError(t, err, tc.errStr)
 			}
 		})
 	}
@@ -222,7 +222,7 @@ func Test_QuoteAggregator(t *testing.T) {
 
 	t.Run("fails with fewer than f+1 values", func(t *testing.T) {
 		_, err := QuoteAggregator([]StreamValue{&Quote{}, &Quote{}}, 2)
-		assert.EqualError(t, err, "not enough valid observations to aggregate quote, expected at least f+1, got 2")
+		require.EqualError(t, err, "not enough valid observations to aggregate quote, expected at least f+1, got 2")
 	})
 
 	t.Run("ignores non-Quote type", func(t *testing.T) {

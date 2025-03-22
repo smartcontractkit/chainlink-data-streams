@@ -81,14 +81,14 @@ func testObservation(t *testing.T, outcomeCodec OutcomeCodec) {
 	t.Run("seqNr=0 always errors", func(t *testing.T) {
 		outctx := ocr3types.OutcomeContext{}
 		_, err := p.Observation(context.Background(), outctx, query)
-		assert.EqualError(t, err, "got invalid seqnr=0, must be >=1")
+		require.EqualError(t, err, "got invalid seqnr=0, must be >=1")
 	})
 
 	t.Run("seqNr=1 always returns empty observation", func(t *testing.T) {
 		outctx := ocr3types.OutcomeContext{SeqNr: 1}
 		obs, err := p.Observation(context.Background(), outctx, query)
 		require.NoError(t, err)
-		require.Len(t, obs, 0)
+		require.Empty(t, obs)
 	})
 
 	t.Run("observes timestamp and channel definitions on seqNr=2", func(t *testing.T) {
@@ -98,10 +98,10 @@ func testObservation(t *testing.T, outcomeCodec OutcomeCodec) {
 		decoded, err := p.ObservationCodec.Decode(obs)
 		require.NoError(t, err)
 
-		assert.Len(t, decoded.AttestedPredecessorRetirement, 0)
+		assert.Empty(t, decoded.AttestedPredecessorRetirement)
 		assert.False(t, decoded.ShouldRetire)
-		assert.Len(t, decoded.RemoveChannelIDs, 0)
-		assert.Len(t, decoded.StreamValues, 0)
+		assert.Empty(t, decoded.RemoveChannelIDs)
+		assert.Empty(t, decoded.StreamValues)
 		assert.Equal(t, cdc.definitions, decoded.UpdateChannelDefinitions)
 		assert.GreaterOrEqual(t, decoded.UnixTimestampNanoseconds, testStartTSNanos)
 	})
@@ -123,10 +123,10 @@ func testObservation(t *testing.T, outcomeCodec OutcomeCodec) {
 		decoded, err := p.ObservationCodec.Decode(obs)
 		require.NoError(t, err)
 
-		assert.Len(t, decoded.AttestedPredecessorRetirement, 0)
+		assert.Empty(t, decoded.AttestedPredecessorRetirement)
 		assert.False(t, decoded.ShouldRetire)
-		assert.Len(t, decoded.UpdateChannelDefinitions, 0)
-		assert.Len(t, decoded.RemoveChannelIDs, 0)
+		assert.Empty(t, decoded.UpdateChannelDefinitions)
+		assert.Empty(t, decoded.RemoveChannelIDs)
 		assert.GreaterOrEqual(t, decoded.UnixTimestampNanoseconds, testStartTSNanos)
 		assert.Equal(t, ds.s, decoded.StreamValues)
 	})
@@ -173,7 +173,7 @@ func testObservation(t *testing.T, outcomeCodec OutcomeCodec) {
 		decoded, err := p.ObservationCodec.Decode(obs)
 		require.NoError(t, err)
 
-		assert.Len(t, decoded.AttestedPredecessorRetirement, 0)
+		assert.Empty(t, decoded.AttestedPredecessorRetirement)
 		assert.False(t, decoded.ShouldRetire)
 
 		assert.Len(t, decoded.UpdateChannelDefinitions, 4)
@@ -222,7 +222,7 @@ func testObservation(t *testing.T, outcomeCodec OutcomeCodec) {
 			decoded, err := p.ObservationCodec.Decode(obs)
 			require.NoError(t, err)
 
-			assert.Len(t, decoded.AttestedPredecessorRetirement, 0)
+			assert.Empty(t, decoded.AttestedPredecessorRetirement)
 			assert.False(t, decoded.ShouldRetire)
 
 			// Even though we have a large amount of channel definitions, we should
@@ -238,7 +238,7 @@ func testObservation(t *testing.T, outcomeCodec OutcomeCodec) {
 			assert.Equal(t, expected, decoded.UpdateChannelDefinitions)
 
 			// Nothing removed
-			assert.Len(t, decoded.RemoveChannelIDs, 0)
+			assert.Empty(t, decoded.RemoveChannelIDs)
 
 			assert.GreaterOrEqual(t, decoded.UnixTimestampNanoseconds, testStartTSNanos)
 			assert.Equal(t, ds.s, decoded.StreamValues)
@@ -268,7 +268,7 @@ func testObservation(t *testing.T, outcomeCodec OutcomeCodec) {
 			decoded, err := p.ObservationCodec.Decode(obs)
 			require.NoError(t, err)
 
-			assert.Len(t, decoded.AttestedPredecessorRetirement, 0)
+			assert.Empty(t, decoded.AttestedPredecessorRetirement)
 			assert.False(t, decoded.ShouldRetire)
 
 			// Even though we have a large amount of channel definitions, we should
@@ -285,7 +285,7 @@ func testObservation(t *testing.T, outcomeCodec OutcomeCodec) {
 			assert.ElementsMatch(t, expectedChannelIDs, maps.Keys(decoded.UpdateChannelDefinitions))
 
 			// Nothing removed
-			assert.Len(t, decoded.RemoveChannelIDs, 0)
+			assert.Empty(t, decoded.RemoveChannelIDs)
 
 			assert.GreaterOrEqual(t, decoded.UnixTimestampNanoseconds, testStartTSNanos)
 			assert.Equal(t, ds.s, decoded.StreamValues)
@@ -308,7 +308,7 @@ func testObservation(t *testing.T, outcomeCodec OutcomeCodec) {
 
 			outctx := ocr3types.OutcomeContext{SeqNr: 3, PreviousOutcome: encodedPreviousOutcome}
 			_, err = p.Observation(context.Background(), outctx, query)
-			assert.EqualError(t, err, "previousOutcome.Definitions is invalid: too many channels, got: 4000/2000")
+			require.EqualError(t, err, "previousOutcome.Definitions is invalid: too many channels, got: 4000/2000")
 		})
 
 		t.Run("in case ChannelDefinitionsCache returns invalid definitions, does not vote to change anything", func(t *testing.T) {
@@ -337,8 +337,8 @@ func testObservation(t *testing.T, outcomeCodec OutcomeCodec) {
 			decoded, err := p.ObservationCodec.Decode(obs)
 			require.NoError(t, err)
 
-			assert.Len(t, decoded.UpdateChannelDefinitions, 0)
-			assert.Len(t, decoded.RemoveChannelIDs, 0)
+			assert.Empty(t, decoded.UpdateChannelDefinitions)
+			assert.Empty(t, decoded.RemoveChannelIDs)
 		})
 	})
 
@@ -362,7 +362,7 @@ func testObservation(t *testing.T, outcomeCodec OutcomeCodec) {
 			decoded, err := p.ObservationCodec.Decode(obs)
 			require.NoError(t, err)
 
-			assert.Len(t, decoded.AttestedPredecessorRetirement, 0)
+			assert.Empty(t, decoded.AttestedPredecessorRetirement)
 			assert.False(t, decoded.ShouldRetire)
 			// will have two items here to account for the change of 1 and 2 in smallDefinitions
 			assert.Len(t, decoded.UpdateChannelDefinitions, 2)
@@ -399,7 +399,7 @@ func testObservation(t *testing.T, outcomeCodec OutcomeCodec) {
 			decoded, err := p.ObservationCodec.Decode(obs)
 			require.NoError(t, err)
 
-			assert.Len(t, decoded.AttestedPredecessorRetirement, 0)
+			assert.Empty(t, decoded.AttestedPredecessorRetirement)
 			assert.False(t, decoded.ShouldRetire)
 			// will have two items here to account for the change of 1 and 2 in smallDefinitions
 			assert.Len(t, decoded.UpdateChannelDefinitions, 2)
@@ -475,7 +475,7 @@ func testObservation(t *testing.T, outcomeCodec OutcomeCodec) {
 
 			outctx := ocr3types.OutcomeContext{SeqNr: 2, PreviousOutcome: encodedPreviousOutcome}
 			_, err = p.Observation(context.Background(), outctx, query)
-			assert.EqualError(t, err, "error fetching attested retirement report from cache: retirement report not found error")
+			require.EqualError(t, err, "error fetching attested retirement report from cache: retirement report not found error")
 		})
 		t.Run("in production lifecycle stage, does not add attestedRetirementReport to observation", func(t *testing.T) {
 			prrc := &mockPredecessorRetirementReportCache{
@@ -520,9 +520,9 @@ func testObservation(t *testing.T, outcomeCodec OutcomeCodec) {
 		assert.Zero(t, decoded.AttestedPredecessorRetirement)
 		assert.False(t, decoded.ShouldRetire)
 		assert.GreaterOrEqual(t, decoded.UnixTimestampNanoseconds, testStartTSNanos)
-		assert.Len(t, decoded.UpdateChannelDefinitions, 0)
-		assert.Len(t, decoded.RemoveChannelIDs, 0)
-		assert.Len(t, decoded.StreamValues, 0)
+		assert.Empty(t, decoded.UpdateChannelDefinitions)
+		assert.Empty(t, decoded.RemoveChannelIDs)
+		assert.Empty(t, decoded.StreamValues)
 	})
 
 	invalidDefinitions := map[llotypes.ChannelID]llotypes.ChannelDefinition{
@@ -548,8 +548,8 @@ func testObservation(t *testing.T, outcomeCodec OutcomeCodec) {
 		decoded, err := p.ObservationCodec.Decode(obs)
 		require.NoError(t, err)
 
-		assert.Len(t, decoded.UpdateChannelDefinitions, 0)
-		assert.Len(t, decoded.RemoveChannelIDs, 0)
+		assert.Empty(t, decoded.UpdateChannelDefinitions)
+		assert.Empty(t, decoded.RemoveChannelIDs)
 		assert.GreaterOrEqual(t, decoded.UnixTimestampNanoseconds, testStartTSNanos)
 		assert.Equal(t, ds.s, decoded.StreamValues)
 	})

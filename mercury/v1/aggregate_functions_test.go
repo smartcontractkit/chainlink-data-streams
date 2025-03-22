@@ -408,7 +408,7 @@ func Test_AggregateFunctions(t *testing.T) {
 					},
 				}
 				hash, num, _, err := GetConsensusLatestBlock(paos, f)
-				assert.NoError(t, err)
+				require.NoError(t, err)
 				assert.Equal(t, mustDecodeHex("bdeb0181416f88812028c4e1ee9e049296c909c1ee15d57cf67d4ce869ed6518"), hash)
 				assert.Equal(t, int64(26014056), num)
 				assert.GreaterOrEqual(t, num, validFrom)
@@ -429,7 +429,7 @@ func Test_AggregateFunctions(t *testing.T) {
 					makeLegacyPAO(42, "2222222222222222222222222222222222222222222222222222222222222222", 1),
 				}
 				hash, num, ts, err := GetConsensusLatestBlock(paos, f)
-				assert.NoError(t, err)
+				require.NoError(t, err)
 				assert.Equal(t, mustDecodeHex("3333333333333333333333333333333333333333333333333333333333333333"), hash)
 				assert.Equal(t, int64(42), num)
 				assert.Equal(t, uint64(1), ts)
@@ -444,7 +444,7 @@ func Test_AggregateFunctions(t *testing.T) {
 					makeLegacyPAO(41, "2222222222222222222222222222222222222222222222222222222222222222", 1),
 				}
 				hash, num, ts, err := GetConsensusLatestBlock(paos, f)
-				assert.NoError(t, err)
+				require.NoError(t, err)
 				assert.Equal(t, mustDecodeHex("3333333333333333333333333333333333333333333333333333333333333333"), hash)
 				assert.Equal(t, int64(42), num)
 				assert.Equal(t, uint64(1), ts)
@@ -459,7 +459,7 @@ func Test_AggregateFunctions(t *testing.T) {
 					makeLegacyPAO(42, "2222222222222222222222222222222222222222222222222222222222222222", 1),
 				}
 				hash, num, ts, err := GetConsensusLatestBlock(paos, f)
-				assert.NoError(t, err)
+				require.NoError(t, err)
 				assert.Equal(t, mustDecodeHex("3333333333333333333333333333333333333333333333333333333333333333"), hash)
 				assert.Equal(t, int64(42), num)
 				assert.Equal(t, uint64(2), ts)
@@ -474,7 +474,7 @@ func Test_AggregateFunctions(t *testing.T) {
 					makeLegacyPAO(42, "2222222222222222222222222222222222222222222222222222222222222222", 1),
 				}
 				hash, num, ts, err := GetConsensusLatestBlock(paos, f)
-				assert.NoError(t, err)
+				require.NoError(t, err)
 				assert.Equal(t, mustDecodeHex("2222222222222222222222222222222222222222222222222222222222222222"), hash)
 				assert.Equal(t, int64(42), num)
 				assert.Equal(t, uint64(1), ts)
@@ -638,7 +638,7 @@ func Test_AggregateFunctions(t *testing.T) {
 
 		t.Run("errors if there are not at least f+1 valid", func(t *testing.T) {
 			_, err := GetConsensusMaxFinalizedBlockNum(invalidPaos, f)
-			assert.EqualError(t, err, "fewer than f+1 observations have a valid maxFinalizedBlockNumber (got: 0/4, f=1)")
+			require.EqualError(t, err, "fewer than f+1 observations have a valid maxFinalizedBlockNumber (got: 0/4, f=1)")
 		})
 
 		t.Run("errors if there are not at least f+1 in consensus about number", func(t *testing.T) {
@@ -662,7 +662,7 @@ func Test_AggregateFunctions(t *testing.T) {
 			}
 
 			_, err := GetConsensusMaxFinalizedBlockNum(badPaos, f)
-			assert.EqualError(t, err, "no valid maxFinalizedBlockNumber with at least f+1 votes (got counts: map[100:1 200:1 300:1 400:1], f=1)")
+			require.EqualError(t, err, "no valid maxFinalizedBlockNumber with at least f+1 votes (got counts: map[100:1 200:1 300:1 400:1], f=1)")
 		})
 	})
 }

@@ -264,7 +264,7 @@ func Test_AggregateFunctions(t *testing.T) {
 		t.Run("fails when fewer than f+1 prices are valid", func(t *testing.T) {
 			invalidMPaos := convert(invalidPaos)
 			_, err := GetConsensusBenchmarkPrice(invalidMPaos, f)
-			assert.EqualError(t, err, "fewer than f+1 observations have a valid price (got: 1/4)")
+			require.EqualError(t, err, "fewer than f+1 observations have a valid price (got: 1/4)")
 		})
 	})
 
@@ -279,7 +279,7 @@ func Test_AggregateFunctions(t *testing.T) {
 		t.Run("fails when fewer than f+1 prices are valid", func(t *testing.T) {
 			invalidMPaos := convertBid(invalidPaos)
 			_, err := GetConsensusBid(invalidMPaos, f)
-			assert.EqualError(t, err, "fewer than f+1 observations have a valid price (got: 1/4)")
+			require.EqualError(t, err, "fewer than f+1 observations have a valid price (got: 1/4)")
 		})
 	})
 
@@ -294,7 +294,7 @@ func Test_AggregateFunctions(t *testing.T) {
 		t.Run("fails when fewer than f+1 prices are valid", func(t *testing.T) {
 			invalidMPaos := convertAsk(invalidPaos)
 			_, err := GetConsensusAsk(invalidMPaos, f)
-			assert.EqualError(t, err, "fewer than f+1 observations have a valid price (got: 1/4)")
+			require.EqualError(t, err, "fewer than f+1 observations have a valid price (got: 1/4)")
 		})
 	})
 
@@ -318,7 +318,7 @@ func Test_AggregateFunctions(t *testing.T) {
 		t.Run("fails when fewer than f+1 maxFinalizedTimestamps are valid", func(t *testing.T) {
 			invalidMPaos := convertMaxFinalizedTimestamp(invalidPaos)
 			_, err := GetConsensusMaxFinalizedTimestamp(invalidMPaos, f)
-			assert.EqualError(t, err, "fewer than f+1 observations have a valid maxFinalizedTimestamp (got: 1/4)")
+			require.EqualError(t, err, "fewer than f+1 observations have a valid maxFinalizedTimestamp (got: 1/4)")
 		})
 
 		t.Run("fails when cannot come to consensus f+1 maxFinalizedTimestamps", func(t *testing.T) {
@@ -341,7 +341,7 @@ func Test_AggregateFunctions(t *testing.T) {
 				},
 			}
 			_, err := GetConsensusMaxFinalizedTimestamp(paos, f)
-			assert.EqualError(t, err, "no valid maxFinalizedTimestamp with at least f+1 votes (got counts: map[1679513477:1 1679648456:1 1679648457:1 1679648458:1])")
+			require.EqualError(t, err, "no valid maxFinalizedTimestamp with at least f+1 votes (got counts: map[1679513477:1 1679648456:1 1679648457:1 1679648458:1])")
 		})
 	})
 
@@ -367,13 +367,13 @@ func Test_AggregateFunctions(t *testing.T) {
 				paos[i].LinkFee = big.NewInt(int64(0 - i))
 			}
 			_, err := GetConsensusLinkFee(convertLinkFee(paos), f)
-			assert.EqualError(t, err, "fewer than f+1 observations have a valid linkFee (got: 1/4)")
+			require.EqualError(t, err, "fewer than f+1 observations have a valid linkFee (got: 1/4)")
 		})
 
 		t.Run("fails when fewer than f+1 linkFees are valid", func(t *testing.T) {
 			invalidMPaos := convertLinkFee(invalidPaos)
 			_, err := GetConsensusLinkFee(invalidMPaos, f)
-			assert.EqualError(t, err, "fewer than f+1 observations have a valid linkFee (got: 1/4)")
+			require.EqualError(t, err, "fewer than f+1 observations have a valid linkFee (got: 1/4)")
 		})
 	})
 
@@ -399,12 +399,12 @@ func Test_AggregateFunctions(t *testing.T) {
 				paos[i].NativeFee = big.NewInt(int64(0 - i))
 			}
 			_, err := GetConsensusNativeFee(convertNativeFee(paos), f)
-			assert.EqualError(t, err, "fewer than f+1 observations have a valid nativeFee (got: 1/4)")
+			require.EqualError(t, err, "fewer than f+1 observations have a valid nativeFee (got: 1/4)")
 		})
 		t.Run("fails when fewer than f+1 nativeFees are valid", func(t *testing.T) {
 			invalidMPaos := convertNativeFee(invalidPaos)
 			_, err := GetConsensusNativeFee(invalidMPaos, f)
-			assert.EqualError(t, err, "fewer than f+1 observations have a valid nativeFee (got: 1/4)")
+			require.EqualError(t, err, "fewer than f+1 observations have a valid nativeFee (got: 1/4)")
 		})
 	})
 }
