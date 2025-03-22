@@ -308,7 +308,7 @@ func Test_JSONCodec(t *testing.T) {
 		encoded, err := cdc.Encode(r, llo.ChannelDefinition{})
 		require.NoError(t, err)
 
-		assert.JSONEq(t, `{"ConfigDigest":"0102030000000000000000000000000000000000000000000000000000000000","SeqNr":43,"ChannelID":46,"ValidAfterNanoseconds":44,"ObservationTimestampNanoseconds":45,"Values":[{"t":0,"v":"1"},{"t":0,"v":"2"},{"t":1,"v":"Q{Bid: 3.13, Benchmark: 4.4, Ask: 5.12}"}],"Specimen":true}`, string(encoded))
+		assert.Equal(t, `{"ConfigDigest":"0102030000000000000000000000000000000000000000000000000000000000","SeqNr":43,"ChannelID":46,"ValidAfterNanoseconds":44,"ObservationTimestampNanoseconds":45,"Values":[{"t":0,"v":"1"},{"t":0,"v":"2"},{"t":1,"v":"Q{Bid: 3.13, Benchmark: 4.4, Ask: 5.12}"}],"Specimen":true}`, string(encoded)) //nolint:testifylint // need to verify exact match including order for determinism
 
 		decoded, err := cdc.Decode(encoded)
 		require.NoError(t, err)
@@ -337,7 +337,7 @@ func Test_JSONCodec(t *testing.T) {
 
 			packed, err := cdc.Pack(digest, seqNr, report, sigs)
 			require.NoError(t, err)
-			assert.JSONEq(t, `{"configDigest":"0102030000000000000000000000000000000000000000000000000000000000","seqNr":43,"report":{"foo":"bar"},"sigs":[{"Signature":"AgME","Signer":2}]}`, string(packed))
+			assert.Equal(t, `{"configDigest":"0102030000000000000000000000000000000000000000000000000000000000","seqNr":43,"report":{"foo":"bar"},"sigs":[{"Signature":"AgME","Signer":2}]}`, string(packed)) //nolint:testifylint // need to verify exact match including order for determinism
 
 			digest2, seqNr2, report2, sigs2, err := cdc.Unpack(packed)
 			require.NoError(t, err)

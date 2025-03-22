@@ -99,7 +99,7 @@ func testReports(t *testing.T, outcomeCodec OutcomeCodec) {
 				// sub-second values are truncated in outcomes for protocol version 0
 				subSecond = "0"
 			}
-			assert.JSONEq(t, fmt.Sprintf(`{"ProtocolVersion":%d,"ValidAfterNanoseconds":{"1":2000000000,"2":3000000000,"3":%s}}`, p.ProtocolVersion, subSecond), string(rwis[0].ReportWithInfo.Report))
+			assert.Equal(t, fmt.Sprintf(`{"ProtocolVersion":%d,"ValidAfterNanoseconds":{"1":2000000000,"2":3000000000,"3":%s}}`, p.ProtocolVersion, subSecond), string(rwis[0].ReportWithInfo.Report)) //nolint:testifylint // need to verify exact match including order for determinism
 		})
 	})
 
@@ -228,9 +228,9 @@ func testReports(t *testing.T, outcomeCodec OutcomeCodec) {
 		rwis, err := p.Reports(ctx, 2, encoded)
 		require.NoError(t, err)
 		require.Len(t, rwis, 2)
-		assert.JSONEq(t, `{"ConfigDigest":"0000000000000000000000000000000000000000000000000000000000000000","SeqNr":2,"ChannelID":1,"ValidAfterNanoseconds":100000000000,"ObservationTimestampNanoseconds":200000000000,"Values":[{"t":0,"v":"1.1"},{"t":0,"v":"2.2"},{"t":1,"v":"Q{Bid: 5.5, Benchmark: 4.4, Ask: 3.3}"}],"Specimen":true}`, string(rwis[0].ReportWithInfo.Report))
+		assert.Equal(t, `{"ConfigDigest":"0000000000000000000000000000000000000000000000000000000000000000","SeqNr":2,"ChannelID":1,"ValidAfterNanoseconds":100000000000,"ObservationTimestampNanoseconds":200000000000,"Values":[{"t":0,"v":"1.1"},{"t":0,"v":"2.2"},{"t":1,"v":"Q{Bid: 5.5, Benchmark: 4.4, Ask: 3.3}"}],"Specimen":true}`, string(rwis[0].ReportWithInfo.Report)) //nolint:testifylint // need to verify exact match including order for determinism
 		assert.Equal(t, llo.ReportInfo{LifeCycleStage: "staging", ReportFormat: llotypes.ReportFormatJSON}, rwis[0].ReportWithInfo.Info)
-		assert.JSONEq(t, `{"ConfigDigest":"0000000000000000000000000000000000000000000000000000000000000000","SeqNr":2,"ChannelID":2,"ValidAfterNanoseconds":100000000000,"ObservationTimestampNanoseconds":200000000000,"Values":[{"t":0,"v":"1.1"},{"t":0,"v":"2.2"},{"t":1,"v":"Q{Bid: 8.8, Benchmark: 7.7, Ask: 6.6}"}],"Specimen":true}`, string(rwis[1].ReportWithInfo.Report))
+		assert.Equal(t, `{"ConfigDigest":"0000000000000000000000000000000000000000000000000000000000000000","SeqNr":2,"ChannelID":2,"ValidAfterNanoseconds":100000000000,"ObservationTimestampNanoseconds":200000000000,"Values":[{"t":0,"v":"1.1"},{"t":0,"v":"2.2"},{"t":1,"v":"Q{Bid: 8.8, Benchmark: 7.7, Ask: 6.6}"}],"Specimen":true}`, string(rwis[1].ReportWithInfo.Report)) //nolint:testifylint // need to verify exact match including order for determinism
 		assert.Equal(t, llo.ReportInfo{LifeCycleStage: "staging", ReportFormat: llotypes.ReportFormatJSON}, rwis[1].ReportWithInfo.Info)
 	})
 
@@ -263,9 +263,9 @@ func testReports(t *testing.T, outcomeCodec OutcomeCodec) {
 		rwis, err := p.Reports(ctx, 2, encoded)
 		require.NoError(t, err)
 		require.Len(t, rwis, 2)
-		assert.JSONEq(t, `{"ConfigDigest":"0000000000000000000000000000000000000000000000000000000000000000","SeqNr":2,"ChannelID":1,"ValidAfterNanoseconds":100000000000,"ObservationTimestampNanoseconds":200000000000,"Values":[{"t":0,"v":"1.1"},{"t":0,"v":"2.2"},{"t":1,"v":"Q{Bid: 5.5, Benchmark: 4.4, Ask: 3.3}"}],"Specimen":false}`, string(rwis[0].ReportWithInfo.Report))
+		assert.Equal(t, `{"ConfigDigest":"0000000000000000000000000000000000000000000000000000000000000000","SeqNr":2,"ChannelID":1,"ValidAfterNanoseconds":100000000000,"ObservationTimestampNanoseconds":200000000000,"Values":[{"t":0,"v":"1.1"},{"t":0,"v":"2.2"},{"t":1,"v":"Q{Bid: 5.5, Benchmark: 4.4, Ask: 3.3}"}],"Specimen":false}`, string(rwis[0].ReportWithInfo.Report)) //nolint:testifylint // need to verify exact match including order for determinism
 		assert.Equal(t, llo.ReportInfo{LifeCycleStage: "production", ReportFormat: llotypes.ReportFormatJSON}, rwis[0].ReportWithInfo.Info)
-		assert.JSONEq(t, `{"ConfigDigest":"0000000000000000000000000000000000000000000000000000000000000000","SeqNr":2,"ChannelID":2,"ValidAfterNanoseconds":100000000000,"ObservationTimestampNanoseconds":200000000000,"Values":[{"t":0,"v":"1.1"},{"t":0,"v":"2.2"},{"t":1,"v":"Q{Bid: 8.8, Benchmark: 7.7, Ask: 6.6}"}],"Specimen":false}`, string(rwis[1].ReportWithInfo.Report))
+		assert.Equal(t, `{"ConfigDigest":"0000000000000000000000000000000000000000000000000000000000000000","SeqNr":2,"ChannelID":2,"ValidAfterNanoseconds":100000000000,"ObservationTimestampNanoseconds":200000000000,"Values":[{"t":0,"v":"1.1"},{"t":0,"v":"2.2"},{"t":1,"v":"Q{Bid: 8.8, Benchmark: 7.7, Ask: 6.6}"}],"Specimen":false}`, string(rwis[1].ReportWithInfo.Report)) //nolint:testifylint // need to verify exact match including order for determinism
 		assert.Equal(t, llo.ReportInfo{LifeCycleStage: "production", ReportFormat: llotypes.ReportFormatJSON}, rwis[1].ReportWithInfo.Info)
 	})
 	t.Run("does not produce reports with overlapping timestamps (where IsReportable returns false)", func(t *testing.T) {
@@ -299,7 +299,7 @@ func testReports(t *testing.T, outcomeCodec OutcomeCodec) {
 
 		// Only second channel is reported because first channel is not valid yet
 		require.Len(t, rwis, 1)
-		assert.JSONEq(t, `{"ConfigDigest":"0000000000000000000000000000000000000000000000000000000000000000","SeqNr":2,"ChannelID":2,"ValidAfterNanoseconds":100000000000,"ObservationTimestampNanoseconds":200000000000,"Values":[{"t":0,"v":"1.1"},{"t":0,"v":"2.2"},{"t":1,"v":"Q{Bid: 8.8, Benchmark: 7.7, Ask: 6.6}"}],"Specimen":false}`, string(rwis[0].ReportWithInfo.Report))
+		assert.Equal(t, `{"ConfigDigest":"0000000000000000000000000000000000000000000000000000000000000000","SeqNr":2,"ChannelID":2,"ValidAfterNanoseconds":100000000000,"ObservationTimestampNanoseconds":200000000000,"Values":[{"t":0,"v":"1.1"},{"t":0,"v":"2.2"},{"t":1,"v":"Q{Bid: 8.8, Benchmark: 7.7, Ask: 6.6}"}],"Specimen":false}`, string(rwis[0].ReportWithInfo.Report)) //nolint:testifylint // need to verify exact match including order for determinism
 		assert.Equal(t, llo.ReportInfo{LifeCycleStage: "production", ReportFormat: llotypes.ReportFormatJSON}, rwis[0].ReportWithInfo.Info)
 	})
 	t.Run("sends telemetry on telemetry channel if set, and does not block on full channel", func(t *testing.T) {
