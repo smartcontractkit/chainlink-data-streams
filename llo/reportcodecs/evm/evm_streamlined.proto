@@ -5,7 +5,7 @@ option go_package = "github.com/smartcontractkit/chainlink-data-streams/llo/repo
 package evm;
 
 message LLOEVMStreamlinedReportWithContext {
-    bytes config_digest = 1;
-    uint64 seq_nr = 2;
-    bytes packed_payload = 3;
+  bytes config_digest = 1;
+  uint64 seq_nr = 2;
+  bytes packed_payload = 3;
 }

@@ -20,9 +20,8 @@ import (
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
 	commonv3 "github.com/smartcontractkit/chainlink-common/pkg/types/mercury/v3"
 	"github.com/smartcontractkit/chainlink-data-streams/llo"
+	ubig "github.com/smartcontractkit/chainlink-data-streams/llo/reportcodecs/evm/utils"
 	v3 "github.com/smartcontractkit/chainlink-data-streams/llo/reportcodecs/evm/v3"
-
-	ubig "github.com/smartcontractkit/chainlink-integrations/evm/utils/big"
 )
 
 var (

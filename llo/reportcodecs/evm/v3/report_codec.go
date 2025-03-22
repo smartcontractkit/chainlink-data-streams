@@ -5,8 +5,6 @@ import (
 	"fmt"
 	"math/big"
 
-	pkgerrors "github.com/pkg/errors"
-
 	ocrtypes "github.com/smartcontractkit/libocr/offchainreporting2plus/types"
 
 	"github.com/smartcontractkit/chainlink-common/pkg/logger"
@@ -49,7 +47,7 @@ func (r *ReportCodec) BuildReport(rf v3.ReportFields) (ocrtypes.Report, error) {
 		return nil, merr
 	}
 	reportBytes, err := Schema.Pack(r.feedID, rf.ValidFromTimestamp, rf.Timestamp, rf.NativeFee, rf.LinkFee, rf.ExpiresAt, rf.BenchmarkPrice, rf.Bid, rf.Ask)
-	return ocrtypes.Report(reportBytes), pkgerrors.Wrap(err, "failed to pack report blob")
+	return ocrtypes.Report(reportBytes), fmt.Errorf("failed to pack report blob: %w", err)
 }
 
 func (r *ReportCodec) Decode(report ocrtypes.Report) (*Report, error) {

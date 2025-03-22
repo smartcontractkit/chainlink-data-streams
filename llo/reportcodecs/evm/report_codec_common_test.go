@@ -13,7 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/smartcontractkit/chainlink-data-streams/llo"
-	ubig "github.com/smartcontractkit/chainlink-integrations/evm/utils/big"
+	ubig "github.com/smartcontractkit/chainlink-data-streams/llo/reportcodecs/evm/utils"
 )
 
 func TestEncodePackedBigInt(t *testing.T) {

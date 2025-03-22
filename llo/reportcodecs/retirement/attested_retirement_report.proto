@@ -5,13 +5,12 @@ option go_package = "github.com/smartcontractkit/chainlink-data-streams/llo/repo
 package retirement;
 
 message AttestedRetirementReport {
-    bytes retirementReport = 1;
-    uint64 seqNr = 2;
-    repeated AttributedOnchainSignature sigs = 3;
+  bytes retirementReport = 1;
+  uint64 seqNr = 2;
+  repeated AttributedOnchainSignature sigs = 3;
 }
 
 message AttributedOnchainSignature {
-	bytes signature = 1;
-	uint32 signer = 2;
+  bytes signature = 1;
+  uint32 signer = 2;
 }
-

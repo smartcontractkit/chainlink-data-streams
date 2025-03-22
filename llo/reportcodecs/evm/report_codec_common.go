@@ -11,7 +11,7 @@ import (
 	"github.com/shopspring/decimal"
 
 	"github.com/smartcontractkit/chainlink-data-streams/llo"
-	ubig "github.com/smartcontractkit/chainlink-integrations/evm/utils/big"
+	ubig "github.com/smartcontractkit/chainlink-data-streams/llo/reportcodecs/evm/utils"
 )
 
 // Extracts nanosecond timestamps as uint32 number of seconds
