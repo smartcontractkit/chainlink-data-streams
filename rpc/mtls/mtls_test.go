@@ -15,14 +15,14 @@ import (
 
 func Test_NewTransportCredentials(t *testing.T) {
 	creds, err := NewTransportCredentials(nil, nil)
-	assert.Error(t, err)
+	require.Error(t, err)
 	assert.Nil(t, creds)
 
 	spub, spriv, err := ed25519.GenerateKey(nil)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	creds, err = NewTransportCredentials(spriv, []ed25519.PublicKey{spub})
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.Equal(t, "tls", creds.Info().SecurityProtocol)
 }
 

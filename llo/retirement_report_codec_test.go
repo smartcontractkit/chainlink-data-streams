@@ -26,7 +26,7 @@ func Test_StandardRetirementReportCodec(t *testing.T) {
 		encoded, err := codec.Encode(rr)
 		require.NoError(t, err)
 
-		assert.Equal(t, `{"ProtocolVersion":1,"ValidAfterNanoseconds":{"1":2000000000,"2":3000000000,"3":100000000}}`, string(encoded))
+		assert.Equal(t, `{"ProtocolVersion":1,"ValidAfterNanoseconds":{"1":2000000000,"2":3000000000,"3":100000000}}`, string(encoded)) //nolint:testifylint // need to verify exact match including order for determinism
 
 		decoded, err := codec.Decode(encoded)
 		require.NoError(t, err)

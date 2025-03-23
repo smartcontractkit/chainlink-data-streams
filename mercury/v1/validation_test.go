@@ -3,9 +3,8 @@ package v1
 import (
 	"testing"
 
-	"github.com/stretchr/testify/assert"
-
 	v1 "github.com/smartcontractkit/chainlink-common/pkg/types/mercury/v1"
+	"github.com/stretchr/testify/require"
 )
 
 func TestValidation(t *testing.T) {
@@ -18,46 +17,46 @@ func TestValidation(t *testing.T) {
 			rf.ValidFromBlockNum = 16634363
 			rf.CurrentBlockNum = 16634364
 			err := ValidateCurrentBlock(rf)
-			assert.NoError(t, err)
+			require.NoError(t, err)
 		})
 		t.Run("succeeds when validFromBlockNum is equal to current block number", func(t *testing.T) {
 			rf.ValidFromBlockNum = 16634364
 			rf.CurrentBlockNum = 16634364
 			err := ValidateCurrentBlock(rf)
-			assert.NoError(t, err)
+			require.NoError(t, err)
 		})
 		t.Run("zero is ok", func(t *testing.T) {
 			rf.ValidFromBlockNum = 0
 			rf.CurrentBlockNum = 0
 			err := ValidateCurrentBlock(rf)
-			assert.NoError(t, err)
+			require.NoError(t, err)
 		})
 		t.Run("errors when validFromBlockNum number < 0", func(t *testing.T) {
 			rf.ValidFromBlockNum = -1
 			rf.CurrentBlockNum = -1
 			err := ValidateCurrentBlock(rf)
-			assert.EqualError(t, err, "validFromBlockNum must be >= 0 (got: -1)")
+			require.EqualError(t, err, "validFromBlockNum must be >= 0 (got: -1)")
 		})
 		t.Run("errors when validFrom > block number", func(t *testing.T) {
 			rf.CurrentBlockNum = 1
 			rf.ValidFromBlockNum = 16634366
 			err := ValidateCurrentBlock(rf)
-			assert.EqualError(t, err, "validFromBlockNum (Value: 16634366) must be less than or equal to CurrentBlockNum (Value: 1)")
+			require.EqualError(t, err, "validFromBlockNum (Value: 16634366) must be less than or equal to CurrentBlockNum (Value: 1)")
 		})
 		t.Run("errors when validFrom < 0", func(t *testing.T) {
 			rf.ValidFromBlockNum = -1
 			err := ValidateCurrentBlock(rf)
-			assert.EqualError(t, err, "validFromBlockNum must be >= 0 (got: -1)")
+			require.EqualError(t, err, "validFromBlockNum must be >= 0 (got: -1)")
 		})
 		t.Run("errors when hash has incorrect length", func(t *testing.T) {
 			rf.ValidFromBlockNum = 16634363
 			rf.CurrentBlockNum = 16634364
 			rf.CurrentBlockHash = []byte{}
 			err := ValidateCurrentBlock(rf)
-			assert.EqualError(t, err, "invalid length for hash; expected 32 (got: 0)")
+			require.EqualError(t, err, "invalid length for hash; expected 32 (got: 0)")
 			rf.CurrentBlockHash = make([]byte, 64)
 			err = ValidateCurrentBlock(rf)
-			assert.EqualError(t, err, "invalid length for hash; expected 32 (got: 64)")
+			require.EqualError(t, err, "invalid length for hash; expected 32 (got: 64)")
 		})
 	})
 }

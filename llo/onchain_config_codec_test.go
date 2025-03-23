@@ -32,7 +32,7 @@ func FuzzEVMOnchainConfigCodec_Decode(f *testing.F) {
 
 	f.Fuzz(func(t *testing.T, data []byte) {
 		// test that it doesn't panic, don't care about errors
-		c.Decode(data) //nolint:errcheck
+		c.Decode(data) //nolint:errcheck // test
 	})
 }
 

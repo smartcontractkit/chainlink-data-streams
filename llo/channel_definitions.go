@@ -1,7 +1,6 @@
 package llo
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"sort"
@@ -9,7 +8,7 @@ import (
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
 )
 
-func VerifyChannelDefinitions(ctx context.Context, codecs map[llotypes.ReportFormat]ReportCodec, channelDefs llotypes.ChannelDefinitions) (merr error) {
+func VerifyChannelDefinitions(codecs map[llotypes.ReportFormat]ReportCodec, channelDefs llotypes.ChannelDefinitions) (merr error) {
 	if len(channelDefs) > MaxOutcomeChannelDefinitionsLength {
 		return fmt.Errorf("too many channels, got: %d/%d", len(channelDefs), MaxOutcomeChannelDefinitionsLength)
 	}
@@ -31,8 +30,8 @@ func VerifyChannelDefinitions(ctx context.Context, codecs map[llotypes.ReportFor
 			uniqueStreamIDs[strm.StreamID] = struct{}{}
 		}
 		if codec, ok := codecs[cd.ReportFormat]; ok {
-			if err := codec.Verify(ctx, cd); err != nil {
-				merr = errors.Join(merr, fmt.Errorf("invalid ChannelDefinition with ID %d: %v", channelID, err))
+			if err := codec.Verify(cd); err != nil {
+				merr = errors.Join(merr, fmt.Errorf("invalid ChannelDefinition with ID %d: %w", channelID, err))
 				continue
 			}
 		}

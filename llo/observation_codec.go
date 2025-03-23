@@ -109,11 +109,12 @@ func (c protoObservationCodec) Decode(b types.Observation) (Observation, error) 
 		}
 	}
 	var unixTSNanoseconds uint64
-	if pbuf.UnixTimestampNanoseconds > 0 {
+	switch {
+	case pbuf.UnixTimestampNanoseconds > 0:
 		unixTSNanoseconds = pbuf.UnixTimestampNanoseconds
-	} else if pbuf.UnixTimestampNanosecondsLegacy >= 0 {
+	case pbuf.UnixTimestampNanosecondsLegacy >= 0:
 		unixTSNanoseconds = uint64(pbuf.UnixTimestampNanosecondsLegacy)
-	} else {
+	default:
 		// Byzantine behavior makes this observation invalid; a well-behaved
 		// node should never encode negative timestamps here
 		return Observation{}, fmt.Errorf("failed to decode observation; cannot accept negative unix timestamp: %d", pbuf.UnixTimestampNanosecondsLegacy)

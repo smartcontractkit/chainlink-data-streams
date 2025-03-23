@@ -562,7 +562,7 @@ func Test_Plugin_parseAttributedObservation(t *testing.T) {
 		ao := newAttributedObservation(t, obs)
 
 		pao, err := parseAttributedObservation(ao)
-		assert.NoError(t, err)
+		require.NoError(t, err)
 
 		assert.Equal(t,
 			parsedAttributedObservation{
@@ -584,7 +584,7 @@ func Test_Plugin_parseAttributedObservation(t *testing.T) {
 			ao := newAttributedObservation(t, obs)
 
 			pao, err := parseAttributedObservation(ao)
-			assert.NoError(t, err)
+			require.NoError(t, err)
 
 			assert.Len(t, pao.GetLatestBlocks(), MaxAllowedBlocks)
 			assert.Equal(t, 49, int(pao.GetLatestBlocks()[0].Num))
@@ -602,7 +602,7 @@ func Test_Plugin_parseAttributedObservation(t *testing.T) {
 			ao := newAttributedObservation(t, obs)
 
 			_, err := parseAttributedObservation(ao)
-			assert.EqualError(t, err, "observation invalid for observer 42; got duplicate block number: 32")
+			require.EqualError(t, err, "observation invalid for observer 42; got duplicate block number: 32")
 		})
 		t.Run("contains duplicate block hashes", func(t *testing.T) {
 			obs := newValidMercuryObservationProto()
@@ -611,7 +611,7 @@ func Test_Plugin_parseAttributedObservation(t *testing.T) {
 			ao := newAttributedObservation(t, obs)
 
 			_, err := parseAttributedObservation(ao)
-			assert.EqualError(t, err, fmt.Sprintf("observation invalid for observer 42; got duplicate block hash: 0x%x", h))
+			require.EqualError(t, err, fmt.Sprintf("observation invalid for observer 42; got duplicate block hash: 0x%x", h))
 		})
 		t.Run("contains too many blocks", func(t *testing.T) {
 			obs := newValidMercuryObservationProto()
@@ -623,7 +623,7 @@ func Test_Plugin_parseAttributedObservation(t *testing.T) {
 			ao := newAttributedObservation(t, obs)
 
 			_, err := parseAttributedObservation(ao)
-			assert.EqualError(t, err, fmt.Sprintf("LatestBlocks too large; got: %d, max: %d", MaxAllowedBlocks+1, MaxAllowedBlocks))
+			require.EqualError(t, err, fmt.Sprintf("LatestBlocks too large; got: %d, max: %d", MaxAllowedBlocks+1, MaxAllowedBlocks))
 		})
 	})
 
@@ -641,7 +641,7 @@ func Test_Plugin_parseAttributedObservation(t *testing.T) {
 			ao := newAttributedObservation(t, obs)
 
 			_, err := parseAttributedObservation(ao)
-			assert.EqualError(t, err, "benchmarkPrice cannot be converted to big.Int: expected b to have length 24, but got length 16")
+			require.EqualError(t, err, "benchmarkPrice cannot be converted to big.Int: expected b to have length 24, but got length 16")
 		})
 		t.Run("bad bid", func(t *testing.T) {
 			obs := newValidMercuryObservationProto()
@@ -649,7 +649,7 @@ func Test_Plugin_parseAttributedObservation(t *testing.T) {
 			ao := newAttributedObservation(t, obs)
 
 			_, err := parseAttributedObservation(ao)
-			assert.EqualError(t, err, "bid cannot be converted to big.Int: expected b to have length 24, but got length 1")
+			require.EqualError(t, err, "bid cannot be converted to big.Int: expected b to have length 24, but got length 1")
 		})
 		t.Run("bad ask", func(t *testing.T) {
 			obs := newValidMercuryObservationProto()
@@ -657,7 +657,7 @@ func Test_Plugin_parseAttributedObservation(t *testing.T) {
 			ao := newAttributedObservation(t, obs)
 
 			_, err := parseAttributedObservation(ao)
-			assert.EqualError(t, err, "ask cannot be converted to big.Int: expected b to have length 24, but got length 1")
+			require.EqualError(t, err, "ask cannot be converted to big.Int: expected b to have length 24, but got length 1")
 		})
 		t.Run("bad block hash", func(t *testing.T) {
 			t.Run("CurrentBlockHash", func(t *testing.T) {
@@ -667,7 +667,7 @@ func Test_Plugin_parseAttributedObservation(t *testing.T) {
 				ao := newAttributedObservation(t, obs)
 
 				_, err := parseAttributedObservation(ao)
-				assert.EqualError(t, err, "wrong len for hash: 1 (expected: 32)")
+				require.EqualError(t, err, "wrong len for hash: 1 (expected: 32)")
 			})
 
 			t.Run("LatestBlocks", func(t *testing.T) {
@@ -676,7 +676,7 @@ func Test_Plugin_parseAttributedObservation(t *testing.T) {
 				ao := newAttributedObservation(t, obs)
 
 				_, err := parseAttributedObservation(ao)
-				assert.EqualError(t, err, "wrong len for hash: 1 (expected: 32)")
+				require.EqualError(t, err, "wrong len for hash: 1 (expected: 32)")
 			})
 		})
 		t.Run("negative block number", func(t *testing.T) {
@@ -687,7 +687,7 @@ func Test_Plugin_parseAttributedObservation(t *testing.T) {
 				ao := newAttributedObservation(t, obs)
 
 				_, err := parseAttributedObservation(ao)
-				assert.EqualError(t, err, "negative block number: -1")
+				require.EqualError(t, err, "negative block number: -1")
 			})
 			t.Run("LatestBlocks", func(t *testing.T) {
 				obs := newValidMercuryObservationProto()
@@ -695,7 +695,7 @@ func Test_Plugin_parseAttributedObservation(t *testing.T) {
 				ao := newAttributedObservation(t, obs)
 
 				_, err := parseAttributedObservation(ao)
-				assert.EqualError(t, err, "negative block number: -1")
+				require.EqualError(t, err, "negative block number: -1")
 			})
 		})
 	})
@@ -713,7 +713,7 @@ func Test_Plugin_Report(t *testing.T) {
 
 		t.Run("errors if not enough attributed observations", func(t *testing.T) {
 			_, _, err := rp.Report(tests.Context(t), repts, nil, []types.AttributedObservation{})
-			assert.EqualError(t, err, "got zero valid attributed observations")
+			require.EqualError(t, err, "got zero valid attributed observations")
 		})
 		t.Run("succeeds, ignoring unparseable attributed observations", func(t *testing.T) {
 			aos := []types.AttributedObservation{
@@ -724,7 +724,7 @@ func Test_Plugin_Report(t *testing.T) {
 			}
 			should, report, err := rp.Report(tests.Context(t), repts, nil, aos)
 
-			assert.NoError(t, err)
+			require.NoError(t, err)
 			assert.True(t, should)
 			assert.Equal(t, codec.builtReport, report)
 		})
@@ -741,7 +741,7 @@ func Test_Plugin_Report(t *testing.T) {
 
 			assert.True(t, should)
 			assert.Equal(t, codec.builtReport, report)
-			assert.NoError(t, err)
+			require.NoError(t, err)
 
 			require.NotNil(t, codec.builtReportFields)
 			assert.Equal(t, 48, int(codec.builtReportFields.ValidFromBlockNum))
@@ -764,7 +764,7 @@ func Test_Plugin_Report(t *testing.T) {
 			}
 			_, _, err := rp.Report(tests.Context(t), repts, nil, aos)
 
-			assert.EqualError(t, err, "no valid maxFinalizedBlockNumber with at least f+1 votes (got counts: map[0:1 1:1 2:1 3:1], f=1)")
+			require.EqualError(t, err, "no valid maxFinalizedBlockNumber with at least f+1 votes (got counts: map[0:1 1:1 2:1 3:1], f=1)")
 		})
 		t.Run("errors if it cannot come to consensus about currentBlockNum", func(t *testing.T) {
 			obs := []*MercuryObservationProto{
@@ -831,7 +831,7 @@ func Test_Plugin_Report(t *testing.T) {
 
 			assert.False(t, should)
 			assert.Nil(t, report)
-			assert.EqualError(t, err, "median benchmark price (Value: -1) is outside of allowable range (Min: 0, Max: 1000)")
+			require.EqualError(t, err, "median benchmark price (Value: -1) is outside of allowable range (Min: 0, Max: 1000)")
 		})
 		t.Run("BuildReport failures", func(t *testing.T) {
 			t.Run("errors if BuildReport returns error", func(t *testing.T) {
@@ -846,7 +846,7 @@ func Test_Plugin_Report(t *testing.T) {
 				}
 				_, _, err := rp.Report(tests.Context(t), repts, nil, aos)
 
-				assert.EqualError(t, err, "buildReportShouldFail=true")
+				require.EqualError(t, err, "buildReportShouldFail=true")
 			})
 			t.Run("errors if BuildReport returns a report that is too long", func(t *testing.T) {
 				codec.builtReport = randBytes(9999)
@@ -858,7 +858,7 @@ func Test_Plugin_Report(t *testing.T) {
 				}
 				_, _, err := rp.Report(tests.Context(t), repts, nil, aos)
 
-				assert.EqualError(t, err, "report with len 9999 violates MaxReportLength limit set by ReportCodec (1248)")
+				require.EqualError(t, err, "report with len 9999 violates MaxReportLength limit set by ReportCodec (1248)")
 			})
 			t.Run("errors if BuildReport returns a report that is too short", func(t *testing.T) {
 				codec.builtReport = []byte{}
@@ -870,7 +870,7 @@ func Test_Plugin_Report(t *testing.T) {
 				}
 				_, _, err := rp.Report(tests.Context(t), repts, nil, aos)
 
-				assert.EqualError(t, err, "report may not have zero length (invariant violation)")
+				require.EqualError(t, err, "report may not have zero length (invariant violation)")
 			})
 		})
 	})
@@ -896,7 +896,7 @@ func Test_Plugin_Report(t *testing.T) {
 
 			assert.True(t, should)
 			assert.Equal(t, codec.builtReport, report)
-			assert.NoError(t, err)
+			require.NoError(t, err)
 
 			require.NotNil(t, codec.builtReportFields)
 			// current block of previous report + 1 is the validFromBlockNum of current report
@@ -914,7 +914,7 @@ func Test_Plugin_Report(t *testing.T) {
 			should, _, err := rp.Report(tests.Context(t), repts, previousReport, aos)
 
 			assert.False(t, should)
-			assert.EqualError(t, err, "test error current block fail")
+			require.EqualError(t, err, "test error current block fail")
 		})
 		t.Run("does not report if currentBlockNum < validFromBlockNum", func(t *testing.T) {
 			codec.currentBlock = 49 // means that validFromBlockNum=50 which is > currentBlockNum of 49
@@ -929,7 +929,7 @@ func Test_Plugin_Report(t *testing.T) {
 			should, _, err := rp.Report(tests.Context(t), repts, previousReport, aos)
 
 			assert.False(t, should)
-			assert.NoError(t, err)
+			require.NoError(t, err)
 		})
 	})
 }

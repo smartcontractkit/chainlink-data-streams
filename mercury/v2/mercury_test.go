@@ -168,7 +168,7 @@ func Test_Plugin_Report(t *testing.T) {
 	t.Run("when previous report is nil", func(t *testing.T) {
 		t.Run("errors if not enough attributed observations", func(t *testing.T) {
 			_, _, err := rp.Report(tests.Context(t), repts, nil, newValidAos(t)[0:1])
-			assert.EqualError(t, err, "only received 1 valid attributed observations, but need at least f+1 (2)")
+			require.EqualError(t, err, "only received 1 valid attributed observations, but need at least f+1 (2)")
 		})
 		t.Run("errors if too many maxFinalizedTimestamp observations are invalid", func(t *testing.T) {
 			ps := newValidProtos()
@@ -179,7 +179,7 @@ func Test_Plugin_Report(t *testing.T) {
 
 			should, _, err := rp.Report(tests.Context(t), types.ReportTimestamp{}, nil, aos)
 			assert.False(t, should)
-			assert.EqualError(t, err, "fewer than f+1 observations have a valid maxFinalizedTimestamp (got: 1/4)")
+			require.EqualError(t, err, "fewer than f+1 observations have a valid maxFinalizedTimestamp (got: 1/4)")
 		})
 		t.Run("errors if maxFinalizedTimestamp is too large", func(t *testing.T) {
 			ps := newValidProtos()
@@ -191,7 +191,7 @@ func Test_Plugin_Report(t *testing.T) {
 
 			should, _, err := rp.Report(tests.Context(t), types.ReportTimestamp{}, nil, aos)
 			assert.False(t, should)
-			assert.EqualError(t, err, "maxFinalizedTimestamp is too large, got: 4294967295")
+			require.EqualError(t, err, "maxFinalizedTimestamp is too large, got: 4294967295")
 		})
 
 		t.Run("succeeds and generates validFromTimestamp from maxFinalizedTimestamp when maxFinalizedTimestamp is positive", func(t *testing.T) {
@@ -199,7 +199,7 @@ func Test_Plugin_Report(t *testing.T) {
 
 			should, report, err := rp.Report(tests.Context(t), types.ReportTimestamp{}, nil, aos)
 			assert.True(t, should)
-			assert.NoError(t, err)
+			require.NoError(t, err)
 			assert.Equal(t, codec.builtReport, report)
 			require.NotNil(t, codec.builtReportFields)
 			assert.Equal(t, v2.ReportFields{
@@ -220,7 +220,7 @@ func Test_Plugin_Report(t *testing.T) {
 
 			should, report, err := rp.Report(tests.Context(t), types.ReportTimestamp{}, nil, aos)
 			assert.True(t, should)
-			assert.NoError(t, err)
+			require.NoError(t, err)
 			assert.Equal(t, codec.builtReport, report)
 			require.NotNil(t, codec.builtReportFields)
 			assert.Equal(t, v2.ReportFields{
@@ -241,7 +241,7 @@ func Test_Plugin_Report(t *testing.T) {
 
 			should, report, err := rp.Report(tests.Context(t), types.ReportTimestamp{}, nil, aos)
 			assert.True(t, should)
-			assert.NoError(t, err)
+			require.NoError(t, err)
 			assert.Equal(t, codec.builtReport, report)
 			require.NotNil(t, codec.builtReportFields)
 			assert.Equal(t, v2.ReportFields{
@@ -311,7 +311,7 @@ func Test_Plugin_Report(t *testing.T) {
 
 			should, _, err := rp.Report(tests.Context(t), types.ReportTimestamp{}, previousReport, aos)
 			assert.False(t, should)
-			assert.EqualError(t, err, "something exploded trying to extract timestamp")
+			require.EqualError(t, err, "something exploded trying to extract timestamp")
 		})
 		t.Run("does not report if observationTimestamp < validFromTimestamp", func(t *testing.T) {
 			codec.observationTimestamp = 43
@@ -325,7 +325,7 @@ func Test_Plugin_Report(t *testing.T) {
 
 			should, _, err := rp.Report(tests.Context(t), types.ReportTimestamp{}, previousReport, aos)
 			assert.False(t, should)
-			assert.NoError(t, err)
+			require.NoError(t, err)
 		})
 		t.Run("uses 0 values for link/native if they are invalid", func(t *testing.T) {
 			codec.observationTimestamp = 42
@@ -340,7 +340,7 @@ func Test_Plugin_Report(t *testing.T) {
 
 			should, report, err := rp.Report(tests.Context(t), types.ReportTimestamp{}, previousReport, aos)
 			assert.True(t, should)
-			assert.NoError(t, err)
+			require.NoError(t, err)
 
 			assert.True(t, should)
 			assert.Equal(t, codec.builtReport, report)
@@ -357,7 +357,7 @@ func Test_Plugin_Report(t *testing.T) {
 
 			_, _, err := rp.Report(tests.Context(t), types.ReportTimestamp{}, nil, aos)
 
-			assert.EqualError(t, err, "report with len 65536 violates MaxReportLength limit set by ReportCodec (123)")
+			require.EqualError(t, err, "report with len 65536 violates MaxReportLength limit set by ReportCodec (123)")
 		})
 
 		t.Run("Report errors when the report length is 0", func(t *testing.T) {
@@ -365,7 +365,7 @@ func Test_Plugin_Report(t *testing.T) {
 			codec.builtReport = []byte{}
 			_, _, err := rp.Report(tests.Context(t), types.ReportTimestamp{}, nil, aos)
 
-			assert.EqualError(t, err, "report may not have zero length (invariant violation)")
+			require.EqualError(t, err, "report may not have zero length (invariant violation)")
 		})
 	})
 }

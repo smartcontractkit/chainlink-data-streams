@@ -54,12 +54,12 @@ func Test_ValidateObservation(t *testing.T) {
 	t.Run("SeqNr < 1 is not valid", func(t *testing.T) {
 		ctx := tests.Context(t)
 		err := p.ValidateObservation(ctx, ocr3types.OutcomeContext{}, types.Query{}, types.AttributedObservation{})
-		assert.EqualError(t, err, "Invalid SeqNr: 0")
+		require.EqualError(t, err, "Invalid SeqNr: 0")
 	})
 	t.Run("SeqNr == 1 enforces empty observation", func(t *testing.T) {
 		ctx := tests.Context(t)
 		err := p.ValidateObservation(ctx, ocr3types.OutcomeContext{SeqNr: 1}, types.Query{}, types.AttributedObservation{Observation: []byte{1}})
-		assert.EqualError(t, err, "Expected empty observation for first round, got: 0x01")
+		require.EqualError(t, err, "Expected empty observation for first round, got: 0x01")
 	})
 	t.Run("nested stream value on TimestampedStreamValue must be a Decimal", func(t *testing.T) {
 		ctx := tests.Context(t)
@@ -77,7 +77,7 @@ func Test_ValidateObservation(t *testing.T) {
 		require.NoError(t, err)
 
 		err = p.ValidateObservation(ctx, ocr3types.OutcomeContext{SeqNr: 2}, types.Query{}, types.AttributedObservation{Observation: serializedObs})
-		assert.EqualError(t, err, "nested stream value on TimestampedStreamValue must be a Decimal, got: TimestampedStreamValue")
+		require.EqualError(t, err, "nested stream value on TimestampedStreamValue must be a Decimal, got: TimestampedStreamValue")
 	})
 }
 

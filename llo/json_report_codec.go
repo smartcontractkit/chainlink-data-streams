@@ -1,9 +1,9 @@
 package llo
 
 import (
-	"context"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"github.com/smartcontractkit/libocr/offchainreporting2/types"
@@ -18,7 +18,7 @@ var _ ReportCodec = JSONReportCodec{}
 
 type JSONReportCodec struct{}
 
-func (cdc JSONReportCodec) Encode(_ context.Context, r Report, _ llotypes.ChannelDefinition) ([]byte, error) {
+func (cdc JSONReportCodec) Encode(r Report, _ llotypes.ChannelDefinition) ([]byte, error) {
 	type encode struct {
 		ConfigDigest                    types.ConfigDigest
 		SeqNr                           uint64
@@ -48,7 +48,7 @@ func (cdc JSONReportCodec) Encode(_ context.Context, r Report, _ llotypes.Channe
 	return json.Marshal(e)
 }
 
-func (cdc JSONReportCodec) Verify(_ context.Context, cd llotypes.ChannelDefinition) error {
+func (cdc JSONReportCodec) Verify(cd llotypes.ChannelDefinition) error {
 	if len(cd.Opts) > 0 {
 		return fmt.Errorf("unexpected Opts in ChannelDefinition (JSONReportCodec expects no opts), got: %q", cd.Opts)
 	}
@@ -72,7 +72,7 @@ func (cdc JSONReportCodec) Decode(b []byte) (r Report, err error) {
 	}
 	if d.SeqNr == 0 {
 		// catch obviously bad inputs, since a valid report can never have SeqNr == 0
-		return r, fmt.Errorf("missing SeqNr")
+		return r, errors.New("missing SeqNr")
 	}
 
 	cdBytes, err := hex.DecodeString(d.ConfigDigest)

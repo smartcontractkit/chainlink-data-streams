@@ -41,10 +41,10 @@ func testOutcome(t *testing.T, outcomeCodec OutcomeCodec) {
 
 	t.Run("if number of observers < 2f+1, errors", func(t *testing.T) {
 		_, err := p.Outcome(ctx, ocr3types.OutcomeContext{SeqNr: 1}, types.Query{}, []types.AttributedObservation{})
-		assert.EqualError(t, err, "invariant violation: expected at least 2f+1 attributed observations, got 0 (f: 0)")
+		require.EqualError(t, err, "invariant violation: expected at least 2f+1 attributed observations, got 0 (f: 0)")
 		p.F = 1
 		_, err = p.Outcome(ctx, ocr3types.OutcomeContext{SeqNr: 1}, types.Query{}, []types.AttributedObservation{{}, {}})
-		assert.EqualError(t, err, "invariant violation: expected at least 2f+1 attributed observations, got 2 (f: 1)")
+		require.EqualError(t, err, "invariant violation: expected at least 2f+1 attributed observations, got 2 (f: 1)")
 	})
 
 	t.Run("if seqnr == 1, and has enough observers, emits initial outcome with 'production' LifeCycleStage", func(t *testing.T) {
@@ -226,7 +226,7 @@ func testOutcome(t *testing.T, outcomeCodec OutcomeCodec) {
 			require.NoError(t, err)
 
 			observationsTs := decoded.ObservationTimestampNanoseconds
-			assert.GreaterOrEqual(t, observationsTs, uint64(testStartTS.UnixNano()+1_200_000_000)) // nolint:gosec // time won't be negative
+			assert.GreaterOrEqual(t, observationsTs, uint64(testStartTS.UnixNano()+1_200_000_000)) //nolint:gosec // time won't be negative
 
 			// NOTE: In protoOutcomeCodecV0 precision is lost on timestamp
 			// serialization, so validAfterNanoseconds will be truncated to
@@ -700,27 +700,27 @@ func Test_Outcome_Methods(t *testing.T) {
 
 			// Not reportable if retired
 			outcome.LifeCycleStage = LifeCycleStageRetired
-			assert.EqualError(t, outcome.IsReportable(cid, 0, 0), "ChannelID: 1; Reason: IsReportable=false; retired channel")
+			require.EqualError(t, outcome.IsReportable(cid, 0, 0), "ChannelID: 1; Reason: IsReportable=false; retired channel")
 
 			// No channel definition with ID
 			outcome.LifeCycleStage = LifeCycleStageProduction
-			outcome.ObservationTimestampNanoseconds = uint64(time.Unix(1726670490, 0).UnixNano()) // nolint:gosec // time won't be negative
+			outcome.ObservationTimestampNanoseconds = uint64(time.Unix(1726670490, 0).UnixNano()) //nolint:gosec // time won't be negative
 			outcome.ChannelDefinitions = map[llotypes.ChannelID]llotypes.ChannelDefinition{}
-			assert.EqualError(t, outcome.IsReportable(cid, 0, 0), "ChannelID: 1; Reason: IsReportable=false; no channel definition with this ID")
+			require.EqualError(t, outcome.IsReportable(cid, 0, 0), "ChannelID: 1; Reason: IsReportable=false; no channel definition with this ID")
 
 			// No ValidAfterNanoseconds yet
 			outcome.ChannelDefinitions = map[llotypes.ChannelID]llotypes.ChannelDefinition{
 				cid: {},
 			}
-			assert.EqualError(t, outcome.IsReportable(cid, 0, 0), "ChannelID: 1; Reason: IsReportable=false; no ValidAfterNanoseconds entry yet, this must be a new channel")
+			require.EqualError(t, outcome.IsReportable(cid, 0, 0), "ChannelID: 1; Reason: IsReportable=false; no ValidAfterNanoseconds entry yet, this must be a new channel")
 
 			// ValidAfterNanoseconds is in the future
 			outcome.ValidAfterNanoseconds = map[llotypes.ChannelID]uint64{cid: uint64(1726670491 * time.Second)}
-			assert.EqualError(t, outcome.IsReportable(cid, 0, 0), "ChannelID: 1; Reason: ChannelID: 1; Reason: IsReportable=false; not valid yet (observationsTimestampSeconds=1726670490, validAfterSeconds=1726670491)")
+			require.EqualError(t, outcome.IsReportable(cid, 0, 0), "ChannelID: 1; Reason: ChannelID: 1; Reason: IsReportable=false; not valid yet (observationsTimestampSeconds=1726670490, validAfterSeconds=1726670491)")
 
 			// ValidAfterSeconds=ObservationTimestampSeconds; IsReportable=false
 			outcome.ValidAfterNanoseconds = map[llotypes.ChannelID]uint64{cid: uint64(1726670490 * time.Second)}
-			assert.EqualError(t, outcome.IsReportable(cid, 0, 0), "ChannelID: 1; Reason: ChannelID: 1; Reason: IsReportable=false; not valid yet (observationsTimestampSeconds=1726670490, validAfterSeconds=1726670490)")
+			require.EqualError(t, outcome.IsReportable(cid, 0, 0), "ChannelID: 1; Reason: ChannelID: 1; Reason: IsReportable=false; not valid yet (observationsTimestampSeconds=1726670490, validAfterSeconds=1726670490)")
 
 			// ValidAfterSeconds<ObservationTimestampSeconds; IsReportable=false
 			outcome.ValidAfterNanoseconds = map[llotypes.ChannelID]uint64{cid: uint64(1726670489 * time.Second)}
@@ -728,7 +728,7 @@ func Test_Outcome_Methods(t *testing.T) {
 		})
 		t.Run("ReportableChannels", func(t *testing.T) {
 			outcome := Outcome{
-				ObservationTimestampNanoseconds: uint64(time.Unix(1726670490, 0).UnixNano()), // nolint:gosec // time won't be negative
+				ObservationTimestampNanoseconds: uint64(time.Unix(1726670490, 0).UnixNano()), //nolint:gosec // time won't be negative
 				ChannelDefinitions: map[llotypes.ChannelID]llotypes.ChannelDefinition{
 					1: {},
 					2: {},
@@ -754,31 +754,31 @@ func Test_Outcome_Methods(t *testing.T) {
 
 			// Not reportable if retired
 			outcome.LifeCycleStage = LifeCycleStageRetired
-			assert.EqualError(t, outcome.IsReportable(cid, 1, defaultMinReportInterval), "ChannelID: 1; Reason: IsReportable=false; retired channel")
+			require.EqualError(t, outcome.IsReportable(cid, 1, defaultMinReportInterval), "ChannelID: 1; Reason: IsReportable=false; retired channel")
 
-			obsTSNanos := uint64(time.Unix(1726670490, 1000).UnixNano()) // nolint:gosec // time won't be negative
+			obsTSNanos := uint64(time.Unix(1726670490, 1000).UnixNano()) //nolint:gosec // time won't be negative
 
 			// No channel definition with ID
 			outcome.LifeCycleStage = LifeCycleStageProduction
 			outcome.ObservationTimestampNanoseconds = obsTSNanos
 			outcome.ChannelDefinitions = map[llotypes.ChannelID]llotypes.ChannelDefinition{}
-			assert.EqualError(t, outcome.IsReportable(cid, 1, defaultMinReportInterval), "ChannelID: 1; Reason: IsReportable=false; no channel definition with this ID")
+			require.EqualError(t, outcome.IsReportable(cid, 1, defaultMinReportInterval), "ChannelID: 1; Reason: IsReportable=false; no channel definition with this ID")
 
 			// No ValidAfterNanoseconds yet
 			outcome.ChannelDefinitions[cid] = llotypes.ChannelDefinition{}
-			assert.EqualError(t, outcome.IsReportable(cid, 1, defaultMinReportInterval), "ChannelID: 1; Reason: IsReportable=false; no ValidAfterNanoseconds entry yet, this must be a new channel")
+			require.EqualError(t, outcome.IsReportable(cid, 1, defaultMinReportInterval), "ChannelID: 1; Reason: IsReportable=false; no ValidAfterNanoseconds entry yet, this must be a new channel")
 
 			// ValidAfterNanoseconds is 1ns in the future; IsReportable=false
 			outcome.ValidAfterNanoseconds = map[llotypes.ChannelID]uint64{cid: obsTSNanos + 1}
-			assert.EqualError(t, outcome.IsReportable(cid, 1, defaultMinReportInterval), "ChannelID: 1; Reason: IsReportable=false; not valid yet (ObservationTimestampNanoseconds=1726670490000001000, validAfterNanoseconds=1726670490000001001, minReportInterval=100000000); 0.100000 seconds (100000001ns) until reportable")
+			require.EqualError(t, outcome.IsReportable(cid, 1, defaultMinReportInterval), "ChannelID: 1; Reason: IsReportable=false; not valid yet (ObservationTimestampNanoseconds=1726670490000001000, validAfterNanoseconds=1726670490000001001, minReportInterval=100000000); 0.100000 seconds (100000001ns) until reportable")
 
 			// ValidAfterNanoseconds is 1s in the future; IsReportable=false
 			outcome.ValidAfterNanoseconds = map[llotypes.ChannelID]uint64{cid: obsTSNanos + uint64(1*time.Second)}
-			assert.EqualError(t, outcome.IsReportable(cid, 1, defaultMinReportInterval), "ChannelID: 1; Reason: IsReportable=false; not valid yet (ObservationTimestampNanoseconds=1726670490000001000, validAfterNanoseconds=1726670491000001000, minReportInterval=100000000); 1.100000 seconds (1100000000ns) until reportable")
+			require.EqualError(t, outcome.IsReportable(cid, 1, defaultMinReportInterval), "ChannelID: 1; Reason: IsReportable=false; not valid yet (ObservationTimestampNanoseconds=1726670490000001000, validAfterNanoseconds=1726670491000001000, minReportInterval=100000000); 1.100000 seconds (1100000000ns) until reportable")
 
 			// ValidAfterNanoseconds is 100ms-1ns in the past; IsReportable=false
 			outcome.ValidAfterNanoseconds = map[llotypes.ChannelID]uint64{cid: obsTSNanos - uint64(100*time.Millisecond) + 1}
-			assert.EqualError(t, outcome.IsReportable(cid, 1, defaultMinReportInterval), "ChannelID: 1; Reason: IsReportable=false; not valid yet (ObservationTimestampNanoseconds=1726670490000001000, validAfterNanoseconds=1726670489900001001, minReportInterval=100000000); 0.000000 seconds (1ns) until reportable")
+			require.EqualError(t, outcome.IsReportable(cid, 1, defaultMinReportInterval), "ChannelID: 1; Reason: IsReportable=false; not valid yet (ObservationTimestampNanoseconds=1726670490000001000, validAfterNanoseconds=1726670489900001001, minReportInterval=100000000); 0.000000 seconds (1ns) until reportable")
 
 			// ValidAfterNanoseconds is exactly 100ms in the past; IsReportable=true
 			outcome.ValidAfterNanoseconds = map[llotypes.ChannelID]uint64{cid: obsTSNanos - uint64(100*time.Millisecond)}
@@ -796,7 +796,7 @@ func Test_Outcome_Methods(t *testing.T) {
 			outcome := Outcome{}
 			cid := llotypes.ChannelID(1)
 
-			obsTSNanos := uint64(time.Unix(1726670490, 1e9-1).UnixNano()) // nolint:gosec // time won't be negative
+			obsTSNanos := uint64(time.Unix(1726670490, 1e9-1).UnixNano()) //nolint:gosec // time won't be negative
 
 			outcome.LifeCycleStage = LifeCycleStageProduction
 			outcome.ObservationTimestampNanoseconds = obsTSNanos
@@ -808,22 +808,22 @@ func Test_Outcome_Methods(t *testing.T) {
 			}
 
 			// if cadence is 0, but time is < 1s, does not report to avoid overlap
-			assert.EqualError(t, outcome.IsReportable(cid, 1, uint64(0)), "ChannelID: 1; Reason: ChannelID: 1; Reason: IsReportable=false; not valid yet (observationsTimestampSeconds=1726670490, validAfterSeconds=1726670490)")
+			require.EqualError(t, outcome.IsReportable(cid, 1, uint64(0)), "ChannelID: 1; Reason: ChannelID: 1; Reason: IsReportable=false; not valid yet (observationsTimestampSeconds=1726670490, validAfterSeconds=1726670490)")
 			// if cadence is < 1s, if time is < 1s, does not report to avoid overlap
-			assert.EqualError(t, outcome.IsReportable(cid, 1, uint64(100*time.Millisecond)), "ChannelID: 1; Reason: ChannelID: 1; Reason: IsReportable=false; not valid yet (observationsTimestampSeconds=1726670490, validAfterSeconds=1726670490)")
+			require.EqualError(t, outcome.IsReportable(cid, 1, uint64(100*time.Millisecond)), "ChannelID: 1; Reason: ChannelID: 1; Reason: IsReportable=false; not valid yet (observationsTimestampSeconds=1726670490, validAfterSeconds=1726670490)")
 			// if cadence is < 1s, if time is >= 1s, does report
 			outcome.ValidAfterNanoseconds[cid] = obsTSNanos - uint64(1*time.Second)
 			assert.Nil(t, outcome.IsReportable(cid, 1, uint64(100*time.Millisecond)))
 			// if cadence is exactly 1s, if time is >= 1s, does report
 			assert.Nil(t, outcome.IsReportable(cid, 1, uint64(1*time.Second)))
 			// if cadence is 5s, if time is < 5s, does not report because cadence hasn't elapsed
-			assert.EqualError(t, outcome.IsReportable(cid, 1, uint64(5*time.Second)), "ChannelID: 1; Reason: IsReportable=false; not valid yet (ObservationTimestampNanoseconds=1726670490999999999, validAfterNanoseconds=1726670489999999999, minReportInterval=5000000000); 4.000000 seconds (4000000000ns) until reportable")
+			require.EqualError(t, outcome.IsReportable(cid, 1, uint64(5*time.Second)), "ChannelID: 1; Reason: IsReportable=false; not valid yet (ObservationTimestampNanoseconds=1726670490999999999, validAfterNanoseconds=1726670489999999999, minReportInterval=5000000000); 4.000000 seconds (4000000000ns) until reportable")
 		})
 		t.Run("ReportableChannels", func(t *testing.T) {
 			defaultMinReportInterval := uint64(1 * time.Second)
 
 			outcome := Outcome{
-				ObservationTimestampNanoseconds: uint64(time.Unix(1726670490, 0).UnixNano()), // nolint:gosec // time won't be negative
+				ObservationTimestampNanoseconds: uint64(time.Unix(1726670490, 0).UnixNano()), //nolint:gosec // time won't be negative
 				ChannelDefinitions: map[llotypes.ChannelID]llotypes.ChannelDefinition{
 					1: {},
 					2: {},

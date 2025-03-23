@@ -72,11 +72,8 @@ func (p *Plugin) reports(ctx context.Context, seqNr uint64, rawOutcome ocr3types
 			p.Logger.Debugw("Emitting report", "lifeCycleStage", outcome.LifeCycleStage, "channelID", cid, "report", report, "stage", "Report", "seqNr", seqNr)
 		}
 
-		encoded, err := p.encodeReport(ctx, report, cd)
+		encoded, err := p.encodeReport(report, cd)
 		if err != nil {
-			if ctx.Err() != nil {
-				return nil, context.Cause(ctx)
-			}
 			p.Logger.Warnw("Error encoding report", "lifeCycleStage", outcome.LifeCycleStage, "reportFormat", cd.ReportFormat, "err", err, "channelID", cid, "stage", "Report", "seqNr", seqNr)
 			continue
 		}
@@ -98,13 +95,13 @@ func (p *Plugin) reports(ctx context.Context, seqNr uint64, rawOutcome ocr3types
 	return rwis, nil
 }
 
-func (p *Plugin) encodeReport(ctx context.Context, r Report, cd llotypes.ChannelDefinition) (types.Report, error) {
+func (p *Plugin) encodeReport(r Report, cd llotypes.ChannelDefinition) (types.Report, error) {
 	codec, exists := p.ReportCodecs[cd.ReportFormat]
 	if !exists {
 		return nil, fmt.Errorf("codec missing for ReportFormat=%q", cd.ReportFormat)
 	}
 	p.captureReportTelemetry(&r, cd)
-	return codec.Encode(ctx, r, cd)
+	return codec.Encode(r, cd)
 }
 
 func (p *Plugin) captureReportTelemetry(r *Report, cd llotypes.ChannelDefinition) {
