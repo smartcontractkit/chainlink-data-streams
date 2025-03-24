@@ -45,6 +45,20 @@ func NewTransportSigner(signer crypto.Signer, pubKeys []ed25519.PublicKey) (cred
 	return credentials.NewTLS(c), nil
 }
 
+func NewTLSConfig(privKey ed25519.PrivateKey, pubKeys []ed25519.PublicKey) (*tls.Config, error) {
+	priv, err := ValidPrivateKeyFromEd25519(privKey)
+	if err != nil {
+		return nil, err
+	}
+
+	pubs, err := ValidPublicKeysFromEd25519(pubKeys...)
+	if err != nil {
+		return nil, err
+	}
+
+	return newMutualTLSConfig(priv.key, pubs)
+}
+
 // newMutualTLSConfig uses the private key and public keys to construct a mutual
 // TLS 1.3 config.
 //
@@ -117,6 +131,9 @@ type PublicKeys struct {
 }
 
 func ValidPublicKeysFromEd25519(keys ...ed25519.PublicKey) (*PublicKeys, error) {
+	if len(keys) == 0 {
+		return nil, errors.New("no public keys provided")
+	}
 	for _, key := range keys {
 		if len(key) != ed25519.PublicKeySize {
 			return nil, fmt.Errorf("invalid key length: %d, expected: %d", len(key), ed25519.PublicKeySize)
