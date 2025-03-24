@@ -198,7 +198,7 @@ func (r *PublicKeys) isValidPublicKey(pub ed25519.PublicKey) bool {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	for _, vpub := range r.keys {
-		if subtle.ConstantTimeCompare(pub, vpub) > 0 {
+		if subtle.ConstantTimeCompare(pub, vpub) == 1 {
 			return true
 		}
 	}
