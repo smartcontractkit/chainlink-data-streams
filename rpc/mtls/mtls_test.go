@@ -6,7 +6,9 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"math/big"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -231,4 +233,115 @@ func Test_NewTLSConfig(t *testing.T) {
 		require.Error(t, err)
 		assert.Nil(t, cfg)
 	})
+}
+
+func Test_PublicKeys_Keys(t *testing.T) {
+	// Create keys
+	pub1, _, err := ed25519.GenerateKey(nil)
+	require.NoError(t, err)
+
+	pub2, _, err := ed25519.GenerateKey(nil)
+	require.NoError(t, err)
+
+	// Create PublicKeys with both keys
+	pks, err := ValidPublicKeysFromEd25519(pub1, pub2)
+	require.NoError(t, err)
+
+	// Get a copy of the keys
+	keysCopy := pks.Keys()
+	require.Equal(t, 2, len(keysCopy))
+
+	// Verify the keys match
+	assert.ElementsMatch(t, []ed25519.PublicKey{pub1, pub2}, keysCopy)
+
+	// Check original is unaffected
+	keysAfter := pks.Keys()
+	require.Equal(t, 2, len(keysAfter))
+}
+
+func Test_PublicKeys_Replace(t *testing.T) {
+	// Create original keys
+	pub1, _, err := ed25519.GenerateKey(nil)
+	require.NoError(t, err)
+
+	pks1, err := ValidPublicKeysFromEd25519(pub1)
+	require.NoError(t, err)
+
+	// Create replacement keys
+	pub2, _, err := ed25519.GenerateKey(nil)
+	require.NoError(t, err)
+
+	pks2, err := ValidPublicKeysFromEd25519(pub2)
+	require.NoError(t, err)
+
+	// Replace keys
+	pks1.Replace(pks2)
+
+	// Verify the replacement worked
+	assert.False(t, pks1.isValidPublicKey(pub1))
+	assert.True(t, pks1.isValidPublicKey(pub2))
+
+	// Modify the source after replace (shouldn't affect replaced keys)
+	pub3, _, err := ed25519.GenerateKey(nil)
+	require.NoError(t, err)
+
+	pks2.Replace(&PublicKeys{keys: []ed25519.PublicKey{pub3}})
+
+	// Original replacement should be unaffected
+	assert.True(t, pks1.isValidPublicKey(pub2))
+	assert.False(t, pks1.isValidPublicKey(pub3))
+}
+
+func Test_PublicKeys_Concurrency(t *testing.T) {
+	pub1, _, err := ed25519.GenerateKey(nil)
+	require.NoError(t, err)
+
+	pub2, _, err := ed25519.GenerateKey(nil)
+	require.NoError(t, err)
+
+	pks, err := ValidPublicKeysFromEd25519(pub1)
+	require.NoError(t, err)
+
+	// Simulate concurrent reads and writes
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+
+	// Add multiple concurrent readers
+	for i := 0; i < 5; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			for j := 0; j < 10; j++ {
+				_ = pks.isValidPublicKey(pub1)
+				_ = pks.Keys()
+				time.Sleep(time.Millisecond)
+			}
+		}()
+	}
+
+	// Add concurrent writers
+	for i := 0; i < 3; i++ {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			<-start
+
+			// Alternate between pub1 and pub2
+			for j := 0; j < 5; j++ {
+				if (idx+j)%2 == 0 {
+					pks.Replace(&PublicKeys{keys: []ed25519.PublicKey{pub1}})
+				} else {
+					pks.Replace(&PublicKeys{keys: []ed25519.PublicKey{pub2}})
+				}
+				time.Sleep(time.Millisecond * 2)
+			}
+		}(i)
+	}
+
+	// Start all goroutines
+	close(start)
+	wg.Wait()
+
+	// No assertion needed - if there are no race conditions, the test passes
 }
