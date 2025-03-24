@@ -146,7 +146,13 @@ func ValidPublicKeysFromEd25519(keys ...ed25519.PublicKey) (*PublicKeys, error) 
 }
 
 func (r *PublicKeys) Keys() []ed25519.PublicKey {
-	return r.keys
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	// Return a copy to prevent race conditions
+	keysCopy := make([]ed25519.PublicKey, len(r.keys))
+	copy(keysCopy, r.keys)
+	return keysCopy
 }
 
 // Verifies that the certificate's public key matches with one of the keys in
@@ -177,9 +183,14 @@ func (r *PublicKeys) VerifyPeerCertificate() func(rawCerts [][]byte, verifiedCha
 // Replace replaces the existing keys with new keys. Use this to dynamically
 // update the allowable keys at runtime.
 func (r *PublicKeys) Replace(pubs *PublicKeys) {
+	pubs.mu.RLock()
+	newKeys := make([]ed25519.PublicKey, len(pubs.keys))
+	copy(newKeys, pubs.keys)
+	pubs.mu.RUnlock()
+
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.keys = pubs.keys
+	r.keys = newKeys
 }
 
 // isValidPublicKey checks the public key against a list of valid keys.
