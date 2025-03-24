@@ -5,13 +5,8 @@ import (
 
 	"github.com/smartcontractkit/libocr/offchainreporting2/types"
 	"github.com/smartcontractkit/libocr/offchainreporting2plus/ocr3types"
-	"google.golang.org/protobuf/proto"
 
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
-)
-
-var (
-	DeterministicMarshalOptions = proto.MarshalOptions{Deterministic: true}
 )
 
 type ObservationCodec interface {
