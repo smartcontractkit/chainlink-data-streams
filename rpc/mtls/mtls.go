@@ -45,6 +45,20 @@ func NewTransportSigner(signer crypto.Signer, pubKeys []ed25519.PublicKey) (cred
 	return credentials.NewTLS(c), nil
 }
 
+func NewTLSConfig(privKey ed25519.PrivateKey, pubKeys []ed25519.PublicKey) (*tls.Config, error) {
+	priv, err := ValidPrivateKeyFromEd25519(privKey)
+	if err != nil {
+		return nil, err
+	}
+
+	pubs, err := ValidPublicKeysFromEd25519(pubKeys...)
+	if err != nil {
+		return nil, err
+	}
+
+	return newMutualTLSConfig(priv.key, pubs)
+}
+
 // newMutualTLSConfig uses the private key and public keys to construct a mutual
 // TLS 1.3 config.
 //
@@ -117,6 +131,9 @@ type PublicKeys struct {
 }
 
 func ValidPublicKeysFromEd25519(keys ...ed25519.PublicKey) (*PublicKeys, error) {
+	if len(keys) == 0 {
+		return nil, errors.New("no public keys provided")
+	}
 	for _, key := range keys {
 		if len(key) != ed25519.PublicKeySize {
 			return nil, fmt.Errorf("invalid key length: %d, expected: %d", len(key), ed25519.PublicKeySize)
@@ -129,7 +146,13 @@ func ValidPublicKeysFromEd25519(keys ...ed25519.PublicKey) (*PublicKeys, error) 
 }
 
 func (r *PublicKeys) Keys() []ed25519.PublicKey {
-	return r.keys
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	// Return a copy to prevent race conditions
+	keysCopy := make([]ed25519.PublicKey, len(r.keys))
+	copy(keysCopy, r.keys)
+	return keysCopy
 }
 
 // Verifies that the certificate's public key matches with one of the keys in
@@ -160,9 +183,14 @@ func (r *PublicKeys) VerifyPeerCertificate() func(rawCerts [][]byte, verifiedCha
 // Replace replaces the existing keys with new keys. Use this to dynamically
 // update the allowable keys at runtime.
 func (r *PublicKeys) Replace(pubs *PublicKeys) {
+	pubs.mu.RLock()
+	newKeys := make([]ed25519.PublicKey, len(pubs.keys))
+	copy(newKeys, pubs.keys)
+	pubs.mu.RUnlock()
+
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.keys = pubs.keys
+	r.keys = newKeys
 }
 
 // isValidPublicKey checks the public key against a list of valid keys.
@@ -170,7 +198,7 @@ func (r *PublicKeys) isValidPublicKey(pub ed25519.PublicKey) bool {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	for _, vpub := range r.keys {
-		if subtle.ConstantTimeCompare(pub, vpub) > 0 {
+		if subtle.ConstantTimeCompare(pub, vpub) == 1 {
 			return true
 		}
 	}
