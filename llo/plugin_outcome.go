@@ -297,7 +297,7 @@ func (p *Plugin) outcome(outctx ocr3types.OutcomeContext, query types.Query, aos
 	if p.Config.VerboseLogging {
 		p.Logger.Debugw("Generated outcome", "outcome", outcome, "stage", "Outcome", "seqNr", outctx.SeqNr)
 	}
-	p.captureOutcomeTelemetry(&outcome, &outctx)
+	p.captureOutcomeTelemetry(outcome, outctx)
 	return p.OutcomeCodec.Encode(outcome)
 }
 
@@ -518,7 +518,7 @@ func medianTimestamp(timestampsNanoseconds []uint64) uint64 {
 	return timestampsNanoseconds[len(timestampsNanoseconds)/2]
 }
 
-func (p *Plugin) captureOutcomeTelemetry(outcome *Outcome, outctx *ocr3types.OutcomeContext) {
+func (p *Plugin) captureOutcomeTelemetry(outcome Outcome, outctx ocr3types.OutcomeContext) {
 	if p.OutcomeTelemetryCh != nil {
 		ot, err := makeOutcomeTelemetry(outcome, p.ConfigDigest, outctx.SeqNr, p.DonID)
 		if err != nil {
@@ -533,7 +533,7 @@ func (p *Plugin) captureOutcomeTelemetry(outcome *Outcome, outctx *ocr3types.Out
 	}
 }
 
-func makeOutcomeTelemetry(outcome *Outcome, configDigest types.ConfigDigest, seqNr uint64, donID uint32) (*LLOOutcomeTelemetry, error) {
+func makeOutcomeTelemetry(outcome Outcome, configDigest types.ConfigDigest, seqNr uint64, donID uint32) (*LLOOutcomeTelemetry, error) {
 	ot := &LLOOutcomeTelemetry{
 		LifeCycleStage:                  string(outcome.LifeCycleStage),
 		ObservationTimestampNanoseconds: outcome.ObservationTimestampNanoseconds,
