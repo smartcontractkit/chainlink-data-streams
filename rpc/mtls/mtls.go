@@ -7,6 +7,8 @@ import (
 	"crypto/subtle"
 	"crypto/tls"
 	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"math/big"
@@ -55,8 +57,32 @@ func NewTLSConfig(privKey ed25519.PrivateKey, pubKeys []ed25519.PublicKey) (*tls
 	if err != nil {
 		return nil, err
 	}
+	c, err := newMutualTLSConfig(priv.key, pubs)
 
-	return newMutualTLSConfig(priv.key, pubs)
+	if err != nil {
+		return nil, err
+	}
+	c.InsecureSkipVerify = true
+	c.ClientAuth = tls.RequireAnyClientCert
+
+	return c, nil
+}
+
+func NewTLSTransportSigner(signer crypto.Signer, pubKeys []ed25519.PublicKey) (*tls.Config, error) {
+	pubs, err := ValidPublicKeysFromEd25519(pubKeys...)
+	if err != nil {
+		return nil, err
+	}
+
+	c, err := newMutualTLSConfig(signer, pubs)
+	c.ClientAuth = tls.RequireAnyClientCert
+	c.InsecureSkipVerify = true
+
+	if err != nil {
+		return nil, err
+	}
+
+	return c, nil
 }
 
 // newMutualTLSConfig uses the private key and public keys to construct a mutual
@@ -93,21 +119,58 @@ func newMutualTLSConfig(signer crypto.Signer, pubs *PublicKeys) (*tls.Config, er
 
 // Generates a minimal certificate (that wouldn't be considered valid outside of
 // this networking protocol) from an Ed25519 private key.
+// This also sets the organization and organizational unit for the certificate used for User Mapping
 func newMinimalX509Cert(signer crypto.Signer) (tls.Certificate, error) {
+	pubKey, ok := signer.Public().(ed25519.PublicKey)
+	if !ok {
+		return tls.Certificate{}, fmt.Errorf("invalid public key type")
+	}
+
+	pubKeyHex := hex.EncodeToString(pubKey)
 	template := x509.Certificate{
 		SerialNumber: big.NewInt(0), // serial number must be set, so we set it to 0
+		Subject: pkix.Name{
+			CommonName:   pubKeyHex,
+			Organization: []string{pubKeyHex},
+		},
+		EmailAddresses: []string{pubKeyHex},
 	}
 
 	encodedCert, err := x509.CreateCertificate(rand.Reader, &template, &template, signer.Public(), signer)
 	if err != nil {
 		return tls.Certificate{}, err
 	}
-
-	return tls.Certificate{
+	cert := tls.Certificate{
 		Certificate:                  [][]byte{encodedCert},
 		PrivateKey:                   signer,
 		SupportedSignatureAlgorithms: []tls.SignatureScheme{tls.Ed25519},
-	}, nil
+	}
+	// err = printCertificateDetails(cert)
+	// if err != nil {
+	// 	return tls.Certificate{}, err
+	// }
+
+	return cert, nil
+}
+
+func printCertificateDetails(cert tls.Certificate) error {
+	// Parse the certificate from its DER bytes.
+	parsedCert, err := x509.ParseCertificate(cert.Certificate[0])
+	if err != nil {
+		return fmt.Errorf("failed to parse certificate: %w", err)
+	}
+
+	fmt.Println("Certificate:")
+	fmt.Println("    Data:")
+	// Print the subject line similar to the OpenSSL output.
+	fmt.Printf("        Subject: %s\n", parsedCert.Subject.String())
+
+	// Optionally, print additional fields.
+	fmt.Printf("        Issuer: %s\n", parsedCert.Issuer.String())
+	fmt.Printf("        Validity:\n")
+	fmt.Printf("            Not Before: %s\n", parsedCert.NotBefore)
+	fmt.Printf("            Not After : %s\n", parsedCert.NotAfter)
+	return nil
 }
 
 type PrivateKey struct {
