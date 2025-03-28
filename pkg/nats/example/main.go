@@ -9,7 +9,6 @@ import (
 	"log"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"syscall"
 	"time"
 
@@ -18,55 +17,6 @@ import (
 	"github.com/smartcontractkit/chainlink-data-streams/rpc/mtls"
 	// Your custom TLS package
 )
-
-func loadOrGenerateKeys(keysDir, prefix string) (ed25519.PublicKey, ed25519.PrivateKey) {
-	// Generate or load server keys
-	serverPubPath := filepath.Join(keysDir, prefix+".pub")
-	serverPrivPath := filepath.Join(keysDir, prefix+".priv")
-
-	var serverPub ed25519.PublicKey
-	var serverPriv ed25519.PrivateKey
-
-	// Try to load existing keys
-	pubBytes, err := os.ReadFile(serverPubPath)
-	if err == nil {
-		privBytes, err := os.ReadFile(serverPrivPath)
-		if err == nil {
-			// Decode existing keys
-			pubBytes, err = hex.DecodeString(string(pubBytes))
-			if err != nil {
-				log.Fatalf("Error decoding server public key: %v", err)
-			}
-			privBytes, err = hex.DecodeString(string(privBytes))
-			if err != nil {
-				log.Fatalf("Error decoding server private key: %v", err)
-			}
-			serverPub = ed25519.PublicKey(pubBytes)
-			serverPriv = ed25519.PrivateKey(privBytes)
-		}
-	}
-
-	// Generate new keys if they don't exist
-	if serverPub == nil || serverPriv == nil {
-		var err error
-		serverPub, serverPriv, err = ed25519.GenerateKey(rand.Reader)
-		if err != nil {
-			log.Fatalf("Error generating server keys: %v", err)
-		}
-
-		// Save new keys
-		err = os.WriteFile(serverPubPath, []byte(hex.EncodeToString(serverPub)), 0644)
-		if err != nil {
-			log.Fatalf("Error saving server public key: %v", err)
-		}
-		err = os.WriteFile(serverPrivPath, []byte(hex.EncodeToString(serverPriv)), 0600)
-		if err != nil {
-			log.Fatalf("Error saving server private key: %v", err)
-		}
-	}
-
-	return serverPub, serverPriv
-}
 
 func startServer(opts *server.Options) (*server.Server, error) {
 	// Create a new NATS server
@@ -106,6 +56,10 @@ func startClientandSendHello(clientName string, clientPriv ed25519.PrivateKey, s
 		nats.FlusherTimeout(1 * time.Second),
 		nats.PingInterval(1 * time.Second),
 		nats.Timeout(2 * time.Second),
+		nats.ErrorHandler(func(nc *nats.Conn, sub *nats.Subscription, err error) {
+			log.Printf("Client %s: Error: %v", clientName, err)
+		}),
+		nats.Name(clientName),
 	}
 	nc, err := nats.Connect(serverURL, natsOpts...)
 	if err != nil {
@@ -114,7 +68,7 @@ func startClientandSendHello(clientName string, clientPriv ed25519.PrivateKey, s
 	defer nc.Close()
 
 	// Subscribe to the test subject
-	sub, err := nc.Subscribe("test", func(msg *nats.Msg) {
+	sub, err := nc.Subscribe("test.*", func(msg *nats.Msg) {
 		log.Printf("Client %s received: %s", clientName, string(msg.Data))
 	})
 	if err != nil {
@@ -122,37 +76,33 @@ func startClientandSendHello(clientName string, clientPriv ed25519.PrivateKey, s
 	}
 	defer sub.Unsubscribe()
 
-	// Send a message
-	err = nc.Publish("test", []byte(fmt.Sprintf("Hello world from %s", clientName)))
+	// Publish a message
+	err = nc.Publish("test.*", []byte(fmt.Sprintf("Hello world from %s", clientName)))
 	if err != nil {
 		log.Fatalf("Client %s: Error publishing message: %v", clientName, err)
 	}
 
-	log.Printf("Client %s: Message published successfully", clientName)
+	// Ensure the publish message is sent to the server.
+	if err := nc.Flush(); err != nil {
+		log.Fatalf("Client %s: Error flushing connection: %v", clientName, err)
+	}
 
-	// Keep the connection alive
-	defer nc.Close()
+	// Wait to ensure the message is received before closing.
+	time.Sleep(2 * time.Second)
 }
 
 func main() {
-	serverPub, serverPriv := loadOrGenerateKeys("keys", "server")
+	serverPub, serverPriv, _ := ed25519.GenerateKey(rand.Reader)
 	log.Printf("Server public key: %x", serverPub)
-	log.Printf("Server private key: %x", serverPriv)
 
-	client1Pub, client1Priv := loadOrGenerateKeys("keys", "client")
-	log.Printf("Client public key: %x", client1Pub)
-	log.Printf("Client private key: %x", client1Priv)
+	client1Pub, client1Priv, _ := ed25519.GenerateKey(rand.Reader)
+	log.Printf("Client1 public key: %x", client1Pub)
 
-	client2Pub, client2Priv := loadOrGenerateKeys("keys", "client2")
+	client2Pub, client2Priv, _ := ed25519.GenerateKey(rand.Reader)
 	log.Printf("Client2 public key: %x", client2Pub)
-	log.Printf("Client2 private key: %x", client2Priv)
 
-	insecureClientPub, insecureClientPriv := loadOrGenerateKeys("keys", "insecureClient")
+	insecureClientPub, insecureClientPriv, _ := ed25519.GenerateKey(rand.Reader)
 	log.Printf("Insecure client public key: %x", insecureClientPub)
-	log.Printf("Insecure client private key: %x", insecureClientPriv)
-
-	fmt.Printf("Client1 username (CN): %s\n", hex.EncodeToString(client1Pub))
-	fmt.Printf("Client2 username (CN): %s\n", hex.EncodeToString(client2Pub))
 
 	clientPubKeys := []ed25519.PublicKey{client1Pub, client2Pub}
 
@@ -165,10 +115,18 @@ func main() {
 		log.Fatalf("Error creating TLS config: %v", err)
 	}
 
+	// Options block for nats-server.
+	// NOTE: This structure is no longer used for monitoring endpoints
+	// and json tags are deprecated and may be removed in the future.
+	// Create an embedded NATS server with least privilege permissions
+
+	client1PubHex := hex.EncodeToString(client1Pub)
+	client2PubHex := hex.EncodeToString(client2Pub)
 	// Create a new NATS server options
 	opts := &server.Options{
 		Host:              "0.0.0.0", // Listen on all interfaces since it's public
 		Port:              4222,
+		NoAuthUser:        "",
 		NoLog:             false, // Keep logs for monitoring
 		NoSigs:            true,  // Disable signal handling since we handle it ourselves
 		Logtime:           true,  // Include timestamps in logs
@@ -193,29 +151,45 @@ func main() {
 		PingInterval: 2 * time.Second,
 		MaxPingsOut:  3, // Disconnect after 3 missed pings
 		// Security hardening
-		NoHeaderSupport:     true, // Disable header support for simpler protocol
-		NoFastProducerStall: true, // Prevent fast producer stall
+		NoHeaderSupport:     false, // Disable header support for simpler protocol
+		NoFastProducerStall: true,  // Prevent fast producer stall
 		// Graceful shutdown
 		LameDuckDuration:    30 * time.Second,
 		LameDuckGracePeriod: 10 * time.Second,
-		// Users with permissions
+		// Define users with specific permissions
 		Users: []*server.User{
+			// User 1 with restricted permissions
 			{
-				Username: fmt.Sprintf("OU=%s,O=%s", hex.EncodeToString(client1Pub), hex.EncodeToString(client1Pub)),
+				Username: fmt.Sprintf("CN=%s,OU=%s,O=Chainlink Data Streams", client1PubHex[:32], client1PubHex),
 				Permissions: &server.Permissions{
-					Publish:   &server.SubjectPermission{Allow: []string{"test.*"}},
-					Subscribe: &server.SubjectPermission{Allow: []string{"test.*"}},
+					Publish: &server.SubjectPermission{
+						Allow: []string{"test.*"}, // Allows test.anything
+					},
+					Subscribe: &server.SubjectPermission{
+						Allow: []string{"test.*"}, // Allows test.anything
+					},
 				},
 			},
+
+			// User 2 with different permissions
 			{
-				Username: fmt.Sprintf("OU=%s,O=%s", hex.EncodeToString(client2Pub), hex.EncodeToString(client2Pub)),
+				Username: fmt.Sprintf("CN=%s,OU=%s,O=Chainlink Data Streams", client2PubHex[:32], client2PubHex),
 				Permissions: &server.Permissions{
-					Publish:   &server.SubjectPermission{Allow: []string{"else.*"}},
-					Subscribe: &server.SubjectPermission{Allow: []string{"else.*"}},
+					Publish: &server.SubjectPermission{
+						Allow: []string{"other"},
+						Deny:  []string{"service.admin.>", "service.internal.>"},
+					},
+					Subscribe: &server.SubjectPermission{
+						Allow: []string{"other", "other"},
+						Deny:  []string{"service.admin.>", "service.internal.>"},
+					},
 				},
 			},
+
+			// Insecure client with no permissions
 		},
 	}
+	
 	// Start the server
 	ns, err := startServer(opts)
 	if err != nil {

@@ -137,7 +137,7 @@ func (c *client) close() error {
 }
 
 func (c *client) Transmit(ctx context.Context, payload []byte, dedupKey string, donID uint32) error {
-	subject := fmt.Sprintf("%s.%s.%s", donID, c.getClientPubKeyHex())
+	subject := fmt.Sprintf("%d.%s", donID, c.getClientPubKeyHex())
 
 	pubOpts := []nats.PubOpt{
 		nats.MsgId(dedupKey),

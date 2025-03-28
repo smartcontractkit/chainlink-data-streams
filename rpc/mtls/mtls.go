@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"math/big"
 	"sync"
+	"time"
 
 	"google.golang.org/grpc/credentials"
 )
@@ -127,13 +128,27 @@ func newMinimalX509Cert(signer crypto.Signer) (tls.Certificate, error) {
 	}
 
 	pubKeyHex := hex.EncodeToString(pubKey)
+
+	// Generate a random serial number.
+	serialNumberLimit := new(big.Int).Lsh(big.NewInt(1), 128)
+	serialNumber, err := rand.Int(rand.Reader, serialNumberLimit)
+	if err != nil {
+		return tls.Certificate{}, fmt.Errorf("failed to generate serial number: %v", err)
+	}
+
+	now := time.Now()
+	// Set certificate validity (e.g., valid for 24 hours)
 	template := x509.Certificate{
-		SerialNumber: big.NewInt(0), // serial number must be set, so we set it to 0
+		SerialNumber: serialNumber,
 		Subject: pkix.Name{
-			CommonName:   pubKeyHex,
-			Organization: []string{pubKeyHex},
+			CommonName:         pubKeyHex[:32],
+			Organization:       []string{"Chainlink Data Streams"},
+			OrganizationalUnit: []string{pubKeyHex},
 		},
-		EmailAddresses: []string{pubKeyHex},
+		NotBefore:             now,
+		KeyUsage:              x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+		BasicConstraintsValid: true,
 	}
 
 	encodedCert, err := x509.CreateCertificate(rand.Reader, &template, &template, signer.Public(), signer)
@@ -145,32 +160,7 @@ func newMinimalX509Cert(signer crypto.Signer) (tls.Certificate, error) {
 		PrivateKey:                   signer,
 		SupportedSignatureAlgorithms: []tls.SignatureScheme{tls.Ed25519},
 	}
-	// err = printCertificateDetails(cert)
-	// if err != nil {
-	// 	return tls.Certificate{}, err
-	// }
-
 	return cert, nil
-}
-
-func printCertificateDetails(cert tls.Certificate) error {
-	// Parse the certificate from its DER bytes.
-	parsedCert, err := x509.ParseCertificate(cert.Certificate[0])
-	if err != nil {
-		return fmt.Errorf("failed to parse certificate: %w", err)
-	}
-
-	fmt.Println("Certificate:")
-	fmt.Println("    Data:")
-	// Print the subject line similar to the OpenSSL output.
-	fmt.Printf("        Subject: %s\n", parsedCert.Subject.String())
-
-	// Optionally, print additional fields.
-	fmt.Printf("        Issuer: %s\n", parsedCert.Issuer.String())
-	fmt.Printf("        Validity:\n")
-	fmt.Printf("            Not Before: %s\n", parsedCert.NotBefore)
-	fmt.Printf("            Not After : %s\n", parsedCert.NotAfter)
-	return nil
 }
 
 type PrivateKey struct {

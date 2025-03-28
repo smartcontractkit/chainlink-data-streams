@@ -38,3 +38,29 @@ func (c *ClientOpts) verifyConfig() error {
 
 	return nil
 }
+
+type ServerOpts struct {
+	Logger        logger.Logger
+	ServerSigner  crypto.Signer
+	clientPubKeys []ed25519.PublicKey
+}
+
+func (s *ServerOpts) verifyConfig() error {
+	var errs []error
+
+	if s.Logger == nil {
+		errs = append(errs, fmt.Errorf("logger is required for NATS server"))
+	}
+	if s.ServerSigner == nil {
+		errs = append(errs, fmt.Errorf("server signer is required for NATS server"))
+	}
+	if len(s.clientPubKeys) == 0 {
+		errs = append(errs, fmt.Errorf("at least one client public key is required for NATS server"))
+	}
+
+	if len(errs) > 0 {
+		return fmt.Errorf("invalid NATS server configuration: %v", errs)
+	}
+
+	return nil
+}
