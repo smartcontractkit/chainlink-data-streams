@@ -148,10 +148,6 @@ func TestClient_Connect(t *testing.T) {
 
 			if tc.expectSuccess {
 				require.NoError(t, err)
-
-				// Clean up connection
-				err = c.Close()
-				require.NoError(t, err)
 			}
 		})
 	}
