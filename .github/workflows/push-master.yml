@@ -40,7 +40,7 @@ jobs:
       actions: read
     steps:
       - name: ci-lint
-        uses: smartcontractkit/.github/actions/ci-lint-go@7ac9af09dda8c553593d2153a975b43b6958fa9f # ci-lint-go@0.2.2
+        uses: smartcontractkit/.github/actions/ci-lint-go@505e2c93adb6b0591afeaec750c653f31657ea40 # ci-lint-go@0.2.2
         with:
           # env inputs
           use-env-files: "true"
@@ -80,7 +80,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: ci-sonarqube
-        uses: smartcontractkit/.github/actions/ci-sonarqube-go@3e11dbc45e4c8b18dd996fb417ccf22056176388 # ci-sonarqube-go@0.1.0
+        uses: smartcontractkit/.github/actions/ci-sonarqube-go@505e2c93adb6b0591afeaec750c653f31657ea40 # ci-sonarqube-go@0.1.0
         with:
           # sonarqube inputs
           sonar-token: ${{ secrets.SONAR_TOKEN }}
@@ -97,7 +97,7 @@ jobs:
     steps:
       - name: cd-release
         id: cd-release
-        uses: smartcontractkit/.github/actions/cicd-changesets@6da79c7b9f14bec077df2c1ad40d53823b409d9c # cicd-changesets@0.3.3
+        uses: smartcontractkit/.github/actions/cicd-changesets@505e2c93adb6b0591afeaec750c653f31657ea40 # cicd-changesets@0.3.3
         with:
           # general inputs
           git-user: app-token-issuer-foundations[bot]
