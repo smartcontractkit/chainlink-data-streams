@@ -48,7 +48,7 @@ jobs:
       actions: read
     steps:
       - name: ci-lint
-        uses: smartcontractkit/.github/actions/ci-lint-go@bfaf6327551cb73461928845c80e758c44d07b27  # version 0.3.1
+        uses: smartcontractkit/.github/actions/ci-lint-go@13b05e8b4e11a8c4402f8034daaf9a4332032dc7  # version 0.3.1
         with:
           # env inputs
           use-env-files: "true"
@@ -64,7 +64,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: ci-lint-misc
-        uses: smartcontractkit/.github/actions/ci-lint-misc@6b08487b176ef7cad086526d0b54ddff6691c044 # ci-lint-misc@0.1.1
+        uses: smartcontractkit/.github/actions/ci-lint-misc@13b05e8b4e11a8c4402f8034daaf9a4332032dc7 # ci-lint-misc@0.1.1
 
   ci-test:
     runs-on: ubuntu-latest
@@ -94,7 +94,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: ci-sonarqube
-        uses: smartcontractkit/.github/actions/ci-sonarqube-go@3e11dbc45e4c8b18dd996fb417ccf22056176388 # ci-sonarqube-go@0.1.0
+        uses: smartcontractkit/.github/actions/ci-sonarqube-go@13b05e8b4e11a8c4402f8034daaf9a4332032dc7 # ci-sonarqube-go@0.1.0
         with:
           # sonarqube inputs
           sonar-token: ${{ secrets.SONAR_TOKEN }}
