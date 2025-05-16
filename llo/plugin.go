@@ -59,12 +59,14 @@ type DSOpts interface {
 	OutCtx() ocr3types.OutcomeContext
 	ConfigDigest() ocr2types.ConfigDigest
 	ObservationTimestamp() time.Time
+	OutcomeCodec() OutcomeCodec
 }
 
 type dsOpts struct {
 	verboseLogging       bool
 	outCtx               ocr3types.OutcomeContext
 	configDigest         ocr2types.ConfigDigest
+	outcomeCodec         OutcomeCodec
 	observationTimestamp time.Time
 }
 
@@ -86,6 +88,10 @@ func (o *dsOpts) ConfigDigest() ocr2types.ConfigDigest {
 
 func (o *dsOpts) ObservationTimestamp() time.Time {
 	return o.observationTimestamp
+}
+
+func (o *dsOpts) OutcomeCodec() OutcomeCodec {
+	return o.outcomeCodec
 }
 
 type DataSource interface {
