@@ -155,7 +155,15 @@ func (p *Plugin) observation(ctx context.Context, outctx ocr3types.OutcomeContex
 			observationCtx, cancel := context.WithTimeout(ctx, p.MaxDurationObservation)
 			defer cancel()
 
-			opts := &dsOpts{p.Config.VerboseLogging, outctx, p.ConfigDigest, p.OutcomeCodec, observationTimestamp}
+			opts := &dsOpts{
+				verboseLogging:               p.Config.VerboseLogging,
+				outCtx:                       outctx,
+				configDigest:                 p.ConfigDigest,
+				outcomeCodec:                 p.OutcomeCodec,
+				observationTimestamp:         observationTimestamp,
+				protocolVersion:              p.ProtocolVersion,
+				minReportIntervalNanoseconds: p.DefaultMinReportIntervalNanoseconds,
+			}
 			if err = p.DataSource.Observe(observationCtx, obs.StreamValues, opts); err != nil {
 				return nil, fmt.Errorf("DataSource.Observe error: %w", err)
 			}
