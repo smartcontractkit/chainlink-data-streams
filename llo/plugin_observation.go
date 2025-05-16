@@ -154,7 +154,9 @@ func (p *Plugin) observation(ctx context.Context, outctx ocr3types.OutcomeContex
 			// any one of which could be slow.
 			observationCtx, cancel := context.WithTimeout(ctx, p.MaxDurationObservation)
 			defer cancel()
-			if err = p.DataSource.Observe(observationCtx, obs.StreamValues, &dsOpts{p.Config.VerboseLogging, outctx, p.ConfigDigest, observationTimestamp}); err != nil {
+
+			opts := &dsOpts{p.Config.VerboseLogging, outctx, p.ConfigDigest, p.OutcomeCodec, observationTimestamp}
+			if err = p.DataSource.Observe(observationCtx, obs.StreamValues, opts); err != nil {
 				return nil, fmt.Errorf("DataSource.Observe error: %w", err)
 			}
 		}
