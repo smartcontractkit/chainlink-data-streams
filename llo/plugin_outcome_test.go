@@ -32,7 +32,7 @@ func testOutcome(t *testing.T, outcomeCodec OutcomeCodec) {
 		Config:           Config{true},
 		OutcomeCodec:     outcomeCodec,
 		Logger:           logger.Test(t),
-		ObservationCodec: protoObservationCodec{},
+		ObservationCodec: NewProtoObservationCodec(logger.Nop()),
 		DonID:            10000043,
 		ConfigDigest:     types.ConfigDigest{1, 2, 3, 4},
 	}

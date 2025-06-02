@@ -8,6 +8,7 @@ import (
 	"golang.org/x/exp/maps"
 	"google.golang.org/protobuf/proto"
 
+	"github.com/smartcontractkit/chainlink-common/pkg/logger"
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
 )
 
@@ -19,7 +20,13 @@ var (
 	_ ObservationCodec = (*protoObservationCodec)(nil)
 )
 
-type protoObservationCodec struct{}
+type protoObservationCodec struct {
+	compressor *Compressor
+}
+
+func NewProtoObservationCodec(lggr logger.Logger) ObservationCodec {
+	return &protoObservationCodec{NewCompressor(lggr)}
+}
 
 func (c protoObservationCodec) Encode(obs Observation) (types.Observation, error) {
 	dfns := channelDefinitionsToProtoObservation(obs.UpdateChannelDefinitions)
@@ -51,7 +58,16 @@ func (c protoObservationCodec) Encode(obs Observation) (types.Observation, error
 		StreamValues:                   streamValues,
 	}
 
-	return proto.Marshal(pbuf)
+	b, err := proto.Marshal(pbuf)
+	if err != nil {
+		return nil, fmt.Errorf("failed to encode observation: %w", err)
+	}
+
+	compressed, err := c.compressor.CompressObservation(b)
+	if err != nil {
+		return nil, fmt.Errorf("failed to compress observation: %w", err)
+	}
+	return compressed, nil
 }
 
 func channelDefinitionsToProtoObservation(in llotypes.ChannelDefinitions) (out map[uint32]*LLOChannelDefinitionProto) {
@@ -76,8 +92,13 @@ func channelDefinitionsToProtoObservation(in llotypes.ChannelDefinitions) (out m
 }
 
 func (c protoObservationCodec) Decode(b types.Observation) (Observation, error) {
+	dec, err := c.compressor.DecompressObservation(b)
+	if err != nil {
+		return Observation{}, fmt.Errorf("failed to decompress observation: %w", err)
+	}
+
 	pbuf := &LLOObservationProto{}
-	err := proto.Unmarshal(b, pbuf)
+	err = proto.Unmarshal(dec, pbuf)
 	if err != nil {
 		return Observation{}, fmt.Errorf("failed to decode observation: expected protobuf (got: 0x%x); %w", b, err)
 	}

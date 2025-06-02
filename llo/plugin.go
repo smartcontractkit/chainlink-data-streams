@@ -267,7 +267,7 @@ func (f *PluginFactory) NewReportingPlugin(ctx context.Context, cfg ocr3types.Re
 			l,
 			cfg.N,
 			cfg.F,
-			protoObservationCodec{},
+			NewProtoObservationCodec(l),
 			offchainConfig.GetOutcomeCodec(),
 			f.RetirementReportCodec,
 			f.ReportCodecs,

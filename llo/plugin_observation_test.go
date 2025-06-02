@@ -73,7 +73,7 @@ func testObservation(t *testing.T, outcomeCodec OutcomeCodec) {
 		ShouldRetireCache:      &mockShouldRetireCache{},
 		ChannelDefinitionCache: cdc,
 		Logger:                 logger.Test(t),
-		ObservationCodec:       protoObservationCodec{},
+		ObservationCodec:       NewProtoObservationCodec(logger.Nop()),
 		DataSource:             ds,
 	}
 	var query types.Query // query is always empty for LLO

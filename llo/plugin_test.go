@@ -47,7 +47,7 @@ func (m *mockDataSource) Observe(ctx context.Context, streamValues StreamValues,
 
 func Test_ValidateObservation(t *testing.T) {
 	p := &Plugin{
-		ObservationCodec: protoObservationCodec{},
+		ObservationCodec: NewProtoObservationCodec(logger.Nop()),
 		Config:           Config{true},
 	}
 
@@ -73,7 +73,7 @@ func Test_ValidateObservation(t *testing.T) {
 			},
 		}
 
-		serializedObs, err := protoObservationCodec{}.Encode(obs)
+		serializedObs, err := NewProtoObservationCodec(logger.Nop()).Encode(obs)
 		require.NoError(t, err)
 
 		err = p.ValidateObservation(ctx, ocr3types.OutcomeContext{SeqNr: 2}, types.Query{}, types.AttributedObservation{Observation: serializedObs})
