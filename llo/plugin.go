@@ -256,6 +256,11 @@ func (f *PluginFactory) NewReportingPlugin(ctx context.Context, cfg ocr3types.Re
 
 	l.Infow("llo.NewReportingPlugin", "onchainConfig", onchainConfig, "offchainConfig", offchainConfig)
 
+	obsCodec, err := NewProtoObservationCodec(l)
+	if err != nil {
+		return nil, ocr3types.ReportingPluginInfo{}, fmt.Errorf("NewReportingPlugin failed to create observation codec: %w", err)
+	}
+
 	return &Plugin{
 			f.Config,
 			onchainConfig.PredecessorConfigDigest,
@@ -267,7 +272,7 @@ func (f *PluginFactory) NewReportingPlugin(ctx context.Context, cfg ocr3types.Re
 			l,
 			cfg.N,
 			cfg.F,
-			protoObservationCodec{},
+			obsCodec,
 			offchainConfig.GetOutcomeCodec(),
 			f.RetirementReportCodec,
 			f.ReportCodecs,
