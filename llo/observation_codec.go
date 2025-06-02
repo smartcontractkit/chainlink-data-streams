@@ -24,8 +24,12 @@ type protoObservationCodec struct {
 	compressor *Compressor
 }
 
-func NewProtoObservationCodec(lggr logger.Logger) ObservationCodec {
-	return &protoObservationCodec{NewCompressor(lggr)}
+func NewProtoObservationCodec(lggr logger.Logger) (ObservationCodec, error) {
+	compressor, err := NewCompressor(lggr)
+	if err != nil {
+		return nil, err
+	}
+	return &protoObservationCodec{compressor}, nil
 }
 
 func (c protoObservationCodec) Encode(obs Observation) (types.Observation, error) {

@@ -11,10 +11,16 @@ type Compressor struct {
 	decoder *zstd.Decoder
 }
 
-func NewCompressor(lggr logger.Logger) *Compressor {
-	encoder, _ := zstd.NewWriter(nil)
-	decoder, _ := zstd.NewReader(nil, zstd.WithDecoderConcurrency(0))
-	return &Compressor{logger.Sugared(lggr).Named("Compressor"), encoder, decoder}
+func NewCompressor(lggr logger.Logger) (*Compressor, error) {
+	encoder, err := zstd.NewWriter(nil)
+	if err != nil {
+		return nil, err
+	}
+	decoder, err := zstd.NewReader(nil, zstd.WithDecoderConcurrency(0))
+	if err != nil {
+		return nil, err
+	}
+	return &Compressor{logger.Sugared(lggr).Named("Compressor"), encoder, decoder}, nil
 }
 
 func (c *Compressor) CompressObservation(b []byte) ([]byte, error) {

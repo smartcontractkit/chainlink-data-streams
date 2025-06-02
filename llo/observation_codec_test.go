@@ -23,7 +23,8 @@ import (
 func Test_protoObservationCodec(t *testing.T) {
 	t.Run("encode and decode empty struct", func(t *testing.T) {
 		obs := Observation{}
-		codec := NewProtoObservationCodec(logger.Nop())
+		codec, err := NewProtoObservationCodec(logger.Nop())
+		require.NoError(t, err)
 		obsBytes, err := codec.Encode(obs)
 		require.NoError(t, err)
 
@@ -56,7 +57,8 @@ func Test_protoObservationCodec(t *testing.T) {
 			},
 		}
 
-		codec := NewProtoObservationCodec(logger.Nop())
+		codec, err := NewProtoObservationCodec(logger.Nop())
+		require.NoError(t, err)
 		obsBytes, err := codec.Encode(obs)
 		require.NoError(t, err)
 
@@ -71,8 +73,9 @@ func Test_protoObservationCodec(t *testing.T) {
 	})
 	t.Run("decoding with invalid data", func(t *testing.T) {
 		t.Run("not a protobuf", func(t *testing.T) {
-			codec := NewProtoObservationCodec(logger.Nop())
-			_, err := codec.Decode([]byte("not a protobuf"))
+			codec, err := NewProtoObservationCodec(logger.Nop())
+			require.NoError(t, err)
+			_, err = codec.Decode([]byte("not a protobuf"))
 			require.Error(t, err)
 
 		})
@@ -81,13 +84,15 @@ func Test_protoObservationCodec(t *testing.T) {
 				RemoveChannelIDs: []uint32{1, 1},
 			}
 
-			compressor := NewCompressor(logger.Nop())
+			compressor, err := NewCompressor(logger.Nop())
+			require.NoError(t, err)
 			obsBytes, err := proto.Marshal(pbuf)
 			require.NoError(t, err)
 			compressed, err := compressor.CompressObservation(obsBytes)
 			require.NoError(t, err)
 
-			codec := NewProtoObservationCodec(logger.Nop())
+			codec, err := NewProtoObservationCodec(logger.Nop())
+			require.NoError(t, err)
 			_, err = codec.Decode(compressed)
 			require.EqualError(t, err, "failed to decode observation; duplicate channel ID in RemoveChannelIDs: 1")
 		})
@@ -99,13 +104,15 @@ func Test_protoObservationCodec(t *testing.T) {
 					},
 				}
 
-				compressor := NewCompressor(logger.Nop())
+				compressor, err := NewCompressor(logger.Nop())
+				require.NoError(t, err)
 				obsBytes, err := proto.Marshal(pbuf)
 				require.NoError(t, err)
 				compressed, err := compressor.CompressObservation(obsBytes)
 				require.NoError(t, err)
 
-				codec := NewProtoObservationCodec(logger.Nop())
+				codec, err := NewProtoObservationCodec(logger.Nop())
+				require.NoError(t, err)
 				_, err = codec.Decode(compressed)
 				require.EqualError(t, err, "failed to decode observation; invalid stream value for stream ID: 1; error decoding binary []: expected at least 4 bytes, got 0")
 			})
@@ -116,13 +123,15 @@ func Test_protoObservationCodec(t *testing.T) {
 					},
 				}
 
-				compressor := NewCompressor(logger.Nop())
+				compressor, err := NewCompressor(logger.Nop())
+				require.NoError(t, err)
 				obsBytes, err := proto.Marshal(pbuf)
 				require.NoError(t, err)
 				compressed, err := compressor.CompressObservation(obsBytes)
 				require.NoError(t, err)
 
-				codec := NewProtoObservationCodec(logger.Nop())
+				codec, err := NewProtoObservationCodec(logger.Nop())
+				require.NoError(t, err)
 				_, err = codec.Decode(compressed)
 				require.EqualError(t, err, "failed to decode observation; invalid stream value for stream ID: 1; cannot unmarshal protobuf stream value; unknown StreamValueType 1000001")
 			})
@@ -142,7 +151,8 @@ func Test_protoObservationCodec(t *testing.T) {
 				bp, err := proto.Marshal(pbuf)
 				require.NoError(t, err)
 
-				compressor := NewCompressor(logger.Nop())
+				compressor, err := NewCompressor(logger.Nop())
+				require.NoError(t, err)
 				compressed, err := compressor.CompressObservation(bp)
 				require.NoError(t, err)
 
@@ -152,12 +162,14 @@ func Test_protoObservationCodec(t *testing.T) {
 		})
 	})
 	t.Run("legacy compatibility", func(t *testing.T) {
-		codec := NewProtoObservationCodec(logger.Nop())
+		codec, err := NewProtoObservationCodec(logger.Nop())
+		require.NoError(t, err)
 		t.Run("encode includes both unixTimestampNanosecondsLegacy and unixTimestampNanoseconds", func(t *testing.T) {
 			encoded, err := codec.Encode(Observation{UnixTimestampNanoseconds: uint64(12345 * time.Second)})
 			require.NoError(t, err)
 
-			compressor := NewCompressor(logger.Nop())
+			compressor, err := NewCompressor(logger.Nop())
+			require.NoError(t, err)
 			uncompressed, err := compressor.DecompressObservation(encoded)
 			require.NoError(t, err)
 
@@ -173,7 +185,8 @@ func Test_protoObservationCodec(t *testing.T) {
 			b, err := base64.StdEncoding.DecodeString(`CgMBAgMQARjShdjMBCICAQIqIQgDEh0IAhIECAMQARIECAQQAxoNeyJmb28iOiJiYXIifTIaCAkSFggBEhIKBAAAAAASBAAAAAAaBAAAAAAyDAgEEggSBgAAAAACezINCAUSCRIHAAAAAAIByDIjCAgSHwgBEhsKBwAAAAACA/ISBwAAAAACA/MaBwAAAAACA/Q=`)
 			require.NoError(t, err)
 
-			compressor := NewCompressor(logger.Nop())
+			compressor, err := NewCompressor(logger.Nop())
+			require.NoError(t, err)
 			compressed, err := compressor.CompressObservation(b)
 			require.NoError(t, err)
 
@@ -188,7 +201,8 @@ func Test_protoObservationCodec(t *testing.T) {
 			}
 			b, err := proto.Marshal(pbuf)
 			require.NoError(t, err)
-			compressor := NewCompressor(logger.Nop())
+			compressor, err := NewCompressor(logger.Nop())
+			require.NoError(t, err)
 			compressed, err := compressor.CompressObservation(b)
 			require.NoError(t, err)
 			_, err = codec.Decode(compressed)
@@ -206,7 +220,8 @@ func Fuzz_protoObservationCodec_Decode(f *testing.F) {
 	f.Add([]byte{})
 
 	obs := Observation{}
-	codec := NewProtoObservationCodec(logger.Nop())
+	codec, err := NewProtoObservationCodec(logger.Nop())
+	require.NoError(f, err)
 	emptyPbuf, err := codec.Encode(obs)
 	require.NoError(f, err)
 	f.Add([]byte(emptyPbuf))
@@ -254,7 +269,8 @@ func Fuzz_protoObservationCodec_Decode(f *testing.F) {
 func Test_protoObservationCodec_Properties(t *testing.T) {
 	properties := gopter.NewProperties(nil)
 
-	codec := NewProtoObservationCodec(logger.Nop())
+	codec, err := NewProtoObservationCodec(logger.Nop())
+	require.NoError(t, err)
 
 	properties.Property("Encode/Decode", prop.ForAll(
 		func(obs Observation) bool {

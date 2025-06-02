@@ -28,11 +28,14 @@ func Test_Outcome(t *testing.T) {
 
 func testOutcome(t *testing.T, outcomeCodec OutcomeCodec) {
 	ctx := tests.Context(t)
+
+	obsCodec, err := NewProtoObservationCodec(logger.Nop())
+	require.NoError(t, err)
 	p := &Plugin{
 		Config:           Config{true},
 		OutcomeCodec:     outcomeCodec,
 		Logger:           logger.Test(t),
-		ObservationCodec: NewProtoObservationCodec(logger.Nop()),
+		ObservationCodec: obsCodec,
 		DonID:            10000043,
 		ConfigDigest:     types.ConfigDigest{1, 2, 3, 4},
 	}

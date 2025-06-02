@@ -67,13 +67,16 @@ func testObservation(t *testing.T, outcomeCodec OutcomeCodec) {
 		err: nil,
 	}
 
+	obsCodec, err := NewProtoObservationCodec(logger.Nop())
+	require.NoError(t, err)
+
 	p := &Plugin{
 		Config:                 Config{true},
 		OutcomeCodec:           outcomeCodec,
 		ShouldRetireCache:      &mockShouldRetireCache{},
 		ChannelDefinitionCache: cdc,
 		Logger:                 logger.Test(t),
-		ObservationCodec:       NewProtoObservationCodec(logger.Nop()),
+		ObservationCodec:       obsCodec,
 		DataSource:             ds,
 	}
 	var query types.Query // query is always empty for LLO
