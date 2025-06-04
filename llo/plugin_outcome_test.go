@@ -29,7 +29,7 @@ func Test_Outcome(t *testing.T) {
 func testOutcome(t *testing.T, outcomeCodec OutcomeCodec) {
 	ctx := tests.Context(t)
 
-	obsCodec, err := NewProtoObservationCodec(logger.Nop())
+	obsCodec, err := NewProtoObservationCodec(logger.Nop(), true)
 	require.NoError(t, err)
 	p := &Plugin{
 		Config:           Config{true},

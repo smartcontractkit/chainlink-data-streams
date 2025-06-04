@@ -25,6 +25,7 @@ type LLOOffchainConfigProto struct {
 	state                               protoimpl.MessageState `protogen:"open.v1"`
 	ProtocolVersion                     uint32                 `protobuf:"varint,1,opt,name=protocolVersion,proto3" json:"protocolVersion,omitempty"`
 	DefaultMinReportIntervalNanoseconds uint64                 `protobuf:"varint,2,opt,name=defaultMinReportIntervalNanoseconds,proto3" json:"defaultMinReportIntervalNanoseconds,omitempty"`
+	EnableObservationCompression        bool                   `protobuf:"varint,3,opt,name=enableObservationCompression,proto3" json:"enableObservationCompression,omitempty"`
 	unknownFields                       protoimpl.UnknownFields
 	sizeCache                           protoimpl.SizeCache
 }
@@ -73,14 +74,22 @@ func (x *LLOOffchainConfigProto) GetDefaultMinReportIntervalNanoseconds() uint64
 	return 0
 }
 
+func (x *LLOOffchainConfigProto) GetEnableObservationCompression() bool {
+	if x != nil {
+		return x.EnableObservationCompression
+	}
+	return false
+}
+
 var File_llo_offchain_config_proto protoreflect.FileDescriptor
 
 const file_llo_offchain_config_proto_rawDesc = "" +
 	"\n" +
-	"\x19llo_offchain_config.proto\x12\x02v1\"\x94\x01\n" +
+	"\x19llo_offchain_config.proto\x12\x02v1\"\xd8\x01\n" +
 	"\x16LLOOffchainConfigProto\x12(\n" +
 	"\x0fprotocolVersion\x18\x01 \x01(\rR\x0fprotocolVersion\x12P\n" +
-	"#defaultMinReportIntervalNanoseconds\x18\x02 \x01(\x04R#defaultMinReportIntervalNanosecondsB\aZ\x05.;llob\x06proto3"
+	"#defaultMinReportIntervalNanoseconds\x18\x02 \x01(\x04R#defaultMinReportIntervalNanoseconds\x12B\n" +
+	"\x1cenableObservationCompression\x18\x03 \x01(\bR\x1cenableObservationCompressionB\aZ\x05.;llob\x06proto3"
 
 var (
 	file_llo_offchain_config_proto_rawDescOnce sync.Once

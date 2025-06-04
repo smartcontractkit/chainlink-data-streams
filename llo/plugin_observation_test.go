@@ -67,7 +67,7 @@ func testObservation(t *testing.T, outcomeCodec OutcomeCodec) {
 		err: nil,
 	}
 
-	obsCodec, err := NewProtoObservationCodec(logger.Nop())
+	obsCodec, err := NewProtoObservationCodec(logger.Nop(), true)
 	require.NoError(t, err)
 
 	p := &Plugin{

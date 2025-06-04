@@ -46,7 +46,7 @@ func (m *mockDataSource) Observe(ctx context.Context, streamValues StreamValues,
 }
 
 func Test_ValidateObservation(t *testing.T) {
-	obsCodec, err := NewProtoObservationCodec(logger.Nop())
+	obsCodec, err := NewProtoObservationCodec(logger.Nop(), true)
 	require.NoError(t, err)
 
 	p := &Plugin{
