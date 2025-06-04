@@ -21,15 +21,23 @@ var (
 )
 
 type protoObservationCodec struct {
-	compressor *Compressor
+	logger            logger.Logger
+	enableCompression bool
+	compressor        *compressor
 }
 
-func NewProtoObservationCodec(lggr logger.Logger) (ObservationCodec, error) {
-	compressor, err := NewCompressor(lggr)
+func NewProtoObservationCodec(lggr logger.Logger, enableCompression bool) (ObservationCodec, error) {
+	lggr = logger.Sugared(lggr).Named("ObservationCodec")
+
+	if !enableCompression {
+		return &protoObservationCodec{lggr, false, nil}, nil
+	}
+
+	compressor, err := newCompressor()
 	if err != nil {
 		return nil, err
 	}
-	return &protoObservationCodec{compressor}, nil
+	return &protoObservationCodec{lggr, enableCompression, compressor}, nil
 }
 
 func (c protoObservationCodec) Encode(obs Observation) (types.Observation, error) {
@@ -67,11 +75,16 @@ func (c protoObservationCodec) Encode(obs Observation) (types.Observation, error
 		return nil, fmt.Errorf("failed to encode observation: %w", err)
 	}
 
-	compressed, err := c.compressor.CompressObservation(b)
-	if err != nil {
-		return nil, fmt.Errorf("failed to compress observation: %w", err)
+	if c.enableCompression {
+		compressed, err := c.compressor.CompressObservation(b)
+		if err != nil {
+			return nil, fmt.Errorf("failed to compress observation: %w", err)
+		}
+		c.logger.Debugw("compressed observation", "compressed_bytes", len(compressed), "uncompressed_bytes", len(b))
+		return compressed, nil
 	}
-	return compressed, nil
+
+	return b, nil
 }
 
 func channelDefinitionsToProtoObservation(in llotypes.ChannelDefinitions) (out map[uint32]*LLOChannelDefinitionProto) {
@@ -96,13 +109,16 @@ func channelDefinitionsToProtoObservation(in llotypes.ChannelDefinitions) (out m
 }
 
 func (c protoObservationCodec) Decode(b types.Observation) (Observation, error) {
-	dec, err := c.compressor.DecompressObservation(b)
-	if err != nil {
-		return Observation{}, fmt.Errorf("failed to decompress observation: %w", err)
+	var err error
+	if c.enableCompression {
+		b, err = c.compressor.DecompressObservation(b)
+		if err != nil {
+			return Observation{}, fmt.Errorf("failed to decompress observation: %w", err)
+		}
 	}
 
 	pbuf := &LLOObservationProto{}
-	err = proto.Unmarshal(dec, pbuf)
+	err = proto.Unmarshal(b, pbuf)
 	if err != nil {
 		return Observation{}, fmt.Errorf("failed to decode observation: expected protobuf (got: 0x%x); %w", b, err)
 	}

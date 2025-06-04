@@ -18,6 +18,8 @@ type OffchainConfig struct {
 	// produced quickly, you are still limited by OCR3's DeltaRound and
 	// DeltaGrace params, as well as networking latency.
 	DefaultMinReportIntervalNanoseconds uint64
+	// EnableObservationCompression enables observation compression.
+	EnableObservationCompression bool
 }
 
 func DecodeOffchainConfig(b []byte) (o OffchainConfig, err error) {
@@ -40,6 +42,7 @@ func DecodeOffchainConfig(b []byte) (o OffchainConfig, err error) {
 	}
 	o.ProtocolVersion = pbuf.ProtocolVersion
 	o.DefaultMinReportIntervalNanoseconds = pbuf.DefaultMinReportIntervalNanoseconds
+	o.EnableObservationCompression = pbuf.EnableObservationCompression
 	return
 }
 
@@ -47,6 +50,7 @@ func (c OffchainConfig) Encode() ([]byte, error) {
 	pbuf := &LLOOffchainConfigProto{
 		ProtocolVersion:                     c.ProtocolVersion,
 		DefaultMinReportIntervalNanoseconds: c.DefaultMinReportIntervalNanoseconds,
+		EnableObservationCompression:        c.EnableObservationCompression,
 	}
 	return proto.Marshal(pbuf)
 }

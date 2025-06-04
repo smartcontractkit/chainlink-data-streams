@@ -53,6 +53,7 @@ func Test_OffchainConfig(t *testing.T) {
 			cfg := OffchainConfig{
 				ProtocolVersion:                     1,
 				DefaultMinReportIntervalNanoseconds: 1000,
+				EnableObservationCompression:        true,
 			}
 
 			b, err := cfg.Encode()
