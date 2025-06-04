@@ -7,10 +7,13 @@ import (
 	"crypto/subtle"
 	"crypto/tls"
 	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"math/big"
 	"sync"
+	"time"
 
 	"google.golang.org/grpc/credentials"
 )
@@ -55,8 +58,32 @@ func NewTLSConfig(privKey ed25519.PrivateKey, pubKeys []ed25519.PublicKey) (*tls
 	if err != nil {
 		return nil, err
 	}
+	c, err := newMutualTLSConfig(priv.key, pubs)
 
-	return newMutualTLSConfig(priv.key, pubs)
+	if err != nil {
+		return nil, err
+	}
+	c.InsecureSkipVerify = true
+	c.ClientAuth = tls.RequireAnyClientCert
+
+	return c, nil
+}
+
+func NewTLSTransportSigner(signer crypto.Signer, pubKeys []ed25519.PublicKey) (*tls.Config, error) {
+	pubs, err := ValidPublicKeysFromEd25519(pubKeys...)
+	if err != nil {
+		return nil, err
+	}
+
+	c, err := newMutualTLSConfig(signer, pubs)
+	c.ClientAuth = tls.RequireAnyClientCert
+	c.InsecureSkipVerify = true
+
+	if err != nil {
+		return nil, err
+	}
+
+	return c, nil
 }
 
 // newMutualTLSConfig uses the private key and public keys to construct a mutual
@@ -93,21 +120,47 @@ func newMutualTLSConfig(signer crypto.Signer, pubs *PublicKeys) (*tls.Config, er
 
 // Generates a minimal certificate (that wouldn't be considered valid outside of
 // this networking protocol) from an Ed25519 private key.
+// This also sets the organization and organizational unit for the certificate used for User Mapping
 func newMinimalX509Cert(signer crypto.Signer) (tls.Certificate, error) {
+	pubKey, ok := signer.Public().(ed25519.PublicKey)
+	if !ok {
+		return tls.Certificate{}, fmt.Errorf("invalid public key type")
+	}
+
+	pubKeyHex := hex.EncodeToString(pubKey)
+
+	// Generate a random serial number.
+	serialNumberLimit := new(big.Int).Lsh(big.NewInt(1), 128)
+	serialNumber, err := rand.Int(rand.Reader, serialNumberLimit)
+	if err != nil {
+		return tls.Certificate{}, fmt.Errorf("failed to generate serial number: %v", err)
+	}
+
+	now := time.Now()
+	// Set certificate validity (e.g., valid for 24 hours)
 	template := x509.Certificate{
-		SerialNumber: big.NewInt(0), // serial number must be set, so we set it to 0
+		SerialNumber: serialNumber,
+		Subject: pkix.Name{
+			CommonName:         pubKeyHex[:32],
+			Organization:       []string{"Chainlink Data Streams"},
+			OrganizationalUnit: []string{pubKeyHex},
+		},
+		NotBefore:             now,
+		KeyUsage:              x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+		BasicConstraintsValid: true,
 	}
 
 	encodedCert, err := x509.CreateCertificate(rand.Reader, &template, &template, signer.Public(), signer)
 	if err != nil {
 		return tls.Certificate{}, err
 	}
-
-	return tls.Certificate{
+	cert := tls.Certificate{
 		Certificate:                  [][]byte{encodedCert},
 		PrivateKey:                   signer,
 		SupportedSignatureAlgorithms: []tls.SignatureScheme{tls.Ed25519},
-	}, nil
+	}
+	return cert, nil
 }
 
 type PrivateKey struct {
