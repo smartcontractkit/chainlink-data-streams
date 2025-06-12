@@ -294,6 +294,12 @@ func (p *Plugin) outcome(outctx ocr3types.OutcomeContext, query types.Query, aos
 		}
 	}
 
+	for x, y := range outcome.ChannelDefinitions {
+		if y.ReportFormat == llotypes.ReportFormatEVMABIEncodeUnpackedExpr {
+			p.Logger.Debugw("ChannelDefinition", "channelID", x, "reportFormat", y.ReportFormat)
+		}
+	}
+
 	if p.Config.VerboseLogging {
 		p.Logger.Debugw("Generated outcome", "outcome", outcome, "stage", "Outcome", "seqNr", outctx.SeqNr)
 	}
