@@ -418,6 +418,12 @@ func (p *Plugin) ProcessStreamCalculated(outcome *Outcome) {
 				outcome.StreamAggregates[abi.ExpressionStreamID] = map[llotypes.Aggregator]StreamValue{
 					llotypes.AggregatorMedian: ToDecimal(value),
 				}
+
+				cd.Streams = append(cd.Streams, llotypes.Stream{
+					StreamID:   abi.ExpressionStreamID,
+					Aggregator: llotypes.AggregatorMedian,
+				})
+				outcome.ChannelDefinitions[cid] = cd
 			}
 
 			env.release()

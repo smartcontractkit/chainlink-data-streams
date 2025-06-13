@@ -1396,6 +1396,9 @@ func TestProcessStreamCalculated(t *testing.T) {
 				assert.Equal(t, expectedValue, actualValue)
 			}
 
+			if len(tt.expectedValues) > 0 {
+				assert.Equal(t, len(tt.outcome.StreamAggregates), len(tt.outcome.ChannelDefinitions[1].Streams))
+			}
 		})
 	}
 }
