@@ -294,11 +294,10 @@ func (p *Plugin) outcome(outctx ocr3types.OutcomeContext, query types.Query, aos
 		}
 	}
 
-	for x, y := range outcome.ChannelDefinitions {
-		if y.ReportFormat == llotypes.ReportFormatEVMABIEncodeUnpackedExpr {
-			p.Logger.Debugw("ChannelDefinition", "channelID", x, "reportFormat", y.ReportFormat)
-		}
-	}
+	// ProcessStreamCalculated checks if channels have calculated streams and if so
+	// it will evaluate the expression and update the outcome.StreamAggregates
+	// with the result
+	p.ProcessStreamCalculated(&outcome)
 
 	if p.Config.VerboseLogging {
 		p.Logger.Debugw("Generated outcome", "outcome", outcome, "stage", "Outcome", "seqNr", outctx.SeqNr)

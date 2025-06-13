@@ -133,6 +133,13 @@ type singleABIEncoder struct {
 	// encoding.
 	// OPTIONAL
 	Multiplier *ubig.Big `json:"multiplier"`
+	// Expression, if provided, will be evaluated and the result will be encoded.
+	// OPTIONAL
+	Expression string `json:"expression"`
+	// ExpressionStreamID, if provided, will be the stream ID of the stream value
+	// that will be used to evaluate the expression.
+	// OPTIONAL
+	ExpressionStreamID uint32 `json:"expressionStreamID"`
 }
 
 // getNormalizedMultiplier returns the multiplier as a decimal.Decimal, defaulting

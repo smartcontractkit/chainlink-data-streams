@@ -1,18 +1,46 @@
-package expression
+package llo
 
 import (
+	"encoding/json"
 	"fmt"
 	"math"
 	"sync"
 
 	"github.com/expr-lang/expr"
 	"github.com/shopspring/decimal"
+	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
 )
 
 var (
 	pool = sync.Pool{
 		New: func() any {
-			return newEnv()
+			return environment{
+				"EQ":                 Equal,
+				"Equal":              Equal,
+				"GT":                 GreaterThan,
+				"GreaterThan":        GreaterThan,
+				"GTE":                GreaterThanOrEqual,
+				"GreaterThanOrEqual": GreaterThanOrEqual,
+				"LT":                 LessThan,
+				"LessThan":           LessThan,
+				"LTE":                LessThanOrEqual,
+				"LessThanOrEqual":    LessThanOrEqual,
+				"Abs":                Abs,
+				"Mul":                Mul,
+				"Div":                Div,
+				"Add":                Add,
+				"Sum":                Add,
+				"Sub":                Sub,
+				"IsZero":             IsZero,
+				"IsNegative":         IsNegative,
+				"IsPositive":         IsPositive,
+				"Round":              Round,
+				"Max":                Max,
+				"Min":                Min,
+				"Ceil":               Ceil,
+				"Floor":              Floor,
+				"Avg":                Avg,
+			}
 		},
 	}
 
@@ -45,9 +73,31 @@ var (
 	}
 )
 
-type Env map[string]any
+type environment map[string]any
 
-func (e Env) Release() {
+func (e environment) SetStreamValue(id llotypes.StreamID, value StreamValue) error {
+	if value == nil {
+		return fmt.Errorf("stream value is nil")
+	}
+
+	switch value.Type() {
+	case LLOStreamValue_Decimal:
+		e[fmt.Sprintf("s%d", id)] = value.(*Decimal).Decimal()
+	case LLOStreamValue_Quote:
+		quote := value.(*Quote)
+		e[fmt.Sprintf("s%d_bid", id)] = quote.Bid
+		e[fmt.Sprintf("s%d_benchmark", id)] = quote.Benchmark
+		e[fmt.Sprintf("s%d_ask", id)] = quote.Ask
+	case LLOStreamValue_TimestampedStreamValue:
+		tsv := value.(*TimestampedStreamValue)
+		e[fmt.Sprintf("s%d_timestamp", id)] = tsv.ObservedAtNanoseconds
+		e.SetStreamValue(id, tsv.StreamValue)
+	}
+
+	return nil
+}
+
+func (e environment) release() {
 	for k := range e {
 		if keys[k] {
 			continue
@@ -58,38 +108,8 @@ func (e Env) Release() {
 }
 
 // NewEnv returns a new environment with the default functions
-func NewEnv() Env {
-	return pool.Get().(Env)
-}
-
-func newEnv() Env {
-	return Env{
-		"EQ":                 Equal,
-		"Equal":              Equal,
-		"GT":                 GreaterThan,
-		"GreaterThan":        GreaterThan,
-		"GTE":                GreaterThanOrEqual,
-		"GreaterThanOrEqual": GreaterThanOrEqual,
-		"LT":                 LessThan,
-		"LessThan":           LessThan,
-		"LTE":                LessThanOrEqual,
-		"LessThanOrEqual":    LessThanOrEqual,
-		"Abs":                Abs,
-		"Mul":                Mul,
-		"Div":                Div,
-		"Add":                Add,
-		"Sum":                Add,
-		"Sub":                Sub,
-		"IsZero":             IsZero,
-		"IsNegative":         IsNegative,
-		"IsPositive":         IsPositive,
-		"Round":              Round,
-		"Max":                Max,
-		"Min":                Min,
-		"Ceil":               Ceil,
-		"Floor":              Floor,
-		"Avg":                Avg,
-	}
+func NewEnv() environment {
+	return pool.Get().(environment)
 }
 
 // Equal returns true if x and y are equal
@@ -346,8 +366,8 @@ func toDecimal(x any) (decimal.Decimal, error) {
 	}
 }
 
-// EvalDecimal evaluates the given expression and returns the result as a decimal.Decimal
-func EvalDecimal(stmt string, env Env) (decimal.Decimal, error) {
+// evalDecimal evaluates the given expression and returns the result as a decimal.Decimal
+func evalDecimal(stmt string, env environment) (decimal.Decimal, error) {
 	r, err := expr.Eval(stmt, env)
 	if err != nil {
 		return decimal.Decimal{}, fmt.Errorf("failed to evaluate expression: %w", err)
@@ -359,4 +379,57 @@ func EvalDecimal(stmt string, env Env) (decimal.Decimal, error) {
 	}
 
 	return d, nil
+}
+
+// ProcessStreamCalculated evaluates the given expression and returns the result as a decimal.Decimal
+func (p *Plugin) ProcessStreamCalculated(outcome *Outcome) {
+	for cid, cd := range outcome.ChannelDefinitions {
+		if cd.ReportFormat == llotypes.ReportFormatEVMABIEncodeUnpackedExpr {
+			env := NewEnv()
+			for _, stream := range cd.Streams {
+				p.Logger.Debugw("setting stream value", "channelID", cid, "streamID", stream.StreamID, "aggregator", stream.Aggregator)
+				env.SetStreamValue(stream.StreamID, outcome.StreamAggregates[stream.StreamID][stream.Aggregator])
+			}
+
+			copt := opts{}
+			if err := json.Unmarshal(cd.Opts, &copt); err != nil {
+				p.Logger.Warnw("failed to unmarshal channel definition options", "channelID", cid, "error", err)
+				continue
+			}
+
+			for _, abi := range copt.ABI {
+				if abi.ExpressionStreamID == 0 {
+					p.Logger.Warnw("expression stream ID is 0", "channelID", cid, "expression", abi.Expression)
+					continue
+				}
+
+				if abi.Expression == "" {
+					p.Logger.Warnw("expression is empty", "channelID", cid, "expressionStreamID", abi.ExpressionStreamID)
+					continue
+				}
+
+				p.Logger.Infow("evaluating expression", "channelID", cid, "expression", abi.Expression, "env", fmt.Sprintf("%+v", env))
+				value, err := evalDecimal(abi.Expression, env)
+				if err != nil {
+					p.Logger.Warnw("failed to evaluate expression", "channelID", cid, "expression", abi.Expression, "error", err)
+					continue
+				}
+
+				outcome.StreamAggregates[abi.ExpressionStreamID] = map[llotypes.Aggregator]StreamValue{
+					llotypes.AggregatorMedian: ToDecimal(value),
+				}
+			}
+
+			env.release()
+			p.Logger.Debugw("ChannelDefinition", "channelID", cid, "reportFormat", cd.ReportFormat)
+		}
+	}
+}
+
+type opts struct {
+	ABI []struct {
+		Type               string            `json:"type"`
+		Expression         string            `json:"expression"`
+		ExpressionStreamID llotypes.StreamID `json:"expressionStreamID"`
+	} `json:"abi"`
 }

@@ -1,10 +1,12 @@
-package expression
+package llo
 
 import (
 	"math"
 	"testing"
 
 	"github.com/shopspring/decimal"
+	"github.com/smartcontractkit/chainlink-common/pkg/logger"
+	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -1003,7 +1005,7 @@ func TestEvalDecimal(t *testing.T) {
 	tests := []struct {
 		name        string
 		stmt        string
-		env         Env
+		env         environment
 		expected    string
 		expectError bool
 	}{
@@ -1022,7 +1024,7 @@ func TestEvalDecimal(t *testing.T) {
 		{
 			name:     "with variables",
 			stmt:     "Add(x, y)",
-			env:      Env{"Add": Add, "x": 10, "y": 5},
+			env:      environment{"Add": Add, "x": 10, "y": 5},
 			expected: "15",
 		},
 		{
@@ -1053,7 +1055,7 @@ func TestEvalDecimal(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result, err := EvalDecimal(tt.stmt, tt.env)
+			result, err := evalDecimal(tt.stmt, tt.env)
 			if tt.expectError {
 				assert.Error(t, err)
 			} else {
@@ -1062,7 +1064,7 @@ func TestEvalDecimal(t *testing.T) {
 				assert.True(t, expected.Equal(result), "expected %s, got %s", expected.String(), result.String())
 			}
 
-			tt.env.Release()
+			tt.env.release()
 		})
 	}
 }
@@ -1070,7 +1072,7 @@ func TestEvalDecimal(t *testing.T) {
 func TestNewEnvAndRelease(t *testing.T) {
 	t.Run("NewEnv creates environment with all functions", func(t *testing.T) {
 		env := NewEnv()
-		defer env.Release()
+		defer env.release()
 
 		for key := range keys {
 			_, ok := env[key]
@@ -1084,11 +1086,11 @@ func TestNewEnvAndRelease(t *testing.T) {
 
 		// Verify custom key exists
 		assert.Contains(t, env, "customKey")
-		env.Release()
+		env.release()
 
 		// Get a new environment from pool to verify cleanup
 		env2 := NewEnv()
-		defer env2.Release()
+		defer env2.release()
 
 		// Custom key should not be present in reused environment
 		assert.NotContains(t, env2, "customKey")
@@ -1109,8 +1111,8 @@ func TestNewEnvAndRelease(t *testing.T) {
 		assert.Contains(t, env2, "test2")
 		assert.NotContains(t, env2, "test1")
 
-		env1.Release()
-		env2.Release()
+		env1.release()
+		env2.release()
 	})
 }
 
@@ -1119,11 +1121,11 @@ func TestEnvPooling(t *testing.T) {
 		// Get an environment and add a custom key that should be cleaned up
 		env1 := NewEnv()
 		env1["shouldBeRemoved"] = "test"
-		env1.Release()
+		env1.release()
 
 		// Get another environment - should be clean
 		env2 := NewEnv()
-		defer env2.Release()
+		defer env2.release()
 
 		assert.NotContains(t, env2, "shouldBeRemoved")
 		assert.Contains(t, env2, "Add") // Default functions should still be there
@@ -1134,7 +1136,7 @@ func TestEnvPooling(t *testing.T) {
 func BenchmarkNewEnv(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		env := NewEnv()
-		env.Release()
+		env.release()
 	}
 }
 
@@ -1146,9 +1148,254 @@ func BenchmarkAdd(b *testing.B) {
 
 func BenchmarkEvalDecimal(b *testing.B) {
 	env := NewEnv()
-	defer env.Release()
+	defer env.release()
 
 	for i := 0; i < b.N; i++ {
-		_, _ = EvalDecimal("Add(123.45, 67.89)", env)
+		_, _ = evalDecimal("Add(123.45, 67.89)", env)
+	}
+}
+
+func TestEnvAdd(t *testing.T) {
+	tests := []struct {
+		name        string
+		id          llotypes.StreamID
+		value       StreamValue
+		expectedEnv map[string]any
+		expectError bool
+	}{
+		{
+			name:  "add decimal value",
+			id:    1,
+			value: ToDecimal(decimal.NewFromFloat(123.45)),
+			expectedEnv: map[string]any{
+				"s1": decimal.NewFromFloat(123.45),
+			},
+		},
+		{
+			name: "add quote value",
+			id:   2,
+			value: &Quote{
+				Bid:       decimal.NewFromFloat(123.45),
+				Benchmark: decimal.NewFromFloat(123.50),
+				Ask:       decimal.NewFromFloat(123.55),
+			},
+			expectedEnv: map[string]any{
+				"s2_bid":       decimal.NewFromFloat(123.45),
+				"s2_benchmark": decimal.NewFromFloat(123.50),
+				"s2_ask":       decimal.NewFromFloat(123.55),
+			},
+		},
+		{
+			name: "add timestamped decimal value",
+			id:   3,
+			value: &TimestampedStreamValue{
+				ObservedAtNanoseconds: 1234567890,
+				StreamValue:           ToDecimal(decimal.NewFromFloat(123.45)),
+			},
+			expectedEnv: map[string]any{
+				"s3_timestamp": uint64(1234567890),
+				"s3":           decimal.NewFromFloat(123.45),
+			},
+		},
+		{
+			name: "add timestamped quote value",
+			id:   4,
+			value: &TimestampedStreamValue{
+				ObservedAtNanoseconds: 1234567890,
+				StreamValue: &Quote{
+					Bid:       decimal.NewFromFloat(123.45),
+					Benchmark: decimal.NewFromFloat(123.50),
+					Ask:       decimal.NewFromFloat(123.55),
+				},
+			},
+			expectedEnv: map[string]any{
+				"s4_timestamp": uint64(1234567890),
+				"s4_bid":       decimal.NewFromFloat(123.45),
+				"s4_benchmark": decimal.NewFromFloat(123.50),
+				"s4_ask":       decimal.NewFromFloat(123.55),
+			},
+		},
+		{
+			name:        "nil value",
+			id:          5,
+			value:       nil,
+			expectError: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			env := NewEnv()
+			defer env.release()
+
+			err := env.SetStreamValue(tt.id, tt.value)
+			if tt.expectError {
+				assert.Error(t, err)
+				return
+			}
+
+			assert.NoError(t, err)
+			for key, expectedValue := range tt.expectedEnv {
+				actualValue, exists := env[key]
+				assert.True(t, exists, "key %s should exist in environment", key)
+				assert.Equal(t, expectedValue, actualValue, "value for key %s should match", key)
+			}
+		})
+	}
+}
+
+func TestProcessStreamCalculated(t *testing.T) {
+	tests := []struct {
+		name           string
+		outcome        Outcome
+		expectedValues map[llotypes.StreamID]StreamValue
+	}{
+		{
+			name: "simple addition",
+			outcome: Outcome{
+				ChannelDefinitions: llotypes.ChannelDefinitions{
+					1: {
+						ReportFormat: llotypes.ReportFormatEVMABIEncodeUnpackedExpr,
+						Streams: []llotypes.Stream{
+							{StreamID: 1, Aggregator: llotypes.AggregatorMedian},
+							{StreamID: 2, Aggregator: llotypes.AggregatorMedian},
+						},
+						Opts: []byte(`{"abi":[{"type":"int256","expression":"Sum(s1, s2)","expressionStreamID":3}]}`),
+					},
+				},
+				StreamAggregates: StreamAggregates{
+					1: {llotypes.AggregatorMedian: ToDecimal(decimal.NewFromInt(5))},
+					2: {llotypes.AggregatorMedian: ToDecimal(decimal.NewFromInt(3))},
+				},
+			},
+			expectedValues: map[llotypes.StreamID]StreamValue{
+				3: ToDecimal(decimal.NewFromInt(8)),
+			},
+		},
+		{
+			name: "complex expression",
+			outcome: Outcome{
+				ChannelDefinitions: llotypes.ChannelDefinitions{
+					1: {
+						ReportFormat: llotypes.ReportFormatEVMABIEncodeUnpackedExpr,
+						Streams: []llotypes.Stream{
+							{StreamID: 1, Aggregator: llotypes.AggregatorMedian},
+							{StreamID: 2, Aggregator: llotypes.AggregatorMedian},
+							{StreamID: 3, Aggregator: llotypes.AggregatorMedian},
+						},
+						Opts: []byte(`{"abi":[{"type":"int256","expression":"Mul(Sum(s1, s2), s3)","expressionStreamID":4}]}`),
+					},
+				},
+				StreamAggregates: StreamAggregates{
+					1: {llotypes.AggregatorMedian: ToDecimal(decimal.NewFromInt(2))},
+					2: {llotypes.AggregatorMedian: ToDecimal(decimal.NewFromInt(3))},
+					3: {llotypes.AggregatorMedian: ToDecimal(decimal.NewFromInt(4))},
+				},
+			},
+			expectedValues: map[llotypes.StreamID]StreamValue{
+				4: ToDecimal(decimal.NewFromInt(20)),
+			},
+		},
+		{
+			name: "quote stream values",
+			outcome: Outcome{
+				ChannelDefinitions: llotypes.ChannelDefinitions{
+					1: {
+						ReportFormat: llotypes.ReportFormatEVMABIEncodeUnpackedExpr,
+						Streams: []llotypes.Stream{
+							{StreamID: 1, Aggregator: llotypes.AggregatorMedian},
+							{StreamID: 2, Aggregator: llotypes.AggregatorMedian},
+						},
+						Opts: []byte(`{"abi":[{"type":"int256","expression":"Sum(s1_benchmark, s2_benchmark)","expressionStreamID":3}]}`),
+					},
+				},
+				StreamAggregates: StreamAggregates{
+					1: {llotypes.AggregatorMedian: &Quote{
+						Bid:       decimal.NewFromInt(1),
+						Benchmark: decimal.NewFromInt(2),
+						Ask:       decimal.NewFromInt(3),
+					}},
+					2: {llotypes.AggregatorMedian: &Quote{
+						Bid:       decimal.NewFromInt(4),
+						Benchmark: decimal.NewFromInt(5),
+						Ask:       decimal.NewFromInt(6),
+					}},
+				},
+			},
+			expectedValues: map[llotypes.StreamID]StreamValue{
+				3: ToDecimal(decimal.NewFromInt(7)),
+			},
+		},
+		{
+			name: "invalid expression",
+			outcome: Outcome{
+				ChannelDefinitions: llotypes.ChannelDefinitions{
+					1: {
+						ReportFormat: llotypes.ReportFormatEVMABIEncodeUnpackedExpr,
+						Streams: []llotypes.Stream{
+							{StreamID: 1, Aggregator: llotypes.AggregatorMedian},
+						},
+						Opts: []byte(`{"abi":[{"type":"int256","expression":"Sum(s1)","expressionStreamID":2}]}`),
+					},
+				},
+			},
+		},
+		{
+			name: "empty expression",
+			outcome: Outcome{
+				ChannelDefinitions: llotypes.ChannelDefinitions{
+					1: {
+						ReportFormat: llotypes.ReportFormatEVMABIEncodeUnpackedExpr,
+						Streams: []llotypes.Stream{
+							{StreamID: 1, Aggregator: llotypes.AggregatorMedian},
+						},
+						Opts: []byte(`{"abi":[{"type":"int256","expression":"","expressionStreamID":2}]}`),
+					},
+				},
+			},
+		},
+		{
+			name: "zero expression stream ID",
+			outcome: Outcome{
+				ChannelDefinitions: llotypes.ChannelDefinitions{
+					1: {
+						ReportFormat: llotypes.ReportFormatEVMABIEncodeUnpackedExpr,
+						Streams: []llotypes.Stream{
+							{StreamID: 1, Aggregator: llotypes.AggregatorMedian},
+						},
+						Opts: []byte(`{"abi":[{"type":"int256","expression":"s1","expressionStreamID":0}]}`),
+					},
+				},
+			},
+		},
+		{
+			name: "invalid JSON options",
+			outcome: Outcome{
+				ChannelDefinitions: llotypes.ChannelDefinitions{
+					1: {
+						ReportFormat: llotypes.ReportFormatEVMABIEncodeUnpackedExpr,
+						Streams: []llotypes.Stream{
+							{StreamID: 1, Aggregator: llotypes.AggregatorMedian},
+						},
+						Opts: []byte(`invalid json`),
+					},
+				},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			lggr, err := logger.New()
+			require.NoError(t, err)
+			p := &Plugin{Logger: lggr}
+			p.ProcessStreamCalculated(&tt.outcome)
+
+			for streamID, expectedValue := range tt.expectedValues {
+				actualValue := tt.outcome.StreamAggregates[streamID][llotypes.AggregatorMedian]
+				assert.Equal(t, expectedValue, actualValue)
+			}
+
+		})
 	}
 }
