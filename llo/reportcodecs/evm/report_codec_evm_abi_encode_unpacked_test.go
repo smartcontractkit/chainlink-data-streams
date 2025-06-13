@@ -71,8 +71,10 @@ func genABIEncoder() gopter.Gen {
 
 func genSingleABIEncoder() gopter.Gen {
 	return gen.StrictStruct(reflect.TypeOf(&singleABIEncoder{}), map[string]gopter.Gen{
-		"Multiplier": genMultiplier(),
-		"Type":       gen.AnyString(),
+		"Multiplier":         genMultiplier(),
+		"Type":               gen.AnyString(),
+		"Expression":         gen.AnyString(),
+		"ExpressionStreamID": gen.UInt32(),
 	})
 }
 
