@@ -127,7 +127,7 @@ func (r ReportCodecEVMABIEncodeUnpacked) Encode(report llo.Report, cd llotypes.C
 }
 
 func buildPayload(encoders []ABIEncoder, values []llo.StreamValue) (payload []byte, merr error) {
-	if len(encoders) != len(values) {
+	if len(encoders) != len(values) || len(encoders) == 0 {
 		return nil, fmt.Errorf("ABI and values length mismatch; ABI: %d, Values: %d", len(encoders), len(values))
 	}
 
