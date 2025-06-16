@@ -381,8 +381,9 @@ func evalDecimal(stmt string, env environment) (decimal.Decimal, error) {
 	return d, nil
 }
 
-// ProcessStreamCalculated evaluates the given expression and returns the result as a decimal.Decimal
-func (p *Plugin) ProcessStreamCalculated(outcome *Outcome) {
+// ProcessCalculatedStreams evaluates expressions for each channel of the
+// EncodeUnpackedExpr format and returns each result as a decimal.Decimal
+func (p *Plugin) ProcessCalculatedStreams(outcome *Outcome) {
 	for cid, cd := range outcome.ChannelDefinitions {
 		if cd.ReportFormat == llotypes.ReportFormatEVMABIEncodeUnpackedExpr {
 			env := NewEnv()
@@ -391,6 +392,10 @@ func (p *Plugin) ProcessStreamCalculated(outcome *Outcome) {
 				env.SetStreamValue(stream.StreamID, outcome.StreamAggregates[stream.StreamID][stream.Aggregator])
 			}
 
+			// TODO: we can potentially cache the opts for each channel definition
+			// and avoid unmarshalling the options on outcome.
+			// for now keep it simple as this will require invalidating on
+			// channel definitions updates.
 			copt := opts{}
 			if err := json.Unmarshal(cd.Opts, &copt); err != nil {
 				p.Logger.Warnw("failed to unmarshal channel definition options", "channelID", cid, "error", err)
@@ -405,6 +410,16 @@ func (p *Plugin) ProcessStreamCalculated(outcome *Outcome) {
 
 				if abi.Expression == "" {
 					p.Logger.Warnw("expression is empty", "channelID", cid, "expressionStreamID", abi.ExpressionStreamID)
+					continue
+				}
+
+				if _, ok := outcome.StreamAggregates[abi.ExpressionStreamID]; ok {
+					p.Logger.Errorw(
+						"calculated stream aggregate ID already exists, skipping",
+						"channelID", cid,
+						"ExpressionStreamID", abi.ExpressionStreamID,
+						"Expression", abi.Expression,
+					)
 					continue
 				}
 

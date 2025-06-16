@@ -1389,7 +1389,7 @@ func TestProcessStreamCalculated(t *testing.T) {
 			lggr, err := logger.New()
 			require.NoError(t, err)
 			p := &Plugin{Logger: lggr}
-			p.ProcessStreamCalculated(&tt.outcome)
+			p.ProcessCalculatedStreams(&tt.outcome)
 
 			for streamID, expectedValue := range tt.expectedValues {
 				actualValue := tt.outcome.StreamAggregates[streamID][llotypes.AggregatorMedian]
