@@ -1012,13 +1012,13 @@ func TestEvalDecimal(t *testing.T) {
 		{
 			name:     "simple addition",
 			stmt:     "Add(10, 5)",
-			env:      NewEnv(),
+			env:      NewEnv(&Outcome{ObservationTimestampNanoseconds: 1750169759775700000}),
 			expected: "15",
 		},
 		{
 			name:     "complex expression",
 			stmt:     "Mul(Add(10, 5), 2)",
-			env:      NewEnv(),
+			env:      NewEnv(&Outcome{ObservationTimestampNanoseconds: 1750169759775700000}),
 			expected: "30",
 		},
 		{
@@ -1030,25 +1030,25 @@ func TestEvalDecimal(t *testing.T) {
 		{
 			name:     "division",
 			stmt:     "Div(10, 2)",
-			env:      NewEnv(),
+			env:      NewEnv(&Outcome{ObservationTimestampNanoseconds: 1750169759775700000}),
 			expected: "5",
 		},
 		{
 			name:        "invalid expression",
 			stmt:        "InvalidFunction(10, 5)",
-			env:         NewEnv(),
+			env:         NewEnv(&Outcome{ObservationTimestampNanoseconds: 1750169759775700000}),
 			expectError: true,
 		},
 		{
 			name:        "division by zero",
 			stmt:        "Div(10, 0)",
-			env:         NewEnv(),
+			env:         NewEnv(&Outcome{ObservationTimestampNanoseconds: 1750169759775700000}),
 			expectError: true,
 		},
 		{
 			name:        "non-decimal result",
 			stmt:        "GT(10, 5)",
-			env:         NewEnv(),
+			env:         NewEnv(&Outcome{ObservationTimestampNanoseconds: 1750169759775700000}),
 			expectError: true,
 		},
 	}
@@ -1071,7 +1071,7 @@ func TestEvalDecimal(t *testing.T) {
 
 func TestNewEnvAndRelease(t *testing.T) {
 	t.Run("NewEnv creates environment with all functions", func(t *testing.T) {
-		env := NewEnv()
+		env := NewEnv(&Outcome{ObservationTimestampNanoseconds: 1750169759775700000})
 		defer env.release()
 
 		for key := range keys {
@@ -1081,7 +1081,7 @@ func TestNewEnvAndRelease(t *testing.T) {
 	})
 
 	t.Run("Release cleans up environment", func(t *testing.T) {
-		env := NewEnv()
+		env := NewEnv(&Outcome{ObservationTimestampNanoseconds: 1750169759775700000})
 		env["customKey"] = "customValue"
 
 		// Verify custom key exists
@@ -1089,7 +1089,7 @@ func TestNewEnvAndRelease(t *testing.T) {
 		env.release()
 
 		// Get a new environment from pool to verify cleanup
-		env2 := NewEnv()
+		env2 := NewEnv(&Outcome{ObservationTimestampNanoseconds: 1750169759775700000})
 		defer env2.release()
 
 		// Custom key should not be present in reused environment
@@ -1100,8 +1100,8 @@ func TestNewEnvAndRelease(t *testing.T) {
 	})
 
 	t.Run("multiple environments work independently", func(t *testing.T) {
-		env1 := NewEnv()
-		env2 := NewEnv()
+		env1 := NewEnv(&Outcome{ObservationTimestampNanoseconds: 1750169759775700000})
+		env2 := NewEnv(&Outcome{ObservationTimestampNanoseconds: 1750169759775700000})
 
 		env1["test1"] = "value1"
 		env2["test2"] = "value2"
@@ -1119,12 +1119,12 @@ func TestNewEnvAndRelease(t *testing.T) {
 func TestEnvPooling(t *testing.T) {
 	t.Run("environment reuse through pool", func(t *testing.T) {
 		// Get an environment and add a custom key that should be cleaned up
-		env1 := NewEnv()
+		env1 := NewEnv(&Outcome{ObservationTimestampNanoseconds: 1750169759775700000})
 		env1["shouldBeRemoved"] = "test"
 		env1.release()
 
 		// Get another environment - should be clean
-		env2 := NewEnv()
+		env2 := NewEnv(&Outcome{ObservationTimestampNanoseconds: 1750169759775700000})
 		defer env2.release()
 
 		assert.NotContains(t, env2, "shouldBeRemoved")
@@ -1135,7 +1135,7 @@ func TestEnvPooling(t *testing.T) {
 // Benchmark tests to ensure performance
 func BenchmarkNewEnv(b *testing.B) {
 	for i := 0; i < b.N; i++ {
-		env := NewEnv()
+		env := NewEnv(&Outcome{ObservationTimestampNanoseconds: 1750169759775700000})
 		env.release()
 	}
 }
@@ -1147,7 +1147,7 @@ func BenchmarkAdd(b *testing.B) {
 }
 
 func BenchmarkEvalDecimal(b *testing.B) {
-	env := NewEnv()
+	env := NewEnv(&Outcome{ObservationTimestampNanoseconds: 1750169759775700000})
 	defer env.release()
 
 	for i := 0; i < b.N; i++ {
@@ -1225,7 +1225,7 @@ func TestEnvAdd(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			env := NewEnv()
+			env := NewEnv(&Outcome{ObservationTimestampNanoseconds: 1750169759775700000})
 			defer env.release()
 
 			err := env.SetStreamValue(tt.id, tt.value)

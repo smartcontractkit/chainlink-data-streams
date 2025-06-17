@@ -108,8 +108,10 @@ func (e environment) release() {
 }
 
 // NewEnv returns a new environment with the default functions
-func NewEnv() environment {
-	return pool.Get().(environment)
+func NewEnv(outcome *Outcome) environment {
+	env := pool.Get().(environment)
+	env["observations_timestamp"] = outcome.ObservationTimestampNanoseconds
+	return env
 }
 
 // Equal returns true if x and y are equal
@@ -386,7 +388,8 @@ func evalDecimal(stmt string, env environment) (decimal.Decimal, error) {
 func (p *Plugin) ProcessCalculatedStreams(outcome *Outcome) {
 	for cid, cd := range outcome.ChannelDefinitions {
 		if cd.ReportFormat == llotypes.ReportFormatEVMABIEncodeUnpackedExpr {
-			env := NewEnv()
+			env := NewEnv(outcome)
+
 			for _, stream := range cd.Streams {
 				p.Logger.Debugw("setting stream value", "channelID", cid, "streamID", stream.StreamID, "aggregator", stream.Aggregator)
 				env.SetStreamValue(stream.StreamID, outcome.StreamAggregates[stream.StreamID][stream.Aggregator])
