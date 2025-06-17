@@ -398,47 +398,60 @@ func (p *Plugin) ProcessCalculatedStreams(outcome *Outcome) {
 			// channel definitions updates.
 			copt := opts{}
 			if err := json.Unmarshal(cd.Opts, &copt); err != nil {
-				p.Logger.Warnw("failed to unmarshal channel definition options", "channelID", cid, "error", err)
+				p.Logger.Errorw("failed to unmarshal channel definition options", "channelID", cid, "error", err)
 				continue
+			}
+
+			if len(copt.ABI) == 0 {
+				p.Logger.Errorw("no expressions found in channel definition", "channelID", cid)
+				continue
+			}
+
+			// channel definitions are inherited from the previous outcome,
+			// so we only update the channel definition streams if we haven't done it before
+			if cd.Streams[len(cd.Streams)-1].StreamID != copt.ABI[len(copt.ABI)-1].ExpressionStreamID {
+				for _, abi := range copt.ABI {
+					cd.Streams = append(cd.Streams, llotypes.Stream{
+						StreamID:   abi.ExpressionStreamID,
+						Aggregator: llotypes.AggregatorMedian,
+					})
+				}
+				outcome.ChannelDefinitions[cid] = cd
 			}
 
 			for _, abi := range copt.ABI {
 				if abi.ExpressionStreamID == 0 {
-					p.Logger.Warnw("expression stream ID is 0", "channelID", cid, "expression", abi.Expression)
-					continue
+					p.Logger.Errorw("expression stream ID is 0", "channelID", cid, "expression", abi.Expression)
+					break
 				}
 
 				if abi.Expression == "" {
-					p.Logger.Warnw("expression is empty", "channelID", cid, "expressionStreamID", abi.ExpressionStreamID)
-					continue
+					p.Logger.Errorw("expression is empty", "channelID", cid, "expressionStreamID", abi.ExpressionStreamID)
+					break
 				}
 
-				if _, ok := outcome.StreamAggregates[abi.ExpressionStreamID]; ok {
+				if len(outcome.StreamAggregates[abi.ExpressionStreamID]) > 0 {
 					p.Logger.Errorw(
 						"calculated stream aggregate ID already exists, skipping",
 						"channelID", cid,
 						"ExpressionStreamID", abi.ExpressionStreamID,
 						"Expression", abi.Expression,
 					)
-					continue
+					break
 				}
 
 				p.Logger.Infow("evaluating expression", "channelID", cid, "expression", abi.Expression, "env", fmt.Sprintf("%+v", env))
 				value, err := evalDecimal(abi.Expression, env)
 				if err != nil {
-					p.Logger.Warnw("failed to evaluate expression", "channelID", cid, "expression", abi.Expression, "error", err)
-					continue
+					p.Logger.Errorw("failed to evaluate expression", "channelID", cid, "expression", abi.Expression, "error", err)
+					break
 				}
 
+				// update the outcome with the new stream value if expression was successfully evaluated
 				outcome.StreamAggregates[abi.ExpressionStreamID] = map[llotypes.Aggregator]StreamValue{
 					llotypes.AggregatorMedian: ToDecimal(value),
 				}
 
-				cd.Streams = append(cd.Streams, llotypes.Stream{
-					StreamID:   abi.ExpressionStreamID,
-					Aggregator: llotypes.AggregatorMedian,
-				})
-				outcome.ChannelDefinitions[cid] = cd
 			}
 
 			env.release()
