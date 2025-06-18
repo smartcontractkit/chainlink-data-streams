@@ -145,43 +145,63 @@ func Floor(x any) (decimal.Decimal, error) {
 	return ad.Floor(), nil
 }
 
-// Avg returns the average of x and y
-func Avg(x, y any) (decimal.Decimal, error) {
-	ad, err := toDecimal(x)
-	if err != nil {
-		return decimal.Decimal{}, err
+// Avg returns the average of x elements
+func Avg(x ...any) (decimal.Decimal, error) {
+	if len(x) == 0 {
+		return decimal.Decimal{}, fmt.Errorf("no elements to calculate avg")
 	}
-	bd, err := toDecimal(y)
-	if err != nil {
-		return decimal.Decimal{}, err
+
+	sum := decimal.Zero
+	for _, v := range x {
+		ad, err := toDecimal(v)
+		if err != nil {
+			return decimal.Decimal{}, err
+		}
+		sum = sum.Add(ad)
 	}
-	return decimal.Avg(ad, bd), nil
+	return sum.Div(decimal.NewFromInt(int64(len(x)))), nil
 }
 
-// Max returns the maximum of x and y
-func Max(x, y any) (decimal.Decimal, error) {
-	ad, err := toDecimal(x)
+// Max returns the maximum of x elements
+func Max(x ...any) (decimal.Decimal, error) {
+	if len(x) == 0 {
+		return decimal.Decimal{}, fmt.Errorf("no elements to calculate max")
+	}
+
+	max, err := toDecimal(x[0])
 	if err != nil {
 		return decimal.Decimal{}, err
 	}
-	bd, err := toDecimal(y)
-	if err != nil {
-		return decimal.Decimal{}, err
+
+	for _, v := range x[1:] {
+		ad, err := toDecimal(v)
+		if err != nil {
+			return decimal.Decimal{}, err
+		}
+		max = decimal.Max(max, ad)
 	}
-	return decimal.Max(ad, bd), nil
+	return max, nil
 }
 
-// Min returns the minimum of x and y
-func Min(x, y any) (decimal.Decimal, error) {
-	ad, err := toDecimal(x)
+// Min returns the minimum of x elements
+func Min(x ...any) (decimal.Decimal, error) {
+	if len(x) == 0 {
+		return decimal.Decimal{}, fmt.Errorf("no elements to calculate min")
+	}
+
+	min, err := toDecimal(x[0])
 	if err != nil {
 		return decimal.Decimal{}, err
 	}
-	bd, err := toDecimal(y)
-	if err != nil {
-		return decimal.Decimal{}, err
+
+	for _, v := range x[1:] {
+		ad, err := toDecimal(v)
+		if err != nil {
+			return decimal.Decimal{}, err
+		}
+		min = decimal.Min(min, ad)
 	}
-	return decimal.Min(ad, bd), nil
+	return min, nil
 }
 
 // GreaterThan returns true if x is greater than y
