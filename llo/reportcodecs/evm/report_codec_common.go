@@ -139,7 +139,7 @@ type singleABIEncoder struct {
 	// ExpressionStreamID, if provided, will be the stream ID of the stream value
 	// that will be used to evaluate the expression.
 	// OPTIONAL
-	ExpressionStreamID uint32 `json:"expressionStreamID"`
+	ExpressionStreamID uint32 `json:"expressionStreamId"`
 }
 
 // getNormalizedMultiplier returns the multiplier as a decimal.Decimal, defaulting
