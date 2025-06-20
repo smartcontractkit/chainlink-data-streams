@@ -436,7 +436,7 @@ func (p *Plugin) ProcessCalculatedStreams(outcome *Outcome) {
 				for _, abi := range copt.ABI {
 					cd.Streams = append(cd.Streams, llotypes.Stream{
 						StreamID:   abi.ExpressionStreamID,
-						Aggregator: llotypes.AggregatorMedian,
+						Aggregator: llotypes.AggregatorCalculated,
 					})
 				}
 				outcome.ChannelDefinitions[cid] = cd
@@ -472,9 +472,8 @@ func (p *Plugin) ProcessCalculatedStreams(outcome *Outcome) {
 
 				// update the outcome with the new stream value if expression was successfully evaluated
 				outcome.StreamAggregates[abi.ExpressionStreamID] = map[llotypes.Aggregator]StreamValue{
-					llotypes.AggregatorMedian: ToDecimal(value),
+					llotypes.AggregatorCalculated: ToDecimal(value),
 				}
-
 			}
 
 			env.release()

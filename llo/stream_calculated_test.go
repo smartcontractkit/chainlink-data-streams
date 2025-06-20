@@ -1392,7 +1392,7 @@ func TestProcessStreamCalculated(t *testing.T) {
 			p.ProcessCalculatedStreams(&tt.outcome)
 
 			for streamID, expectedValue := range tt.expectedValues {
-				actualValue := tt.outcome.StreamAggregates[streamID][llotypes.AggregatorMedian]
+				actualValue := tt.outcome.StreamAggregates[streamID][llotypes.AggregatorCalculated]
 				assert.Equal(t, expectedValue, actualValue)
 			}
 
