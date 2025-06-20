@@ -10,6 +10,7 @@ import (
 
 	"github.com/shopspring/decimal"
 
+	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
 	"github.com/smartcontractkit/chainlink-data-streams/llo"
 	ubig "github.com/smartcontractkit/chainlink-data-streams/llo/reportcodecs/evm/utils"
 )
@@ -135,11 +136,11 @@ type singleABIEncoder struct {
 	Multiplier *ubig.Big `json:"multiplier"`
 	// Expression, if provided, will be evaluated and the result will be encoded.
 	// OPTIONAL
-	Expression string `json:"expression"`
+	Expression string `json:"expression,omitempty"`
 	// ExpressionStreamID, if provided, will be the stream ID of the stream value
 	// that will be used to evaluate the expression.
 	// OPTIONAL
-	ExpressionStreamID uint32 `json:"expressionStreamId"`
+	ExpressionStreamID llotypes.StreamID `json:"expressionStreamId,omitempty"`
 }
 
 // getNormalizedMultiplier returns the multiplier as a decimal.Decimal, defaulting
