@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"sync"
+	"time"
 
 	"github.com/expr-lang/expr"
 	"github.com/shopspring/decimal"
@@ -40,6 +41,7 @@ var (
 				"Ceil":               Ceil,
 				"Floor":              Floor,
 				"Avg":                Avg,
+				"Duration":           Duration,
 			}
 		},
 	}
@@ -70,6 +72,7 @@ var (
 		"Ceil":               true,
 		"Floor":              true,
 		"Avg":                true,
+		"Duration":           true,
 	}
 )
 
@@ -360,6 +363,11 @@ func Round(x any, precision int) (decimal.Decimal, error) {
 	return ad.Round(int32(precision)), nil
 }
 
+// Duration parses a duration string into a time.Duration
+func Duration(x string) (time.Duration, error) {
+	return time.ParseDuration(x)
+}
+
 // toDecimal converts x to a decimal.Decimal
 func toDecimal(x any) (decimal.Decimal, error) {
 	switch v := x.(type) {
@@ -383,14 +391,24 @@ func toDecimal(x any) (decimal.Decimal, error) {
 		return decimal.NewFromUint64(v), nil
 	case decimal.Decimal:
 		return v, nil
+	case time.Duration:
+		return decimal.NewFromInt(int64(v)), nil
 	default:
 		return decimal.Decimal{}, fmt.Errorf("unsupported type: %T", x)
 	}
 }
 
 // evalDecimal evaluates the given expression and returns the result as a decimal.Decimal
-func evalDecimal(stmt string, env environment) (decimal.Decimal, error) {
-	r, err := expr.Eval(stmt, env)
+func evalDecimal(stmt string, env map[string]any) (decimal.Decimal, error) {
+	// compile with the environment for	type checking
+	// disable all builtins to avoid unexpected behaviors
+	p, err := expr.Compile(stmt, expr.Env(env), expr.DisableAllBuiltins())
+
+	if err != nil {
+		return decimal.Decimal{}, fmt.Errorf("failed to compile expression: %w", err)
+	}
+
+	r, err := expr.Run(p, env)
 	if err != nil {
 		return decimal.Decimal{}, fmt.Errorf("failed to evaluate expression: %w", err)
 	}

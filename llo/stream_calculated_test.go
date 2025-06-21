@@ -1069,6 +1069,44 @@ func TestEvalDecimal(t *testing.T) {
 	}
 }
 
+func TestEvalDuration(t *testing.T) {
+	tests := []struct {
+		name        string
+		stmt        string
+		env         environment
+		expected    string
+		expectError bool
+	}{
+		{
+			name:     "duration",
+			stmt:     `Sum(Duration('60s'), observations_timestamp)`,
+			env:      NewEnv(&Outcome{ObservationTimestampNanoseconds: 1750169759775700000}),
+			expected: "1750169819775700000",
+		},
+		{
+			name:        "invalid expression",
+			stmt:        "Duration(10)",
+			env:         NewEnv(&Outcome{ObservationTimestampNanoseconds: 1750169759775700000}),
+			expectError: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := evalDecimal(tt.stmt, tt.env)
+			if tt.expectError {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+				expected, _ := decimal.NewFromString(tt.expected)
+				assert.True(t, expected.Equal(result), "expected %s, got %s", expected.String(), result.String())
+			}
+
+			tt.env.release()
+		})
+	}
+}
+
 func TestNewEnvAndRelease(t *testing.T) {
 	t.Run("NewEnv creates environment with all functions", func(t *testing.T) {
 		env := NewEnv(&Outcome{ObservationTimestampNanoseconds: 1750169759775700000})
