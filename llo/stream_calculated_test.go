@@ -1440,3 +1440,36 @@ func TestProcessStreamCalculated(t *testing.T) {
 		})
 	}
 }
+
+func BenchmarkProcessCalculatedStreams(b *testing.B) {
+	aggr := StreamAggregates{
+		1: {llotypes.AggregatorMedian: ToDecimal(decimal.NewFromInt(2))},
+		2: {llotypes.AggregatorMedian: ToDecimal(decimal.NewFromInt(3))},
+		3: {llotypes.AggregatorMedian: ToDecimal(decimal.NewFromInt(4))},
+	}
+	outcome := Outcome{
+		ObservationTimestampNanoseconds: 1750169759775700000,
+		ChannelDefinitions: llotypes.ChannelDefinitions{
+			1: {
+				ReportFormat: llotypes.ReportFormatEVMABIEncodeUnpackedExpr,
+				Streams: []llotypes.Stream{
+					{StreamID: 1, Aggregator: llotypes.AggregatorMedian},
+					{StreamID: 2, Aggregator: llotypes.AggregatorMedian},
+					{StreamID: 3, Aggregator: llotypes.AggregatorMedian},
+				},
+				Opts: []byte(`{"abi":[{"type":"int256","expression":"Mul(Sum(s1, s2), s3)","expressionStreamID":4}]}`),
+			},
+		},
+		StreamAggregates: aggr,
+	}
+
+	p := &Plugin{Logger: logger.Nop()}
+
+	for i := 0; i < b.N; i++ {
+		p.ProcessCalculatedStreams(&outcome)
+		if _, ok := outcome.StreamAggregates[4]; !ok {
+			b.Fatal("stream aggregate is not set")
+		}
+		outcome.StreamAggregates = aggr
+	}
+}
