@@ -11,7 +11,7 @@ require (
 	github.com/klauspost/compress v1.18.0
 	github.com/leanovate/gopter v0.2.11
 	github.com/shopspring/decimal v1.4.0
-	github.com/smartcontractkit/chainlink-common v0.7.1-0.20250620171839-6009cad95977
+	github.com/smartcontractkit/chainlink-common v0.7.1-0.20250623140116-9cb7ec4a4def
 	github.com/smartcontractkit/libocr v0.0.0-20250220133800-f3b940c4f298
 	github.com/stretchr/testify v1.10.0
 	golang.org/x/exp v0.0.0-20250218142911-aa4b98e5adaa
