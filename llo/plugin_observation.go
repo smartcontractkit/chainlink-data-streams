@@ -33,17 +33,6 @@ func (p *Plugin) observation(ctx context.Context, outctx ocr3types.OutcomeContex
 	}
 
 	var obs Observation
-	// QUESTION: is there a way to have this captured in EAs so we get something
-	// closer to the source?
-	observationTimestamp := time.Now()
-	{
-		obsTSNanos := observationTimestamp.UnixNano()
-		if obsTSNanos < 0 {
-			// Invariant violation; we should never see a negative time
-			return nil, fmt.Errorf("negative observation timestamps are not supported, got: %d", obsTSNanos)
-		}
-		obs.UnixTimestampNanoseconds = uint64(obsTSNanos)
-	}
 
 	if previousOutcome.LifeCycleStage == LifeCycleStageRetired {
 		p.Logger.Debugw("Node is retired, will generate empty observation", "stage", "Observation", "seqNr", outctx.SeqNr)
@@ -155,12 +144,19 @@ func (p *Plugin) observation(ctx context.Context, outctx ocr3types.OutcomeContex
 			observationCtx, cancel := context.WithTimeout(ctx, p.MaxDurationObservation)
 			defer cancel()
 
-			opts := &dsOpts{p.Config.VerboseLogging, outctx, p.ConfigDigest, p.OutcomeCodec, observationTimestamp}
+			opts := &dsOpts{p.Config.VerboseLogging, outctx, p.ConfigDigest, p.OutcomeCodec, time.Now()}
 			if err = p.DataSource.Observe(observationCtx, obs.StreamValues, opts); err != nil {
 				return nil, fmt.Errorf("DataSource.Observe error: %w", err)
 			}
 		}
 	}
+
+	obsTSNanos := time.Now().UnixNano()
+	if obsTSNanos < 0 {
+		// Invariant violation; we should never see a negative time
+		return nil, fmt.Errorf("negative observation timestamps are not supported, got: %d", obsTSNanos)
+	}
+	obs.UnixTimestampNanoseconds = uint64(obsTSNanos)
 
 	serialized, err := p.ObservationCodec.Encode(obs)
 	if err != nil {
