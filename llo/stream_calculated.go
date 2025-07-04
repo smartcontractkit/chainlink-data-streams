@@ -4,10 +4,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"regexp"
+	"strconv"
 	"sync"
 	"time"
 
 	"github.com/expr-lang/expr"
+	"github.com/expr-lang/expr/ast"
+	"github.com/expr-lang/expr/parser"
 	"github.com/shopspring/decimal"
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
 )
@@ -440,12 +444,15 @@ func (p *Plugin) ProcessCalculatedStreams(outcome *Outcome) {
 			copt := opts{}
 			if err := json.Unmarshal(cd.Opts, &copt); err != nil {
 				p.Logger.Errorw("failed to unmarshal channel definition options", "channelID", cid, "error", err)
+				env.release()
 				continue
 			}
 
 			if len(copt.ABI) == 0 {
 				p.Logger.Errorw("no expressions found in channel definition", "channelID", cid)
+				env.release()
 				continue
+
 			}
 
 			// channel definitions are inherited from the previous outcome,
@@ -460,44 +467,46 @@ func (p *Plugin) ProcessCalculatedStreams(outcome *Outcome) {
 				outcome.ChannelDefinitions[cid] = cd
 			}
 
-			for _, abi := range copt.ABI {
-				if abi.ExpressionStreamID == 0 {
-					p.Logger.Errorw("expression stream ID is 0", "channelID", cid, "expression", abi.Expression)
-					break
-				}
-
-				if abi.Expression == "" {
-					p.Logger.Errorw("expression is empty", "channelID", cid, "expressionStreamID", abi.ExpressionStreamID)
-					break
-				}
-
-				if len(outcome.StreamAggregates[abi.ExpressionStreamID]) > 0 {
-					p.Logger.Errorw(
-						"calculated stream aggregate ID already exists, skipping",
-						"channelID", cid,
-						"ExpressionStreamID", abi.ExpressionStreamID,
-						"Expression", abi.Expression,
-					)
-					break
-				}
-
-				p.Logger.Infow("evaluating expression", "channelID", cid, "expression", abi.Expression, "env", fmt.Sprintf("%+v", env))
-				value, err := evalDecimal(abi.Expression, env)
-				if err != nil {
-					p.Logger.Errorw("failed to evaluate expression", "channelID", cid, "expression", abi.Expression, "error", err)
-					break
-				}
-
-				// update the outcome with the new stream value if expression was successfully evaluated
-				outcome.StreamAggregates[abi.ExpressionStreamID] = map[llotypes.Aggregator]StreamValue{
-					llotypes.AggregatorCalculated: ToDecimal(value),
-				}
+			if err := p.evalExpression(&copt, cid, env, outcome); err != nil {
+				p.Logger.Errorw("failed to process expression", "channelID", cid, "error", err)
 			}
-
 			env.release()
-			p.Logger.Debugw("ChannelDefinition", "channelID", cid, "reportFormat", cd.ReportFormat)
 		}
 	}
+}
+
+func (p *Plugin) evalExpression(o *opts, cid llotypes.ChannelID, env environment, outcome *Outcome) error {
+	for _, abi := range o.ABI {
+		if abi.ExpressionStreamID == 0 {
+			return fmt.Errorf("expression stream ID is 0, channelID: %d, expression: %s",
+				cid, abi.Expression)
+		}
+
+		if abi.Expression == "" {
+			return fmt.Errorf(
+				"expression is empty, channelID: %d, expressionStreamID: %d",
+				cid, abi.ExpressionStreamID)
+		}
+
+		if len(outcome.StreamAggregates[abi.ExpressionStreamID]) > 0 {
+			return fmt.Errorf(
+				"calculated stream aggregate ID already exists, channelID: %d, expressionStreamID: %d, expression: %s",
+				cid, abi.ExpressionStreamID, abi.Expression)
+		}
+
+		value, err := evalDecimal(abi.Expression, env)
+		if err != nil {
+			return fmt.Errorf(
+				"failed to evaluate expression, channelID: %d, expression: %s, error: %w",
+				cid, abi.Expression, err)
+		}
+
+		// update the outcome with the new stream value if expression was successfully evaluated
+		outcome.StreamAggregates[abi.ExpressionStreamID] = map[llotypes.Aggregator]StreamValue{
+			llotypes.AggregatorCalculated: ToDecimal(value),
+		}
+	}
+	return nil
 }
 
 type opts struct {
@@ -507,3 +516,117 @@ type opts struct {
 		ExpressionStreamID llotypes.StreamID `json:"expressionStreamID"`
 	} `json:"abi"`
 }
+
+// ProcessCalculatedStreamsDryRun processes the calculated streams for the given expressions
+// and returns the outcome with the calculated streams, useful for testing.
+func (p *Plugin) ProcessCalculatedStreamsDryRun(expression string) error {
+	tree, err := parser.Parse(expression)
+	if err != nil {
+		return fmt.Errorf("failed to parse expression: %w", err)
+	}
+
+	v := &visitor{}
+	ast.Walk(&tree.Node, v)
+
+	// Create outcome with required streams
+	aggr := StreamAggregates{}
+	streams := []llotypes.Stream{}
+
+	for streamID, kind := range v.Identifiers {
+		switch kind {
+		case "bid", "ask", "benchmark":
+			aggr[streamID] = map[llotypes.Aggregator]StreamValue{
+				llotypes.AggregatorMedian: &Quote{
+					Bid:       decimal.NewFromInt(110000000000000002),
+					Ask:       decimal.NewFromInt(110000000000000001),
+					Benchmark: decimal.NewFromInt(110000000000000000),
+				},
+			}
+		case "timestamp":
+			aggr[streamID] = map[llotypes.Aggregator]StreamValue{
+				llotypes.AggregatorMedian: &TimestampedStreamValue{
+					ObservedAtNanoseconds: uint64(time.Now().UnixNano()),
+					StreamValue:           ToDecimal(decimal.NewFromInt(110000000000000000)),
+				},
+			}
+		default:
+			aggr[streamID] = map[llotypes.Aggregator]StreamValue{
+				llotypes.AggregatorMedian: ToDecimal(decimal.NewFromInt(int64(streamID))),
+			}
+		}
+
+		streams = append(streams, llotypes.Stream{
+			StreamID:   streamID,
+			Aggregator: llotypes.AggregatorMedian,
+		})
+	}
+
+	cd := llotypes.ChannelDefinitions{
+		1: {
+			ReportFormat: llotypes.ReportFormatEVMABIEncodeUnpackedExpr,
+			Streams:      streams,
+			Opts:         []byte(fmt.Sprintf(`{"abi":[{"type":"int256","expression":"%s","expressionStreamID":999}]}`, expression)),
+		},
+	}
+
+	outcome := Outcome{
+		ObservationTimestampNanoseconds: uint64(time.Now().UnixNano()),
+		ChannelDefinitions:              cd,
+		StreamAggregates:                aggr,
+	}
+
+	env := NewEnv(&outcome)
+	for _, stream := range cd[1].Streams {
+		env.SetStreamValue(stream.StreamID, outcome.StreamAggregates[stream.StreamID][stream.Aggregator])
+	}
+
+	// Process the calculated streams
+	o := &opts{
+		ABI: []struct {
+			Type               string            `json:"type"`
+			Expression         string            `json:"expression"`
+			ExpressionStreamID llotypes.StreamID `json:"expressionStreamID"`
+		}{
+			{
+				Type:               "int256",
+				Expression:         expression,
+				ExpressionStreamID: 999,
+			},
+		},
+	}
+	err = p.evalExpression(o, 1, env, &outcome)
+	if err != nil {
+		return fmt.Errorf("failed to process expression: %w", err)
+	}
+
+	if _, ok := outcome.StreamAggregates[999]; !ok {
+		return fmt.Errorf("calculated stream aggregate ID does not exist: %v", outcome.StreamAggregates[999])
+	}
+
+	return nil
+}
+
+type visitor struct {
+	Identifiers map[llotypes.StreamID]string
+}
+
+func (v *visitor) Visit(node *ast.Node) {
+	if v.Identifiers == nil {
+		v.Identifiers = make(map[llotypes.StreamID]string)
+	}
+
+	if n, ok := (*node).(*ast.IdentifierNode); ok {
+		match := streamMatch.FindStringSubmatch(n.Value)
+		if len(match) > 0 {
+			id, err := strconv.ParseUint(match[1], 10, 32)
+			if err != nil {
+				return
+			}
+			if _, ok := v.Identifiers[llotypes.StreamID(id)]; !ok && v.Identifiers[llotypes.StreamID(id)] == "" {
+				v.Identifiers[llotypes.StreamID(id)] = match[2]
+			}
+		}
+	}
+}
+
+var streamMatch = regexp.MustCompile(`s(\d+)(?:_(bid|ask|benchmark|timestamp))?`)

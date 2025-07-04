@@ -1473,3 +1473,63 @@ func BenchmarkProcessCalculatedStreams(b *testing.B) {
 		outcome.StreamAggregates = aggr
 	}
 }
+
+func TestProcessCalculatedStreamsDryRun(t *testing.T) {
+	tests := []struct {
+		name        string
+		expression  string
+		expectError bool
+	}{
+		{
+			name:        "simple addition",
+			expression:  "Sum(s1, s2)",
+			expectError: false,
+		},
+		{
+			name:        "complex expression with functions",
+			expression:  "Mul(Sum(s1, s2), s3)",
+			expectError: false,
+		},
+		{
+			name:        "expression with stream properties",
+			expression:  "Div(Sum(s1_bid, s2_ask), s3_timestamp)",
+			expectError: false,
+		},
+		{
+			name:        "single stream",
+			expression:  "Abs(s1_timestamp)",
+			expectError: false,
+		},
+		{
+			name:        "empty expression",
+			expression:  "",
+			expectError: true,
+		},
+		{
+			name:        "invalid expression",
+			expression:  "invalid + syntax",
+			expectError: true,
+		},
+		{
+			name:        "expression with non-existent function",
+			expression:  "NonExistentFunc(s1, s2)",
+			expectError: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			lggr, err := logger.New()
+			require.NoError(t, err)
+			p := &Plugin{Logger: lggr}
+
+			err = p.ProcessCalculatedStreamsDryRun(tt.expression)
+
+			if tt.expectError {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
