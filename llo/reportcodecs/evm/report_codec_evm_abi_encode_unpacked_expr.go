@@ -89,10 +89,6 @@ func (r ReportCodecEVMABIEncodeUnpackedExpr) Verify(cd llotypes.ChannelDefinitio
 	if len(cd.Streams) < 3 {
 		return fmt.Errorf("expected at least 3 streams; got: %d", len(cd.Streams))
 	}
-	// NOTE: First two streams are always expected to be native/link price
-	if len(opts.ABI) != len(cd.Streams)-2 {
-		return fmt.Errorf("ABI length mismatch; expected: %d, got: %d", len(cd.Streams)-2, len(opts.ABI))
-	}
 	return nil
 }
 

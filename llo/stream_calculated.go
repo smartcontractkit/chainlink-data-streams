@@ -546,12 +546,12 @@ func (p *Plugin) ProcessCalculatedStreamsDryRun(expression string) error {
 			aggr[streamID] = map[llotypes.Aggregator]StreamValue{
 				llotypes.AggregatorMedian: &TimestampedStreamValue{
 					ObservedAtNanoseconds: uint64(time.Now().UnixNano()),
-					StreamValue:           ToDecimal(decimal.NewFromInt(110000000000000000)),
+					StreamValue:           ToDecimal(decimal.NewFromInt(109999999999999999)),
 				},
 			}
 		default:
 			aggr[streamID] = map[llotypes.Aggregator]StreamValue{
-				llotypes.AggregatorMedian: ToDecimal(decimal.NewFromInt(int64(streamID))),
+				llotypes.AggregatorMedian: ToDecimal(decimal.NewFromInt(109999999999999998)),
 			}
 		}
 

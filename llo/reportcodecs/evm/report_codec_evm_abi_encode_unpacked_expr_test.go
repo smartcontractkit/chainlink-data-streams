@@ -44,7 +44,7 @@ func TestReportCodecEVMABIEncodeUnpackedExpr_Encode(t *testing.T) {
 		serializedOpts, err := opts.Encode()
 		require.NoError(t, err)
 		cd := llotypes.ChannelDefinition{
-			ReportFormat: llotypes.ReportFormatEVMABIEncodeUnpacked,
+			ReportFormat: llotypes.ReportFormatEVMABIEncodeUnpackedExpr,
 			Streams: []llotypes.Stream{
 				{
 					Aggregator: llotypes.AggregatorMedian,
@@ -123,7 +123,7 @@ func TestReportCodecEVMABIEncodeUnpackedExpr_Encode(t *testing.T) {
 			require.NoError(t, err)
 
 			cd := llotypes.ChannelDefinition{
-				ReportFormat: llotypes.ReportFormatEVMABIEncodeUnpacked,
+				ReportFormat: llotypes.ReportFormatEVMABIEncodeUnpackedExpr,
 				Streams: []llotypes.Stream{
 					{
 						Aggregator: llotypes.AggregatorMedian,
@@ -187,7 +187,7 @@ func TestReportCodecEVMABIEncodeUnpackedExpr_Verify(t *testing.T) {
 	c := ReportCodecEVMABIEncodeUnpackedExpr{}
 	t.Run("unrecognized fields in opts", func(t *testing.T) {
 		cd := llotypes.ChannelDefinition{
-			ReportFormat: llotypes.ReportFormatEVMABIEncodeUnpacked,
+			ReportFormat: llotypes.ReportFormatEVMABIEncodeUnpackedExpr,
 			Opts:         []byte(`{"unknown":"field"}`),
 		}
 		err := c.Verify(cd)
@@ -196,7 +196,7 @@ func TestReportCodecEVMABIEncodeUnpackedExpr_Verify(t *testing.T) {
 	})
 	t.Run("invalid opts", func(t *testing.T) {
 		cd := llotypes.ChannelDefinition{
-			ReportFormat: llotypes.ReportFormatEVMABIEncodeUnpacked,
+			ReportFormat: llotypes.ReportFormatEVMABIEncodeUnpackedExpr,
 			Opts:         []byte(`"invalid"`),
 		}
 		err := c.Verify(cd)
@@ -205,7 +205,7 @@ func TestReportCodecEVMABIEncodeUnpackedExpr_Verify(t *testing.T) {
 	})
 	t.Run("negative BaseUSDFee", func(t *testing.T) {
 		cd := llotypes.ChannelDefinition{
-			ReportFormat: llotypes.ReportFormatEVMABIEncodeUnpacked,
+			ReportFormat: llotypes.ReportFormatEVMABIEncodeUnpackedExpr,
 			Opts:         []byte(`{"baseUSDFee":"-1"}`),
 		}
 		err := c.Verify(cd)
@@ -214,7 +214,7 @@ func TestReportCodecEVMABIEncodeUnpackedExpr_Verify(t *testing.T) {
 	})
 	t.Run("zero feedID", func(t *testing.T) {
 		cd := llotypes.ChannelDefinition{
-			ReportFormat: llotypes.ReportFormatEVMABIEncodeUnpacked,
+			ReportFormat: llotypes.ReportFormatEVMABIEncodeUnpackedExpr,
 			Opts:         []byte(`{"feedID":"0x0000000000000000000000000000000000000000000000000000000000000000"}`),
 		}
 		err := c.Verify(cd)
@@ -223,7 +223,7 @@ func TestReportCodecEVMABIEncodeUnpackedExpr_Verify(t *testing.T) {
 	})
 	t.Run("missing feedID", func(t *testing.T) {
 		cd := llotypes.ChannelDefinition{
-			ReportFormat: llotypes.ReportFormatEVMABIEncodeUnpacked,
+			ReportFormat: llotypes.ReportFormatEVMABIEncodeUnpackedExpr,
 			Opts:         []byte(`{}`),
 		}
 		err := c.Verify(cd)
@@ -232,7 +232,7 @@ func TestReportCodecEVMABIEncodeUnpackedExpr_Verify(t *testing.T) {
 	})
 	t.Run("not enough streams", func(t *testing.T) {
 		cd := llotypes.ChannelDefinition{
-			ReportFormat: llotypes.ReportFormatEVMABIEncodeUnpacked,
+			ReportFormat: llotypes.ReportFormatEVMABIEncodeUnpackedExpr,
 			Streams: []llotypes.Stream{
 				{StreamID: 1},
 				{StreamID: 2},
@@ -245,7 +245,7 @@ func TestReportCodecEVMABIEncodeUnpackedExpr_Verify(t *testing.T) {
 	})
 	t.Run("ABI length does not match streams length", func(t *testing.T) {
 		cd := llotypes.ChannelDefinition{
-			ReportFormat: llotypes.ReportFormatEVMABIEncodeUnpacked,
+			ReportFormat: llotypes.ReportFormatEVMABIEncodeUnpackedExpr,
 			Streams: []llotypes.Stream{
 				{StreamID: 1},
 				{StreamID: 2},
@@ -255,12 +255,11 @@ func TestReportCodecEVMABIEncodeUnpackedExpr_Verify(t *testing.T) {
 			Opts: []byte(`{"ABI":[{"type":"int192"}],"feedID":"0x1111111111111111111111111111111111111111111111111111111111111111"}`),
 		}
 		err := c.Verify(cd)
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "ABI length mismatch; expected: 2, got: 1")
+		require.NoError(t, err)
 	})
 	t.Run("invalid feedID", func(t *testing.T) {
 		cd := llotypes.ChannelDefinition{
-			ReportFormat: llotypes.ReportFormatEVMABIEncodeUnpacked,
+			ReportFormat: llotypes.ReportFormatEVMABIEncodeUnpackedExpr,
 			Opts:         []byte(`{"baseUSDFee":"1","feedID":"0x"}`),
 		}
 		err := c.Verify(cd)
@@ -274,7 +273,7 @@ func TestReportCodecEVMABIEncodeUnpackedExpr_Verify(t *testing.T) {
 				{StreamID: 2},
 				{StreamID: 3},
 			},
-			ReportFormat: llotypes.ReportFormatEVMABIEncodeUnpacked,
+			ReportFormat: llotypes.ReportFormatEVMABIEncodeUnpackedExpr,
 			Opts:         []byte(`{"baseUSDFee":"1","feedID":"0x1111111111111111111111111111111111111111111111111111111111111111","ABI":[{"streamID":1,"type":"int192"}]}`),
 		}
 		err := c.Verify(cd)
