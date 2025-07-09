@@ -429,49 +429,60 @@ func evalDecimal(stmt string, env map[string]any) (decimal.Decimal, error) {
 // EncodeUnpackedExpr format and returns each result as a decimal.Decimal
 func (p *Plugin) ProcessCalculatedStreams(outcome *Outcome) {
 	for cid, cd := range outcome.ChannelDefinitions {
-		if cd.ReportFormat == llotypes.ReportFormatEVMABIEncodeUnpackedExpr {
-			env := NewEnv(outcome)
-
-			for _, stream := range cd.Streams {
-				p.Logger.Debugw("setting stream value", "channelID", cid, "streamID", stream.StreamID, "aggregator", stream.Aggregator)
-				env.SetStreamValue(stream.StreamID, outcome.StreamAggregates[stream.StreamID][stream.Aggregator])
-			}
-
-			// TODO: we can potentially cache the opts for each channel definition
-			// and avoid unmarshalling the options on outcome.
-			// for now keep it simple as this will require invalidating on
-			// channel definitions updates.
-			copt := opts{}
-			if err := json.Unmarshal(cd.Opts, &copt); err != nil {
-				p.Logger.Errorw("failed to unmarshal channel definition options", "channelID", cid, "error", err)
-				env.release()
-				continue
-			}
-
-			if len(copt.ABI) == 0 {
-				p.Logger.Errorw("no expressions found in channel definition", "channelID", cid)
-				env.release()
-				continue
-
-			}
-
-			// channel definitions are inherited from the previous outcome,
-			// so we only update the channel definition streams if we haven't done it before
-			if cd.Streams[len(cd.Streams)-1].StreamID != copt.ABI[len(copt.ABI)-1].ExpressionStreamID {
-				for _, abi := range copt.ABI {
-					cd.Streams = append(cd.Streams, llotypes.Stream{
-						StreamID:   abi.ExpressionStreamID,
-						Aggregator: llotypes.AggregatorCalculated,
-					})
-				}
-				outcome.ChannelDefinitions[cid] = cd
-			}
-
-			if err := p.evalExpression(&copt, cid, env, outcome); err != nil {
-				p.Logger.Errorw("failed to process expression", "channelID", cid, "error", err)
-			}
-			env.release()
+		if cd.ReportFormat != llotypes.ReportFormatEVMABIEncodeUnpackedExpr {
+			continue
 		}
+
+		var err error
+		env := NewEnv(outcome)
+		for _, stream := range cd.Streams {
+			p.Logger.Debugw("setting stream value", "channelID", cid, "streamID", stream.StreamID, "aggregator", stream.Aggregator)
+
+			if err = env.SetStreamValue(stream.StreamID, outcome.StreamAggregates[stream.StreamID][stream.Aggregator]); err != nil {
+				p.Logger.Errorw("failed to set stream value", "channelID", cid, "error", err, "streamID", stream.StreamID, "aggregator", stream.Aggregator)
+				env.release()
+				break
+			}
+		}
+
+		if err != nil {
+			continue
+		}
+
+		// TODO: we can potentially cache the opts for each channel definition
+		// and avoid unmarshalling the options on outcome.
+		// for now keep it simple as this will require invalidating on
+		// channel definitions updates.
+		copt := opts{}
+		if err := json.Unmarshal(cd.Opts, &copt); err != nil {
+			p.Logger.Errorw("failed to unmarshal channel definition options", "channelID", cid, "error", err)
+			env.release()
+			continue
+		}
+
+		if len(copt.ABI) == 0 {
+			p.Logger.Errorw("no expressions found in channel definition", "channelID", cid)
+			env.release()
+			continue
+
+		}
+
+		// channel definitions are inherited from the previous outcome,
+		// so we only update the channel definition streams if we haven't done it before
+		if cd.Streams[len(cd.Streams)-1].StreamID != copt.ABI[len(copt.ABI)-1].ExpressionStreamID {
+			for _, abi := range copt.ABI {
+				cd.Streams = append(cd.Streams, llotypes.Stream{
+					StreamID:   abi.ExpressionStreamID,
+					Aggregator: llotypes.AggregatorCalculated,
+				})
+			}
+			outcome.ChannelDefinitions[cid] = cd
+		}
+
+		if err := p.evalExpression(&copt, cid, env, outcome); err != nil {
+			p.Logger.Errorw("failed to process expression", "channelID", cid, "error", err)
+		}
+		env.release()
 	}
 }
 
