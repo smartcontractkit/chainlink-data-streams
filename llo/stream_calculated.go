@@ -587,8 +587,11 @@ func (p *Plugin) ProcessCalculatedStreamsDryRun(expression string) error {
 	}
 
 	env := NewEnv(&outcome)
+	defer env.release()
 	for _, stream := range cd[1].Streams {
-		env.SetStreamValue(stream.StreamID, outcome.StreamAggregates[stream.StreamID][stream.Aggregator])
+		if err := env.SetStreamValue(stream.StreamID, outcome.StreamAggregates[stream.StreamID][stream.Aggregator]); err != nil {
+			return fmt.Errorf("failed to set stream value: %w", err)
+		}
 	}
 
 	// Process the calculated streams
