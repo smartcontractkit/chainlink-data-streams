@@ -294,6 +294,10 @@ func (p *Plugin) outcome(outctx ocr3types.OutcomeContext, query types.Query, aos
 		}
 	}
 
+	// ProcessStreamCalculated checks if channels have calculated streams and if so
+	// it will evaluate the expression and update the outcome.StreamAggregates with the result
+	p.ProcessCalculatedStreams(&outcome)
+
 	if p.Config.VerboseLogging {
 		p.Logger.Debugw("Generated outcome", "outcome", outcome, "stage", "Outcome", "seqNr", outctx.SeqNr)
 	}
