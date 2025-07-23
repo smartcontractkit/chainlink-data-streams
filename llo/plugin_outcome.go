@@ -204,6 +204,12 @@ func (p *Plugin) outcome(outctx ocr3types.OutcomeContext, query types.Query, aos
 	for cid, cd := range outcome.ChannelDefinitions {
 		for _, strm := range cd.Streams {
 			sid, agg := strm.StreamID, strm.Aggregator
+
+			// Calculated streams are handled after all streams are aggregated
+			if strm.Aggregator == llotypes.AggregatorCalculated {
+				continue
+			}
+
 			if _, exists := outcome.StreamAggregates[sid][agg]; exists {
 				// Should only happen in the case of duplicate
 				// streams, no need to aggregate twice.
