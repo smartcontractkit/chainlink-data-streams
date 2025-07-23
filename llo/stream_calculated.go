@@ -436,6 +436,10 @@ func (p *Plugin) ProcessCalculatedStreams(outcome *Outcome) {
 		var err error
 		env := NewEnv(outcome)
 		for _, stream := range cd.Streams {
+			if stream.Aggregator == llotypes.AggregatorCalculated {
+				continue
+			}
+
 			p.Logger.Debugw("setting stream value", "channelID", cid, "streamID", stream.StreamID, "aggregator", stream.Aggregator)
 
 			if err = env.SetStreamValue(stream.StreamID, outcome.StreamAggregates[stream.StreamID][stream.Aggregator]); err != nil {
