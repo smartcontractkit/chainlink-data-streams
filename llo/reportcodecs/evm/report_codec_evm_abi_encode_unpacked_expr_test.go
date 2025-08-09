@@ -1,6 +1,7 @@
 package evm
 
 import (
+	"math/big"
 	"testing"
 
 	"github.com/ethereum/go-ethereum/accounts/abi"
@@ -74,14 +75,70 @@ func TestReportCodecEVMABIEncodeUnpackedExpr_Encode(t *testing.T) {
 		assert.Contains(t, err.Error(), "ABI and values length mismatch")
 	})
 
+	t.Run("ns timestamp format verification", func(t *testing.T) {
+		validAfterNano := uint64(1609459200000000000)  
+		observationNano := uint64(1609459260000000000)
+
+		report := llo.Report{
+			ConfigDigest:                    types.ConfigDigest{0x01},
+			SeqNr:                           0x02,
+			ChannelID:                       llotypes.ChannelID(0x03),
+			ValidAfterNanoseconds:           validAfterNano,
+			ObservationTimestampNanoseconds: observationNano,
+			Values: []llo.StreamValue{
+				&llo.Quote{Bid: decimal.NewFromFloat(6.1), 
+					Benchmark: decimal.NewFromFloat(100.0), Ask: decimal.NewFromFloat(8.2332)}, // Native price
+				&llo.Quote{Bid: decimal.NewFromFloat(9.4), 
+					Benchmark: decimal.NewFromFloat(15.0), Ask: decimal.NewFromFloat(11.33)},   // Link price
+				llo.ToDecimal(decimal.NewFromFloat(100)),
+			},
+			Specimen: false,
+		}
+
+		opts := ReportFormatEVMABIEncodeOpts{
+			BaseUSDFee:       decimal.NewFromFloat(0.1),
+			ExpirationWindow: 300, // 5 minutes in seconds
+			FeedID:           common.HexToHash("0x1111111111111111111111111111111111111111111111111111111111111111"),
+			ABI: []ABIEncoder{
+				newSingleABIEncoder("int192", ubig.New(big.NewInt(1e8))),
+			},
+		}
+		serializedOpts, err := opts.Encode()
+		require.NoError(t, err)
+
+		cd := llotypes.ChannelDefinition{
+			ReportFormat: llotypes.ReportFormatEVMABIEncodeUnpackedExpr,
+			Streams: []llotypes.Stream{
+				{Aggregator: llotypes.AggregatorMedian},
+				{Aggregator: llotypes.AggregatorMedian},
+				{Aggregator: llotypes.AggregatorMedian},
+			},
+			Opts: serializedOpts,
+		}
+
+		codec := ReportCodecEVMABIEncodeUnpackedExpr{}
+		encoded, err := codec.Encode(report, cd)
+		require.NoError(t, err)
+
+
+		values, err := BaseNanosecondSchema.Unpack(encoded[:192]) // First 192 bytes is the header
+		require.NoError(t, err)
+		require.Len(t, values, 6)
+
+		// Check that timestamps are in nanosecond format
+		assert.Equal(t, validAfterNano+1, values[1].(uint64))        // validFromTimestamp (validAfter + 1 nanosecond)
+		assert.Equal(t, observationNano, values[2].(uint64))         // observationsTimestamp
+		assert.Equal(t, observationNano+300*1e9, values[5].(uint64)) // expiresAt (observation + 300 seconds in nanoseconds)
+	})
+
 	t.Run("DEX-based asset schema example", func(t *testing.T) {
 		expectedDEXBasedAssetSchema := abi.Arguments([]abi.Argument{
 			{Name: "feedId", Type: mustNewABIType("bytes32")},
-			{Name: "validFromTimestamp", Type: mustNewABIType("uint32")},
-			{Name: "observationsTimestamp", Type: mustNewABIType("uint32")},
+			{Name: "validFromTimestamp", Type: mustNewABIType("uint64")},
+			{Name: "observationsTimestamp", Type: mustNewABIType("uint64")},
 			{Name: "nativeFee", Type: mustNewABIType("uint192")},
 			{Name: "linkFee", Type: mustNewABIType("uint192")},
-			{Name: "expiresAt", Type: mustNewABIType("uint32")},
+			{Name: "expiresAt", Type: mustNewABIType("uint64")},
 			{Name: "price", Type: mustNewABIType("int192")},
 			{Name: "baseMarketDepth", Type: mustNewABIType("int192")},
 			{Name: "quoteMarketDepth", Type: mustNewABIType("int192")},

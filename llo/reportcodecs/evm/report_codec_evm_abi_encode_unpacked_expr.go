@@ -3,12 +3,15 @@ package evm
 import (
 	"errors"
 	"fmt"
+	"math/big"
 
 	"github.com/ethereum/go-ethereum/common"
 
 	"github.com/smartcontractkit/chainlink-common/pkg/logger"
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
 	"github.com/smartcontractkit/chainlink-data-streams/llo"
+
+	"github.com/ethereum/go-ethereum/accounts/abi"
 )
 
 var (
@@ -22,6 +25,38 @@ type ReportCodecEVMABIEncodeUnpackedExpr struct {
 
 func NewReportCodecEVMABIEncodeUnpackedExpr(lggr logger.Logger, donID uint32) ReportCodecEVMABIEncodeUnpackedExpr {
 	return ReportCodecEVMABIEncodeUnpackedExpr{logger.Sugared(lggr).Named("ReportCodecEVMABIEncodeUnpackedExpr"), donID}
+}
+
+// BaseReportFieldsNanoseconds represents the base report fields with nanosecond precision timestamps
+type BaseReportFieldsNanoseconds struct {
+	FeedID             common.Hash
+	ValidFromTimestamp uint64
+	Timestamp          uint64
+	NativeFee          *big.Int
+	LinkFee            *big.Int
+	ExpiresAt          uint64
+}
+
+// BaseNanosecondSchema represents the fixed base schema for nanosecond timestamps
+// that is used for EVMABIEncodeUnpackedExpr reports.
+var BaseNanosecondSchema = getNanosecondBaseSchema()
+
+func getNanosecondBaseSchema() abi.Arguments {
+	mustNewType := func(t string) abi.Type {
+		result, err := abi.NewType(t, "", []abi.ArgumentMarshaling{})
+		if err != nil {
+			panic(fmt.Sprintf("Unexpected error during abi.NewType: %s", err))
+		}
+		return result
+	}
+	return abi.Arguments([]abi.Argument{
+		{Name: "feedId", Type: mustNewType("bytes32")},
+		{Name: "validFromTimestamp", Type: mustNewType("uint64")},
+		{Name: "observationsTimestamp", Type: mustNewType("uint64")},
+		{Name: "nativeFee", Type: mustNewType("uint192")},
+		{Name: "linkFee", Type: mustNewType("uint192")},
+		{Name: "expiresAt", Type: mustNewType("uint64")},
+	})
 }
 
 func (r ReportCodecEVMABIEncodeUnpackedExpr) Encode(report llo.Report, cd llotypes.ChannelDefinition) ([]byte, error) {
@@ -48,21 +83,16 @@ func (r ReportCodecEVMABIEncodeUnpackedExpr) Encode(report llo.Report, cd llotyp
 		return nil, fmt.Errorf("failed to decode opts; got: '%s'; %w", cd.Opts, err)
 	}
 
-	validAfterSeconds, observationTimestampSeconds, err := ExtractTimestamps(report)
-	if err != nil {
-		return nil, fmt.Errorf("failed to extract timestamps; %w", err)
-	}
-
-	rf := BaseReportFields{
+	rf := BaseReportFieldsNanoseconds{
 		FeedID:             opts.FeedID,
-		ValidFromTimestamp: validAfterSeconds + 1,
-		Timestamp:          observationTimestampSeconds,
+		ValidFromTimestamp: report.ValidAfterNanoseconds + 1, // Add 1 nanosecond - smallest increment for nanosecond precision
+		Timestamp:          report.ObservationTimestampNanoseconds,
 		NativeFee:          CalculateFee(nativePrice, opts.BaseUSDFee),
 		LinkFee:            CalculateFee(linkPrice, opts.BaseUSDFee),
-		ExpiresAt:          observationTimestampSeconds + opts.ExpirationWindow,
+		ExpiresAt:          report.ObservationTimestampNanoseconds + uint64(opts.ExpirationWindow)*1e9, // Convert seconds to nanoseconds
 	}
 
-	header, err := r.buildHeader(rf)
+	header, err := r.buildHeaderNanoseconds(rf)
 	if err != nil {
 		return nil, fmt.Errorf("failed to build base report; %w", err)
 	}
@@ -92,22 +122,22 @@ func (r ReportCodecEVMABIEncodeUnpackedExpr) Verify(cd llotypes.ChannelDefinitio
 	return nil
 }
 
-func (r ReportCodecEVMABIEncodeUnpackedExpr) buildHeader(rf BaseReportFields) ([]byte, error) {
+func (r ReportCodecEVMABIEncodeUnpackedExpr) buildHeaderNanoseconds(rf BaseReportFieldsNanoseconds) ([]byte, error) {
 	var merr error
 	if rf.LinkFee == nil {
 		merr = errors.Join(merr, errors.New("linkFee may not be nil"))
-	} else if rf.LinkFee.Cmp(zero) < 0 {
+	} else if rf.LinkFee.Cmp(big.NewInt(0)) < 0 {
 		merr = errors.Join(merr, fmt.Errorf("linkFee may not be negative (got: %s)", rf.LinkFee))
 	}
 	if rf.NativeFee == nil {
 		merr = errors.Join(merr, errors.New("nativeFee may not be nil"))
-	} else if rf.NativeFee.Cmp(zero) < 0 {
+	} else if rf.NativeFee.Cmp(big.NewInt(0)) < 0 {
 		merr = errors.Join(merr, fmt.Errorf("nativeFee may not be negative (got: %s)", rf.NativeFee))
 	}
 	if merr != nil {
 		return nil, merr
 	}
-	b, err := BaseSchema.Pack(rf.FeedID, rf.ValidFromTimestamp, rf.Timestamp, rf.NativeFee, rf.LinkFee, rf.ExpiresAt)
+	b, err := BaseNanosecondSchema.Pack(rf.FeedID, rf.ValidFromTimestamp, rf.Timestamp, rf.NativeFee, rf.LinkFee, rf.ExpiresAt)
 	if err != nil {
 		return nil, fmt.Errorf("failed to pack base report blob; %w", err)
 	}
