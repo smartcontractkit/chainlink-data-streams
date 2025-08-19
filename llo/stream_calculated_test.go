@@ -1,7 +1,9 @@
 package llo
 
 import (
+	"fmt"
 	"math"
+	"strconv"
 	"testing"
 
 	"github.com/shopspring/decimal"
@@ -552,6 +554,261 @@ func TestSub(t *testing.T) {
 	}
 }
 
+func TestPow(t *testing.T) {
+	tests := []struct {
+		name        string
+		x, y        any
+		expected    string
+		expectError bool
+	}{
+		{
+			name:     "positive integer power",
+			x:        "10",
+			y:        2,
+			expected: "100",
+		},
+		{
+			name:     "positive float power",
+			x:        "100",
+			y:        0.5,
+			expected: "10",
+		},
+		{
+			name:     "negative base even positive power",
+			x:        "-10",
+			y:        2,
+			expected: "100",
+		},
+		{
+			name:     "negative base odd positive power",
+			x:        "-10",
+			y:        3,
+			expected: "-1000",
+		},
+		{
+			name:        "negative base float power (known edge case)",
+			x:           "-10",
+			y:           0.5,
+			expectError: true,
+		},
+		{
+			name:        "invalid base",
+			x:           "invalid",
+			y:           2,
+			expectError: true,
+		},
+		{
+			name:        "invalid power",
+			x:           10,
+			y:           "invalid",
+			expectError: true,
+		},
+		{
+			name:     "zero base valid power",
+			x:        0,
+			y:        "12",
+			expected: "0",
+		},
+		{
+			name:        "zero base zero power",
+			x:           0,
+			y:           "",
+			expectError: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := Pow(tt.x, tt.y)
+			if tt.expectError {
+				assert.Error(t, err, "expected error, got result: %s", result.String())
+			} else {
+				assert.NoError(t, err)
+				expected, _ := decimal.NewFromString(tt.expected)
+				assert.True(t, expected.Equal(result), "expected %s, got %s", expected.String(), result.String())
+			}
+		})
+	}
+}
+
+func TestSqrt(t *testing.T) {
+	tests := []struct {
+		name        string
+		x           any
+		expected    string
+		expectError bool
+	}{
+		{
+			name:     "positive int",
+			x:        "144",
+			expected: "12",
+		},
+		{
+			name:     "positive float",
+			x:        "123.45",
+			expected: "11.110805551354051125",
+		},
+		{
+			name:     "zero",
+			x:        "0",
+			expected: "0",
+		},
+		{
+			name:        "negative",
+			x:           "-10",
+			expectError: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := Sqrt(tt.x)
+			if tt.expectError {
+				assert.Error(t, err, "expected error, got result: %s", result.String())
+			} else {
+				assert.NoError(t, err)
+				expected, _ := decimal.NewFromString(tt.expected)
+				assert.True(t, expected.Equal(result), "expected %s, got %s", expected.String(), result.String())
+			}
+		})
+	}
+}
+
+func TestLn(t *testing.T) {
+	tests := []struct {
+		name        string
+		x           any
+		expected    string
+		expectError bool
+	}{
+		{
+			name:     "ln(0.1)",
+			x:        0.1,
+			expected: "-2.302585092994045684",
+		},
+		{
+			name:     "ln(0.0001)",
+			x:        0.0001,
+			expected: "-9.210340371976182736",
+		},
+		{
+			name:     "ln(3.14159)",
+			x:        3.14159,
+			expected: "1.144729041185178381",
+		},
+		{
+			name:        "zero",
+			x:           "0",
+			expectError: true,
+		},
+		{
+			name:        "negative",
+			x:           "-10.0",
+			expectError: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := Ln(tt.x)
+			if tt.expectError {
+				assert.Error(t, err, "expected error, got result: %s", result.String())
+			} else {
+				assert.NoError(t, err)
+				expected, _ := decimal.NewFromString(tt.expected)
+				assert.True(t, expected.Equal(result), "expected %s, got %s", expected.String(), result.String())
+
+				// Extra validation against the standard library.
+				// We only use 14 decimals of accuracy because beyond that many sources give different answers.
+				{
+					logFloat, err := strconv.ParseFloat(fmt.Sprintf("%.14f", tt.x), 64)
+					assert.NoError(t, err)
+					// result with 14 decimals of accuracy:
+					resultFloat, _ := result.Float64()
+					resultStr := fmt.Sprintf("%.14f", resultFloat)
+					// stdlib result with 14 decimals of accuracy:
+					stdlibResultStr := fmt.Sprintf("%.14f", math.Log(logFloat))
+					assert.Equal(t, resultStr, stdlibResultStr, "expected %s, got %s", result.String(), stdlibResultStr)
+				}
+			}
+		})
+	}
+}
+
+func TestLog(t *testing.T) {
+	tests := []struct {
+		name        string
+		x           any
+		y           any
+		expected    string
+		expectError bool
+	}{
+		{
+			name:     "log_2(0.1)",
+			x:        2.0,
+			y:        0.1,
+			expected: "-3.321928094887362348",
+		},
+		{
+			name:     "log_2(0.0001)",
+			x:        2.0,
+			y:        0.0001,
+			expected: "-13.287712379549449391",
+		},
+		{
+			name:     "log_10(3.14159)",
+			x:        10.0,
+			y:        3.14159,
+			expected: "0.497149505861123269",
+		},
+		{
+			name:        "zero log",
+			x:           "0",
+			y:           "10",
+			expectError: true,
+		},
+		{
+			name:        "zero base",
+			x:           "10",
+			y:           "0",
+			expectError: true,
+		},
+		{
+			name:        "negative",
+			x:           "-10.0",
+			expectError: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := Log(tt.x, tt.y)
+			if tt.expectError {
+				assert.Error(t, err, "expected error, got result: %s", result.String())
+			} else {
+				assert.NoError(t, err)
+				expected, _ := decimal.NewFromString(tt.expected)
+				assert.True(t, expected.Equal(result), "expected %s, got %s", expected.String(), result.String())
+
+				// Extra validation against the standard library.
+				// We only use 14 decimals of accuracy because beyond that many sources give different answers.
+				{
+					baseFloat, err := strconv.ParseFloat(fmt.Sprintf("%.14f", tt.y), 64)
+					assert.NoError(t, err)
+					logFloat, err := strconv.ParseFloat(fmt.Sprintf("%.14f", tt.x), 64)
+					assert.NoError(t, err)
+					// result with 14 decimals of accuracy:
+					resultFloat, _ := result.Float64()
+					resultStr := fmt.Sprintf("%.14f", resultFloat)
+					// stdlib result with 14 decimals of accuracy:
+					stdlibResultStr := fmt.Sprintf("%.14f", math.Log(baseFloat)/math.Log(logFloat))
+					assert.Equal(t, resultStr, stdlibResultStr, "expected %s, got %s", result.String(), stdlibResultStr)
+				}
+			}
+		})
+	}
+}
+
 func TestIsZero(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -749,6 +1006,47 @@ func TestRound(t *testing.T) {
 			result, err := Round(tt.input, tt.precision)
 			if tt.expectError {
 				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+				expected, _ := decimal.NewFromString(tt.expected)
+				assert.True(t, expected.Equal(result), "expected %s, got %s", expected.String(), result.String())
+			}
+		})
+	}
+}
+
+func TestTruncate(t *testing.T) {
+	tests := []struct {
+		name        string
+		precision   int32
+		expected    string
+		expectError bool
+	}{
+		{
+			name:      "pi 20",
+			precision: 20,
+			expected:  "3.14159265358979323846",
+		},
+		{
+			name:      "pi 10",
+			precision: 10,
+			expected:  "3.1415926535",
+		},
+		{
+			name:      "pi 2",
+			precision: 2,
+			expected:  "3.14",
+		},
+	}
+
+	// We use a string representation of math.Pi because if we pass the constant we only get 15 digits of precision.
+	const piStr = "3.14159265358979323846264338327950288419716939937510582097494459"
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := Truncate(piStr, tt.precision)
+			if tt.expectError {
+				assert.Error(t, err, "expected error, got result: %s", result.String())
 			} else {
 				assert.NoError(t, err)
 				expected, _ := decimal.NewFromString(tt.expected)
