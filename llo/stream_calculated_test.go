@@ -718,15 +718,16 @@ func TestLn(t *testing.T) {
 				expected, _ := decimal.NewFromString(tt.expected)
 				assert.True(t, expected.Equal(result), "expected %s, got %s", expected.String(), result.String())
 
-				// Extra validation against the standard library:
+				// Extra validation against the standard library.
+				// We only use 14 decimals of accuracy because beyond that many sources give different answers.
 				{
-					logFloat, err := strconv.ParseFloat(fmt.Sprintf("%.10f", tt.x), 64)
+					logFloat, err := strconv.ParseFloat(fmt.Sprintf("%.14f", tt.x), 64)
 					assert.NoError(t, err)
-					// result with 10 decimals of accuracy:
+					// result with 14 decimals of accuracy:
 					resultFloat, _ := result.Float64()
-					resultStr := fmt.Sprintf("%.10f", resultFloat)
-					// stdlib result with 10 decimals of accuracy:
-					stdlibResultStr := fmt.Sprintf("%.10f", math.Log(logFloat))
+					resultStr := fmt.Sprintf("%.14f", resultFloat)
+					// stdlib result with 14 decimals of accuracy:
+					stdlibResultStr := fmt.Sprintf("%.14f", math.Log(logFloat))
 					assert.Equal(t, resultStr, stdlibResultStr, "expected %s, got %s", result.String(), stdlibResultStr)
 				}
 			}
@@ -789,17 +790,18 @@ func TestLog(t *testing.T) {
 				expected, _ := decimal.NewFromString(tt.expected)
 				assert.True(t, expected.Equal(result), "expected %s, got %s", expected.String(), result.String())
 
-				// Extra validation against the standard library:
+				// Extra validation against the standard library.
+				// We only use 14 decimals of accuracy because beyond that many sources give different answers.
 				{
-					baseFloat, err := strconv.ParseFloat(fmt.Sprintf("%.10f", tt.y), 64)
+					baseFloat, err := strconv.ParseFloat(fmt.Sprintf("%.14f", tt.y), 64)
 					assert.NoError(t, err)
-					logFloat, err := strconv.ParseFloat(fmt.Sprintf("%.10f", tt.x), 64)
+					logFloat, err := strconv.ParseFloat(fmt.Sprintf("%.14f", tt.x), 64)
 					assert.NoError(t, err)
-					// result with 10 decimals of accuracy:
+					// result with 14 decimals of accuracy:
 					resultFloat, _ := result.Float64()
-					resultStr := fmt.Sprintf("%.10f", resultFloat)
-					// stdlib result with 10 decimals of accuracy:
-					stdlibResultStr := fmt.Sprintf("%.10f", math.Log(baseFloat)/math.Log(logFloat))
+					resultStr := fmt.Sprintf("%.14f", resultFloat)
+					// stdlib result with 14 decimals of accuracy:
+					stdlibResultStr := fmt.Sprintf("%.14f", math.Log(baseFloat)/math.Log(logFloat))
 					assert.Equal(t, resultStr, stdlibResultStr, "expected %s, got %s", result.String(), stdlibResultStr)
 				}
 			}
