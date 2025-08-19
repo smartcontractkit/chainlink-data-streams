@@ -90,7 +90,7 @@ var (
 
 // precision defines the precision level for power calculations, representing the number of decimal places.
 // See PowerWithPrecision at https://github.com/shopspring/decimal/blob/master/decimal.go#L798.
-const precision = 10
+const precision = 18
 
 type environment map[string]any
 
@@ -404,7 +404,7 @@ func Log(x, y any) (decimal.Decimal, error) {
 		return decimal.Decimal{}, err
 	}
 
-	return lnBase.DivRound(lnLog, 2*precision), nil
+	return lnBase.DivRound(lnLog, precision), nil
 }
 
 // IsZero returns true if x is zero

@@ -571,7 +571,7 @@ func TestPow(t *testing.T) {
 			name:     "positive float power",
 			x:        "100",
 			y:        0.5,
-			expected: "10.00000000000000000002",
+			expected: "10.0000000000000000000000000002",
 		},
 		{
 			name:     "negative base even positive power",
@@ -641,12 +641,12 @@ func TestSqrt(t *testing.T) {
 		{
 			name:     "positive int",
 			x:        "144",
-			expected: "12",
+			expected: "12.0000000000000000000000000002",
 		},
 		{
 			name:     "positive float",
 			x:        "123.45",
-			expected: "11.1108055513540511245",
+			expected: "11.1108055513540511245004438742",
 		},
 		{
 			name:     "zero",
@@ -684,17 +684,17 @@ func TestLn(t *testing.T) {
 		{
 			name:     "ln(0.1)",
 			x:        0.1,
-			expected: "-2.302585093",
+			expected: "-2.302585092994045684",
 		},
 		{
 			name:     "ln(0.0001)",
 			x:        0.0001,
-			expected: "-9.210340372",
+			expected: "-9.210340371976182736",
 		},
 		{
 			name:     "ln(3.14159)",
 			x:        3.14159,
-			expected: "1.1447290412",
+			expected: "1.144729041185178381",
 		},
 		{
 			name:        "zero",
@@ -746,19 +746,19 @@ func TestLog(t *testing.T) {
 			name:     "log_2(0.1)",
 			x:        2.0,
 			y:        0.1,
-			expected: "-3.32192809488736234786",
+			expected: "-3.321928094887362348",
 		},
 		{
 			name:     "log_2(0.0001)",
 			x:        2.0,
 			y:        0.0001,
-			expected: "-13.28771237954944939143",
+			expected: "-13.287712379549449391",
 		},
 		{
 			name:     "log_10(3.14159)",
 			x:        10.0,
 			y:        3.14159,
-			expected: "0.49714950586112326858",
+			expected: "0.497149505861123269",
 		},
 		{
 			name:        "zero log",
