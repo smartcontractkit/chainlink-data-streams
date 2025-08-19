@@ -1015,6 +1015,47 @@ func TestRound(t *testing.T) {
 	}
 }
 
+func TestTruncate(t *testing.T) {
+	tests := []struct {
+		name        string
+		precision   int32
+		expected    string
+		expectError bool
+	}{
+		{
+			name:      "pi 20",
+			precision: 20,
+			expected:  "3.14159265358979323846",
+		},
+		{
+			name:      "pi 10",
+			precision: 10,
+			expected:  "3.1415926535",
+		},
+		{
+			name:      "pi 2",
+			precision: 2,
+			expected:  "3.14",
+		},
+	}
+
+	// We use a string representation of math.Pi because if we pass the constant we only get 15 digits of precision.
+	const piStr = "3.14159265358979323846264338327950288419716939937510582097494459"
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := Truncate(piStr, tt.precision)
+			if tt.expectError {
+				assert.Error(t, err, "expected error, got result: %s", result.String())
+			} else {
+				assert.NoError(t, err)
+				expected, _ := decimal.NewFromString(tt.expected)
+				assert.True(t, expected.Equal(result), "expected %s, got %s", expected.String(), result.String())
+			}
+		})
+	}
+}
+
 func TestMax(t *testing.T) {
 	tests := []struct {
 		name        string

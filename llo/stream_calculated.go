@@ -461,6 +461,15 @@ func Round(x any, precision int) (decimal.Decimal, error) {
 	return ad.Round(int32(precision)), nil
 }
 
+// Truncate truncates off digits from the number, without rounding.
+func Truncate(x any, precision int32) (decimal.Decimal, error) {
+	n, err := toDecimal(x)
+	if err != nil {
+		return decimal.Decimal{}, err
+	}
+	return n.Truncate(precision), nil
+}
+
 // Duration parses a duration string into a time.Duration
 func Duration(x string) (time.Duration, error) {
 	return time.ParseDuration(x)
