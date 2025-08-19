@@ -88,9 +88,14 @@ var (
 	}
 )
 
-// precision defines the precision level for power calculations, representing the number of decimal places.
-// See PowerWithPrecision at https://github.com/shopspring/decimal/blob/master/decimal.go#L798.
-const precision = 18
+const (
+	// precision defines the precision level for power calculations, representing the number of decimal places.
+	// See PowerWithPrecision at https://github.com/shopspring/decimal/blob/master/decimal.go#L798.
+	precision = 18
+	// doublePrecision is used when we intend to further modify the result and we don't want to suffer from rounding
+	// errors.
+	doublePrecision = 2 * precision
+)
 
 type environment map[string]any
 
@@ -351,7 +356,7 @@ func Pow(x, y any) (decimal.Decimal, error) {
 		return decimal.Decimal{}, err
 	}
 	// We use double precision here in order to offset any float approximation errors.
-	res, err := base.PowWithPrecision(power, 2*precision)
+	res, err := base.PowWithPrecision(power, doublePrecision)
 	if err != nil {
 		return decimal.Decimal{}, err
 	}
@@ -369,7 +374,7 @@ func Sqrt(x any) (decimal.Decimal, error) {
 	}
 	sqrtPow, _ := toDecimal(0.5)
 	// We use double precision here in order to offset any float approximation errors.
-	res, err := n.PowWithPrecision(sqrtPow, 2*precision)
+	res, err := n.PowWithPrecision(sqrtPow, doublePrecision)
 	if err != nil {
 		return decimal.Decimal{}, err
 	}
@@ -400,7 +405,7 @@ func Log(x, y any) (decimal.Decimal, error) {
 	if err != nil {
 		return decimal.Decimal{}, err
 	}
-	lnLog, err := log.Ln(2 * precision) // double precision, since we're going to divide them
+	lnLog, err := log.Ln(doublePrecision) // double precision, since we're going to divide them
 	if err != nil {
 		return decimal.Decimal{}, err
 	}
@@ -409,7 +414,7 @@ func Log(x, y any) (decimal.Decimal, error) {
 	if err != nil {
 		return decimal.Decimal{}, err
 	}
-	lnBase, err := base.Ln(2 * precision) // double precision, since we're going to divide them
+	lnBase, err := base.Ln(doublePrecision) // double precision, since we're going to divide them
 	if err != nil {
 		return decimal.Decimal{}, err
 	}
