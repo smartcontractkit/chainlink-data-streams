@@ -36,6 +36,10 @@ var (
 				"Add":                Add,
 				"Sum":                Add,
 				"Sub":                Sub,
+				"Pow":                Pow,
+				"Sqrt":               Sqrt,
+				"Ln":                 Ln,
+				"Log":                Log,
 				"IsZero":             IsZero,
 				"IsNegative":         IsNegative,
 				"IsPositive":         IsPositive,
@@ -67,6 +71,10 @@ var (
 		"Add":                true,
 		"Sum":                true,
 		"Sub":                true,
+		"Pow":                true,
+		"Sqrt":               true,
+		"Ln":                 true,
+		"Log":                true,
 		"IsZero":             true,
 		"IsNegative":         true,
 		"IsPositive":         true,
@@ -79,6 +87,10 @@ var (
 		"Duration":           true,
 	}
 )
+
+// precision defines the precision level for power calculations, representing the number of decimal places.
+// See PowerWithPrecision at https://github.com/shopspring/decimal/blob/master/decimal.go#L798.
+const precision = 10
 
 type environment map[string]any
 
@@ -326,6 +338,73 @@ func Sub(x, y any) (decimal.Decimal, error) {
 		return decimal.Decimal{}, err
 	}
 	return ad.Sub(bd), nil
+}
+
+// Pow returns x, raised to the power of y
+func Pow(x, y any) (decimal.Decimal, error) {
+	base, err := toDecimal(x)
+	if err != nil {
+		return decimal.Decimal{}, err
+	}
+	power, err := toDecimal(y)
+	if err != nil {
+		return decimal.Decimal{}, err
+	}
+	return base.PowWithPrecision(power, precision)
+}
+
+// Sqrt returns the square root of x. Returns error for negative values.
+func Sqrt(x any) (decimal.Decimal, error) {
+	n, err := toDecimal(x)
+	if err != nil {
+		return decimal.Decimal{}, err
+	}
+	if n.IsNegative() {
+		return decimal.Decimal{}, fmt.Errorf("negative number")
+	}
+	sqrtPow, _ := toDecimal(0.5)
+	return n.PowWithPrecision(sqrtPow, precision)
+}
+
+// Ln returns the natural logarithm of x.
+func Ln(x any) (decimal.Decimal, error) {
+	n, err := toDecimal(x)
+	if err != nil {
+		return decimal.Decimal{}, err
+	}
+	if n.IsZero() {
+		return decimal.Decimal{}, fmt.Errorf("cannot represent natural logarithm of 0")
+	}
+	return n.Ln(precision)
+}
+
+// Log returns the logarithms of y with base x. This is equivalent to log_x(y).
+//
+// We use this formula:
+//
+//	             ln(y)
+//	log_x(y)  =  ----
+//	             ln(x)
+func Log(x, y any) (decimal.Decimal, error) {
+	log, err := toDecimal(x)
+	if err != nil {
+		return decimal.Decimal{}, err
+	}
+	lnLog, err := log.Ln(2 * precision) // double precision, since we're going to divide them
+	if err != nil {
+		return decimal.Decimal{}, err
+	}
+
+	base, err := toDecimal(y)
+	if err != nil {
+		return decimal.Decimal{}, err
+	}
+	lnBase, err := base.Ln(2 * precision) // double precision, since we're going to divide them
+	if err != nil {
+		return decimal.Decimal{}, err
+	}
+
+	return lnBase.DivRound(lnLog, 2*precision), nil
 }
 
 // IsZero returns true if x is zero
