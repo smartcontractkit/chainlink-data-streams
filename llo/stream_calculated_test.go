@@ -571,7 +571,7 @@ func TestPow(t *testing.T) {
 			name:     "positive float power",
 			x:        "100",
 			y:        0.5,
-			expected: "10.0000000000000000000000000002",
+			expected: "10",
 		},
 		{
 			name:     "negative base even positive power",
@@ -641,12 +641,12 @@ func TestSqrt(t *testing.T) {
 		{
 			name:     "positive int",
 			x:        "144",
-			expected: "12.0000000000000000000000000002",
+			expected: "12",
 		},
 		{
 			name:     "positive float",
 			x:        "123.45",
-			expected: "11.1108055513540511245004438742",
+			expected: "11.110805551354051125",
 		},
 		{
 			name:     "zero",

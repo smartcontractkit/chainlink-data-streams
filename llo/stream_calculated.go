@@ -350,7 +350,12 @@ func Pow(x, y any) (decimal.Decimal, error) {
 	if err != nil {
 		return decimal.Decimal{}, err
 	}
-	return base.PowWithPrecision(power, precision)
+	// We use double precision here in order to offset any float approximation errors.
+	res, err := base.PowWithPrecision(power, 2*precision)
+	if err != nil {
+		return decimal.Decimal{}, err
+	}
+	return res.Round(precision), nil
 }
 
 // Sqrt returns the square root of x. Returns error for negative values.
@@ -363,7 +368,12 @@ func Sqrt(x any) (decimal.Decimal, error) {
 		return decimal.Decimal{}, fmt.Errorf("negative number")
 	}
 	sqrtPow, _ := toDecimal(0.5)
-	return n.PowWithPrecision(sqrtPow, precision)
+	// We use double precision here in order to offset any float approximation errors.
+	res, err := n.PowWithPrecision(sqrtPow, 2*precision)
+	if err != nil {
+		return decimal.Decimal{}, err
+	}
+	return res.Round(precision), nil
 }
 
 // Ln returns the natural logarithm of x.
