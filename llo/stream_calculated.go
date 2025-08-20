@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"math/big"
 	"regexp"
 	"strconv"
 	"sync"
@@ -462,12 +463,15 @@ func Round(x any, precision int) (decimal.Decimal, error) {
 }
 
 // Truncate truncates off digits from the number, without rounding.
-func Truncate(x any, precision int32) (decimal.Decimal, error) {
+func Truncate(x any, precision int) (decimal.Decimal, error) {
+	if precision > math.MaxInt32 {
+		return decimal.Decimal{}, fmt.Errorf("precision is too large")
+	}
 	n, err := toDecimal(x)
 	if err != nil {
 		return decimal.Decimal{}, err
 	}
-	return n.Truncate(precision), nil
+	return n.Truncate(int32(precision)), nil
 }
 
 // Duration parses a duration string into a time.Duration
@@ -496,6 +500,8 @@ func toDecimal(x any) (decimal.Decimal, error) {
 		return decimal.NewFromUint64(uint64(v)), nil
 	case uint64:
 		return decimal.NewFromUint64(v), nil
+	case *big.Int:
+		return decimal.NewFromBigInt(v, 0), nil
 	case decimal.Decimal:
 		return v, nil
 	case time.Duration:

@@ -3,6 +3,7 @@ package llo
 import (
 	"fmt"
 	"math"
+	"math/big"
 	"strconv"
 	"testing"
 
@@ -74,6 +75,11 @@ func TestToDecimal(t *testing.T) {
 			name:     "decimal.Decimal",
 			input:    decimal.NewFromFloat(123.45),
 			expected: decimal.NewFromFloat(123.45),
+		},
+		{
+			name:     "*big.Int",
+			input:    big.NewInt(123),
+			expected: decimal.NewFromBigInt(big.NewInt(123), 0),
 		},
 		{
 			name:        "unsupported type",
@@ -1018,7 +1024,7 @@ func TestRound(t *testing.T) {
 func TestTruncate(t *testing.T) {
 	tests := []struct {
 		name        string
-		precision   int32
+		precision   int
 		expected    string
 		expectError bool
 	}{
