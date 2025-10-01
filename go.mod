@@ -7,6 +7,7 @@ toolchain go1.24.4
 require (
 	github.com/ethereum/go-ethereum v1.15.3
 	github.com/expr-lang/expr v1.17.5
+	github.com/goccy/go-json v0.10.4
 	github.com/hashicorp/go-plugin v1.6.3
 	github.com/klauspost/compress v1.18.0
 	github.com/leanovate/gopter v0.2.11

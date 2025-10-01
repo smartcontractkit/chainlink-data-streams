@@ -704,7 +704,7 @@ func TestReportCodecEVMABIEncodeUnpacked_Verify(t *testing.T) {
 		}
 		err := c.Verify(cd)
 		require.Error(t, err)
-		require.EqualError(t, err, "invalid Opts, got: \"\\\"invalid\\\"\"; json: cannot unmarshal string into Go value of type evm.ReportFormatEVMABIEncodeOpts")
+		require.Contains(t, err.Error(), "invalid Opts, got: \"\\\"invalid\\\"\"")
 	})
 	t.Run("negative BaseUSDFee", func(t *testing.T) {
 		cd := llotypes.ChannelDefinition{

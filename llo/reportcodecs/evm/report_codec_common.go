@@ -1,12 +1,13 @@
 package evm
 
 import (
-	"encoding/json"
 	"fmt"
 	"math"
 	"math/big"
 	"regexp"
 	"strconv"
+
+	"github.com/goccy/go-json"
 
 	"github.com/shopspring/decimal"
 

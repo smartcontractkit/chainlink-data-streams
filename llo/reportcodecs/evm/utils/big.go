@@ -2,9 +2,10 @@ package utils
 
 import (
 	"database/sql/driver"
-	"encoding/json"
 	"fmt"
 	"math/big"
+
+	"github.com/goccy/go-json"
 
 	"github.com/ethereum/go-ethereum/common/hexutil"
 

@@ -94,7 +94,8 @@ func TestReportCodecEVMStreamlined(t *testing.T) {
 				err = codec.Verify(llotypes.ChannelDefinition{
 					Opts: []byte(`{"feedID":"0xinvalid","abi":[{"type":"int160"}]}`),
 				})
-				require.EqualError(t, err, "failed to decode opts; got: '{\"feedID\":\"0xinvalid\",\"abi\":[{\"type\":\"int160\"}]}'; json: cannot unmarshal hex string of odd length into Go struct field ReportFormatEVMStreamlinedOpts.feedID of type common.Hash")
+				require.Error(t, err)
+				require.Contains(t, err.Error(), "json: cannot unmarshal hex string of odd length")
 			})
 		})
 	})

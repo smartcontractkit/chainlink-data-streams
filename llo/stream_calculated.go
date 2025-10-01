@@ -1,7 +1,6 @@
 package llo
 
 import (
-	"encoding/json"
 	"fmt"
 	"math"
 	"math/big"
@@ -9,6 +8,8 @@ import (
 	"strconv"
 	"sync"
 	"time"
+
+	"github.com/goccy/go-json"
 
 	"github.com/expr-lang/expr"
 	"github.com/expr-lang/expr/ast"
