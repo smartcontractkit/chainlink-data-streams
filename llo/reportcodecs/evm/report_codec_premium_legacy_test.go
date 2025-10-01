@@ -267,7 +267,7 @@ func Test_ReportCodecPremiumLegacy_Verify(t *testing.T) {
 		}
 		err := c.Verify(cd)
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "invalid Opts, got: \"\\\"invalid\\\"\"; json: cannot unmarshal string into Go value of type evm.ReportFormatEVMPremiumLegacyOpts")
+		assert.Contains(t, err.Error(), "invalid Opts, got: \"\\\"invalid\\\"\"")
 	})
 	t.Run("negative BaseUSDFee", func(t *testing.T) {
 		cd := llotypes.ChannelDefinition{
@@ -303,7 +303,7 @@ func Test_ReportCodecPremiumLegacy_Verify(t *testing.T) {
 		}
 		err := c.Verify(cd)
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "invalid Opts, got: \"{\\\"baseUSDFee\\\":\\\"1\\\",\\\"feedID\\\":\\\"foo\\\"}\"; json: cannot unmarshal hex string without 0x prefix into Go struct field ReportFormatEVMPremiumLegacyOpts.feedID of type common.Hash")
+		assert.Contains(t, err.Error(), "json: cannot unmarshal hex string without 0x prefix into Go value of type common.Hash")
 	})
 	t.Run("valid", func(t *testing.T) {
 		cd := llotypes.ChannelDefinition{
