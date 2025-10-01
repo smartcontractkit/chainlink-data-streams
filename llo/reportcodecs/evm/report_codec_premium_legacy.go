@@ -2,11 +2,12 @@ package evm
 
 import (
 	"bytes"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
 	"math/big"
+
+	"github.com/goccy/go-json"
 
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"

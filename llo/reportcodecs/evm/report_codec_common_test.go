@@ -2,11 +2,12 @@ package evm
 
 import (
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"math"
 	"math/big"
 	"testing"
+
+	"github.com/goccy/go-json"
 
 	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/assert"

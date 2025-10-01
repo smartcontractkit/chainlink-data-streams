@@ -2,10 +2,11 @@ package llo
 
 import (
 	"encoding"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"regexp"
+
+	"github.com/goccy/go-json"
 
 	"google.golang.org/protobuf/proto"
 

@@ -325,7 +325,8 @@ func Test_JSONCodec(t *testing.T) {
 			cdc := JSONReportCodec{}
 
 			_, err := cdc.Pack(digest, seqNr, report, sigs)
-			require.EqualError(t, err, "json: error calling MarshalJSON for type json.RawMessage: invalid character 'o' in literal false (expecting 'a')")
+			require.Error(t, err)
+			require.Contains(t, err.Error(), "json: error calling MarshalJSON for type json.RawMessage")
 		})
 		t.Run("report is valid JSON", func(t *testing.T) {
 			digest := types.ConfigDigest([32]byte{1, 2, 3})
