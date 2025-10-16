@@ -28,7 +28,7 @@ func (p *Plugin) reports(ctx context.Context, seqNr uint64, rawOutcome ocr3types
 		// ValidAfterNanoseconds part of state to the new protocol instance for a
 		// "gapless" handover
 		retirementReport := outcome.GenRetirementReport(p.ProtocolVersion)
-		p.Logger.Infow("Emitting retirement report", "lifeCycleStage", outcome.LifeCycleStage, "retirementReport", retirementReport, "stage", "Report", "seqNr", seqNr)
+		p.Logger.Debugw("Emitting retirement report", "lifeCycleStage", outcome.LifeCycleStage, "retirementReport", retirementReport, "stage", "Report", "seqNr", seqNr)
 
 		encoded, err := p.RetirementReportCodec.Encode(retirementReport)
 		if err != nil {
