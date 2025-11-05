@@ -88,7 +88,7 @@ func Test_protoObservationCodec(t *testing.T) {
 			require.NoError(t, err)
 			obsBytes, err := proto.Marshal(pbuf)
 			require.NoError(t, err)
-			compressed, err := compressor.CompressObservation(obsBytes)
+			compressed, err := compressor.Compress(obsBytes)
 			require.NoError(t, err)
 
 			codec, err := NewProtoObservationCodec(logger.Nop(), true)
@@ -108,7 +108,7 @@ func Test_protoObservationCodec(t *testing.T) {
 				require.NoError(t, err)
 				obsBytes, err := proto.Marshal(pbuf)
 				require.NoError(t, err)
-				compressed, err := compressor.CompressObservation(obsBytes)
+				compressed, err := compressor.Compress(obsBytes)
 				require.NoError(t, err)
 
 				codec, err := NewProtoObservationCodec(logger.Nop(), true)
@@ -127,7 +127,7 @@ func Test_protoObservationCodec(t *testing.T) {
 				require.NoError(t, err)
 				obsBytes, err := proto.Marshal(pbuf)
 				require.NoError(t, err)
-				compressed, err := compressor.CompressObservation(obsBytes)
+				compressed, err := compressor.Compress(obsBytes)
 				require.NoError(t, err)
 
 				codec, err := NewProtoObservationCodec(logger.Nop(), true)
@@ -153,7 +153,7 @@ func Test_protoObservationCodec(t *testing.T) {
 
 				compressor, err := newCompressor()
 				require.NoError(t, err)
-				compressed, err := compressor.CompressObservation(bp)
+				compressed, err := compressor.Compress(bp)
 				require.NoError(t, err)
 
 				require.Greater(t, len(bp), len(compressed))
@@ -170,7 +170,7 @@ func Test_protoObservationCodec(t *testing.T) {
 
 			compressor, err := newCompressor()
 			require.NoError(t, err)
-			uncompressed, err := compressor.DecompressObservation(encoded)
+			uncompressed, err := compressor.Decompress(encoded)
 			require.NoError(t, err)
 
 			pbuf := &LLOObservationProto{}
@@ -187,7 +187,7 @@ func Test_protoObservationCodec(t *testing.T) {
 
 			compressor, err := newCompressor()
 			require.NoError(t, err)
-			compressed, err := compressor.CompressObservation(b)
+			compressed, err := compressor.Compress(b)
 			require.NoError(t, err)
 
 			obs, err := codec.Decode(compressed)
@@ -203,7 +203,7 @@ func Test_protoObservationCodec(t *testing.T) {
 			require.NoError(t, err)
 			compressor, err := newCompressor()
 			require.NoError(t, err)
-			compressed, err := compressor.CompressObservation(b)
+			compressed, err := compressor.Compress(b)
 			require.NoError(t, err)
 			_, err = codec.Decode(compressed)
 			require.Error(t, err)

@@ -21,11 +21,11 @@ func newCompressor() (*compressor, error) {
 	return &compressor{encoder, decoder}, nil
 }
 
-func (c *compressor) CompressObservation(b []byte) ([]byte, error) {
+func (c *compressor) Compress(b []byte) ([]byte, error) {
 	compressed := c.encoder.EncodeAll(b, nil)
 	return compressed, nil
 }
 
-func (c *compressor) DecompressObservation(b []byte) ([]byte, error) {
+func (c *compressor) Decompress(b []byte) ([]byte, error) {
 	return c.decoder.DecodeAll(b, nil)
 }

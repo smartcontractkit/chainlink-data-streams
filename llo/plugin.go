@@ -273,6 +273,11 @@ func (f *PluginFactory) NewReportingPlugin(ctx context.Context, cfg ocr3types.Re
 		return nil, ocr3types.ReportingPluginInfo{}, fmt.Errorf("NewReportingPlugin failed to create observation codec: %w", err)
 	}
 
+	outcomeCodec, err := offchainConfig.GetOutcomeCodec(l)
+	if err != nil {
+		return nil, ocr3types.ReportingPluginInfo{}, fmt.Errorf("NewReportingPlugin failed to create outcome codec: %w", err)
+	}
+
 	// Initialize the memory ballast
 	ballastOnce.Do(func() {
 		ballastAlloc = make([]byte, ballastSz)
@@ -290,7 +295,7 @@ func (f *PluginFactory) NewReportingPlugin(ctx context.Context, cfg ocr3types.Re
 			cfg.N,
 			cfg.F,
 			obsCodec,
-			offchainConfig.GetOutcomeCodec(),
+			outcomeCodec,
 			f.RetirementReportCodec,
 			f.ReportCodecs,
 			f.OutcomeTelemetryCh,

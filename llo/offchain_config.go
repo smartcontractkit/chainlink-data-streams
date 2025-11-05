@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/smartcontractkit/chainlink-common/pkg/logger"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -20,6 +21,8 @@ type OffchainConfig struct {
 	DefaultMinReportIntervalNanoseconds uint64
 	// EnableObservationCompression enables observation compression.
 	EnableObservationCompression bool
+	// EnableOutcomeCompression enables outcome compression.
+	EnableOutcomeCompression bool
 }
 
 func DecodeOffchainConfig(b []byte) (o OffchainConfig, err error) {
@@ -51,6 +54,7 @@ func (c OffchainConfig) Encode() ([]byte, error) {
 		ProtocolVersion:                     c.ProtocolVersion,
 		DefaultMinReportIntervalNanoseconds: c.DefaultMinReportIntervalNanoseconds,
 		EnableObservationCompression:        c.EnableObservationCompression,
+		EnableOutcomeCompression:            c.EnableObservationCompression,
 	}
 	return proto.Marshal(pbuf)
 }
@@ -71,11 +75,11 @@ func (c OffchainConfig) Validate() error {
 	return nil
 }
 
-func (c OffchainConfig) GetOutcomeCodec() OutcomeCodec {
+func (c OffchainConfig) GetOutcomeCodec(lggr logger.Logger) (OutcomeCodec, error) {
 	switch c.ProtocolVersion {
 	case 0:
-		return protoOutcomeCodecV0{}
+		return NewProtoOutcomeCodecV0(lggr, c.EnableOutcomeCompression)
 	default:
-		return protoOutcomeCodecV1{}
+		return NewProtoOutcomeCodecV1(lggr, c.EnableOutcomeCompression)
 	}
 }

@@ -76,7 +76,7 @@ func (c protoObservationCodec) Encode(obs Observation) (types.Observation, error
 	}
 
 	if c.enableCompression {
-		compressed, err := c.compressor.CompressObservation(b)
+		compressed, err := c.compressor.Compress(b)
 		if err != nil {
 			return nil, fmt.Errorf("failed to compress observation: %w", err)
 		}
@@ -111,7 +111,7 @@ func channelDefinitionsToProtoObservation(in llotypes.ChannelDefinitions) (out m
 func (c protoObservationCodec) Decode(b types.Observation) (Observation, error) {
 	var err error
 	if c.enableCompression {
-		b, err = c.compressor.DecompressObservation(b)
+		b, err = c.compressor.Decompress(b)
 		if err != nil {
 			return Observation{}, fmt.Errorf("failed to decompress observation: %w", err)
 		}
