@@ -60,7 +60,7 @@ jobs:
       actions: read
     steps:
       - name: ci-test
-        uses: smartcontractkit/.github/actions/ci-test-go@ci-test-go/0.3.5
+        uses: smartcontractkit/.github/actions/ci-test-go@ci-test-go/1.1.0
         with:
           # docker inputs
           use-docker-compose: "true"
