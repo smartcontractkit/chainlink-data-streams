@@ -97,7 +97,7 @@ func TestReportCodecEVMABIEncodeUnpacked_Encode_properties(t *testing.T) {
 			{Name: "baseMarketDepth", Type: mustNewABIType("int192")},
 			{Name: "quoteMarketDepth", Type: mustNewABIType("int192")},
 		})
-		runTest := func(sampleFeedID common.Hash, sampleObservationTimestampNanoseconds, sampleValidAfterNanoseconds uint64, sampleExpirationWindow uint32, priceMultiplier, marketDepthMultiplier *ubig.Big, sampleBaseUSDFee, sampleLinkBenchmarkPrice, sampleNativeBenchmarkPrice, sampleDexBasedAssetPrice, sampleBaseMarketDepth, sampleQuoteMarketDepth decimal.Decimal, sampleTimestampPrecision TimestampPrecision) bool {
+		runTest := func(sampleFeedID common.Hash, sampleObservationTimestampNanoseconds, sampleValidAfterNanoseconds uint64, sampleExpirationWindow uint32, priceMultiplier, marketDepthMultiplier *ubig.Big, sampleBaseUSDFee, sampleLinkBenchmarkPrice, sampleNativeBenchmarkPrice, sampleDexBasedAssetPrice, sampleBaseMarketDepth, sampleQuoteMarketDepth decimal.Decimal) bool {
 			report := llo.Report{
 				ConfigDigest:                    types.ConfigDigest{0x01},
 				SeqNr:                           0x02,
@@ -198,7 +198,6 @@ func TestReportCodecEVMABIEncodeUnpacked_Encode_properties(t *testing.T) {
 			genBenchmarkPrice(),
 			genBaseMarketDepth(),
 			genQuoteMarketDepth(),
-			genTimestampPrecision(),
 		))
 
 		properties.TestingRun(t)
