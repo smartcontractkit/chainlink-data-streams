@@ -2,6 +2,7 @@ package evm
 
 import (
 	"fmt"
+	"math"
 	"math/big"
 	"reflect"
 	"strings"
@@ -50,10 +51,11 @@ func TestReportFormatEVMABIEncodeOpts_Decode_Encode_properties(t *testing.T) {
 	properties.Property("Encodes values", prop.ForAll(
 		runTest,
 		gen.StrictStruct(reflect.TypeOf(&ReportFormatEVMABIEncodeOpts{}), map[string]gopter.Gen{
-			"BaseUSDFee":       genBaseUSDFee(),
-			"ExpirationWindow": genExpirationWindow(),
-			"FeedID":           genFeedID(),
-			"ABI":              genABI(),
+			"BaseUSDFee":         genBaseUSDFee(),
+			"ExpirationWindow":   genExpirationWindow(),
+			"FeedID":             genFeedID(),
+			"ABI":                genABI(),
+			"TimestampPrecision": genTimestampPrecision(),
 		})))
 
 	properties.TestingRun(t)
@@ -113,9 +115,10 @@ func TestReportCodecEVMABIEncodeUnpacked_Encode_properties(t *testing.T) {
 			}
 
 			opts := ReportFormatEVMABIEncodeOpts{
-				BaseUSDFee:       sampleBaseUSDFee,
-				ExpirationWindow: sampleExpirationWindow,
-				FeedID:           sampleFeedID,
+				BaseUSDFee:         sampleBaseUSDFee,
+				ExpirationWindow:   sampleExpirationWindow,
+				FeedID:             sampleFeedID,
+				TimestampPrecision: PrecisionSeconds,
 				ABI: []ABIEncoder{
 					// benchmark price
 					newSingleABIEncoder("int192", priceMultiplier),
@@ -227,9 +230,10 @@ func TestReportCodecEVMABIEncodeUnpacked_Encode_properties(t *testing.T) {
 			}
 
 			opts := ReportFormatEVMABIEncodeOpts{
-				BaseUSDFee:       sampleBaseUSDFee,
-				ExpirationWindow: sampleExpirationWindow,
-				FeedID:           sampleFeedID,
+				BaseUSDFee:         sampleBaseUSDFee,
+				ExpirationWindow:   sampleExpirationWindow,
+				FeedID:             sampleFeedID,
+				TimestampPrecision: PrecisionSeconds,
 				ABI: []ABIEncoder{
 					// market status
 					newSingleABIEncoder("uint32", nil),
@@ -330,9 +334,10 @@ func TestReportCodecEVMABIEncodeUnpacked_Encode_properties(t *testing.T) {
 			}
 
 			opts := ReportFormatEVMABIEncodeOpts{
-				BaseUSDFee:       sampleBaseUSDFee,
-				ExpirationWindow: sampleExpirationWindow,
-				FeedID:           sampleFeedID,
+				BaseUSDFee:         sampleBaseUSDFee,
+				ExpirationWindow:   sampleExpirationWindow,
+				FeedID:             sampleFeedID,
+				TimestampPrecision: PrecisionSeconds,
 				ABI: []ABIEncoder{
 					// benchmark price
 					newSingleABIEncoder("int192", priceMultiplier),
@@ -403,6 +408,121 @@ func TestReportCodecEVMABIEncodeUnpacked_Encode_properties(t *testing.T) {
 		properties.TestingRun(t)
 	})
 
+	t.Run("varying timestamp precision schemas", func(t *testing.T) {
+		runTest := func(sampleFeedID common.Hash, sampleObservationTimestampNanoseconds, sampleValidAfterNanoseconds uint64, sampleExpirationWindow uint32, priceMultiplier *ubig.Big, sampleBaseUSDFee, sampleLinkBenchmarkPrice, sampleNativeBenchmarkPrice, sampleBenchmarkPrice decimal.Decimal, sampleTimestampPrecision TimestampPrecision) bool {
+			// Determine timestamp type based on precision
+			timestampType := "uint64"
+			if sampleTimestampPrecision == PrecisionSeconds {
+				timestampType = "uint32"
+			}
+
+			schema := abi.Arguments([]abi.Argument{
+				{Name: "feedId", Type: mustNewABIType("bytes32")},
+				{Name: "validFromTimestamp", Type: mustNewABIType(timestampType)},
+				{Name: "observationsTimestamp", Type: mustNewABIType(timestampType)},
+				{Name: "nativeFee", Type: mustNewABIType("uint192")},
+				{Name: "linkFee", Type: mustNewABIType("uint192")},
+				{Name: "expiresAt", Type: mustNewABIType(timestampType)},
+				{Name: "price", Type: mustNewABIType("int192")},
+			})
+
+			report := llo.Report{
+				ConfigDigest:                    types.ConfigDigest{0x01},
+				SeqNr:                           0x02,
+				ChannelID:                       llotypes.ChannelID(0x03),
+				ValidAfterNanoseconds:           sampleValidAfterNanoseconds,
+				ObservationTimestampNanoseconds: sampleObservationTimestampNanoseconds,
+				Values: []llo.StreamValue{
+					&llo.Quote{Bid: decimal.NewFromFloat(6.1), Benchmark: sampleNativeBenchmarkPrice, Ask: decimal.NewFromFloat(8.2332)},
+					&llo.Quote{Bid: decimal.NewFromFloat(9.4), Benchmark: sampleLinkBenchmarkPrice, Ask: decimal.NewFromFloat(11.33)},
+					llo.ToDecimal(sampleBenchmarkPrice),
+				},
+				Specimen: false,
+			}
+
+			opts := ReportFormatEVMABIEncodeOpts{
+				BaseUSDFee:         sampleBaseUSDFee,
+				ExpirationWindow:   sampleExpirationWindow,
+				FeedID:             sampleFeedID,
+				TimestampPrecision: sampleTimestampPrecision,
+				ABI: []ABIEncoder{
+					newSingleABIEncoder("int192", priceMultiplier),
+				},
+			}
+			serializedOpts, err := opts.Encode()
+			require.NoError(t, err)
+
+			cd := llotypes.ChannelDefinition{
+				ReportFormat: llotypes.ReportFormatEVMABIEncodeUnpacked,
+				Streams: []llotypes.Stream{
+					{
+						Aggregator: llotypes.AggregatorMedian,
+					},
+					{
+						Aggregator: llotypes.AggregatorMedian,
+					},
+					{
+						Aggregator: llotypes.AggregatorQuote,
+					},
+				},
+				Opts: serializedOpts,
+			}
+
+			encoded, err := codec.Encode(report, cd)
+			require.NoError(t, err)
+
+			values, err := schema.Unpack(encoded)
+			require.NoError(t, err)
+			require.Len(t, values, len(schema))
+
+			expectedLinkFee := CalculateFee(sampleLinkBenchmarkPrice, sampleBaseUSDFee)
+			expectedNativeFee := CalculateFee(sampleNativeBenchmarkPrice, sampleBaseUSDFee)
+
+			checks := []bool{
+				assert.Equal(t, sampleFeedID, (common.Hash)(values[0].([32]byte))), //nolint:testifylint // false positive
+				assert.Equal(t, sampleBenchmarkPrice.Mul(decimal.NewFromBigInt(priceMultiplier.ToInt(), 0)).BigInt(), values[6].(*big.Int)),
+				assert.Equal(t, expectedNativeFee.String(), values[3].(*big.Int).String()),
+				assert.Equal(t, expectedLinkFee.String(), values[4].(*big.Int).String()),
+			}
+
+			// Verify timestamps per precision type
+			expectedValidFrom := ConvertTimestamp(sampleValidAfterNanoseconds, sampleTimestampPrecision) + 1
+			expectedObservationTimestamp := ConvertTimestamp(sampleObservationTimestampNanoseconds, sampleTimestampPrecision)
+			expectedExpiresAt := expectedObservationTimestamp + uint64(sampleExpirationWindow)
+			if timestampType == "uint32" {
+				checks = append(checks,
+					assert.Equal(t, uint32(expectedValidFrom), values[1].(uint32)),
+					assert.Equal(t, uint32(expectedObservationTimestamp), values[2].(uint32)),
+					assert.Equal(t, uint32(expectedExpiresAt), values[5].(uint32)),
+				)
+			} else {
+				checks = append(checks,
+					assert.Equal(t, expectedValidFrom, values[1].(uint64)),
+					assert.Equal(t, expectedObservationTimestamp, values[2].(uint64)),
+					assert.Equal(t, expectedExpiresAt, values[5].(uint64)),
+				)
+			}
+
+			return AllTrue(checks)
+		}
+
+		properties := gopter.NewProperties(nil)
+		properties.Property("Encodes values", prop.ForAll(
+			runTest,
+			genFeedID(),
+			genObservationTimestampNanoseconds(),
+			genValidAfterNanoseconds(),
+			genExpirationWindow(),
+			genPriceMultiplier(),
+			genBaseUSDFee(),
+			genLinkBenchmarkPrice(),
+			genNativeBenchmarkPrice(),
+			genBenchmarkPrice(),
+			genTimestampPrecision(),
+		))
+		properties.TestingRun(t)
+	})
+
 	t.Run("funding rate schema example", func(t *testing.T) {
 		expectedFundingRateSchema := abi.Arguments([]abi.Argument{
 			{Name: "feedId", Type: mustNewABIType("bytes32")},
@@ -440,9 +560,10 @@ func TestReportCodecEVMABIEncodeUnpacked_Encode_properties(t *testing.T) {
 			}
 
 			opts := ReportFormatEVMABIEncodeOpts{
-				BaseUSDFee:       sampleBaseUSDFee,
-				ExpirationWindow: sampleExpirationWindow,
-				FeedID:           sampleFeedID,
+				BaseUSDFee:         sampleBaseUSDFee,
+				ExpirationWindow:   sampleExpirationWindow,
+				FeedID:             sampleFeedID,
+				TimestampPrecision: PrecisionSeconds,
 				ABI: []ABIEncoder{
 					newSingleABIEncoder("int192", nil),
 					newSingleABIEncoder("uint32", nil),
@@ -603,14 +724,25 @@ func genValidAfterNanoseconds() gopter.Gen {
 	return genTimestampThatFitsUint32Seconds()
 }
 
+func getMaxExpirationWindow() uint32 {
+	// Use reasonable expiration window
+	return 30 * 24 * 60 * 60
+}
+
 func genTimestampThatFitsUint32Seconds() gopter.Gen {
-	return gen.UInt32().Map(func(i uint32) uint64 {
+	// Leave headroom for max expirationWindow to prevent overflow when computing expiresAt
+	maxSafeTimestamp := uint32(math.MaxUint32 - getMaxExpirationWindow())
+	return gen.UInt32Range(0, maxSafeTimestamp).Map(func(i uint32) uint64 {
 		return uint64(i) * 1e9
 	})
 }
 
+func genTimestampPrecision() gopter.Gen {
+	return gen.OneConstOf(PrecisionSeconds, PrecisionMilliseconds, PrecisionMicroseconds, PrecisionNanoseconds)
+}
+
 func genExpirationWindow() gopter.Gen {
-	return gen.UInt32()
+	return gen.UInt32Range(1, getMaxExpirationWindow())
 }
 
 func genPriceMultiplier() gopter.Gen {
@@ -800,4 +932,75 @@ func newSingleABIEncoder(t string, m *ubig.Big) ABIEncoder {
 			Multiplier: m,
 		}},
 	}
+}
+
+// TestReportCodecEVMABIEncodeUnpacked_EncodeOpts
+func TestReportCodecEVMABIEncodeUnpacked_EncodeOpts(t *testing.T) {
+	t.Run("zero value is PrecisionSeconds", func(t *testing.T) {
+		var defaultPrecision TimestampPrecision
+		assert.Equal(t, PrecisionSeconds, defaultPrecision, "zero value must be PrecisionSeconds for backward compatibility")
+		assert.Equal(t, TimestampPrecision(0), PrecisionSeconds, "PrecisionSeconds must be 0")
+	})
+
+	t.Run("JSON opts without timestampPrecision defaults to seconds", func(t *testing.T) {
+		jsonConfig := `{
+			"baseUSDFee": "1.5",
+			"expirationWindow": 3600,
+			"feedID": "0x0001020304050607080910111213141516171819202122232425262728293031",
+			"abi": [{"type": "uint192"}]
+		}`
+
+		var opts ReportFormatEVMABIEncodeOpts
+		err := opts.Decode([]byte(jsonConfig))
+		require.NoError(t, err)
+
+		assert.Equal(t, PrecisionSeconds, opts.TimestampPrecision)
+	})
+
+	t.Run("JSON opts with timestampPrecision uses correct value", func(t *testing.T) {
+		testCases := []struct {
+			name              string
+			jsonPrecision     string
+			expectedPrecision TimestampPrecision
+		}{
+			{
+				name:              "seconds",
+				jsonPrecision:     "s",
+				expectedPrecision: PrecisionSeconds,
+			},
+			{
+				name:              "milliseconds",
+				jsonPrecision:     "ms",
+				expectedPrecision: PrecisionMilliseconds,
+			},
+			{
+				name:              "microseconds",
+				jsonPrecision:     "us",
+				expectedPrecision: PrecisionMicroseconds,
+			},
+			{
+				name:              "nanoseconds",
+				jsonPrecision:     "ns",
+				expectedPrecision: PrecisionNanoseconds,
+			},
+		}
+
+		for _, tc := range testCases {
+			t.Run(tc.name, func(t *testing.T) {
+				jsonConfig := fmt.Sprintf(`{
+					"baseUSDFee": "1.5",
+					"expirationWindow": 3600,
+					"feedID": "0x0001020304050607080910111213141516171819202122232425262728293031",
+					"abi": [{"type": "uint192"}],
+					"timestampPrecision": "%s"
+				}`, tc.jsonPrecision)
+
+				var opts ReportFormatEVMABIEncodeOpts
+				err := opts.Decode([]byte(jsonConfig))
+				require.NoError(t, err)
+
+				assert.Equal(t, tc.expectedPrecision, opts.TimestampPrecision)
+			})
+		}
+	})
 }

@@ -3,6 +3,7 @@ package evm
 import (
 	"errors"
 	"fmt"
+	"math"
 
 	"github.com/ethereum/go-ethereum/common"
 
@@ -48,21 +49,19 @@ func (r ReportCodecEVMABIEncodeUnpackedExpr) Encode(report llo.Report, cd llotyp
 		return nil, fmt.Errorf("failed to decode opts; got: '%s'; %w", cd.Opts, err)
 	}
 
-	validAfterSeconds, observationTimestampSeconds, err := ExtractTimestamps(report)
-	if err != nil {
-		return nil, fmt.Errorf("failed to extract timestamps; %w", err)
-	}
+	validAfter := ConvertTimestamp(report.ValidAfterNanoseconds, opts.TimestampPrecision)
+	observationTimestamp := ConvertTimestamp(report.ObservationTimestampNanoseconds, opts.TimestampPrecision)
 
 	rf := BaseReportFields{
 		FeedID:             opts.FeedID,
-		ValidFromTimestamp: validAfterSeconds + 1,
-		Timestamp:          observationTimestampSeconds,
+		ValidFromTimestamp: validAfter + 1,
+		Timestamp:          observationTimestamp,
 		NativeFee:          CalculateFee(nativePrice, opts.BaseUSDFee),
 		LinkFee:            CalculateFee(linkPrice, opts.BaseUSDFee),
-		ExpiresAt:          observationTimestampSeconds + opts.ExpirationWindow,
+		ExpiresAt:          observationTimestamp + uint64(opts.ExpirationWindow),
 	}
 
-	header, err := r.buildHeader(rf)
+	header, err := r.buildHeader(rf, opts.TimestampPrecision)
 	if err != nil {
 		return nil, fmt.Errorf("failed to build base report; %w", err)
 	}
@@ -92,7 +91,7 @@ func (r ReportCodecEVMABIEncodeUnpackedExpr) Verify(cd llotypes.ChannelDefinitio
 	return nil
 }
 
-func (r ReportCodecEVMABIEncodeUnpackedExpr) buildHeader(rf BaseReportFields) ([]byte, error) {
+func (r ReportCodecEVMABIEncodeUnpackedExpr) buildHeader(rf BaseReportFields, precision TimestampPrecision) ([]byte, error) {
 	var merr error
 	if rf.LinkFee == nil {
 		merr = errors.Join(merr, errors.New("linkFee may not be nil"))
@@ -107,7 +106,38 @@ func (r ReportCodecEVMABIEncodeUnpackedExpr) buildHeader(rf BaseReportFields) ([
 	if merr != nil {
 		return nil, merr
 	}
-	b, err := BaseSchema.Pack(rf.FeedID, rf.ValidFromTimestamp, rf.Timestamp, rf.NativeFee, rf.LinkFee, rf.ExpiresAt)
+
+	var b []byte
+	var err error
+	if precision == PrecisionSeconds {
+		if rf.ValidFromTimestamp > math.MaxUint32 {
+			return nil, fmt.Errorf("validFromTimestamp %d exceeds uint32 range", rf.ValidFromTimestamp)
+		}
+		if rf.Timestamp > math.MaxUint32 {
+			return nil, fmt.Errorf("timestamp %d exceeds uint32 range", rf.Timestamp)
+		}
+		if rf.ExpiresAt > math.MaxUint32 {
+			return nil, fmt.Errorf("expiresAt %d exceeds uint32 range", rf.ExpiresAt)
+		}
+		b, err = BaseSchemaUint32.Pack(
+			rf.FeedID,
+			uint32(rf.ValidFromTimestamp),
+			uint32(rf.Timestamp),
+			rf.NativeFee,
+			rf.LinkFee,
+			uint32(rf.ExpiresAt),
+		)
+	} else {
+		b, err = BaseSchemaUint64.Pack(
+			rf.FeedID,
+			rf.ValidFromTimestamp,
+			rf.Timestamp,
+			rf.NativeFee,
+			rf.LinkFee,
+			rf.ExpiresAt,
+		)
+	}
+
 	if err != nil {
 		return nil, fmt.Errorf("failed to pack base report blob; %w", err)
 	}
