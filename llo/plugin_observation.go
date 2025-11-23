@@ -133,6 +133,10 @@ func (p *Plugin) observation(ctx context.Context, outctx ocr3types.OutcomeContex
 		} else {
 			obs.StreamValues = make(StreamValues)
 			for _, channelDefinition := range previousOutcome.ChannelDefinitions {
+				if channelDefinition.Tombstone {
+					continue
+				}
+
 				for _, strm := range channelDefinition.Streams {
 					// Calculated streams have no values to observe
 					if strm.Aggregator == llotypes.AggregatorCalculated {
