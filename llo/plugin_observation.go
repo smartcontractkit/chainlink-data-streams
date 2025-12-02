@@ -75,7 +75,7 @@ func (p *Plugin) observation(ctx context.Context, outctx ocr3types.OutcomeContex
 			// can agree on the same set of changes.
 			//
 			// ChannelIDs should always be sorted the same way (channel ID ascending).
-			expectedChannelDefs := p.ChannelDefinitionCache.Definitions()
+			expectedChannelDefs := p.ChannelDefinitionCache.Definitions(previousOutcome.ChannelDefinitions)
 			if err = VerifyChannelDefinitions(p.ReportCodecs, expectedChannelDefs); err != nil {
 				// If channel definitions is invalid, do not error out but instead
 				// don't vote on any new channels.

@@ -161,10 +161,6 @@ type PredecessorRetirementReportCache interface {
 	CheckAttestedRetirementReport(predecessorConfigDigest ocr2types.ConfigDigest, attestedRetirementReport []byte) (RetirementReport, error)
 }
 
-type ChannelDefinitionCache interface {
-	Definitions() llotypes.ChannelDefinitions
-}
-
 // ChannelDefinitionOptsCache stores parsed channel definition opts to avoid
 // repeated JSON unmarshalling in hot paths like Observation and Reports.
 // Despite the name, this acts as a store rather than a cache: there is no TTL
@@ -244,7 +240,7 @@ type PluginFactoryParams struct {
 	PredecessorRetirementReportCache
 	ShouldRetireCache
 	RetirementReportCodec
-	ChannelDefinitionCache
+	llotypes.ChannelDefinitionCache
 	DataSource
 	logger.Logger
 	OnchainConfigCodec
@@ -341,7 +337,7 @@ type Plugin struct {
 	ConfigDigest                     types.ConfigDigest
 	PredecessorRetirementReportCache PredecessorRetirementReportCache
 	ShouldRetireCache                ShouldRetireCache
-	ChannelDefinitionCache           ChannelDefinitionCache
+	ChannelDefinitionCache           llotypes.ChannelDefinitionCache
 	ChannelDefinitionOptsCache       ChannelDefinitionOptsCache
 	DataSource                       DataSource
 	Logger                           logger.Logger

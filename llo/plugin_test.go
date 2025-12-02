@@ -29,7 +29,7 @@ type mockChannelDefinitionCache struct {
 	definitions llotypes.ChannelDefinitions
 }
 
-func (m *mockChannelDefinitionCache) Definitions() llotypes.ChannelDefinitions {
+func (m *mockChannelDefinitionCache) Definitions(previous llotypes.ChannelDefinitions) llotypes.ChannelDefinitions {
 	return m.definitions
 }
 
