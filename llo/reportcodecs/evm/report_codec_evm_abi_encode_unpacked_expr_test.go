@@ -545,3 +545,44 @@ func TestReportCodecEVMABIEncodeUnpackedExpr_WithAndWithoutParsedOpts(t *testing
 	// Both paths should produce identical output
 	assert.Equal(t, encodedWithCache, encodedWithoutCache)
 }
+
+func TestReportCodecEVMABIEncodeUnpackedExpr_ParseOpts(t *testing.T) {
+	codec := ReportCodecEVMABIEncodeUnpackedExpr{}
+
+	t.Run("valid opts", func(t *testing.T) {
+		opts := []byte(`{"baseUSDFee":"2.5","expirationWindow":7200,"feedID":"0x0001020304050607080910111213141516171819202122232425262728293031","abi":[],"timeResolution":"us"}`)
+		result, err := codec.ParseOpts(opts)
+		require.NoError(t, err)
+		require.NotNil(t, result)
+
+		parsed, ok := result.(ReportFormatEVMABIEncodeOpts)
+		require.True(t, ok)
+		require.Equal(t, "2.5", parsed.BaseUSDFee.String())
+		require.Equal(t, uint32(7200), parsed.ExpirationWindow)
+		require.Equal(t, llo.ResolutionMicroseconds, parsed.TimeResolution)
+	})
+
+	t.Run("invalid JSON", func(t *testing.T) {
+		_, err := codec.ParseOpts([]byte(`{invalid`))
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "failed to parse EVMABIEncodeUnpackedExpr opts")
+	})
+}
+
+func TestReportCodecEVMABIEncodeUnpackedExpr_TimeResolution(t *testing.T) {
+	codec := ReportCodecEVMABIEncodeUnpackedExpr{}
+
+	t.Run("valid parsed opts", func(t *testing.T) {
+		opts := ReportFormatEVMABIEncodeOpts{TimeResolution: llo.ResolutionNanoseconds}
+		res, err := codec.TimeResolution(opts)
+		require.NoError(t, err)
+		require.Equal(t, llo.ResolutionNanoseconds, res)
+	})
+
+	t.Run("invalid type", func(t *testing.T) {
+		type wrongType struct{}
+		_, err := codec.TimeResolution(wrongType{})
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "expected ReportFormatEVMABIEncodeOpts")
+	})
+}

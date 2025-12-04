@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"sync"
 
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
 )
@@ -71,6 +72,7 @@ func subtractChannelDefinitions(minuend llotypes.ChannelDefinitions, subtrahend 
 }
 
 type channelDefinitionOptsCache struct {
+	mu    sync.RWMutex
 	cache map[llotypes.ChannelID]interface{}
 }
 
@@ -99,15 +101,21 @@ func (c *channelDefinitionOptsCache) Set(
 		return fmt.Errorf("failed to parse opts for channelID %d: %w", channelID, err)
 	}
 
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.cache[channelID] = parsedOpts
 	return nil
 }
 
 func (c *channelDefinitionOptsCache) Get(channelID llotypes.ChannelID) (interface{}, bool) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
 	val, ok := c.cache[channelID]
 	return val, ok
 }
 
 func (c *channelDefinitionOptsCache) Delete(channelID llotypes.ChannelID) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	delete(c.cache, channelID)
 }

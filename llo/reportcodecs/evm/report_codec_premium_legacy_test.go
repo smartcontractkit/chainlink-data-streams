@@ -369,3 +369,47 @@ func TestReportCodecPremiumLegacy_WithAndWithoutParsedOpts(t *testing.T) {
 	// Both paths should produce identical output
 	assert.Equal(t, encodedWithCache, encodedWithoutCache)
 }
+
+func TestReportCodecPremiumLegacy_ParseOpts(t *testing.T) {
+	codec := ReportCodecPremiumLegacy{}
+
+	t.Run("valid opts", func(t *testing.T) {
+		opts := []byte(`{"baseUSDFee":"0.5","expirationWindow":1800,"feedID":"0x0001020304050607080910111213141516171819202122232425262728293031","multiplier":"1000000000000000000"}`)
+		result, err := codec.ParseOpts(opts)
+		require.NoError(t, err)
+		require.NotNil(t, result)
+
+		parsed, ok := result.(ReportFormatEVMPremiumLegacyOpts)
+		require.True(t, ok)
+		require.Equal(t, "0.5", parsed.BaseUSDFee.String())
+		require.Equal(t, uint32(1800), parsed.ExpirationWindow)
+	})
+
+	t.Run("empty JSON object", func(t *testing.T) {
+		result, err := codec.ParseOpts([]byte(`{}`))
+		require.NoError(t, err)
+		require.NotNil(t, result)
+	})
+
+	t.Run("invalid JSON", func(t *testing.T) {
+		_, err := codec.ParseOpts([]byte(`{invalid`))
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "failed to parse EVMPremiumLegacy opts")
+	})
+}
+
+func TestReportCodecPremiumLegacy_TimeResolution(t *testing.T) {
+	codec := ReportCodecPremiumLegacy{}
+
+	t.Run("always returns seconds resolution", func(t *testing.T) {
+		// Premium legacy always uses seconds, regardless of input
+		type anyType struct{}
+		res, err := codec.TimeResolution(anyType{})
+		require.NoError(t, err)
+		require.Equal(t, llo.ResolutionSeconds, res)
+
+		res, err = codec.TimeResolution(nil)
+		require.NoError(t, err)
+		require.Equal(t, llo.ResolutionSeconds, res)
+	})
+}
