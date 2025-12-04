@@ -166,6 +166,59 @@ func testReports(t *testing.T, outcomeCodec OutcomeCodec) {
 		require.Empty(t, rwis)
 	})
 
+	t.Run("does not generate reports for tombstoned channels", func(t *testing.T) {
+		tombstonedDefinitions := map[llotypes.ChannelID]llotypes.ChannelDefinition{
+			1: {
+				ReportFormat: llotypes.ReportFormatJSON,
+				Streams:      []llotypes.Stream{{StreamID: 1, Aggregator: llotypes.AggregatorMedian}, {StreamID: 2, Aggregator: llotypes.AggregatorMedian}},
+				Tombstone:    true, // Channel is tombstoned
+			},
+			2: {
+				ReportFormat: llotypes.ReportFormatJSON,
+				Streams:      []llotypes.Stream{{StreamID: 1, Aggregator: llotypes.AggregatorMedian}, {StreamID: 2, Aggregator: llotypes.AggregatorMedian}},
+				Tombstone:    false, // Channel is not tombstoned
+			},
+		}
+
+		outcome := Outcome{
+			LifeCycleStage:                  LifeCycleStageProduction,
+			ObservationTimestampNanoseconds: uint64(200 * time.Second),
+			ValidAfterNanoseconds: map[llotypes.ChannelID]uint64{
+				1: uint64(100 * time.Second), // Tombstoned channel would be reportable if not tombstoned
+				2: uint64(100 * time.Second), // Non-tombstoned channel is reportable
+			},
+			ChannelDefinitions: tombstonedDefinitions,
+			StreamAggregates: map[llotypes.StreamID]map[llotypes.Aggregator]StreamValue{
+				1: {
+					llotypes.AggregatorMedian: ToDecimal(decimal.NewFromFloat(1.1)),
+				},
+				2: {
+					llotypes.AggregatorMedian: ToDecimal(decimal.NewFromFloat(2.2)),
+				},
+			},
+		}
+
+		// Verify tombstoned channel is not reportable
+		unreportableErr := outcome.IsReportable(1, protocolVersion, uint64(minReportInterval))
+		require.NotNil(t, unreportableErr)
+		assert.Contains(t, unreportableErr.Error(), "tombstone channel")
+
+		// Verify non-tombstoned channel is reportable
+		require.Nil(t, outcome.IsReportable(2, protocolVersion, uint64(minReportInterval)))
+
+		encoded, err := p.OutcomeCodec.Encode(outcome)
+		require.NoError(t, err)
+		rwis, err := p.Reports(ctx, 2, encoded)
+		require.NoError(t, err)
+
+		// Should only generate report for non-tombstoned channel (channel 2)
+		// Tombstoned channel (channel 1) should not generate a report
+		require.Len(t, rwis, 1)
+		assert.Contains(t, string(rwis[0].ReportWithInfo.Report), `"ChannelID":2`)
+		assert.NotContains(t, string(rwis[0].ReportWithInfo.Report), `"ChannelID":1`)
+		assert.Equal(t, llo.ReportInfo{LifeCycleStage: LifeCycleStageProduction, ReportFormat: llotypes.ReportFormatJSON}, rwis[0].ReportWithInfo.Info)
+	})
+
 	t.Run("skips reports if codec is missing", func(t *testing.T) {
 		dfns := map[llotypes.ChannelID]llotypes.ChannelDefinition{
 			1: {
