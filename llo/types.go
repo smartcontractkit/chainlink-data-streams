@@ -34,13 +34,33 @@ type ReportCodec interface {
 	Verify(llotypes.ChannelDefinition) error
 }
 
+// OptsParser parses raw channel opts bytes into a codec-specific structure.
+// ReportCodecs may implement this interface to enable caching of parsed opts
+// to avoid repeated unmarshalling of Opts bytes. For example unmarshalling
+// from JSON is much more expensive than peforming a type assertion on an `interface{}` type.
+// Since not all Codec Opts might have the same Options - you can create
+// `OptsProvider` interfaces where needed. For Example `TimeResolutionProvider` or `ABIProvider`
+// and the Codecs can implement all interfaces that match the specific Opt.
 type OptsParser interface {
-	// ParseOpts parses the ReportCodec's opts and returns an interface{} which can be type asserted
-	// to the specific ReportCodec's opts type.
-	// Use when parsing of Opts is considered too expensive to do repeatedly.
+	// ParseOpts parses the raw opts bytes and returns a codec-specific
+	// parsed opts structure as interface{}.
+	// Use the returned interface to type assert to the specific Opts type.
+	// For Example:
+	// opts, err := codec.ParseOpts(optsBytes)
+	// if err != nil {
+	// 	return nil, err
+	// }
+	// optsProvider, ok := opts.(OptsProvider) // where OptsProvider is the interface you created for the specific Opts type
+	// if !ok {
+	// 	return nil, fmt.Errorf("invalid opts type")
+	// }
 	ParseOpts(opts []byte) (interface{}, error)
+}
 
-	// TimeResolution returns the time resolution available in the parsed opts
+// TimeResolutionProvider extracts time resolution information from codec opts
+type TimeResolutionProvider interface {
+	// TimeResolution returns the time resolution from the parsed opts.
+	// The parsedOpts must be the value returned by OptsParser.ParseOpts.
 	TimeResolution(parsedOpts interface{}) (TimeResolution, error)
 }
 

@@ -14,8 +14,9 @@ import (
 )
 
 var (
-	_ llo.ReportCodec = ReportCodecEVMABIEncodeUnpackedExpr{}
-	_ llo.OptsParser  = ReportCodecEVMABIEncodeUnpackedExpr{}
+	_ llo.ReportCodec            = ReportCodecEVMABIEncodeUnpackedExpr{}
+	_ llo.OptsParser             = ReportCodecEVMABIEncodeUnpackedExpr{}
+	_ llo.TimeResolutionProvider = ReportCodecEVMABIEncodeUnpackedExpr{}
 )
 
 type ReportCodecEVMABIEncodeUnpackedExpr struct {

@@ -24,9 +24,10 @@ import (
 )
 
 var (
-	_            llo.ReportCodec = ReportCodecPremiumLegacy{}
-	_            llo.OptsParser  = ReportCodecPremiumLegacy{}
-	PayloadTypes                 = getPayloadTypes()
+	_            llo.ReportCodec            = ReportCodecPremiumLegacy{}
+	_            llo.OptsParser             = ReportCodecPremiumLegacy{}
+	_            llo.TimeResolutionProvider = ReportCodecPremiumLegacy{}
+	PayloadTypes                            = getPayloadTypes()
 )
 
 func getPayloadTypes() abi.Arguments {

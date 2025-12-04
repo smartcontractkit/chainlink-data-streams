@@ -19,8 +19,9 @@ import (
 )
 
 var (
-	_ llo.ReportCodec = ReportCodecEVMABIEncodeUnpacked{}
-	_ llo.OptsParser  = ReportCodecEVMABIEncodeUnpacked{}
+	_ llo.ReportCodec            = ReportCodecEVMABIEncodeUnpacked{}
+	_ llo.OptsParser             = ReportCodecEVMABIEncodeUnpacked{}
+	_ llo.TimeResolutionProvider = ReportCodecEVMABIEncodeUnpacked{}
 
 	zero = big.NewInt(0)
 )

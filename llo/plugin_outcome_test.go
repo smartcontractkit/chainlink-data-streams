@@ -787,8 +787,9 @@ type mockCodec struct {
 }
 
 var (
-	_ ReportCodec = mockCodec{}
-	_ OptsParser  = mockCodec{}
+	_ ReportCodec            = mockCodec{}
+	_ OptsParser             = mockCodec{}
+	_ TimeResolutionProvider = mockCodec{}
 )
 
 func (mockCodec) Encode(Report, llotypes.ChannelDefinition) ([]byte, error) { return nil, nil }

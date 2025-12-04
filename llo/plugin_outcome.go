@@ -464,8 +464,8 @@ func IsSecondsResolution(channelID llotypes.ChannelID, codec ReportCodec, optsCa
 	// Try to determine the time resolution from the channel definition opts
 	if optsCache != nil {
 		if cachedOpts, cached := optsCache.Get(channelID); cached {
-			if optsParser, ok := codec.(OptsParser); ok {
-				resolution, err := optsParser.TimeResolution(cachedOpts)
+			if timeResProvider, ok := codec.(TimeResolutionProvider); ok {
+				resolution, err := timeResProvider.TimeResolution(cachedOpts)
 				if err != nil {
 					// This should not happen since caching the cached opts should logically ensure that this channel's opts
 					// are valid for channels report codec. If this error occurs it would indicate a wrong codec/opts mismatch.
@@ -476,7 +476,7 @@ func IsSecondsResolution(channelID llotypes.ChannelID, codec ReportCodec, optsCa
 		}
 	}
 
-	// Fall back to protocol default time resolution when codecs don't implement OptsParser
+	// Fall back to protocol default time resolution when codecs don't implement TimeResolutionProvider
 	return false, nil
 }
 

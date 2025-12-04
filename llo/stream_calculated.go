@@ -563,10 +563,8 @@ func (p *Plugin) ProcessCalculatedStreams(outcome *Outcome) {
 			continue
 		}
 
-		// TODO: we can potentially cache the opts for each channel definition
-		// and avoid unmarshalling the options on outcome.
-		// for now keep it simple as this will require invalidating on
-		// channel definitions updates.
+		// TODO: Use ChannelDefinitionOptsCache to avoid repeated JSON unmarshaling.
+		// Type assert cached opts to evm.ReportFormatEVMABIEncodeOpts and access ABI field directly.
 		copt := opts{}
 		if err := json.Unmarshal(cd.Opts, &copt); err != nil {
 			p.Logger.Errorw("failed to unmarshal channel definition options", "channelID", cid, "error", err)
