@@ -469,7 +469,7 @@ func IsSecondsResolution(channelID llotypes.ChannelID, codec ReportCodec, optsCa
 				if err != nil {
 					// This should not happen since caching the cached opts should logically ensure that this channel's opts
 					// are valid for channels report codec. If this error occurs it would indicate a wrong codec/opts mismatch.
-					return false, fmt.Errorf("failed to parse time resolution from opts (wrong codec/opts mismatch?) :%w", err)
+					return false, fmt.Errorf("invariant violation: failed to parse time resolution from opts (wrong codec/opts mismatch?) :%w", err)
 				}
 				return resolution == ResolutionSeconds, nil
 			}

@@ -39,8 +39,9 @@ func testOutcome(t *testing.T, outcomeCodec OutcomeCodec) {
 		DonID:            10000043,
 		ConfigDigest:     types.ConfigDigest{1, 2, 3, 4},
 		ReportCodecs: map[llotypes.ReportFormat]ReportCodec{
-			llotypes.ReportFormatJSON:             mockCodec{timeResolution: ResolutionNanoseconds},
-			llotypes.ReportFormatEVMPremiumLegacy: mockCodec{timeResolution: ResolutionSeconds},
+			llotypes.ReportFormatEVMABIEncodeUnpacked: mockCodec{timeResolution: ResolutionNanoseconds},
+			llotypes.ReportFormatEVMPremiumLegacy:     mockCodec{timeResolution: ResolutionSeconds},
+			llotypes.ReportFormatJSON:                 basicCodec{},
 		},
 		ChannelDefinitionOptsCache: NewChannelDefinitionOptsCache(),
 	}
@@ -86,10 +87,16 @@ func testOutcome(t *testing.T, outcomeCodec OutcomeCodec) {
 
 	t.Run("channel definitions", func(t *testing.T) {
 		t.Run("adds a new channel definition if there are enough votes", func(t *testing.T) {
+			// Use EVMPremiumLegacy which implements OptsParser (unlike JSON format)
 			newCd := llotypes.ChannelDefinition{
-				ReportFormat: llotypes.ReportFormat(2),
+				ReportFormat: llotypes.ReportFormatEVMPremiumLegacy,
 				Streams:      []llotypes.Stream{{StreamID: 1, Aggregator: llotypes.AggregatorMedian}, {StreamID: 2, Aggregator: llotypes.AggregatorMedian}, {StreamID: 3, Aggregator: llotypes.AggregatorMedian}},
 			}
+
+			// Verify cache is empty before
+			_, cached := p.ChannelDefinitionOptsCache.Get(42)
+			assert.False(t, cached, "cache should be empty before channel is added")
+
 			obs, err := p.ObservationCodec.Encode(Observation{
 				UpdateChannelDefinitions: map[llotypes.ChannelID]llotypes.ChannelDefinition{
 					42: newCd,
@@ -111,13 +118,28 @@ func testOutcome(t *testing.T, outcomeCodec OutcomeCodec) {
 			require.NoError(t, err)
 
 			assert.Equal(t, newCd, decoded.ChannelDefinitions[42])
+
+			// Verify cache was populated after channel added
+			cachedOpts, cached := p.ChannelDefinitionOptsCache.Get(42)
+			assert.True(t, cached, "cache should be populated after channel is added")
+			assert.NotNil(t, cachedOpts, "cached opts should not be nil")
 		})
 
 		t.Run("replaces an existing channel definition if there are enough votes", func(t *testing.T) {
+			// Use different formats to verify cache Set() was actually called during update
+			oldCd := llotypes.ChannelDefinition{
+				ReportFormat: llotypes.ReportFormatEVMPremiumLegacy, // seconds resolution
+				Streams:      []llotypes.Stream{{StreamID: 2, Aggregator: llotypes.AggregatorMedian}, {StreamID: 3, Aggregator: llotypes.AggregatorMedian}, {StreamID: 4, Aggregator: llotypes.AggregatorMedian}},
+			}
 			newCd := llotypes.ChannelDefinition{
-				ReportFormat: llotypes.ReportFormat(2),
+				ReportFormat: llotypes.ReportFormatEVMABIEncodeUnpacked, // nanoseconds resolution
 				Streams:      []llotypes.Stream{{StreamID: 1, Aggregator: llotypes.AggregatorQuote}, {StreamID: 2, Aggregator: llotypes.AggregatorMedian}, {StreamID: 3, Aggregator: llotypes.AggregatorMedian}},
 			}
+
+			// Pre-populate cache with old definition
+			populateCache(t, p.ChannelDefinitionOptsCache, 42, oldCd, p.ReportCodecs)
+			oldCachedOpts, _ := p.ChannelDefinitionOptsCache.Get(42)
+
 			obs, err := p.ObservationCodec.Encode(Observation{
 				UpdateChannelDefinitions: map[llotypes.ChannelID]llotypes.ChannelDefinition{
 					42: newCd,
@@ -135,10 +157,7 @@ func testOutcome(t *testing.T, outcomeCodec OutcomeCodec) {
 
 			previousOutcome, err := p.OutcomeCodec.Encode(Outcome{
 				ChannelDefinitions: map[llotypes.ChannelID]llotypes.ChannelDefinition{
-					42: {
-						ReportFormat: llotypes.ReportFormat(1),
-						Streams:      []llotypes.Stream{{StreamID: 2, Aggregator: llotypes.AggregatorMedian}, {StreamID: 3, Aggregator: llotypes.AggregatorMedian}, {StreamID: 4, Aggregator: llotypes.AggregatorMedian}},
-					},
+					42: oldCd,
 				},
 			})
 			require.NoError(t, err)
@@ -150,17 +169,29 @@ func testOutcome(t *testing.T, outcomeCodec OutcomeCodec) {
 			require.NoError(t, err)
 
 			assert.Equal(t, newCd, decoded.ChannelDefinitions[42])
+
+			// Verify cache was updated by checking cached value changed
+			newCachedOpts, cached := p.ChannelDefinitionOptsCache.Get(42)
+			assert.True(t, cached, "optsCache should be populated after update")
+			assert.NotNil(t, newCachedOpts, "cached opts should not be nil after update")
+			// The old/new cached opts must be different because the report formats are different
+			assert.NotEqual(t, oldCachedOpts, newCachedOpts, "cached opts must change when format changes (proves Set was called)")
 		})
 
 		t.Run("removes a channel definition if there are enough votes", func(t *testing.T) {
-			t.Skip("removal votes are not implemented yet")
-			newCd := llotypes.ChannelDefinition{
-				ReportFormat: llotypes.ReportFormat(2),
+			existingCd := llotypes.ChannelDefinition{
+				ReportFormat: llotypes.ReportFormatEVMPremiumLegacy,
 				Streams:      []llotypes.Stream{{StreamID: 1, Aggregator: llotypes.AggregatorMedian}, {StreamID: 2, Aggregator: llotypes.AggregatorMedian}, {StreamID: 3, Aggregator: llotypes.AggregatorMedian}},
+				Opts:         []byte(`{"existing":"channel"}`),
 			}
+
+			// Pre-populate cache with existing channel
+			populateCache(t, p.ChannelDefinitionOptsCache, 42, existingCd, p.ReportCodecs)
+
+			// Vote to remove channel 42
 			obs, err := p.ObservationCodec.Encode(Observation{
-				UpdateChannelDefinitions: map[llotypes.ChannelID]llotypes.ChannelDefinition{
-					42: newCd,
+				RemoveChannelIDs: map[llotypes.ChannelID]struct{}{
+					42: {},
 				},
 			})
 			require.NoError(t, err)
@@ -172,13 +203,27 @@ func testOutcome(t *testing.T, outcomeCodec OutcomeCodec) {
 						Observer:    commontypes.OracleID(i),
 					})
 			}
-			outcome, err := p.Outcome(ctx, ocr3types.OutcomeContext{SeqNr: 2}, types.Query{}, aos)
+
+			previousOutcome, err := p.OutcomeCodec.Encode(Outcome{
+				ChannelDefinitions: map[llotypes.ChannelID]llotypes.ChannelDefinition{
+					42: existingCd,
+				},
+			})
+			require.NoError(t, err)
+
+			// Will process votes to remove channel 42
+			outcome, err := p.Outcome(ctx, ocr3types.OutcomeContext{PreviousOutcome: previousOutcome, SeqNr: 2}, types.Query{}, aos)
 			require.NoError(t, err)
 
 			decoded, err := p.OutcomeCodec.Decode(outcome)
 			require.NoError(t, err)
 
-			assert.Equal(t, newCd, decoded.ChannelDefinitions[42])
+			// Channel should be removed from definitions
+			assert.NotContains(t, decoded.ChannelDefinitions, llotypes.ChannelID(42))
+
+			// Verify cache entry was deleted
+			_, cached := p.ChannelDefinitionOptsCache.Get(42)
+			assert.False(t, cached, "cache should not contain channel after removal")
 		})
 
 		t.Run("does not add channels beyond MaxOutcomeChannelDefinitionsLength", func(t *testing.T) {
@@ -729,8 +774,16 @@ func Test_MakeChannelHash(t *testing.T) {
 	})
 }
 
+func populateCache(t *testing.T, cache ChannelDefinitionOptsCache, channelID llotypes.ChannelID, cd llotypes.ChannelDefinition, codecs map[llotypes.ReportFormat]ReportCodec) {
+	err := cache.Set(channelID, cd.Opts, codecs[cd.ReportFormat])
+	require.NoError(t, err)
+	_, cached := cache.Get(channelID)
+	require.True(t, cached, "cache should be populated after Set")
+}
+
 type mockCodec struct {
-	timeResolution TimeResolution
+	timeResolution    TimeResolution
+	timeResolutionErr error
 }
 
 var (
@@ -738,35 +791,43 @@ var (
 	_ OptsParser  = mockCodec{}
 )
 
-func (mockCodec) Encode(Report, llotypes.ChannelDefinition) ([]byte, error) {
-	return nil, nil
-}
+func (mockCodec) Encode(Report, llotypes.ChannelDefinition) ([]byte, error) { return nil, nil }
 
-func (mockCodec) Verify(llotypes.ChannelDefinition) error {
-	return nil
-}
+func (mockCodec) Verify(llotypes.ChannelDefinition) error { return nil }
 
 func (c mockCodec) ParseOpts(opts []byte) (interface{}, error) {
-	// TODO do we need to parse opts in anyway here?
+	// Ignoring opts bytes parsing here is acceptable for integration tests because
+	// that is a responsibility of the codec implementation.
+	// Real codec unit tests should verify actual parsing behavior
 	return c, nil
 }
 
 func (c mockCodec) TimeResolution(parsedOpts interface{}) (TimeResolution, error) {
+	if c.timeResolutionErr != nil {
+		return 0, c.timeResolutionErr
+	}
 	if tc, ok := parsedOpts.(mockCodec); ok {
 		return tc.timeResolution, nil
 	}
 	return c.timeResolution, nil
 }
 
+// basicCodec is a codec that does not implement OptsParser
+type basicCodec struct{}
+
+var _ ReportCodec = basicCodec{}
+
+func (basicCodec) Encode(Report, llotypes.ChannelDefinition) ([]byte, error) { return nil, nil }
+func (basicCodec) Verify(llotypes.ChannelDefinition) error                   { return nil }
+
 func Test_Outcome_Methods(t *testing.T) {
-	// Cache for parsed channel definition opts
 	optsCache := NewChannelDefinitionOptsCache()
-	// Use test codecs that mimic real codec behavior
 	codecs := map[llotypes.ReportFormat]ReportCodec{
 		llotypes.ReportFormat(0):                      mockCodec{timeResolution: ResolutionNanoseconds},
 		llotypes.ReportFormatEVMPremiumLegacy:         mockCodec{timeResolution: ResolutionSeconds},
 		llotypes.ReportFormatEVMABIEncodeUnpacked:     mockCodec{timeResolution: ResolutionNanoseconds},
 		llotypes.ReportFormatEVMABIEncodeUnpackedExpr: mockCodec{timeResolution: ResolutionNanoseconds},
+		llotypes.ReportFormatJSON:                     basicCodec{},
 	}
 
 	t.Run("protocol version 0", func(t *testing.T) {
@@ -867,6 +928,42 @@ func Test_Outcome_Methods(t *testing.T) {
 			// zero report cadence allows overlaps (but still respects seconds resolution boundary)
 			outcome.ValidAfterNanoseconds = map[llotypes.ChannelID]uint64{cid: obsTSNanos - uint64(1*time.Second)}
 			require.Nil(t, outcome.IsReportable(cid, 1, 0, codecs, optsCache))
+
+			t.Run("returns error when TimeResolution fails (codec/opts mismatch)", func(t *testing.T) {
+				cid := llotypes.ChannelID(3)
+				obsTSNanos := uint64(time.Unix(1726670490, 1000).UnixNano()) //nolint:gosec // time won't be negative
+
+				outcome := Outcome{
+					LifeCycleStage:                  LifeCycleStageProduction,
+					ObservationTimestampNanoseconds: obsTSNanos,
+					ChannelDefinitions: map[llotypes.ChannelID]llotypes.ChannelDefinition{
+						cid: {ReportFormat: llotypes.ReportFormatEVMPremiumLegacy},
+					},
+					ValidAfterNanoseconds: map[llotypes.ChannelID]uint64{
+						cid: obsTSNanos - uint64(2*time.Second),
+					},
+				}
+
+				// Create a mockCodec that will return an error when TimeResolution is called
+				codecWithError := mockCodec{
+					timeResolution:    ResolutionSeconds,
+					timeResolutionErr: fmt.Errorf("could not marshall structure"),
+				}
+				codecsWithError := map[llotypes.ReportFormat]ReportCodec{
+					llotypes.ReportFormatEVMPremiumLegacy: codecWithError,
+				}
+
+				// Populate cache with opts that will be mismatched with the codec
+				// This simulates a scenario where the cache returnes Opts that the Codec cannot parse
+				// this mimics if the outcome method improperly uses the cache or the scenario where the cache itself fails
+				cd := outcome.ChannelDefinitions[cid]
+				err := optsCache.Set(cid, cd.Opts, codecWithError)
+				require.NoError(t, err)
+
+				// IsReportable should return an error about the invariant violation
+				err = outcome.IsReportable(cid, 1, uint64(100*time.Millisecond), codecsWithError, optsCache)
+				require.EqualError(t, err, "ChannelID: 3; Reason: IsReportable=false; failed to determine time resolution; Err: invariant violation: failed to parse time resolution from opts (wrong codec/opts mismatch?) :could not marshall structure")
+			})
 		})
 		t.Run("IsReportable with seconds resolution", func(t *testing.T) {
 			outcome := Outcome{}
@@ -883,7 +980,7 @@ func Test_Outcome_Methods(t *testing.T) {
 				cid: obsTSNanos - uint64(500*time.Millisecond),
 			}
 
-			// OptsCache should be populated after successful channel voting 
+			// OptsCache should be populated after successful channel voting
 			cd := outcome.ChannelDefinitions[cid]
 			_ = optsCache.Set(cid, cd.Opts, codecs[cd.ReportFormat])
 
@@ -899,6 +996,42 @@ func Test_Outcome_Methods(t *testing.T) {
 			// if cadence is 5s, if time is < 5s, does not report because cadence hasn't elapsed
 			require.EqualError(t, outcome.IsReportable(cid, 1, uint64(5*time.Second), codecs, optsCache), "ChannelID: 1; Reason: IsReportable=false; not valid yet (ObservationTimestampNanoseconds=1726670490999999999, validAfterNanoseconds=1726670489999999999, minReportInterval=5000000000); 4.000000 seconds (4000000000ns) until reportable")
 		})
+
+		t.Run("IsSecondsResolution returns false when codec does not implement OptsParser", func(t *testing.T) {
+			cid := llotypes.ChannelID(2)
+
+			cd := llotypes.ChannelDefinition{
+				ReportFormat: llotypes.ReportFormatJSON,
+			}
+
+			// Cannot populate cache because codec does not implement OptsParser
+			err := optsCache.Set(cid, cd.Opts, codecs[cd.ReportFormat])
+			require.NoError(t, err)
+			_, cached := optsCache.Get(cid)
+			require.False(t, cached, "cache should not be populated after Set (Codec does not implement OptsParser)")
+
+			// ReportFormatJSON is using a codec which does not implement OptsParser - IsSecondsResolution returns false
+			// indicating to use the default time resolution
+			isSecondsResolution, err := IsSecondsResolution(cid, codecs[llotypes.ReportFormatJSON], optsCache)
+			require.NoError(t, err)
+			assert.False(t, isSecondsResolution)
+		})
+
+		t.Run("IsSecondsResolution returns true when codec requires seconds resolution", func(t *testing.T) {
+			cid := llotypes.ChannelID(2)
+
+			cd := llotypes.ChannelDefinition{
+				ReportFormat: llotypes.ReportFormatEVMPremiumLegacy,
+			}
+
+			populateCache(t, optsCache, cid, cd, codecs)
+
+			isSecondsResolution, err := IsSecondsResolution(cid, codecs[llotypes.ReportFormatEVMPremiumLegacy], optsCache)
+			require.NoError(t, err)
+			assert.True(t, isSecondsResolution)
+
+		})
+
 		t.Run("ReportableChannels", func(t *testing.T) {
 			defaultMinReportInterval := uint64(1 * time.Second)
 
