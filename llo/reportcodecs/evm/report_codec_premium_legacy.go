@@ -25,6 +25,7 @@ import (
 
 var (
 	_            llo.ReportCodec = ReportCodecPremiumLegacy{}
+	_            llo.OptsParser  = ReportCodecPremiumLegacy{}
 	PayloadTypes                 = getPayloadTypes()
 )
 
@@ -269,4 +270,17 @@ func LegacyReportContext(cd ocr2types.ConfigDigest, seqNr uint64, donID uint32) 
 		},
 		ExtraHash: LLOExtraHash(donID), // ExtraHash is always zero for mercury, we use LLOExtraHash here to differentiate from the legacy plugin
 	}, nil
+}
+
+func (r ReportCodecPremiumLegacy) ParseOpts(opts []byte) (interface{}, error) {
+	var o ReportFormatEVMPremiumLegacyOpts
+	if err := json.Unmarshal(opts, &o); err != nil {
+		return nil, fmt.Errorf("failed to parse EVMPremiumLegacy opts: %w", err)
+	}
+	return o, nil
+}
+
+func (r ReportCodecPremiumLegacy) TimeResolution(parsedOpts interface{}) (llo.TimeResolution, error) {
+	// Premium legacy always uses seconds resolution
+	return llo.ResolutionSeconds, nil
 }

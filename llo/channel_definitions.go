@@ -69,3 +69,47 @@ func subtractChannelDefinitions(minuend llotypes.ChannelDefinitions, subtrahend 
 
 	return difference
 }
+
+type channelDefinitionOptsCache struct {
+	cache map[llotypes.ChannelID]interface{}
+}
+
+var _ ChannelDefinitionOptsCache = (*channelDefinitionOptsCache)(nil)
+
+// NewChannelDefinitionOptsCache creates a new ChannelDefinitionOptsCache
+func NewChannelDefinitionOptsCache() ChannelDefinitionOptsCache {
+	return &channelDefinitionOptsCache{
+		cache: make(map[llotypes.ChannelID]interface{}),
+	}
+}
+
+// If the codec does not implement OptsParser, nothing is cached
+func (c *channelDefinitionOptsCache) Set(
+	channelID llotypes.ChannelID,
+	channelOpts llotypes.ChannelOpts,
+	codec ReportCodec,
+) error {
+	// Check if codec implements optional OptsParser interface
+	optsParser, ok := codec.(OptsParser)
+	if !ok {
+		// Codec doesn't implement OptsParser, nothing to cache
+		return nil
+	}
+
+	parsedOpts, err := optsParser.ParseOpts(channelOpts)
+	if err != nil {
+		return fmt.Errorf("failed to parse opts for channelID %d: %w", channelID, err)
+	}
+
+	c.cache[channelID] = parsedOpts
+	return nil
+}
+
+func (c *channelDefinitionOptsCache) Get(channelID llotypes.ChannelID) (interface{}, bool) {
+	val, ok := c.cache[channelID]
+	return val, ok
+}
+
+func (c *channelDefinitionOptsCache) Delete(channelID llotypes.ChannelID) {
+	delete(c.cache, channelID)
+}

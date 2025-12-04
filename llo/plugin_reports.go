@@ -46,7 +46,7 @@ func (p *Plugin) reports(ctx context.Context, seqNr uint64, rawOutcome ocr3types
 		})
 	}
 
-	reportableChannels, unreportableChannels := outcome.ReportableChannels(p.ProtocolVersion, p.DefaultMinReportIntervalNanoseconds)
+	reportableChannels, unreportableChannels := outcome.ReportableChannels(p.ProtocolVersion, p.DefaultMinReportIntervalNanoseconds, p.ReportCodecs, p.ChannelDefinitionOptsCache)
 	if p.Config.VerboseLogging {
 		p.Logger.Debugw("Reportable channels", "lifeCycleStage", outcome.LifeCycleStage, "reportableChannels", reportableChannels, "unreportableChannels", unreportableChannels, "stage", "Report", "seqNr", seqNr)
 	}

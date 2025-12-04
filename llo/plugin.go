@@ -165,6 +165,20 @@ type ChannelDefinitionCache interface {
 	Definitions() llotypes.ChannelDefinitions
 }
 
+// ChannelDefinitionOptsCache is a cache of channel definition opts
+// It is used to avoid repeated JSON parsing of channel definition opts
+type ChannelDefinitionOptsCache interface {
+	// Set parses and caches the channel definition opts for the given channelID
+	// The channelOpts should match the ReportCodec's opts type.
+	Set(channelID llotypes.ChannelID, channelOpts llotypes.ChannelOpts, codec ReportCodec) error
+	// Get retrieves cached opts for the given channelID
+	// Returning `interface{}` requires type assertion to the specific ReportCodec's opts type.
+	// This is still considered better than parsing the opts from JSON every time we need to access them.
+	Get(channelID llotypes.ChannelID) (interface{}, bool)
+	// Delete removes cached opts for the given channelID
+	Delete(channelID llotypes.ChannelID)
+}
+
 // A ReportingPlugin allows plugging custom logic into the OCR3 protocol. The OCR
 // protocol handles cryptography, networking, ensuring that a sufficient number
 // of nodes is in agreement about any report, transmitting the report to the
@@ -278,6 +292,8 @@ func (f *PluginFactory) NewReportingPlugin(ctx context.Context, cfg ocr3types.Re
 		ballastAlloc = make([]byte, ballastSz)
 	})
 
+	channelOptsCache := NewChannelDefinitionOptsCache()
+
 	return &Plugin{
 			f.Config,
 			onchainConfig.PredecessorConfigDigest,
@@ -285,6 +301,7 @@ func (f *PluginFactory) NewReportingPlugin(ctx context.Context, cfg ocr3types.Re
 			f.PredecessorRetirementReportCache,
 			f.ShouldRetireCache,
 			f.ChannelDefinitionCache,
+			channelOptsCache,
 			f.DataSource,
 			l,
 			cfg.N,
@@ -320,6 +337,7 @@ type Plugin struct {
 	PredecessorRetirementReportCache PredecessorRetirementReportCache
 	ShouldRetireCache                ShouldRetireCache
 	ChannelDefinitionCache           ChannelDefinitionCache
+	ChannelDefinitionOptsCache       ChannelDefinitionOptsCache
 	DataSource                       DataSource
 	Logger                           logger.Logger
 	N                                int
