@@ -32,7 +32,7 @@ func FuzzReportCodecPremiumLegacy_Decode(f *testing.F) {
 
 	codec := ReportCodecPremiumLegacy{logger.Test(f), 100002}
 
-	validEncodedReport, err := codec.Encode(validReport, cd)
+	validEncodedReport, err := codec.Encode(validReport, cd, nil)
 	require.NoError(f, err)
 	f.Add(validEncodedReport)
 
@@ -60,7 +60,7 @@ func Test_ReportCodecPremiumLegacy(t *testing.T) {
 	cd := llotypes.ChannelDefinition{Opts: llotypes.ChannelOpts(fmt.Sprintf(`{"baseUSDFee":"10.50","expirationWindow":60,"feedId":"0x%x","multiplier":10}`, feedID))}
 
 	t.Run("Encode errors if no values", func(t *testing.T) {
-		_, err := rc.Encode(llo.Report{}, cd)
+		_, err := rc.Encode(llo.Report{}, cd, nil)
 		require.Error(t, err)
 
 		assert.Contains(t, err.Error(), "ReportCodecPremiumLegacy cannot encode; got unusable report; ReportCodecPremiumLegacy requires exactly 3 values (NativePrice, LinkPrice, Quote{Bid, Mid, Ask}); got report.Values: []")
@@ -70,7 +70,7 @@ func Test_ReportCodecPremiumLegacy(t *testing.T) {
 		report := newValidPremiumLegacyReport()
 		report.Specimen = true
 
-		_, err := rc.Encode(report, cd)
+		_, err := rc.Encode(report, cd, nil)
 		require.Error(t, err)
 		require.EqualError(t, err, "ReportCodecPremiumLegacy does not support encoding specimen reports")
 	})
@@ -78,7 +78,7 @@ func Test_ReportCodecPremiumLegacy(t *testing.T) {
 	t.Run("Encode constructs a report from observations", func(t *testing.T) {
 		report := newValidPremiumLegacyReport()
 
-		encoded, err := rc.Encode(report, cd)
+		encoded, err := rc.Encode(report, cd, nil)
 		require.NoError(t, err)
 
 		assert.Len(t, encoded, 288)
@@ -119,7 +119,7 @@ func Test_ReportCodecPremiumLegacy(t *testing.T) {
 			Values: []llo.StreamValue{nil, nil, &llo.Quote{Bid: decimal.NewFromInt(37), Benchmark: decimal.NewFromInt(38), Ask: decimal.NewFromInt(39)}},
 		}
 
-		encoded, err := rc.Encode(report, cd)
+		encoded, err := rc.Encode(report, cd, nil)
 		require.NoError(t, err)
 
 		assert.Len(t, encoded, 288)
@@ -327,4 +327,45 @@ func Test_ReportCodecPremiumLegacy_Verify(t *testing.T) {
 		err := c.Verify(cd)
 		require.NoError(t, err)
 	})
+}
+
+func TestReportCodecPremiumLegacy_WithAndWithoutParsedOpts(t *testing.T) {
+	codec := ReportCodecPremiumLegacy{Logger: logger.Test(t)}
+
+	optsJSON := []byte(`{
+		"baseUSDFee": "1.5",
+		"expirationWindow": 3600,
+		"feedID": "0x0001020304050607080910111213141516171819202122232425262728293031"
+	}`)
+
+	cd := llotypes.ChannelDefinition{
+		ReportFormat: llotypes.ReportFormatEVMPremiumLegacy,
+		Streams:      []llotypes.Stream{{StreamID: 1}, {StreamID: 2}, {StreamID: 3}},
+		Opts:         optsJSON,
+	}
+
+	report := llo.Report{
+		ValidAfterNanoseconds:           1234567890000000000,
+		ObservationTimestampNanoseconds: 1234567891000000000,
+		Values: []llo.StreamValue{
+			llo.ToDecimal(decimal.NewFromFloat(1.5)),
+			llo.ToDecimal(decimal.NewFromFloat(2.5)),
+			&llo.Quote{Bid: decimal.NewFromFloat(100.1), Benchmark: decimal.NewFromFloat(100.2), Ask: decimal.NewFromFloat(100.3)},
+		},
+	}
+
+	// Parse opts using OptsParser
+	parsedOpts, err := codec.ParseOpts(optsJSON)
+	require.NoError(t, err)
+
+	// Encode with parsed opts
+	encodedWithCache, err := codec.Encode(report, cd, parsedOpts)
+	require.NoError(t, err)
+
+	// Encode without parsed opts
+	encodedWithoutCache, err := codec.Encode(report, cd, nil)
+	require.NoError(t, err)
+
+	// Both paths should produce identical output
+	assert.Equal(t, encodedWithCache, encodedWithoutCache)
 }

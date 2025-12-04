@@ -170,6 +170,8 @@ type ChannelDefinitionCache interface {
 type ChannelDefinitionOptsCache interface {
 	// Set parses and caches the channel definition opts for the given channelID
 	// The channelOpts should match the ReportCodec's opts type.
+	// The codec is responsible for having a method to parse `channelOpts` into the codec's expected opts type.
+	// Failure to cache opts should return an error.
 	Set(channelID llotypes.ChannelID, channelOpts llotypes.ChannelOpts, codec ReportCodec) error
 	// Get retrieves cached opts for the given channelID
 	// Returning `interface{}` requires type assertion to the specific ReportCodec's opts type.

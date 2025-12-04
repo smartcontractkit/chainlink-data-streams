@@ -101,7 +101,15 @@ func (p *Plugin) encodeReport(r Report, cd llotypes.ChannelDefinition) (types.Re
 		return nil, fmt.Errorf("codec missing for ReportFormat=%q", cd.ReportFormat)
 	}
 	p.captureReportTelemetry(r, cd)
-	return codec.Encode(r, cd)
+
+	// Lookup cached opts if available
+	var cachedOpts interface{}
+	if p.ChannelDefinitionOptsCache != nil {
+		cachedOpts, _ = p.ChannelDefinitionOptsCache.Get(r.ChannelID)
+		// cachedOpts may be nil - that's fine, codec will parse cd.Opts
+	}
+
+	return codec.Encode(r, cd, cachedOpts)
 }
 
 func (p *Plugin) captureReportTelemetry(r Report, cd llotypes.ChannelDefinition) {

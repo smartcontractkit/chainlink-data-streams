@@ -24,7 +24,13 @@ type ReportCodec interface {
 	// Encode may be lossy, so no Decode function is expected
 	// Encode should handle nil stream aggregate values without panicking (it
 	// may return error instead)
-	Encode(Report, llotypes.ChannelDefinition) ([]byte, error)
+	//
+	// parsedOpts is a pre-parsed version of ChannelDefinition.Opts which avoids repeated Opts parsing. 
+	// ChannelDefinition.Opts can be nil and is up to the codec to determine if it needs Opts and if 
+	// the codec does not need ChannelDefinition.Opts it should pass in nil
+	// If parsedOpts is nil, the codec is expected to parse cd.Opts directly.
+	// If parsedOpts is non-nil, the codec should type-assert it to its expected opts type.
+	Encode(r Report, cd llotypes.ChannelDefinition, parsedOpts interface{}) ([]byte, error)
 	// Verify may optionally verify a channel definition to ensure it is valid
 	// for the given report codec. If a codec does not wish to implement
 	// validation it may simply return nil here. If any definition fails

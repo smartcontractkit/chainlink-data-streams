@@ -83,7 +83,7 @@ type BaseReportFields struct {
 	ExpiresAt          uint64
 }
 
-func (r ReportCodecEVMABIEncodeUnpacked) Encode(report llo.Report, cd llotypes.ChannelDefinition) ([]byte, error) {
+func (r ReportCodecEVMABIEncodeUnpacked) Encode(report llo.Report, cd llotypes.ChannelDefinition, parsedOpts interface{}) ([]byte, error) {
 	if report.Specimen {
 		return nil, errors.New("ReportCodecEVMABIEncodeUnpacked does not support encoding specimen reports")
 	}
@@ -99,12 +99,19 @@ func (r ReportCodecEVMABIEncodeUnpacked) Encode(report llo.Report, cd llotypes.C
 		return nil, fmt.Errorf("ReportCodecEVMABIEncodeUnpacked failed to extract link price: %w", err)
 	}
 
-	// NOTE: It seems suboptimal to have to parse the opts on every encode but
-	// not sure how to avoid it. Should be negligible performance hit as long
-	// as Opts is small.
-	opts := ReportFormatEVMABIEncodeOpts{}
-	if err = (&opts).Decode(cd.Opts); err != nil {
-		return nil, fmt.Errorf("failed to decode opts; got: '%s'; %w", cd.Opts, err)
+	var opts ReportFormatEVMABIEncodeOpts
+	if parsedOpts != nil {
+		// Use cached opts
+		var ok bool
+		opts, ok = parsedOpts.(ReportFormatEVMABIEncodeOpts)
+		if !ok {
+			return nil, fmt.Errorf("expected ReportFormatEVMABIEncodeOpts, got %T", parsedOpts)
+		}
+	} else {
+		// Fall back to parsing JSON
+		if err = (&opts).Decode(cd.Opts); err != nil {
+			return nil, fmt.Errorf("failed to decode opts; got: '%s'; %w", cd.Opts, err)
+		}
 	}
 
 	validAfter := ConvertTimestamp(report.ValidAfterNanoseconds, opts.TimeResolution)

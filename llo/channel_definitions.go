@@ -83,7 +83,6 @@ func NewChannelDefinitionOptsCache() ChannelDefinitionOptsCache {
 	}
 }
 
-// If the codec does not implement OptsParser, nothing is cached
 func (c *channelDefinitionOptsCache) Set(
 	channelID llotypes.ChannelID,
 	channelOpts llotypes.ChannelOpts,
@@ -92,8 +91,7 @@ func (c *channelDefinitionOptsCache) Set(
 	// Check if codec implements optional OptsParser interface
 	optsParser, ok := codec.(OptsParser)
 	if !ok {
-		// Codec doesn't implement OptsParser, nothing to cache
-		return nil
+		return fmt.Errorf("codec does not implement OptsParser interface")
 	}
 
 	parsedOpts, err := optsParser.ParseOpts(channelOpts)

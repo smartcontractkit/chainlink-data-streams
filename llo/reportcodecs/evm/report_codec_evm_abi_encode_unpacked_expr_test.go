@@ -72,7 +72,7 @@ func TestReportCodecEVMABIEncodeUnpackedExpr_Encode(t *testing.T) {
 		}
 
 		codec := ReportCodecEVMABIEncodeUnpackedExpr{}
-		_, err = codec.Encode(report, cd)
+		_, err = codec.Encode(report, cd, nil)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "ABI and values length mismatch")
 	})
@@ -149,7 +149,7 @@ func TestReportCodecEVMABIEncodeUnpackedExpr_Encode(t *testing.T) {
 			}
 
 			codec := ReportCodecEVMABIEncodeUnpackedExpr{}
-			encoded, err := codec.Encode(report, cd)
+			encoded, err := codec.Encode(report, cd, nil)
 			require.NoError(t, err)
 
 			values, err := expectedDEXBasedAssetSchema.Unpack(encoded)
@@ -161,7 +161,7 @@ func TestReportCodecEVMABIEncodeUnpackedExpr_Encode(t *testing.T) {
 			for i := range report.Values {
 				report.Values[i] = nil
 			}
-			_, err = codec.Encode(report, cd)
+			_, err = codec.Encode(report, cd, nil)
 			require.Error(t, err)
 
 			return true
@@ -262,7 +262,7 @@ func TestReportCodecEVMABIEncodeUnpackedExpr_Encode(t *testing.T) {
 			}
 
 			codec := ReportCodecEVMABIEncodeUnpackedExpr{}
-			encoded, err := codec.Encode(report, cd)
+			encoded, err := codec.Encode(report, cd, nil)
 			require.NoError(t, err)
 
 			values, err := schema.Unpack(encoded)
@@ -502,4 +502,46 @@ func TestReportCodecEVMABIEncodeUnpackedExpr_EncodeOpts(t *testing.T) {
 			})
 		}
 	})
+}
+
+func TestReportCodecEVMABIEncodeUnpackedExpr_WithAndWithoutParsedOpts(t *testing.T) {
+	codec := ReportCodecEVMABIEncodeUnpackedExpr{}
+
+	optsJSON := []byte(`{
+		"baseUSDFee": "1.5",
+		"expirationWindow": 3600,
+		"feedID": "0x0001020304050607080910111213141516171819202122232425262728293031",
+		"abi": [{"type": "uint192"}]
+	}`)
+
+	cd := llotypes.ChannelDefinition{
+		ReportFormat: llotypes.ReportFormatEVMABIEncodeUnpackedExpr,
+		Streams:      []llotypes.Stream{{StreamID: 1}, {StreamID: 2}, {StreamID: 3}},
+		Opts:         optsJSON,
+	}
+
+	report := llo.Report{
+		ValidAfterNanoseconds:           1234567890000000000,
+		ObservationTimestampNanoseconds: 1234567891000000000,
+		Values: []llo.StreamValue{
+			llo.ToDecimal(decimal.NewFromFloat(1.5)),
+			llo.ToDecimal(decimal.NewFromFloat(2.5)),
+			llo.ToDecimal(decimal.NewFromFloat(100.123)),
+		},
+	}
+
+	// Parse opts using OptsParser (simulates cache hit)
+	parsedOpts, err := codec.ParseOpts(optsJSON)
+	require.NoError(t, err)
+
+	// Encode with parsed opts
+	encodedWithCache, err := codec.Encode(report, cd, parsedOpts)
+	require.NoError(t, err)
+
+	// Encode without parsed opts
+	encodedWithoutCache, err := codec.Encode(report, cd, nil)
+	require.NoError(t, err)
+
+	// Both paths should produce identical output
+	assert.Equal(t, encodedWithCache, encodedWithoutCache)
 }

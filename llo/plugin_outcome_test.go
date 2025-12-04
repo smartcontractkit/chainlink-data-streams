@@ -41,7 +41,7 @@ func testOutcome(t *testing.T, outcomeCodec OutcomeCodec) {
 		ReportCodecs: map[llotypes.ReportFormat]ReportCodec{
 			llotypes.ReportFormatEVMABIEncodeUnpacked: mockCodec{timeResolution: ResolutionNanoseconds},
 			llotypes.ReportFormatEVMPremiumLegacy:     mockCodec{timeResolution: ResolutionSeconds},
-			llotypes.ReportFormatJSON:                 basicCodec{},
+			llotypes.ReportFormatJSON:                 mockReportCodec{},
 		},
 		ChannelDefinitionOptsCache: NewChannelDefinitionOptsCache(),
 	}
@@ -792,7 +792,9 @@ var (
 	_ TimeResolutionProvider = mockCodec{}
 )
 
-func (mockCodec) Encode(Report, llotypes.ChannelDefinition) ([]byte, error) { return nil, nil }
+func (mockCodec) Encode(Report, llotypes.ChannelDefinition, interface{}) ([]byte, error) {
+	return nil, nil
+}
 
 func (mockCodec) Verify(llotypes.ChannelDefinition) error { return nil }
 
@@ -813,14 +815,6 @@ func (c mockCodec) TimeResolution(parsedOpts interface{}) (TimeResolution, error
 	return c.timeResolution, nil
 }
 
-// basicCodec is a codec that does not implement OptsParser
-type basicCodec struct{}
-
-var _ ReportCodec = basicCodec{}
-
-func (basicCodec) Encode(Report, llotypes.ChannelDefinition) ([]byte, error) { return nil, nil }
-func (basicCodec) Verify(llotypes.ChannelDefinition) error                   { return nil }
-
 func Test_Outcome_Methods(t *testing.T) {
 	optsCache := NewChannelDefinitionOptsCache()
 	codecs := map[llotypes.ReportFormat]ReportCodec{
@@ -828,7 +822,7 @@ func Test_Outcome_Methods(t *testing.T) {
 		llotypes.ReportFormatEVMPremiumLegacy:         mockCodec{timeResolution: ResolutionSeconds},
 		llotypes.ReportFormatEVMABIEncodeUnpacked:     mockCodec{timeResolution: ResolutionNanoseconds},
 		llotypes.ReportFormatEVMABIEncodeUnpackedExpr: mockCodec{timeResolution: ResolutionNanoseconds},
-		llotypes.ReportFormatJSON:                     basicCodec{},
+		llotypes.ReportFormatJSON:                     mockReportCodec{},
 	}
 
 	t.Run("protocol version 0", func(t *testing.T) {
@@ -1007,7 +1001,7 @@ func Test_Outcome_Methods(t *testing.T) {
 
 			// Cannot populate cache because codec does not implement OptsParser
 			err := optsCache.Set(cid, cd.Opts, codecs[cd.ReportFormat])
-			require.NoError(t, err)
+			require.Error(t, err)
 			_, cached := optsCache.Get(cid)
 			require.False(t, cached, "cache should not be populated after Set (Codec does not implement OptsParser)")
 

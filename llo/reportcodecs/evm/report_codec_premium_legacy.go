@@ -79,7 +79,7 @@ func (r *ReportFormatEVMPremiumLegacyOpts) Decode(opts []byte) error {
 	return decoder.Decode(r)
 }
 
-func (r ReportCodecPremiumLegacy) Encode(report llo.Report, cd llotypes.ChannelDefinition) ([]byte, error) {
+func (r ReportCodecPremiumLegacy) Encode(report llo.Report, cd llotypes.ChannelDefinition, parsedOpts interface{}) ([]byte, error) {
 	if report.Specimen {
 		return nil, errors.New("ReportCodecPremiumLegacy does not support encoding specimen reports")
 	}
@@ -88,12 +88,19 @@ func (r ReportCodecPremiumLegacy) Encode(report llo.Report, cd llotypes.ChannelD
 		return nil, fmt.Errorf("ReportCodecPremiumLegacy cannot encode; got unusable report; %w", err)
 	}
 
-	// NOTE: It seems suboptimal to have to parse the opts on every encode but
-	// not sure how to avoid it. Should be negligible performance hit as long
-	// as Opts is small.
-	opts := ReportFormatEVMPremiumLegacyOpts{}
-	if err = (&opts).Decode(cd.Opts); err != nil {
-		return nil, fmt.Errorf("failed to decode opts; got: '%s'; %w", cd.Opts, err)
+	var opts ReportFormatEVMPremiumLegacyOpts
+	if parsedOpts != nil {
+		// Use cached opts
+		var ok bool
+		opts, ok = parsedOpts.(ReportFormatEVMPremiumLegacyOpts)
+		if !ok {
+			return nil, fmt.Errorf("expected ReportFormatEVMPremiumLegacyOpts, got %T", parsedOpts)
+		}
+	} else {
+		// Fall back to parsing JSON
+		if err = (&opts).Decode(cd.Opts); err != nil {
+			return nil, fmt.Errorf("failed to decode opts; got: '%s'; %w", cd.Opts, err)
+		}
 	}
 	var multiplier decimal.Decimal
 	if opts.Multiplier == nil {
