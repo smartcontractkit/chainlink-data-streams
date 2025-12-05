@@ -13,7 +13,7 @@ type mockReportCodec struct {
 	err error
 }
 
-func (m mockReportCodec) Encode(Report, llotypes.ChannelDefinition, interface{}) ([]byte, error) {
+func (m mockReportCodec) Encode(Report, llotypes.ChannelDefinition, any) ([]byte, error) {
 	return nil, nil
 }
 

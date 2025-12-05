@@ -19,7 +19,7 @@ var _ ReportCodec = JSONReportCodec{}
 
 type JSONReportCodec struct{}
 
-func (cdc JSONReportCodec) Encode(r Report, _ llotypes.ChannelDefinition, _ interface{}) ([]byte, error) {
+func (cdc JSONReportCodec) Encode(r Report, _ llotypes.ChannelDefinition, _ any) ([]byte, error) {
 	type encode struct {
 		ConfigDigest                    types.ConfigDigest
 		SeqNr                           uint64
