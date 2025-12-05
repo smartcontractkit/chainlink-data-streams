@@ -78,7 +78,6 @@ type channelDefinitionOptsCache struct {
 
 var _ ChannelDefinitionOptsCache = (*channelDefinitionOptsCache)(nil)
 
-// NewChannelDefinitionOptsCache creates a new ChannelDefinitionOptsCache
 func NewChannelDefinitionOptsCache() ChannelDefinitionOptsCache {
 	return &channelDefinitionOptsCache{
 		cache: make(map[llotypes.ChannelID]interface{}),
@@ -90,7 +89,8 @@ func (c *channelDefinitionOptsCache) Set(
 	channelOpts llotypes.ChannelOpts,
 	codec ReportCodec,
 ) error {
-	// Check if codec implements optional OptsParser interface
+	// codec may or may not implement OptsParser interface - that is the codec's choice. 
+	// if codec does not then we cannot cache the opts. Codec may do this if they do not have opts. 
 	optsParser, ok := codec.(OptsParser)
 	if !ok {
 		return fmt.Errorf("codec does not implement OptsParser interface")
