@@ -28,7 +28,7 @@ func NewReportCodecEVMABIEncodeUnpackedExpr(lggr logger.Logger, donID uint32) Re
 	return ReportCodecEVMABIEncodeUnpackedExpr{logger.Sugared(lggr).Named("ReportCodecEVMABIEncodeUnpackedExpr"), donID}
 }
 
-func (r ReportCodecEVMABIEncodeUnpackedExpr) Encode(report llo.Report, cd llotypes.ChannelDefinition, parsedOpts interface{}) ([]byte, error) {
+func (r ReportCodecEVMABIEncodeUnpackedExpr) Encode(report llo.Report, cd llotypes.ChannelDefinition, parsedOpts any) ([]byte, error) {
 	if report.Specimen {
 		return nil, errors.New("ReportCodecEVMABIEncodeUnpackedExpr does not support encoding specimen reports")
 	}
@@ -154,7 +154,7 @@ func (r ReportCodecEVMABIEncodeUnpackedExpr) buildHeader(rf BaseReportFields, pr
 	return b, nil
 }
 
-func (r ReportCodecEVMABIEncodeUnpackedExpr) ParseOpts(opts []byte) (interface{}, error) {
+func (r ReportCodecEVMABIEncodeUnpackedExpr) ParseOpts(opts []byte) (any, error) {
 	var o ReportFormatEVMABIEncodeOpts
 	if err := json.Unmarshal(opts, &o); err != nil {
 		return nil, fmt.Errorf("failed to parse EVMABIEncodeUnpackedExpr opts: %w", err)
@@ -162,7 +162,7 @@ func (r ReportCodecEVMABIEncodeUnpackedExpr) ParseOpts(opts []byte) (interface{}
 	return o, nil
 }
 
-func (r ReportCodecEVMABIEncodeUnpackedExpr) TimeResolution(parsedOpts interface{}) (llo.TimeResolution, error) {
+func (r ReportCodecEVMABIEncodeUnpackedExpr) TimeResolution(parsedOpts any) (llo.TimeResolution, error) {
 	opts, ok := parsedOpts.(ReportFormatEVMABIEncodeOpts)
 	if !ok {
 		return llo.ResolutionSeconds, fmt.Errorf("expected ReportFormatEVMABIEncodeOpts, got %T", parsedOpts)

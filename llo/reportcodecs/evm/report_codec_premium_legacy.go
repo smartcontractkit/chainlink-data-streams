@@ -79,7 +79,7 @@ func (r *ReportFormatEVMPremiumLegacyOpts) Decode(opts []byte) error {
 	return decoder.Decode(r)
 }
 
-func (r ReportCodecPremiumLegacy) Encode(report llo.Report, cd llotypes.ChannelDefinition, parsedOpts interface{}) ([]byte, error) {
+func (r ReportCodecPremiumLegacy) Encode(report llo.Report, cd llotypes.ChannelDefinition, parsedOpts any) ([]byte, error) {
 	if report.Specimen {
 		return nil, errors.New("ReportCodecPremiumLegacy does not support encoding specimen reports")
 	}
@@ -280,7 +280,7 @@ func LegacyReportContext(cd ocr2types.ConfigDigest, seqNr uint64, donID uint32) 
 	}, nil
 }
 
-func (r ReportCodecPremiumLegacy) ParseOpts(opts []byte) (interface{}, error) {
+func (r ReportCodecPremiumLegacy) ParseOpts(opts []byte) (any, error) {
 	var o ReportFormatEVMPremiumLegacyOpts
 	if err := json.Unmarshal(opts, &o); err != nil {
 		return nil, fmt.Errorf("failed to parse EVMPremiumLegacy opts: %w", err)
@@ -288,7 +288,7 @@ func (r ReportCodecPremiumLegacy) ParseOpts(opts []byte) (interface{}, error) {
 	return o, nil
 }
 
-func (r ReportCodecPremiumLegacy) TimeResolution(parsedOpts interface{}) (llo.TimeResolution, error) {
+func (r ReportCodecPremiumLegacy) TimeResolution(parsedOpts any) (llo.TimeResolution, error) {
 	// Premium legacy always uses seconds resolution
 	return llo.ResolutionSeconds, nil
 }

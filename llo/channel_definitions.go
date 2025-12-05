@@ -73,14 +73,14 @@ func subtractChannelDefinitions(minuend llotypes.ChannelDefinitions, subtrahend 
 
 type channelDefinitionOptsCache struct {
 	mu    sync.RWMutex
-	cache map[llotypes.ChannelID]interface{}
+	cache map[llotypes.ChannelID]any
 }
 
 var _ ChannelDefinitionOptsCache = (*channelDefinitionOptsCache)(nil)
 
 func NewChannelDefinitionOptsCache() ChannelDefinitionOptsCache {
 	return &channelDefinitionOptsCache{
-		cache: make(map[llotypes.ChannelID]interface{}),
+		cache: make(map[llotypes.ChannelID]any),
 	}
 }
 
@@ -107,7 +107,7 @@ func (c *channelDefinitionOptsCache) Set(
 	return nil
 }
 
-func (c *channelDefinitionOptsCache) Get(channelID llotypes.ChannelID) (interface{}, bool) {
+func (c *channelDefinitionOptsCache) Get(channelID llotypes.ChannelID) (any, bool) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	val, ok := c.cache[channelID]

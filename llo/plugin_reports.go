@@ -103,10 +103,10 @@ func (p *Plugin) encodeReport(r Report, cd llotypes.ChannelDefinition) (types.Re
 	p.captureReportTelemetry(r, cd)
 
 	// Lookup cached opts if available
-	var cachedOpts interface{}
+	var cachedOpts any
 	if p.ChannelDefinitionOptsCache != nil {
 		cachedOpts, _ = p.ChannelDefinitionOptsCache.Get(r.ChannelID)
-		// cachedOpts may be nil - that's fine, codec will parse cd.Opts
+		// cachedOpts may be nil in the case the Codec doesn't have any Opts to parse.
 	}
 
 	return codec.Encode(r, cd, cachedOpts)

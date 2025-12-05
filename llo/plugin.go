@@ -165,8 +165,11 @@ type ChannelDefinitionCache interface {
 	Definitions() llotypes.ChannelDefinitions
 }
 
-// ChannelDefinitionOptsCache is a cache of channel definition opts
-// It is used to avoid repeated JSON parsing of channel definition opts
+// ChannelDefinitionOptsCache caches parsed channel definition opts to avoid
+// repeated JSON unmarshalling in hot paths. Stores parsed opts as `any` which requires type
+// assertion but is orders of magnitude faster than JSON parsing.
+// Plugin controls cache lifecycle (set on channel add/update, delete on channel remove)
+// OCR phases such as Observation and Reports use the cache to avoid repeated JSON unmarshalling.
 type ChannelDefinitionOptsCache interface {
 	// Set parses and caches the channel definition opts for the given channelID
 	// The channelOpts should match the ReportCodec's opts type.
@@ -174,9 +177,9 @@ type ChannelDefinitionOptsCache interface {
 	// Failure to cache opts should return an error.
 	Set(channelID llotypes.ChannelID, channelOpts llotypes.ChannelOpts, codec ReportCodec) error
 	// Get retrieves cached opts for the given channelID
-	// Returning `interface{}` requires type assertion to the specific ReportCodec's opts type.
+	// Returning `any` requires type assertion to the specific ReportCodec's opts type.
 	// This is still considered better than parsing the opts from JSON every time we need to access them.
-	Get(channelID llotypes.ChannelID) (interface{}, bool)
+	Get(channelID llotypes.ChannelID) (any, bool)
 	// Delete removes cached opts for the given channelID
 	Delete(channelID llotypes.ChannelID)
 }

@@ -83,7 +83,7 @@ type BaseReportFields struct {
 	ExpiresAt          uint64
 }
 
-func (r ReportCodecEVMABIEncodeUnpacked) Encode(report llo.Report, cd llotypes.ChannelDefinition, parsedOpts interface{}) ([]byte, error) {
+func (r ReportCodecEVMABIEncodeUnpacked) Encode(report llo.Report, cd llotypes.ChannelDefinition, parsedOpts any) ([]byte, error) {
 	if report.Specimen {
 		return nil, errors.New("ReportCodecEVMABIEncodeUnpacked does not support encoding specimen reports")
 	}
@@ -267,7 +267,7 @@ func (r ReportCodecEVMABIEncodeUnpacked) buildHeader(rf BaseReportFields, precis
 	return b, nil
 }
 
-func (r ReportCodecEVMABIEncodeUnpacked) ParseOpts(opts []byte) (interface{}, error) {
+func (r ReportCodecEVMABIEncodeUnpacked) ParseOpts(opts []byte) (any, error) {
 	var o ReportFormatEVMABIEncodeOpts
 	if err := json.Unmarshal(opts, &o); err != nil {
 		return nil, fmt.Errorf("failed to parse EVMABIEncodeUnpacked opts: %w", err)
@@ -275,7 +275,7 @@ func (r ReportCodecEVMABIEncodeUnpacked) ParseOpts(opts []byte) (interface{}, er
 	return o, nil
 }
 
-func (r ReportCodecEVMABIEncodeUnpacked) TimeResolution(parsedOpts interface{}) (llo.TimeResolution, error) {
+func (r ReportCodecEVMABIEncodeUnpacked) TimeResolution(parsedOpts any) (llo.TimeResolution, error) {
 	opts, ok := parsedOpts.(ReportFormatEVMABIEncodeOpts)
 	if !ok {
 		return llo.ResolutionSeconds, fmt.Errorf("expected ReportFormatEVMABIEncodeOpts, got %T", parsedOpts)

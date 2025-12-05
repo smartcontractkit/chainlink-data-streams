@@ -25,12 +25,13 @@ type ReportCodec interface {
 	// Encode should handle nil stream aggregate values without panicking (it
 	// may return error instead)
 	//
-	// parsedOpts is a pre-parsed version of ChannelDefinition.Opts which avoids repeated Opts parsing. 
-	// ChannelDefinition.Opts can be nil and is up to the codec to determine if it needs Opts and if 
-	// the codec does not need ChannelDefinition.Opts it should pass in nil
+	// parsedOpts is a pre-parsed instantiation of ChannelDefinition.Opts which is created from
+	// the codecs Opts struct. cd.Opts can be nil and is up to the codec to determine 
+	// if it needs Opts. If the codec does not have Opts it should pass in nil.
+	// For codecs with opts:
 	// If parsedOpts is nil, the codec is expected to parse cd.Opts directly.
 	// If parsedOpts is non-nil, the codec should type-assert it to its expected opts type.
-	Encode(r Report, cd llotypes.ChannelDefinition, parsedOpts interface{}) ([]byte, error)
+	Encode(r Report, cd llotypes.ChannelDefinition, parsedOpts any) ([]byte, error)
 	// Verify may optionally verify a channel definition to ensure it is valid
 	// for the given report codec. If a codec does not wish to implement
 	// validation it may simply return nil here. If any definition fails
@@ -43,31 +44,32 @@ type ReportCodec interface {
 // OptsParser parses raw channel opts bytes into a codec-specific structure.
 // ReportCodecs may implement this interface to enable caching of parsed opts
 // to avoid repeated unmarshalling of Opts bytes. For example unmarshalling
-// from JSON is much more expensive than peforming a type assertion on an `interface{}` type.
+// from JSON is much more expensive than peforming a type assertion on an `any` type.
 // Since not all Codec Opts might have the same Options - you can create
 // `OptsProvider` interfaces where needed. For Example `TimeResolutionProvider` or `ABIProvider`
 // and the Codecs can implement all interfaces that match the specific Opt.
 type OptsParser interface {
 	// ParseOpts parses the raw opts bytes and returns a codec-specific
-	// parsed opts structure as interface{}.
+	// parsed opts structure as `any`. 
 	// Use the returned interface to type assert to the specific Opts type.
 	// For Example:
 	// opts, err := codec.ParseOpts(optsBytes)
 	// if err != nil {
 	// 	return nil, err
 	// }
-	// optsProvider, ok := opts.(OptsProvider) // where OptsProvider is the interface you created for the specific Opts type
+	// 
+	// optsProvider, ok := opts.(OptsProvider) 
 	// if !ok {
 	// 	return nil, fmt.Errorf("invalid opts type")
 	// }
-	ParseOpts(opts []byte) (interface{}, error)
+	ParseOpts(opts []byte) (any, error)
 }
 
 // TimeResolutionProvider extracts time resolution information from codec opts
 type TimeResolutionProvider interface {
 	// TimeResolution returns the time resolution from the parsed opts.
 	// The parsedOpts must be the value returned by OptsParser.ParseOpts.
-	TimeResolution(parsedOpts interface{}) (TimeResolution, error)
+	TimeResolution(parsedOpts any) (TimeResolution, error)
 }
 
 type ChannelDefinitionWithID struct {
