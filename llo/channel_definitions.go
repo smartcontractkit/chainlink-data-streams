@@ -71,8 +71,13 @@ func subtractChannelDefinitions(minuend llotypes.ChannelDefinitions, subtrahend 
 	return difference
 }
 
+// channelDefinitionOptsCache stores pre-parsed channel opts to avoid repeated JSON parsing.
+// See: BenchmarkChannelOptsCache_* tests in channel_definitions_bench_test.go for performance details.
 type channelDefinitionOptsCache struct {
-	mu    sync.RWMutex
+	// OCR driver should ensure that each phase is only called by one thread at a time.
+	// The mu here is added as a safeguard for future proofing.
+	// Benchmarks showed that without a mutex we were saving about 10ns per call to Get .
+	mu    sync.Mutex
 	cache map[llotypes.ChannelID]any
 }
 
@@ -89,8 +94,8 @@ func (c *channelDefinitionOptsCache) Set(
 	channelOpts llotypes.ChannelOpts,
 	codec ReportCodec,
 ) error {
-	// codec may or may not implement OptsParser interface - that is the codec's choice. 
-	// if codec does not then we cannot cache the opts. Codec may do this if they do not have opts. 
+	// codec may or may not implement OptsParser interface - that is the codec's choice.
+	// if codec does not then we cannot cache the opts. Codec may do this if they do not have opts.
 	optsParser, ok := codec.(OptsParser)
 	if !ok {
 		return fmt.Errorf("codec does not implement OptsParser interface")
@@ -108,8 +113,8 @@ func (c *channelDefinitionOptsCache) Set(
 }
 
 func (c *channelDefinitionOptsCache) Get(channelID llotypes.ChannelID) (any, bool) {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	val, ok := c.cache[channelID]
 	return val, ok
 }

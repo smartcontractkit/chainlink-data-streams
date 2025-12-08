@@ -26,7 +26,7 @@ type ReportCodec interface {
 	// may return error instead)
 	//
 	// parsedOpts is a pre-parsed instantiation of ChannelDefinition.Opts which is created from
-	// the codecs Opts struct. cd.Opts can be nil and is up to the codec to determine 
+	// the codecs Opts struct. cd.Opts can be nil and is up to the codec to determine
 	// if it needs Opts. If the codec does not have Opts it should pass in nil.
 	// For codecs with opts:
 	// If parsedOpts is nil, the codec is expected to parse cd.Opts directly.
@@ -50,15 +50,15 @@ type ReportCodec interface {
 // and the Codecs can implement all interfaces that match the specific Opt.
 type OptsParser interface {
 	// ParseOpts parses the raw opts bytes and returns a codec-specific
-	// parsed opts structure as `any`. 
+	// parsed opts structure as `any`.
 	// Use the returned interface to type assert to the specific Opts type.
 	// For Example:
 	// opts, err := codec.ParseOpts(optsBytes)
 	// if err != nil {
 	// 	return nil, err
 	// }
-	// 
-	// optsProvider, ok := opts.(OptsProvider) 
+	//
+	// optsProvider, ok := opts.(OptsProvider)
 	// if !ok {
 	// 	return nil, fmt.Errorf("invalid opts type")
 	// }
@@ -70,6 +70,20 @@ type TimeResolutionProvider interface {
 	// TimeResolution returns the time resolution from the parsed opts.
 	// The parsedOpts must be the value returned by OptsParser.ParseOpts.
 	TimeResolution(parsedOpts any) (TimeResolution, error)
+}
+
+// CalculatedStreamABI represents expression config needed for calculated streams
+type CalculatedStreamABI struct {
+	Type               string
+	Expression         string
+	ExpressionStreamID llotypes.StreamID
+}
+
+// CalculatedStreamABIProvider extracts expression ABI config from parsed codec opts
+type CalculatedStreamABIProvider interface {
+	// CalculatedStreamABI returns the expression ABI entries from the parsed opts.
+	// The parsedOpts must be the value returned by OptsParser.ParseOpts.
+	CalculatedStreamABI(parsedOpts any) ([]CalculatedStreamABI, error)
 }
 
 type ChannelDefinitionWithID struct {

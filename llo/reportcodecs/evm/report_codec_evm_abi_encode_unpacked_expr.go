@@ -14,9 +14,10 @@ import (
 )
 
 var (
-	_ llo.ReportCodec            = ReportCodecEVMABIEncodeUnpackedExpr{}
-	_ llo.OptsParser             = ReportCodecEVMABIEncodeUnpackedExpr{}
-	_ llo.TimeResolutionProvider = ReportCodecEVMABIEncodeUnpackedExpr{}
+	_ llo.ReportCodec                 = ReportCodecEVMABIEncodeUnpackedExpr{}
+	_ llo.OptsParser                  = ReportCodecEVMABIEncodeUnpackedExpr{}
+	_ llo.TimeResolutionProvider      = ReportCodecEVMABIEncodeUnpackedExpr{}
+	_ llo.CalculatedStreamABIProvider = ReportCodecEVMABIEncodeUnpackedExpr{}
 )
 
 type ReportCodecEVMABIEncodeUnpackedExpr struct {
@@ -168,4 +169,25 @@ func (r ReportCodecEVMABIEncodeUnpackedExpr) TimeResolution(parsedOpts any) (llo
 		return llo.ResolutionSeconds, fmt.Errorf("expected ReportFormatEVMABIEncodeOpts, got %T", parsedOpts)
 	}
 	return opts.TimeResolution, nil
+}
+
+func (r ReportCodecEVMABIEncodeUnpackedExpr) CalculatedStreamABI(parsedOpts any) ([]llo.CalculatedStreamABI, error) {
+	opts, ok := parsedOpts.(ReportFormatEVMABIEncodeOpts)
+	if !ok {
+		return nil, fmt.Errorf("expected ReportFormatEVMABIEncodeOpts, got %T", parsedOpts)
+	}
+	var result []llo.CalculatedStreamABI
+	for _, enc := range opts.ABI {
+		if len(enc.encoders) > 0 {
+			e := enc.encoders[0]
+			if e.Expression != "" || e.ExpressionStreamID != 0 {
+				result = append(result, llo.CalculatedStreamABI{
+					Type:               e.Type,
+					Expression:         e.Expression,
+					ExpressionStreamID: e.ExpressionStreamID,
+				})
+			}
+		}
+	}
+	return result, nil
 }

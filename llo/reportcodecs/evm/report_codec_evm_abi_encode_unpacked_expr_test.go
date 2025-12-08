@@ -534,15 +534,12 @@ func TestReportCodecEVMABIEncodeUnpackedExpr_WithAndWithoutParsedOpts(t *testing
 	parsedOpts, err := codec.ParseOpts(optsJSON)
 	require.NoError(t, err)
 
-	// Encode with parsed opts
 	encodedWithCache, err := codec.Encode(report, cd, parsedOpts)
 	require.NoError(t, err)
 
-	// Encode without parsed opts
 	encodedWithoutCache, err := codec.Encode(report, cd, nil)
 	require.NoError(t, err)
 
-	// Both paths should produce identical output
 	assert.Equal(t, encodedWithCache, encodedWithoutCache)
 }
 
@@ -584,5 +581,174 @@ func TestReportCodecEVMABIEncodeUnpackedExpr_TimeResolution(t *testing.T) {
 		_, err := codec.TimeResolution(wrongType{})
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "expected ReportFormatEVMABIEncodeOpts")
+	})
+}
+
+func TestReportCodecEVMABIEncodeUnpackedExpr_CalculatedStreamABI(t *testing.T) {
+	codec := ReportCodecEVMABIEncodeUnpackedExpr{}
+
+	t.Run("parses expression fields from valid JSON", func(t *testing.T) {
+		optsJSON := []byte(`{
+			"baseUSDFee": "1.5",
+			"expirationWindow": 3600,
+			"feedID": "0x0001020304050607080910111213141516171819202122232425262728293031",
+			"abi": [
+				{"type": "int256", "expression": "Sum(s1, s2)", "expressionStreamId": 100}
+			]
+		}`)
+
+		parsedOpts, err := codec.ParseOpts(optsJSON)
+		require.NoError(t, err)
+
+		result, err := codec.CalculatedStreamABI(parsedOpts)
+		require.NoError(t, err)
+		require.Len(t, result, 1)
+
+		assert.Equal(t, "int256", result[0].Type)
+		assert.Equal(t, "Sum(s1, s2)", result[0].Expression)
+		assert.Equal(t, llotypes.StreamID(100), result[0].ExpressionStreamID)
+	})
+
+	t.Run("parses multiple expression entries", func(t *testing.T) {
+		optsJSON := []byte(`{
+			"baseUSDFee": "1.5",
+			"expirationWindow": 3600,
+			"feedID": "0x0001020304050607080910111213141516171819202122232425262728293031",
+			"abi": [
+				{"type": "int192", "expression": "Mul(s1, s2)", "expressionStreamId": 10},
+				{"type": "uint256", "expression": "Div(s3, s4)", "expressionStreamId": 20},
+				{"type": "int256", "expression": "Sum(s1_benchmark, s2_benchmark)", "expressionStreamId": 30}
+			]
+		}`)
+
+		parsedOpts, err := codec.ParseOpts(optsJSON)
+		require.NoError(t, err)
+
+		result, err := codec.CalculatedStreamABI(parsedOpts)
+		require.NoError(t, err)
+		require.Len(t, result, 3)
+
+		assert.Equal(t, "int192", result[0].Type)
+		assert.Equal(t, "Mul(s1, s2)", result[0].Expression)
+		assert.Equal(t, llotypes.StreamID(10), result[0].ExpressionStreamID)
+
+		assert.Equal(t, "uint256", result[1].Type)
+		assert.Equal(t, "Div(s3, s4)", result[1].Expression)
+		assert.Equal(t, llotypes.StreamID(20), result[1].ExpressionStreamID)
+
+		assert.Equal(t, "int256", result[2].Type)
+		assert.Equal(t, "Sum(s1_benchmark, s2_benchmark)", result[2].Expression)
+		assert.Equal(t, llotypes.StreamID(30), result[2].ExpressionStreamID)
+	})
+
+	t.Run("returns empty for ABI without expressions", func(t *testing.T) {
+		optsJSON := []byte(`{
+			"baseUSDFee": "1.5",
+			"expirationWindow": 3600,
+			"feedID": "0x0001020304050607080910111213141516171819202122232425262728293031",
+			"abi": [
+				{"type": "int192"},
+				{"type": "uint256"}
+			]
+		}`)
+
+		parsedOpts, err := codec.ParseOpts(optsJSON)
+		require.NoError(t, err)
+
+		result, err := codec.CalculatedStreamABI(parsedOpts)
+		require.NoError(t, err)
+		require.Len(t, result, 0)
+	})
+
+	t.Run("filters out non-expression entries in mixed ABI", func(t *testing.T) {
+		optsJSON := []byte(`{
+			"baseUSDFee": "1.5",
+			"expirationWindow": 3600,
+			"feedID": "0x0001020304050607080910111213141516171819202122232425262728293031",
+			"abi": [
+				{"type": "int192"},
+				{"type": "int256", "expression": "Sum(s1, s2)", "expressionStreamId": 100},
+				{"type": "uint256"},
+				{"type": "int256", "expression": "Mul(s3, s4)", "expressionStreamId": 200}
+			]
+		}`)
+
+		parsedOpts, err := codec.ParseOpts(optsJSON)
+		require.NoError(t, err)
+
+		result, err := codec.CalculatedStreamABI(parsedOpts)
+		require.NoError(t, err)
+		require.Len(t, result, 2)
+
+		assert.Equal(t, llotypes.StreamID(100), result[0].ExpressionStreamID)
+		assert.Equal(t, llotypes.StreamID(200), result[1].ExpressionStreamID)
+	})
+
+	t.Run("includes entry with only expressionStreamId (no expression string)", func(t *testing.T) {
+		// Edge case: expressionStreamId is set but expression is empty
+		optsJSON := []byte(`{
+			"baseUSDFee": "1.5",
+			"expirationWindow": 3600,
+			"feedID": "0x0001020304050607080910111213141516171819202122232425262728293031",
+			"abi": [
+				{"type": "int256", "expressionStreamId": 50}
+			]
+		}`)
+
+		parsedOpts, err := codec.ParseOpts(optsJSON)
+		require.NoError(t, err)
+
+		result, err := codec.CalculatedStreamABI(parsedOpts)
+		require.NoError(t, err)
+		require.Len(t, result, 1)
+
+		assert.Equal(t, "int256", result[0].Type)
+		assert.Equal(t, "", result[0].Expression)
+		assert.Equal(t, llotypes.StreamID(50), result[0].ExpressionStreamID)
+	})
+
+	t.Run("returns empty for empty ABI array", func(t *testing.T) {
+		optsJSON := []byte(`{
+			"baseUSDFee": "1.5",
+			"expirationWindow": 3600,
+			"feedID": "0x0001020304050607080910111213141516171819202122232425262728293031",
+			"abi": []
+		}`)
+
+		parsedOpts, err := codec.ParseOpts(optsJSON)
+		require.NoError(t, err)
+
+		result, err := codec.CalculatedStreamABI(parsedOpts)
+		require.NoError(t, err)
+		require.Len(t, result, 0)
+	})
+
+	t.Run("errors on invalid type", func(t *testing.T) {
+		type wrongType struct{}
+		_, err := codec.CalculatedStreamABI(wrongType{})
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "expected ReportFormatEVMABIEncodeOpts")
+	})
+
+	t.Run("errors on nil", func(t *testing.T) {
+		_, err := codec.CalculatedStreamABI(nil)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "expected ReportFormatEVMABIEncodeOpts")
+	})
+
+	t.Run("ParseOpts fails on invalid JSON", func(t *testing.T) {
+		_, err := codec.ParseOpts([]byte(`{not valid json`))
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "failed to parse EVMABIEncodeUnpackedExpr opts")
+	})
+
+	t.Run("ParseOpts fails on malformed abi field", func(t *testing.T) {
+		optsJSON := []byte(`{
+			"baseUSDFee": "1.5",
+			"feedID": "0x0001020304050607080910111213141516171819202122232425262728293031",
+			"abi": "not an array"
+		}`)
+		_, err := codec.ParseOpts(optsJSON)
+		require.Error(t, err)
 	})
 }

@@ -165,11 +165,11 @@ type ChannelDefinitionCache interface {
 	Definitions() llotypes.ChannelDefinitions
 }
 
-// ChannelDefinitionOptsCache caches parsed channel definition opts to avoid
-// repeated JSON unmarshalling in hot paths. Stores parsed opts as `any` which requires type
-// assertion but is orders of magnitude faster than JSON parsing.
-// Plugin controls cache lifecycle (set on channel add/update, delete on channel remove)
-// OCR phases such as Observation and Reports use the cache to avoid repeated JSON unmarshalling.
+// ChannelDefinitionOptsCache stores parsed channel definition opts to avoid
+// repeated JSON unmarshalling in hot paths like Observation and Reports.
+// Despite the name, this acts as a store rather than a cache: there is no TTL
+// and entries are managed explicitly (set on channel add/update, deleted on remove).
+// Stored as `any` requiring type assertion, but orders of magnitude faster than JSON parsing.
 type ChannelDefinitionOptsCache interface {
 	// Set parses and caches the channel definition opts for the given channelID
 	// The channelOpts should match the ReportCodec's opts type.

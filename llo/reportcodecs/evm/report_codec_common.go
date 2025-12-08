@@ -16,7 +16,6 @@ import (
 	ubig "github.com/smartcontractkit/chainlink-data-streams/llo/reportcodecs/evm/utils"
 )
 
-
 // ConvertTimestamp converts a nanosecond timestamp to a specified precision.
 func ConvertTimestamp(timestampNanos uint64, precision llo.TimeResolution) uint64 {
 	switch precision {
