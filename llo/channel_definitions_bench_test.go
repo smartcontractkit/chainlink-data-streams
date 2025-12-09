@@ -9,27 +9,22 @@ import (
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
 )
 
-// =============================================================================
-// Benchmark: Direct JSON Parsing vs Cache Lookup
-// =============================================================================
+// Benchmark the cost of parsing JSON vs using the cache.
 //
-// These benchmarks demonstrate why we cache parsed channel opts instead of
-// parsing JSON on every access. Run with:
-//
+// Run with:
 //   go test . -bench=BenchmarkChannelOptsCache -benchmem -run=NONE
 //
 // Expected results (approximate):
 //
-//   DirectParse (JSON):  ~600-800 ns/op  |  640 B/op  |  6 allocs
-//   CacheGet:            ~15-25 ns/op    |  0 B/op    |  0 allocs
-//   Speedup:             ~40-50x faster, zero allocations
+//   DirectParse:  ~600-800 ns/op  |  640 B/op  |  6 allocs
+//   CacheGet:     ~15-25 ns/op    |  0 B/op    |  0 allocs
+//   Speedup:      ~40-50x faster, zero allocations
 //
 // =============================================================================
 
-// Realistic opts JSON for existing codecs that use JSON opts format
+// Example opts for existing codecs that use JSON opts format
 var benchmarkOptsJSON = []byte(`{"feedID":"0x0001020304050607080910111213141516171819202122232425262728293031","baseUSDFee":"1.5","expirationWindow":3600,"timeResolution":"ns","abi":[{"type":"int192","expression":"Sum(s1,s2)","expressionStreamId":100},{"type":"int192"},{"type":"uint256"}]}`)
 
-// benchParsedOpts mirrors existing codec structures
 type benchParsedOpts struct {
 	FeedID           string     `json:"feedID"`
 	BaseUSDFee       string     `json:"baseUSDFee"`
@@ -44,7 +39,6 @@ type abiEntry struct {
 	ExpressionStreamID uint32 `json:"expressionStreamId,omitempty"`
 }
 
-// benchMockCodec implements OptsParser for benchmarks
 type benchMockCodec struct{}
 
 func (benchMockCodec) Encode(Report, llotypes.ChannelDefinition, any) ([]byte, error) {
@@ -59,32 +53,32 @@ func (benchMockCodec) ParseOpts(opts []byte) (any, error) {
 	return parsed, nil
 }
 
-// BenchmarkChannelOptsCache_DirectParse measures the cost of parsing opts directly.
-// Note: actual parsing cost depends on codec implementation (JSON, protobuf, etc.)
-// This benchmark uses JSON as representative of current codecs.
-func BenchmarkChannelOptsCache_DirectParse(b *testing.B) {
-	for i := 0; i < b.N; i++ {
-		var opts benchParsedOpts
-		_ = json.Unmarshal(benchmarkOptsJSON, &opts)
-	}
-}
-
-// BenchmarkChannelOptsCache_CacheGet measures the cost of a cache lookup + type assertion.
-// This is the required usage pattern for the cache.
-func BenchmarkChannelOptsCache_CacheGet(b *testing.B) {
-	cache := NewChannelDefinitionOptsCache()
-	codec := benchMockCodec{}
-
-	if err := cache.Set(1, benchmarkOptsJSON, codec); err != nil {
-		b.Fatal(err)
-	}
-
-	b.ResetTimer()
-	// Usage pattern is 1) Get and 2) type assertion
-	for i := 0; i < b.N; i++ {
-		val, ok := cache.Get(1)
-		if ok {
-			_ = val.(benchParsedOpts)
+func BenchmarkChannelOptsCache(b *testing.B) {
+	b.Run("DirectParse", func(b *testing.B) {
+		// Measures the cost of parsing JSON directly.
+		// This is the usage pattern without caching.
+		for i := 0; i < b.N; i++ {
+			var opts benchParsedOpts
+			_ = json.Unmarshal(benchmarkOptsJSON, &opts)
 		}
-	}
+	})
+
+	b.Run("CacheGet", func(b *testing.B) {
+		// Measures the cost of cache lookup + type assertion.
+		// This is the required usage pattern for the cache.
+		cache := NewChannelDefinitionOptsCache()
+		codec := benchMockCodec{}
+
+		if err := cache.Set(1, benchmarkOptsJSON, codec); err != nil {
+			b.Fatal(err)
+		}
+
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			val, ok := cache.Get(1)
+			if ok {
+				_ = val.(benchParsedOpts)
+			}
+		}
+	})
 }
