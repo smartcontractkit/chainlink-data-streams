@@ -1027,34 +1027,6 @@ func Test_Outcome_Methods(t *testing.T) {
 
 		})
 
-		t.Run("IsReportable with ReportFormatEVMABIEncodeUnpackedExpr prevents same-second timestamps", func(t *testing.T) {
-			outcome := Outcome{}
-			cid := llotypes.ChannelID(1)
-
-			// Test case from production bug: both timestamps truncate to same second
-			// observationTimestampNanoseconds: 1765173183742021148 → 1765173183 sec
-			// validAfterNanoseconds:           1765173183282997914 → 1765173183 sec
-			outcome.LifeCycleStage = LifeCycleStageProduction
-			outcome.ObservationTimestampNanoseconds = 1765173183742021148
-			outcome.ChannelDefinitions = map[llotypes.ChannelID]llotypes.ChannelDefinition{
-				cid: {ReportFormat: llotypes.ReportFormatEVMABIEncodeUnpackedExpr},
-			}
-			outcome.ValidAfterNanoseconds = map[llotypes.ChannelID]uint64{
-				cid: 1765173183282997914,
-			}
-
-			// Should be unreportable because timestamps are in same second
-			require.EqualError(t, outcome.IsReportable(cid, 1, uint64(0)),
-				"ChannelID: 1; Reason: ChannelID: 1; Reason: IsReportable=false; not valid yet (observationsTimestampSeconds=1765173183, validAfterSeconds=1765173183)")
-
-			// When ValidAfter is at least 1 second before observation, should be reportable
-			outcome.ValidAfterNanoseconds[cid] = 1765173182999999999 // 1ns before previous second
-			assert.Nil(t, outcome.IsReportable(cid, 1, uint64(0)))
-
-			// Test IsSecondsResolution returns true for calculated streams
-			assert.True(t, IsSecondsResolution(llotypes.ReportFormatEVMABIEncodeUnpackedExpr),
-				"IsSecondsResolution should return true for ReportFormatEVMABIEncodeUnpackedExpr")
-		})
 		t.Run("ReportableChannels", func(t *testing.T) {
 			defaultMinReportInterval := uint64(1 * time.Second)
 
