@@ -452,7 +452,7 @@ func IsSecondsResolution(reportFormat llotypes.ReportFormat) bool {
 	// TODO: Might be cleaner to expose a TimeResolution() uint64 field on the
 	// ReportCodec so that the plugin doesn't have to have special knowledge of
 	// the report format details
-	case llotypes.ReportFormatEVMPremiumLegacy, llotypes.ReportFormatEVMABIEncodeUnpacked:
+	case llotypes.ReportFormatEVMPremiumLegacy, llotypes.ReportFormatEVMABIEncodeUnpacked, llotypes.ReportFormatEVMABIEncodeUnpackedExpr:
 		return true
 	default:
 		return false
