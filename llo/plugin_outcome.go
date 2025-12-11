@@ -421,7 +421,7 @@ func (out *Outcome) IsReportable(channelID llotypes.ChannelID, protocolVersion u
 	if cd.Tombstone {
 		// Tombstone channels are not reportable
 		return &UnreportableChannelError{nil, "IsReportable=false; tombstone channel", channelID}
-}
+	}
 
 	codec, hasCodec := codecsMap[cd.ReportFormat]
 	if !hasCodec {
