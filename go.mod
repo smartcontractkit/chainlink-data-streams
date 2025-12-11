@@ -7,7 +7,7 @@ require (
 	github.com/expr-lang/expr v1.17.5
 	github.com/goccy/go-json v0.10.5
 	github.com/hashicorp/go-plugin v1.7.0
-	github.com/klauspost/compress v1.18.0
+	github.com/klauspost/compress v1.18.2
 	github.com/leanovate/gopter v0.2.11
 	github.com/shopspring/decimal v1.4.0
 	github.com/smartcontractkit/chainlink-common v0.9.6-0.20251211140724-319861e514c4
