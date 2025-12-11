@@ -46,7 +46,7 @@ func (p *Plugin) reports(ctx context.Context, seqNr uint64, rawOutcome ocr3types
 		})
 	}
 
-	reportableChannels, unreportableChannels := outcome.ReportableChannels(p.ProtocolVersion, p.DefaultMinReportIntervalNanoseconds)
+	reportableChannels, unreportableChannels := outcome.ReportableChannels(p.ProtocolVersion, p.DefaultMinReportIntervalNanoseconds, p.ReportCodecs, p.ChannelDefinitionOptsCache)
 	if p.Config.VerboseLogging {
 		p.Logger.Debugw("Reportable channels", "lifeCycleStage", outcome.LifeCycleStage, "reportableChannels", reportableChannels, "unreportableChannels", unreportableChannels, "stage", "Report", "seqNr", seqNr)
 	}
@@ -101,7 +101,15 @@ func (p *Plugin) encodeReport(r Report, cd llotypes.ChannelDefinition) (types.Re
 		return nil, fmt.Errorf("codec missing for ReportFormat=%q", cd.ReportFormat)
 	}
 	p.captureReportTelemetry(r, cd)
-	return codec.Encode(r, cd)
+
+	// Lookup cached opts if available
+	var cachedOpts any
+	if p.ChannelDefinitionOptsCache != nil {
+		cachedOpts, _ = p.ChannelDefinitionOptsCache.Get(r.ChannelID)
+		// cachedOpts may be nil in the case the Codec doesn't have any Opts to parse.
+	}
+
+	return codec.Encode(r, cd, cachedOpts)
 }
 
 func (p *Plugin) captureReportTelemetry(r Report, cd llotypes.ChannelDefinition) {

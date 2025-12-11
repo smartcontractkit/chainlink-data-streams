@@ -41,8 +41,8 @@ func TestReportCodecEVMABIEncodeUnpackedExpr_Encode(t *testing.T) {
 		}
 
 		opts := ReportFormatEVMABIEncodeOpts{
-			TimestampPrecision: PrecisionSeconds,
-			ABI:                []ABIEncoder{},
+			TimeResolution: llo.ResolutionSeconds,
+			ABI:            []ABIEncoder{},
 		}
 		serializedOpts, err := opts.Encode()
 		require.NoError(t, err)
@@ -72,7 +72,7 @@ func TestReportCodecEVMABIEncodeUnpackedExpr_Encode(t *testing.T) {
 		}
 
 		codec := ReportCodecEVMABIEncodeUnpackedExpr{}
-		_, err = codec.Encode(report, cd)
+		_, err = codec.Encode(report, cd, nil)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "ABI and values length mismatch")
 	})
@@ -110,10 +110,10 @@ func TestReportCodecEVMABIEncodeUnpackedExpr_Encode(t *testing.T) {
 			}
 
 			opts := ReportFormatEVMABIEncodeOpts{
-				BaseUSDFee:         sampleBaseUSDFee,
-				ExpirationWindow:   sampleExpirationWindow,
-				FeedID:             sampleFeedID,
-				TimestampPrecision: PrecisionSeconds,
+				BaseUSDFee:       sampleBaseUSDFee,
+				ExpirationWindow: sampleExpirationWindow,
+				FeedID:           sampleFeedID,
+				TimeResolution:   llo.ResolutionSeconds,
 				ABI: []ABIEncoder{
 					// benchmark price
 					newSingleABIEncoder("int192", priceMultiplier),
@@ -149,7 +149,7 @@ func TestReportCodecEVMABIEncodeUnpackedExpr_Encode(t *testing.T) {
 			}
 
 			codec := ReportCodecEVMABIEncodeUnpackedExpr{}
-			encoded, err := codec.Encode(report, cd)
+			encoded, err := codec.Encode(report, cd, nil)
 			require.NoError(t, err)
 
 			values, err := expectedDEXBasedAssetSchema.Unpack(encoded)
@@ -161,7 +161,7 @@ func TestReportCodecEVMABIEncodeUnpackedExpr_Encode(t *testing.T) {
 			for i := range report.Values {
 				report.Values[i] = nil
 			}
-			_, err = codec.Encode(report, cd)
+			_, err = codec.Encode(report, cd, nil)
 			require.Error(t, err)
 
 			return true
@@ -187,10 +187,10 @@ func TestReportCodecEVMABIEncodeUnpackedExpr_Encode(t *testing.T) {
 	})
 
 	t.Run("varying timestamp precision schemas", func(t *testing.T) {
-		runTest := func(sampleFeedID common.Hash, sampleObservationTimestampNanoseconds, sampleValidAfterNanoseconds uint64, sampleExpirationWindow uint32, priceMultiplier, marketDepthMultiplier *ubig.Big, sampleBaseUSDFee, sampleLinkBenchmarkPrice, sampleNativeBenchmarkPrice, sampleDexBasedAssetPrice, sampleBaseMarketDepth, sampleQuoteMarketDepth decimal.Decimal, sampleTimestampPrecision TimestampPrecision) bool {
+		runTest := func(sampleFeedID common.Hash, sampleObservationTimestampNanoseconds, sampleValidAfterNanoseconds uint64, sampleExpirationWindow uint32, priceMultiplier, marketDepthMultiplier *ubig.Big, sampleBaseUSDFee, sampleLinkBenchmarkPrice, sampleNativeBenchmarkPrice, sampleDexBasedAssetPrice, sampleBaseMarketDepth, sampleQuoteMarketDepth decimal.Decimal, sampleTimeResolution llo.TimeResolution) bool {
 			// Determine timestamp type based on precision
 			timestampType := "uint64"
-			if sampleTimestampPrecision == PrecisionSeconds {
+			if sampleTimeResolution == llo.ResolutionSeconds {
 				timestampType = "uint32"
 			}
 
@@ -223,10 +223,10 @@ func TestReportCodecEVMABIEncodeUnpackedExpr_Encode(t *testing.T) {
 			}
 
 			opts := ReportFormatEVMABIEncodeOpts{
-				BaseUSDFee:         sampleBaseUSDFee,
-				ExpirationWindow:   sampleExpirationWindow,
-				FeedID:             sampleFeedID,
-				TimestampPrecision: sampleTimestampPrecision,
+				BaseUSDFee:       sampleBaseUSDFee,
+				ExpirationWindow: sampleExpirationWindow,
+				FeedID:           sampleFeedID,
+				TimeResolution:   sampleTimeResolution,
 				ABI: []ABIEncoder{
 					// benchmark price
 					newSingleABIEncoder("int192", priceMultiplier),
@@ -262,7 +262,7 @@ func TestReportCodecEVMABIEncodeUnpackedExpr_Encode(t *testing.T) {
 			}
 
 			codec := ReportCodecEVMABIEncodeUnpackedExpr{}
-			encoded, err := codec.Encode(report, cd)
+			encoded, err := codec.Encode(report, cd, nil)
 			require.NoError(t, err)
 
 			values, err := schema.Unpack(encoded)
@@ -282,8 +282,8 @@ func TestReportCodecEVMABIEncodeUnpackedExpr_Encode(t *testing.T) {
 			}
 
 			// Verify timestamps per precision type
-			expectedValidFrom := ConvertTimestamp(sampleValidAfterNanoseconds, sampleTimestampPrecision) + 1
-			expectedObservationTimestamp := ConvertTimestamp(sampleObservationTimestampNanoseconds, sampleTimestampPrecision)
+			expectedValidFrom := ConvertTimestamp(sampleValidAfterNanoseconds, sampleTimeResolution) + 1
+			expectedObservationTimestamp := ConvertTimestamp(sampleObservationTimestampNanoseconds, sampleTimeResolution)
 			expectedExpiresAt := expectedObservationTimestamp + uint64(sampleExpirationWindow)
 			if timestampType == "uint32" {
 				checks = append(checks,
@@ -317,7 +317,7 @@ func TestReportCodecEVMABIEncodeUnpackedExpr_Encode(t *testing.T) {
 			genDexBasedAssetPrice(),
 			genMarketDepth(),
 			genMarketDepth(),
-			genTimestampPrecision(),
+			genTimeResolution(),
 		))
 		properties.TestingRun(t)
 	})
@@ -435,13 +435,13 @@ func genMarketDepth() gopter.Gen {
 
 // TestReportCodecEVMABIEncodeUnpackedExpr_EncodeOpts
 func TestReportCodecEVMABIEncodeUnpackedExpr_EncodeOpts(t *testing.T) {
-	t.Run("zero value is PrecisionSeconds", func(t *testing.T) {
-		var defaultPrecision TimestampPrecision
-		assert.Equal(t, PrecisionSeconds, defaultPrecision, "zero value must be PrecisionSeconds for backward compatibility")
-		assert.Equal(t, TimestampPrecision(0), PrecisionSeconds, "PrecisionSeconds must be 0")
+	t.Run("zero value is llo.ResolutionSeconds", func(t *testing.T) {
+		var defaultPrecision llo.TimeResolution
+		assert.Equal(t, llo.ResolutionSeconds, defaultPrecision, "zero value must be llo.ResolutionSeconds for backward compatibility")
+		assert.Equal(t, llo.TimeResolution(0), llo.ResolutionSeconds, "llo.ResolutionSeconds must be 0")
 	})
 
-	t.Run("JSON opts without timestampPrecision defaults to seconds", func(t *testing.T) {
+	t.Run("JSON opts without timeResolution defaults to seconds", func(t *testing.T) {
 		jsonConfig := `{
 			"baseUSDFee": "1.5",
 			"expirationWindow": 3600,
@@ -453,34 +453,34 @@ func TestReportCodecEVMABIEncodeUnpackedExpr_EncodeOpts(t *testing.T) {
 		err := opts.Decode([]byte(jsonConfig))
 		require.NoError(t, err)
 
-		assert.Equal(t, PrecisionSeconds, opts.TimestampPrecision)
+		assert.Equal(t, llo.ResolutionSeconds, opts.TimeResolution)
 	})
 
-	t.Run("JSON opts with timestampPrecision uses correct value", func(t *testing.T) {
+	t.Run("JSON opts with timeResolution uses correct value", func(t *testing.T) {
 		testCases := []struct {
 			name              string
 			jsonPrecision     string
-			expectedPrecision TimestampPrecision
+			expectedPrecision llo.TimeResolution
 		}{
 			{
 				name:              "seconds",
 				jsonPrecision:     "s",
-				expectedPrecision: PrecisionSeconds,
+				expectedPrecision: llo.ResolutionSeconds,
 			},
 			{
 				name:              "milliseconds",
 				jsonPrecision:     "ms",
-				expectedPrecision: PrecisionMilliseconds,
+				expectedPrecision: llo.ResolutionMilliseconds,
 			},
 			{
 				name:              "microseconds",
 				jsonPrecision:     "us",
-				expectedPrecision: PrecisionMicroseconds,
+				expectedPrecision: llo.ResolutionMicroseconds,
 			},
 			{
 				name:              "nanoseconds",
 				jsonPrecision:     "ns",
-				expectedPrecision: PrecisionNanoseconds,
+				expectedPrecision: llo.ResolutionNanoseconds,
 			},
 		}
 
@@ -491,15 +491,264 @@ func TestReportCodecEVMABIEncodeUnpackedExpr_EncodeOpts(t *testing.T) {
 					"expirationWindow": 3600,
 					"feedID": "0x0001020304050607080910111213141516171819202122232425262728293031",
 					"abi": [{"type": "uint192"}],
-					"timestampPrecision": "%s"
+					"timeResolution": "%s"
 				}`, tc.jsonPrecision)
 
 				var opts ReportFormatEVMABIEncodeOpts
 				err := opts.Decode([]byte(jsonConfig))
 				require.NoError(t, err)
 
-				assert.Equal(t, tc.expectedPrecision, opts.TimestampPrecision)
+				assert.Equal(t, tc.expectedPrecision, opts.TimeResolution)
 			})
 		}
+	})
+}
+
+func TestReportCodecEVMABIEncodeUnpackedExpr_WithAndWithoutParsedOpts(t *testing.T) {
+	codec := ReportCodecEVMABIEncodeUnpackedExpr{}
+
+	optsJSON := []byte(`{
+		"baseUSDFee": "1.5",
+		"expirationWindow": 3600,
+		"feedID": "0x0001020304050607080910111213141516171819202122232425262728293031",
+		"abi": [{"type": "uint192"}]
+	}`)
+
+	cd := llotypes.ChannelDefinition{
+		ReportFormat: llotypes.ReportFormatEVMABIEncodeUnpackedExpr,
+		Streams:      []llotypes.Stream{{StreamID: 1}, {StreamID: 2}, {StreamID: 3}},
+		Opts:         optsJSON,
+	}
+
+	report := llo.Report{
+		ValidAfterNanoseconds:           1234567890000000000,
+		ObservationTimestampNanoseconds: 1234567891000000000,
+		Values: []llo.StreamValue{
+			llo.ToDecimal(decimal.NewFromFloat(1.5)),
+			llo.ToDecimal(decimal.NewFromFloat(2.5)),
+			llo.ToDecimal(decimal.NewFromFloat(100.123)),
+		},
+	}
+
+	// Parse opts using OptsParser (simulates cache hit)
+	parsedOpts, err := codec.ParseOpts(optsJSON)
+	require.NoError(t, err)
+
+	encodedWithCache, err := codec.Encode(report, cd, parsedOpts)
+	require.NoError(t, err)
+
+	encodedWithoutCache, err := codec.Encode(report, cd, nil)
+	require.NoError(t, err)
+
+	assert.Equal(t, encodedWithCache, encodedWithoutCache)
+}
+
+func TestReportCodecEVMABIEncodeUnpackedExpr_ParseOpts(t *testing.T) {
+	codec := ReportCodecEVMABIEncodeUnpackedExpr{}
+
+	t.Run("valid opts", func(t *testing.T) {
+		opts := []byte(`{"baseUSDFee":"2.5","expirationWindow":7200,"feedID":"0x0001020304050607080910111213141516171819202122232425262728293031","abi":[],"timeResolution":"us"}`)
+		result, err := codec.ParseOpts(opts)
+		require.NoError(t, err)
+		require.NotNil(t, result)
+
+		parsed, ok := result.(ReportFormatEVMABIEncodeOpts)
+		require.True(t, ok)
+		require.Equal(t, "2.5", parsed.BaseUSDFee.String())
+		require.Equal(t, uint32(7200), parsed.ExpirationWindow)
+		require.Equal(t, llo.ResolutionMicroseconds, parsed.TimeResolution)
+	})
+
+	t.Run("invalid JSON", func(t *testing.T) {
+		_, err := codec.ParseOpts([]byte(`{invalid`))
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "failed to parse EVMABIEncodeUnpackedExpr opts")
+	})
+}
+
+func TestReportCodecEVMABIEncodeUnpackedExpr_TimeResolution(t *testing.T) {
+	codec := ReportCodecEVMABIEncodeUnpackedExpr{}
+
+	t.Run("valid parsed opts", func(t *testing.T) {
+		opts := ReportFormatEVMABIEncodeOpts{TimeResolution: llo.ResolutionNanoseconds}
+		res, err := codec.TimeResolution(opts)
+		require.NoError(t, err)
+		require.Equal(t, llo.ResolutionNanoseconds, res)
+	})
+
+	t.Run("invalid type", func(t *testing.T) {
+		type wrongType struct{}
+		_, err := codec.TimeResolution(wrongType{})
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "expected ReportFormatEVMABIEncodeOpts")
+	})
+}
+
+func TestReportCodecEVMABIEncodeUnpackedExpr_CalculatedStreamABI(t *testing.T) {
+	codec := ReportCodecEVMABIEncodeUnpackedExpr{}
+
+	t.Run("parses expression fields from valid JSON", func(t *testing.T) {
+		optsJSON := []byte(`{
+			"baseUSDFee": "1.5",
+			"expirationWindow": 3600,
+			"feedID": "0x0001020304050607080910111213141516171819202122232425262728293031",
+			"abi": [
+				{"type": "int256", "expression": "Sum(s1, s2)", "expressionStreamId": 100}
+			]
+		}`)
+
+		parsedOpts, err := codec.ParseOpts(optsJSON)
+		require.NoError(t, err)
+
+		result, err := codec.CalculatedStreamABI(parsedOpts)
+		require.NoError(t, err)
+		require.Len(t, result, 1)
+
+		assert.Equal(t, "int256", result[0].Type)
+		assert.Equal(t, "Sum(s1, s2)", result[0].Expression)
+		assert.Equal(t, llotypes.StreamID(100), result[0].ExpressionStreamID)
+	})
+
+	t.Run("parses multiple expression entries", func(t *testing.T) {
+		optsJSON := []byte(`{
+			"baseUSDFee": "1.5",
+			"expirationWindow": 3600,
+			"feedID": "0x0001020304050607080910111213141516171819202122232425262728293031",
+			"abi": [
+				{"type": "int192", "expression": "Mul(s1, s2)", "expressionStreamId": 10},
+				{"type": "uint256", "expression": "Div(s3, s4)", "expressionStreamId": 20},
+				{"type": "int256", "expression": "Sum(s1_benchmark, s2_benchmark)", "expressionStreamId": 30}
+			]
+		}`)
+
+		parsedOpts, err := codec.ParseOpts(optsJSON)
+		require.NoError(t, err)
+
+		result, err := codec.CalculatedStreamABI(parsedOpts)
+		require.NoError(t, err)
+		require.Len(t, result, 3)
+
+		assert.Equal(t, "int192", result[0].Type)
+		assert.Equal(t, "Mul(s1, s2)", result[0].Expression)
+		assert.Equal(t, llotypes.StreamID(10), result[0].ExpressionStreamID)
+
+		assert.Equal(t, "uint256", result[1].Type)
+		assert.Equal(t, "Div(s3, s4)", result[1].Expression)
+		assert.Equal(t, llotypes.StreamID(20), result[1].ExpressionStreamID)
+
+		assert.Equal(t, "int256", result[2].Type)
+		assert.Equal(t, "Sum(s1_benchmark, s2_benchmark)", result[2].Expression)
+		assert.Equal(t, llotypes.StreamID(30), result[2].ExpressionStreamID)
+	})
+
+	t.Run("returns empty for ABI without expressions", func(t *testing.T) {
+		optsJSON := []byte(`{
+			"baseUSDFee": "1.5",
+			"expirationWindow": 3600,
+			"feedID": "0x0001020304050607080910111213141516171819202122232425262728293031",
+			"abi": [
+				{"type": "int192"},
+				{"type": "uint256"}
+			]
+		}`)
+
+		parsedOpts, err := codec.ParseOpts(optsJSON)
+		require.NoError(t, err)
+
+		result, err := codec.CalculatedStreamABI(parsedOpts)
+		require.NoError(t, err)
+		require.Len(t, result, 0)
+	})
+
+	t.Run("filters out non-expression entries in mixed ABI", func(t *testing.T) {
+		optsJSON := []byte(`{
+			"baseUSDFee": "1.5",
+			"expirationWindow": 3600,
+			"feedID": "0x0001020304050607080910111213141516171819202122232425262728293031",
+			"abi": [
+				{"type": "int192"},
+				{"type": "int256", "expression": "Sum(s1, s2)", "expressionStreamId": 100},
+				{"type": "uint256"},
+				{"type": "int256", "expression": "Mul(s3, s4)", "expressionStreamId": 200}
+			]
+		}`)
+
+		parsedOpts, err := codec.ParseOpts(optsJSON)
+		require.NoError(t, err)
+
+		result, err := codec.CalculatedStreamABI(parsedOpts)
+		require.NoError(t, err)
+		require.Len(t, result, 2)
+
+		assert.Equal(t, llotypes.StreamID(100), result[0].ExpressionStreamID)
+		assert.Equal(t, llotypes.StreamID(200), result[1].ExpressionStreamID)
+	})
+
+	t.Run("includes entry with only expressionStreamId (no expression string)", func(t *testing.T) {
+		// Edge case: expressionStreamId is set but expression is empty
+		optsJSON := []byte(`{
+			"baseUSDFee": "1.5",
+			"expirationWindow": 3600,
+			"feedID": "0x0001020304050607080910111213141516171819202122232425262728293031",
+			"abi": [
+				{"type": "int256", "expressionStreamId": 50}
+			]
+		}`)
+
+		parsedOpts, err := codec.ParseOpts(optsJSON)
+		require.NoError(t, err)
+
+		result, err := codec.CalculatedStreamABI(parsedOpts)
+		require.NoError(t, err)
+		require.Len(t, result, 1)
+
+		assert.Equal(t, "int256", result[0].Type)
+		assert.Equal(t, "", result[0].Expression)
+		assert.Equal(t, llotypes.StreamID(50), result[0].ExpressionStreamID)
+	})
+
+	t.Run("returns empty for empty ABI array", func(t *testing.T) {
+		optsJSON := []byte(`{
+			"baseUSDFee": "1.5",
+			"expirationWindow": 3600,
+			"feedID": "0x0001020304050607080910111213141516171819202122232425262728293031",
+			"abi": []
+		}`)
+
+		parsedOpts, err := codec.ParseOpts(optsJSON)
+		require.NoError(t, err)
+
+		result, err := codec.CalculatedStreamABI(parsedOpts)
+		require.NoError(t, err)
+		require.Len(t, result, 0)
+	})
+
+	t.Run("errors on invalid type", func(t *testing.T) {
+		type wrongType struct{}
+		_, err := codec.CalculatedStreamABI(wrongType{})
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "expected ReportFormatEVMABIEncodeOpts")
+	})
+
+	t.Run("errors on nil", func(t *testing.T) {
+		_, err := codec.CalculatedStreamABI(nil)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "expected ReportFormatEVMABIEncodeOpts")
+	})
+
+	t.Run("ParseOpts fails on invalid JSON", func(t *testing.T) {
+		_, err := codec.ParseOpts([]byte(`{not valid json`))
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "failed to parse EVMABIEncodeUnpackedExpr opts")
+	})
+
+	t.Run("ParseOpts fails on malformed abi field", func(t *testing.T) {
+		optsJSON := []byte(`{
+			"baseUSDFee": "1.5",
+			"feedID": "0x0001020304050607080910111213141516171819202122232425262728293031",
+			"abi": "not an array"
+		}`)
+		_, err := codec.ParseOpts(optsJSON)
+		require.Error(t, err)
 	})
 }

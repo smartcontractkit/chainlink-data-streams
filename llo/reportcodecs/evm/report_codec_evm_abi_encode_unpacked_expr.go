@@ -6,6 +6,7 @@ import (
 	"math"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/goccy/go-json"
 
 	"github.com/smartcontractkit/chainlink-common/pkg/logger"
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
@@ -13,7 +14,10 @@ import (
 )
 
 var (
-	_ llo.ReportCodec = ReportCodecEVMABIEncodeUnpackedExpr{}
+	_ llo.ReportCodec                 = ReportCodecEVMABIEncodeUnpackedExpr{}
+	_ llo.OptsParser                  = ReportCodecEVMABIEncodeUnpackedExpr{}
+	_ llo.TimeResolutionProvider      = ReportCodecEVMABIEncodeUnpackedExpr{}
+	_ llo.CalculatedStreamABIProvider = ReportCodecEVMABIEncodeUnpackedExpr{}
 )
 
 type ReportCodecEVMABIEncodeUnpackedExpr struct {
@@ -25,7 +29,7 @@ func NewReportCodecEVMABIEncodeUnpackedExpr(lggr logger.Logger, donID uint32) Re
 	return ReportCodecEVMABIEncodeUnpackedExpr{logger.Sugared(lggr).Named("ReportCodecEVMABIEncodeUnpackedExpr"), donID}
 }
 
-func (r ReportCodecEVMABIEncodeUnpackedExpr) Encode(report llo.Report, cd llotypes.ChannelDefinition) ([]byte, error) {
+func (r ReportCodecEVMABIEncodeUnpackedExpr) Encode(report llo.Report, cd llotypes.ChannelDefinition, parsedOpts any) ([]byte, error) {
 	if report.Specimen {
 		return nil, errors.New("ReportCodecEVMABIEncodeUnpackedExpr does not support encoding specimen reports")
 	}
@@ -41,16 +45,23 @@ func (r ReportCodecEVMABIEncodeUnpackedExpr) Encode(report llo.Report, cd llotyp
 		return nil, fmt.Errorf("ReportCodecEVMABIEncodeUnpackedExpr failed to extract link price: %w", err)
 	}
 
-	// NOTE: It seems suboptimal to have to parse the opts on every encode but
-	// not sure how to avoid it. Should be negligible performance hit as long
-	// as Opts is small.
-	opts := ReportFormatEVMABIEncodeOpts{}
-	if err = (&opts).Decode(cd.Opts); err != nil {
-		return nil, fmt.Errorf("failed to decode opts; got: '%s'; %w", cd.Opts, err)
+	var opts ReportFormatEVMABIEncodeOpts
+	if parsedOpts != nil {
+		// Use cached opts
+		var ok bool
+		opts, ok = parsedOpts.(ReportFormatEVMABIEncodeOpts)
+		if !ok {
+			return nil, fmt.Errorf("expected ReportFormatEVMABIEncodeOpts, got %T", parsedOpts)
+		}
+	} else {
+		// Fall back to parsing JSON
+		if err = (&opts).Decode(cd.Opts); err != nil {
+			return nil, fmt.Errorf("failed to decode opts; got: '%s'; %w", cd.Opts, err)
+		}
 	}
 
-	validAfter := ConvertTimestamp(report.ValidAfterNanoseconds, opts.TimestampPrecision)
-	observationTimestamp := ConvertTimestamp(report.ObservationTimestampNanoseconds, opts.TimestampPrecision)
+	validAfter := ConvertTimestamp(report.ValidAfterNanoseconds, opts.TimeResolution)
+	observationTimestamp := ConvertTimestamp(report.ObservationTimestampNanoseconds, opts.TimeResolution)
 
 	rf := BaseReportFields{
 		FeedID:             opts.FeedID,
@@ -61,7 +72,7 @@ func (r ReportCodecEVMABIEncodeUnpackedExpr) Encode(report llo.Report, cd llotyp
 		ExpiresAt:          observationTimestamp + uint64(opts.ExpirationWindow),
 	}
 
-	header, err := r.buildHeader(rf, opts.TimestampPrecision)
+	header, err := r.buildHeader(rf, opts.TimeResolution)
 	if err != nil {
 		return nil, fmt.Errorf("failed to build base report; %w", err)
 	}
@@ -91,7 +102,7 @@ func (r ReportCodecEVMABIEncodeUnpackedExpr) Verify(cd llotypes.ChannelDefinitio
 	return nil
 }
 
-func (r ReportCodecEVMABIEncodeUnpackedExpr) buildHeader(rf BaseReportFields, precision TimestampPrecision) ([]byte, error) {
+func (r ReportCodecEVMABIEncodeUnpackedExpr) buildHeader(rf BaseReportFields, precision llo.TimeResolution) ([]byte, error) {
 	var merr error
 	if rf.LinkFee == nil {
 		merr = errors.Join(merr, errors.New("linkFee may not be nil"))
@@ -109,7 +120,7 @@ func (r ReportCodecEVMABIEncodeUnpackedExpr) buildHeader(rf BaseReportFields, pr
 
 	var b []byte
 	var err error
-	if precision == PrecisionSeconds {
+	if precision == llo.ResolutionSeconds {
 		if rf.ValidFromTimestamp > math.MaxUint32 {
 			return nil, fmt.Errorf("validFromTimestamp %d exceeds uint32 range", rf.ValidFromTimestamp)
 		}
@@ -142,4 +153,41 @@ func (r ReportCodecEVMABIEncodeUnpackedExpr) buildHeader(rf BaseReportFields, pr
 		return nil, fmt.Errorf("failed to pack base report blob; %w", err)
 	}
 	return b, nil
+}
+
+func (r ReportCodecEVMABIEncodeUnpackedExpr) ParseOpts(opts []byte) (any, error) {
+	var o ReportFormatEVMABIEncodeOpts
+	if err := json.Unmarshal(opts, &o); err != nil {
+		return nil, fmt.Errorf("failed to parse EVMABIEncodeUnpackedExpr opts: %w", err)
+	}
+	return o, nil
+}
+
+func (r ReportCodecEVMABIEncodeUnpackedExpr) TimeResolution(parsedOpts any) (llo.TimeResolution, error) {
+	opts, ok := parsedOpts.(ReportFormatEVMABIEncodeOpts)
+	if !ok {
+		return llo.ResolutionSeconds, fmt.Errorf("expected ReportFormatEVMABIEncodeOpts, got %T", parsedOpts)
+	}
+	return opts.TimeResolution, nil
+}
+
+func (r ReportCodecEVMABIEncodeUnpackedExpr) CalculatedStreamABI(parsedOpts any) ([]llo.CalculatedStreamABI, error) {
+	opts, ok := parsedOpts.(ReportFormatEVMABIEncodeOpts)
+	if !ok {
+		return nil, fmt.Errorf("expected ReportFormatEVMABIEncodeOpts, got %T", parsedOpts)
+	}
+	var result []llo.CalculatedStreamABI
+	for _, enc := range opts.ABI {
+		if len(enc.encoders) > 0 {
+			e := enc.encoders[0]
+			if e.Expression != "" || e.ExpressionStreamID != 0 {
+				result = append(result, llo.CalculatedStreamABI{
+					Type:               e.Type,
+					Expression:         e.Expression,
+					ExpressionStreamID: e.ExpressionStreamID,
+				})
+			}
+		}
+	}
+	return result, nil
 }

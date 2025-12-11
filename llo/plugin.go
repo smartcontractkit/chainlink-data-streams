@@ -165,6 +165,25 @@ type ChannelDefinitionCache interface {
 	Definitions() llotypes.ChannelDefinitions
 }
 
+// ChannelDefinitionOptsCache stores parsed channel definition opts to avoid
+// repeated JSON unmarshalling in hot paths like Observation and Reports.
+// Despite the name, this acts as a store rather than a cache: there is no TTL
+// and entries are managed explicitly (set on channel add/update, deleted on remove).
+// Stored as `any` requiring type assertion, but orders of magnitude faster than JSON parsing.
+type ChannelDefinitionOptsCache interface {
+	// Set parses and caches the channel definition opts for the given channelID
+	// The channelOpts should match the ReportCodec's opts type.
+	// The codec is responsible for having a method to parse `channelOpts` into the codec's expected opts type.
+	// Failure to cache opts should return an error.
+	Set(channelID llotypes.ChannelID, channelOpts llotypes.ChannelOpts, codec ReportCodec) error
+	// Get retrieves cached opts for the given channelID
+	// Returning `any` requires type assertion to the specific ReportCodec's opts type.
+	// This is still considered better than parsing the opts from JSON every time we need to access them.
+	Get(channelID llotypes.ChannelID) (any, bool)
+	// Delete removes cached opts for the given channelID
+	Delete(channelID llotypes.ChannelID)
+}
+
 // A ReportingPlugin allows plugging custom logic into the OCR3 protocol. The OCR
 // protocol handles cryptography, networking, ensuring that a sufficient number
 // of nodes is in agreement about any report, transmitting the report to the
@@ -278,6 +297,8 @@ func (f *PluginFactory) NewReportingPlugin(ctx context.Context, cfg ocr3types.Re
 		ballastAlloc = make([]byte, ballastSz)
 	})
 
+	channelOptsCache := NewChannelDefinitionOptsCache()
+
 	return &Plugin{
 			f.Config,
 			onchainConfig.PredecessorConfigDigest,
@@ -285,6 +306,7 @@ func (f *PluginFactory) NewReportingPlugin(ctx context.Context, cfg ocr3types.Re
 			f.PredecessorRetirementReportCache,
 			f.ShouldRetireCache,
 			f.ChannelDefinitionCache,
+			channelOptsCache,
 			f.DataSource,
 			l,
 			cfg.N,
@@ -320,6 +342,7 @@ type Plugin struct {
 	PredecessorRetirementReportCache PredecessorRetirementReportCache
 	ShouldRetireCache                ShouldRetireCache
 	ChannelDefinitionCache           ChannelDefinitionCache
+	ChannelDefinitionOptsCache       ChannelDefinitionOptsCache
 	DataSource                       DataSource
 	Logger                           logger.Logger
 	N                                int
