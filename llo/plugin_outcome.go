@@ -104,6 +104,7 @@ func (p *Plugin) outcome(outctx ocr3types.OutcomeContext, query types.Query, aos
 		}
 		removedChannelIDs = append(removedChannelIDs, channelID)
 		delete(outcome.ChannelDefinitions, channelID)
+		p.ChannelDefinitionOptsCache.Delete(channelID)
 	}
 
 	type hashWithID struct {
@@ -150,6 +151,9 @@ func (p *Plugin) outcome(outctx ocr3types.OutcomeContext, query types.Query, aos
 			)
 		}
 		outcome.ChannelDefinitions[defWithID.ChannelID] = defWithID.ChannelDefinition
+
+		// Parse and cache opts to avoid repeated JSON parsing where opts are needed
+		p.parseAndCacheChannelOpts(defWithID.ChannelID, defWithID.ChannelDefinition)
 	}
 
 	/////////////////////////////////
@@ -162,7 +166,7 @@ func (p *Plugin) outcome(outctx ocr3types.OutcomeContext, query types.Query, aos
 	if outcome.ValidAfterNanoseconds == nil {
 		outcome.ValidAfterNanoseconds = map[llotypes.ChannelID]uint64{}
 		for channelID, previousValidAfterNanoseconds := range previousOutcome.ValidAfterNanoseconds {
-			if err3 := previousOutcome.IsReportable(channelID, p.ProtocolVersion, p.DefaultMinReportIntervalNanoseconds); err3 != nil {
+			if err3 := previousOutcome.IsReportable(channelID, p.ProtocolVersion, p.DefaultMinReportIntervalNanoseconds, p.ReportCodecs, p.ChannelDefinitionOptsCache); err3 != nil {
 				if p.Config.VerboseLogging {
 					p.Logger.Debugw("Channel is not reportable", "channelID", channelID, "err", err3, "stage", "Outcome", "seqNr", outctx.SeqNr)
 				}
@@ -404,7 +408,7 @@ func (out *Outcome) GenRetirementReport(protocolVersion uint32) RetirementReport
 // NOTE: A channel is still reportable even if missing some or all stream
 // values. The report codec is expected to handle nils and act accordingly
 // (e.g. some values may be optional).
-func (out *Outcome) IsReportable(channelID llotypes.ChannelID, protocolVersion uint32, minReportInterval uint64) *UnreportableChannelError {
+func (out *Outcome) IsReportable(channelID llotypes.ChannelID, protocolVersion uint32, minReportInterval uint64, codecsMap map[llotypes.ReportFormat]ReportCodec, optsCache ChannelDefinitionOptsCache) *UnreportableChannelError {
 	if out.LifeCycleStage == LifeCycleStageRetired {
 		return &UnreportableChannelError{nil, "IsReportable=false; retired channel", channelID}
 	}
@@ -417,6 +421,11 @@ func (out *Outcome) IsReportable(channelID llotypes.ChannelID, protocolVersion u
 	if cd.Tombstone {
 		// Tombstone channels are not reportable
 		return &UnreportableChannelError{nil, "IsReportable=false; tombstone channel", channelID}
+}
+
+	codec, hasCodec := codecsMap[cd.ReportFormat]
+	if !hasCodec {
+		return &UnreportableChannelError{nil, fmt.Sprintf("IsReportable=false; no codec found for report format %d", cd.ReportFormat), channelID}
 	}
 
 	validAfterNanos, ok := out.ValidAfterNanoseconds[channelID]
@@ -445,7 +454,11 @@ func (out *Outcome) IsReportable(channelID llotypes.ChannelID, protocolVersion u
 	// This keeps compatibility with old nodes that may not have nanosecond resolution
 	//
 	// Also use seconds resolution for report formats that require it to prevent overlap
-	if protocolVersion == 0 || IsSecondsResolution(cd.ReportFormat) {
+	isSecondsResolution, err := IsSecondsResolution(channelID, codec, optsCache)
+	if err != nil {
+		return &UnreportableChannelError{err, "IsReportable=false; failed to determine time resolution", channelID}
+	}
+	if protocolVersion == 0 || isSecondsResolution {
 		validAfterSeconds := validAfterNanos / 1e9
 		obsTsSeconds := obsTsNanos / 1e9
 		if validAfterSeconds >= obsTsSeconds {
@@ -456,25 +469,33 @@ func (out *Outcome) IsReportable(channelID llotypes.ChannelID, protocolVersion u
 	return nil
 }
 
-func IsSecondsResolution(reportFormat llotypes.ReportFormat) bool {
-	switch reportFormat {
-	// TODO: Might be cleaner to expose a TimeResolution() uint64 field on the
-	// ReportCodec so that the plugin doesn't have to have special knowledge of
-	// the report format details
-	case llotypes.ReportFormatEVMPremiumLegacy, llotypes.ReportFormatEVMABIEncodeUnpacked, llotypes.ReportFormatEVMABIEncodeUnpackedExpr:
-		return true
-	default:
-		return false
+func IsSecondsResolution(channelID llotypes.ChannelID, codec ReportCodec, optsCache ChannelDefinitionOptsCache) (bool, error) {
+	// Try to determine the time resolution from the channel definition opts
+	if optsCache != nil {
+		if cachedOpts, cached := optsCache.Get(channelID); cached {
+			if timeResProvider, ok := codec.(TimeResolutionProvider); ok {
+				resolution, err := timeResProvider.TimeResolution(cachedOpts)
+				if err != nil {
+					// This should not happen since caching the cached opts should logically ensure that this channel's opts
+					// are valid for channels report codec. If this error occurs it would indicate a wrong codec/opts mismatch.
+					return false, fmt.Errorf("invariant violation: failed to parse time resolution from opts (wrong codec/opts mismatch?) :%w", err)
+				}
+				return resolution == ResolutionSeconds, nil
+			}
+		}
 	}
+
+	// Fall back to protocol default time resolution when codecs don't implement TimeResolutionProvider
+	return false, nil
 }
 
 // List of reportable channels (according to IsReportable), sorted according
 // to a canonical ordering
-func (out *Outcome) ReportableChannels(protocolVersion uint32, defaultMinReportInterval uint64) (reportable []llotypes.ChannelID, unreportable []*UnreportableChannelError) {
+func (out *Outcome) ReportableChannels(protocolVersion uint32, defaultMinReportInterval uint64, codecsMap map[llotypes.ReportFormat]ReportCodec, optsCache ChannelDefinitionOptsCache) (reportable []llotypes.ChannelID, unreportable []*UnreportableChannelError) {
 	for channelID := range out.ChannelDefinitions {
 		// In theory in future, minReportInterval could be overridden on a
 		// per-channel basis in the ChannelDefinitions
-		if err := out.IsReportable(channelID, protocolVersion, defaultMinReportInterval); err != nil {
+		if err := out.IsReportable(channelID, protocolVersion, defaultMinReportInterval, codecsMap, optsCache); err != nil {
 			unreportable = append(unreportable, err)
 		} else {
 			reportable = append(reportable, channelID)
@@ -584,4 +605,16 @@ func makeOutcomeTelemetry(outcome Outcome, configDigest types.ConfigDigest, seqN
 		ot.StreamAggregates[sid] = &LLOAggregatorStreamValue{AggregatorValues: aggVals}
 	}
 	return ot, nil
+}
+
+// parseAndCacheChannelOpts parses and caches channel opts to avoid repeated JSON parsing
+func (p *Plugin) parseAndCacheChannelOpts(channelID llotypes.ChannelID, cd llotypes.ChannelDefinition) {
+	codec, exists := p.ReportCodecs[cd.ReportFormat]
+	if !exists {
+		return
+	}
+
+	if err := p.ChannelDefinitionOptsCache.Set(channelID, cd.Opts, codec); err != nil {
+		p.Logger.Warnw("Failed to parse opts for caching", "channelID", channelID, "reportFormat", cd.ReportFormat, "err", err)
+	}
 }

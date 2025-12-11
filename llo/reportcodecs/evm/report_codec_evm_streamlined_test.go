@@ -33,7 +33,7 @@ func TestReportCodecEVMStreamlined(t *testing.T) {
 				Values: []llo.StreamValue{
 					llo.ToDecimal(decimal.NewFromFloat(1123455935.123)),
 				},
-			}, cd)
+			}, cd, nil)
 			require.NoError(t, err)
 			require.Len(t, payload, 32)
 			// Report Format
@@ -56,7 +56,7 @@ func TestReportCodecEVMStreamlined(t *testing.T) {
 				Values: []llo.StreamValue{
 					llo.ToDecimal(decimal.NewFromFloat(1123455935.123)),
 				},
-			}, cd)
+			}, cd, nil)
 			require.NoError(t, err)
 			require.Len(t, payload, 64)
 			assert.Equal(t, feedID, hex.EncodeToString(payload[:32]))                                             // feed id

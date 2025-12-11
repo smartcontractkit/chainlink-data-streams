@@ -7,12 +7,43 @@ import (
 	"strconv"
 	"testing"
 
+	"github.com/goccy/go-json"
 	"github.com/shopspring/decimal"
 	"github.com/smartcontractkit/chainlink-common/pkg/logger"
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// mockCalculatedStreamCodec implements ReportCodec, OptsParser, and CalculatedStreamABIProvider for tests.
+// ParseOpts parses JSON to populate the cache; CalculatedStreamABI returns the cached value.
+// Note: ParseOpts correctness is tested in the real codec's tests - this is just test setup.
+type mockCalculatedStreamCodec struct{}
+
+func (m mockCalculatedStreamCodec) Encode(r Report, cd llotypes.ChannelDefinition, parsedOpts any) ([]byte, error) {
+	return nil, nil
+}
+
+func (m mockCalculatedStreamCodec) Verify(cd llotypes.ChannelDefinition) error {
+	return nil
+}
+
+func (m mockCalculatedStreamCodec) ParseOpts(opts []byte) (any, error) {
+	var parsed struct {
+		ABI []CalculatedStreamABI `json:"abi"`
+	}
+	if err := json.Unmarshal(opts, &parsed); err != nil {
+		return nil, err
+	}
+	return parsed.ABI, nil
+}
+
+func (m mockCalculatedStreamCodec) CalculatedStreamABI(parsedOpts any) ([]CalculatedStreamABI, error) {
+	if abi, ok := parsedOpts.([]CalculatedStreamABI); ok {
+		return abi, nil
+	}
+	return nil, nil
+}
 
 func TestToDecimal(t *testing.T) {
 	tests := []struct {
@@ -1710,27 +1741,28 @@ func TestProcessStreamCalculated(t *testing.T) {
 				},
 			},
 		},
-		{
-			name: "invalid JSON options",
-			outcome: Outcome{
-				ChannelDefinitions: llotypes.ChannelDefinitions{
-					1: {
-						ReportFormat: llotypes.ReportFormatEVMABIEncodeUnpackedExpr,
-						Streams: []llotypes.Stream{
-							{StreamID: 1, Aggregator: llotypes.AggregatorMedian},
-						},
-						Opts: []byte(`invalid json`),
-					},
-				},
-			},
-		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			lggr, err := logger.New()
 			require.NoError(t, err)
-			p := &Plugin{Logger: lggr}
+
+			codec := mockCalculatedStreamCodec{}
+			cache := NewChannelDefinitionOptsCache()
+
+			// Populate cache - ParseOpts parses the JSON and caches the result
+			for cid, cd := range tt.outcome.ChannelDefinitions {
+				cache.Set(cid, cd.Opts, codec)
+			}
+
+			p := &Plugin{
+				Logger: lggr,
+				ReportCodecs: map[llotypes.ReportFormat]ReportCodec{
+					llotypes.ReportFormatEVMABIEncodeUnpackedExpr: codec,
+				},
+				ChannelDefinitionOptsCache: cache,
+			}
 			p.ProcessCalculatedStreams(&tt.outcome)
 
 			for streamID, expectedValue := range tt.expectedValues {
@@ -1740,6 +1772,71 @@ func TestProcessStreamCalculated(t *testing.T) {
 
 			if len(tt.expectedValues) > 0 {
 				assert.Equal(t, len(tt.outcome.StreamAggregates), len(tt.outcome.ChannelDefinitions[1].Streams))
+			}
+		})
+	}
+}
+
+// TestProcessCalculatedStreams_CacheMissAndHit explicitly tests the cache miss and hit scenarios.
+func TestProcessCalculatedStreams_CacheMissAndHit(t *testing.T) {
+	lggr, err := logger.New()
+	require.NoError(t, err)
+
+	tests := []struct {
+		name   string
+		cached bool
+	}{
+
+		{
+			name:   "cached",
+			cached: true,
+		},
+		{
+			name:   "not cached (miss)",
+			cached: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			codec := mockCalculatedStreamCodec{}
+			cache := NewChannelDefinitionOptsCache()
+
+			p := &Plugin{
+				Logger: lggr,
+				ReportCodecs: map[llotypes.ReportFormat]ReportCodec{
+					llotypes.ReportFormatEVMABIEncodeUnpackedExpr: codec,
+				},
+				ChannelDefinitionOptsCache: cache,
+			}
+			outcome := Outcome{
+				ChannelDefinitions: llotypes.ChannelDefinitions{
+					1: {
+						ReportFormat: llotypes.ReportFormatEVMABIEncodeUnpackedExpr,
+						Streams:      []llotypes.Stream{{StreamID: 1, Aggregator: llotypes.AggregatorMedian}},
+						Opts:         []byte(`{"abi":[{"type":"int256","expression":"s1","expressionStreamID":2}]}`),
+					},
+				},
+				StreamAggregates: StreamAggregates{
+					1: {llotypes.AggregatorMedian: ToDecimal(decimal.NewFromInt(100))},
+				},
+			}
+
+			if tt.cached {
+				populateCache(t, cache, 1, outcome.ChannelDefinitions[1], p.ReportCodecs)
+			} else {
+				_, cached := cache.Get(1)
+				assert.False(t, cached, "cache should be empty for cache miss test")
+			}
+
+			p.ProcessCalculatedStreams(&outcome)
+
+			// Stream 2 is the calculated stream (expressionStreamID: 2)
+			_, hasCalculatedStream := outcome.StreamAggregates[2]
+			if tt.cached {
+				assert.True(t, hasCalculatedStream, "should have calculated stream when cache hit")
+			} else {
+				assert.False(t, hasCalculatedStream, "should not have calculated stream when cache miss")
 			}
 		})
 	}
@@ -1767,7 +1864,19 @@ func BenchmarkProcessCalculatedStreams(b *testing.B) {
 		StreamAggregates: aggr,
 	}
 
-	p := &Plugin{Logger: logger.Nop()}
+	codec := mockCalculatedStreamCodec{}
+	cache := NewChannelDefinitionOptsCache()
+	for cid, cd := range outcome.ChannelDefinitions {
+		cache.Set(cid, cd.Opts, codec)
+	}
+
+	p := &Plugin{
+		Logger: logger.Nop(),
+		ReportCodecs: map[llotypes.ReportFormat]ReportCodec{
+			llotypes.ReportFormatEVMABIEncodeUnpackedExpr: codec,
+		},
+		ChannelDefinitionOptsCache: cache,
+	}
 
 	for i := 0; i < b.N; i++ {
 		p.ProcessCalculatedStreams(&outcome)

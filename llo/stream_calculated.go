@@ -9,11 +9,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/goccy/go-json"
-
 	"github.com/expr-lang/expr"
 	"github.com/expr-lang/expr/ast"
 	"github.com/expr-lang/expr/parser"
+	"github.com/goccy/go-json"
 	"github.com/shopspring/decimal"
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
 )
@@ -596,15 +595,54 @@ func (p *Plugin) ProcessCalculatedStreams(outcome *Outcome) {
 			continue
 		}
 
-		if err := p.evalExpression(&copt, cid, env, outcome); err != nil {
+		abiEntries := []CalculatedStreamABI{}
+		for _, abi := range copt.ABI {
+			abiEntries = append(abiEntries, CalculatedStreamABI{
+				Type:               abi.Type,
+				Expression:         abi.Expression,
+				ExpressionStreamID: abi.ExpressionStreamID,
+			})
+		}
+
+		if err := p.evalCalculatedExpression(abiEntries, cid, env, outcome); err != nil {
 			p.Logger.Errorw("failed to process expression", "channelID", cid, "error", err)
 		}
 		env.release()
 	}
 }
 
-func (p *Plugin) evalExpression(o *opts, cid llotypes.ChannelID, env environment, outcome *Outcome) error {
-	for _, abi := range o.ABI {
+// getCalculatedStreamABI retrieves calculated stream ABI entries from cached opts.
+// Returns an error if the codec doesn't support CalculatedStreamABIProvider or opts aren't cached.
+func (p *Plugin) getCalculatedStreamABI(cid llotypes.ChannelID, cd llotypes.ChannelDefinition) ([]CalculatedStreamABI, error) {
+	codec, ok := p.ReportCodecs[cd.ReportFormat]
+	if !ok {
+		return nil, fmt.Errorf("codec not found for report format: %s", cd.ReportFormat)
+	}
+
+	provider, ok := codec.(CalculatedStreamABIProvider)
+	if !ok {
+		return nil, fmt.Errorf("codec does not implement CalculatedStreamABIProvider")
+	}
+
+	cached, exists := p.ChannelDefinitionOptsCache.Get(cid)
+	if !exists {
+		return nil, fmt.Errorf("opts not found in channel definition opts cache. opts may have failed to parse earlier if they were invalid")
+	}
+
+	abiEntries, err := provider.CalculatedStreamABI(cached)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get calculated stream ABI: %w", err)
+	}
+
+	if len(abiEntries) == 0 {
+		return nil, fmt.Errorf("no expressions found in channel definition")
+	}
+
+	return abiEntries, nil
+}
+
+func (p *Plugin) evalCalculatedExpression(abiEntries []CalculatedStreamABI, cid llotypes.ChannelID, env environment, outcome *Outcome) error {
+	for _, abi := range abiEntries {
 		if abi.ExpressionStreamID == 0 {
 			return fmt.Errorf("expression stream ID is 0, channelID: %d, expression: %s",
 				cid, abi.Expression)
@@ -712,20 +750,14 @@ func (p *Plugin) ProcessCalculatedStreamsDryRun(expression string) error {
 	}
 
 	// Process the calculated streams
-	o := &opts{
-		ABI: []struct {
-			Type               string            `json:"type"`
-			Expression         string            `json:"expression"`
-			ExpressionStreamID llotypes.StreamID `json:"expressionStreamID"`
-		}{
-			{
-				Type:               "int256",
-				Expression:         expression,
-				ExpressionStreamID: 999,
-			},
+	abiEntries := []CalculatedStreamABI{
+		{
+			Type:               "int256",
+			Expression:         expression,
+			ExpressionStreamID: 999,
 		},
 	}
-	err = p.evalExpression(o, 1, env, &outcome)
+	err = p.evalCalculatedExpression(abiEntries, 1, env, &outcome)
 	if err != nil {
 		return fmt.Errorf("failed to process expression: %w", err)
 	}

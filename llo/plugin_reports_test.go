@@ -199,12 +199,12 @@ func testReports(t *testing.T, outcomeCodec OutcomeCodec) {
 		}
 
 		// Verify tombstoned channel is not reportable
-		unreportableErr := outcome.IsReportable(1, protocolVersion, uint64(minReportInterval))
+		unreportableErr := outcome.IsReportable(1, protocolVersion, uint64(minReportInterval), p.ReportCodecs, p.ChannelDefinitionOptsCache)
 		require.NotNil(t, unreportableErr)
 		assert.Contains(t, unreportableErr.Error(), "tombstone channel")
 
 		// Verify non-tombstoned channel is reportable
-		require.Nil(t, outcome.IsReportable(2, protocolVersion, uint64(minReportInterval)))
+		require.Nil(t, outcome.IsReportable(2, protocolVersion, uint64(minReportInterval), p.ReportCodecs, p.ChannelDefinitionOptsCache))
 
 		encoded, err := p.OutcomeCodec.Encode(outcome)
 		require.NoError(t, err)

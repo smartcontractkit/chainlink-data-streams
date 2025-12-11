@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"sync"
 
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
 )
@@ -72,4 +73,58 @@ func subtractChannelDefinitions(minuend llotypes.ChannelDefinitions, subtrahend 
 	}
 
 	return difference
+}
+
+// channelDefinitionOptsCache stores pre-parsed channel opts to avoid repeated JSON parsing.
+// See: BenchmarkChannelOptsCache_* tests in channel_definitions_bench_test.go for performance details.
+type channelDefinitionOptsCache struct {
+	// OCR driver should ensure that each phase is only called by one thread at a time.
+	// The mu here is added as a safeguard for future proofing.
+	// Benchmarks showed that without a mutex we were saving about 10ns per call to Get .
+	mu    sync.Mutex
+	cache map[llotypes.ChannelID]any
+}
+
+var _ ChannelDefinitionOptsCache = (*channelDefinitionOptsCache)(nil)
+
+func NewChannelDefinitionOptsCache() ChannelDefinitionOptsCache {
+	return &channelDefinitionOptsCache{
+		cache: make(map[llotypes.ChannelID]any),
+	}
+}
+
+func (c *channelDefinitionOptsCache) Set(
+	channelID llotypes.ChannelID,
+	channelOpts llotypes.ChannelOpts,
+	codec ReportCodec,
+) error {
+	// codec may or may not implement OptsParser interface - that is the codec's choice.
+	// if codec does not then we cannot cache the opts. Codec may do this if they do not have opts.
+	optsParser, ok := codec.(OptsParser)
+	if !ok {
+		return fmt.Errorf("codec does not implement OptsParser interface")
+	}
+
+	parsedOpts, err := optsParser.ParseOpts(channelOpts)
+	if err != nil {
+		return fmt.Errorf("failed to parse opts for channelID %d: %w", channelID, err)
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.cache[channelID] = parsedOpts
+	return nil
+}
+
+func (c *channelDefinitionOptsCache) Get(channelID llotypes.ChannelID) (any, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	val, ok := c.cache[channelID]
+	return val, ok
+}
+
+func (c *channelDefinitionOptsCache) Delete(channelID llotypes.ChannelID) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.cache, channelID)
 }
