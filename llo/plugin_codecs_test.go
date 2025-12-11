@@ -63,6 +63,8 @@ func genChannelDefinition() gopter.Gen {
 		"ReportFormat": genReportFormat(),
 		"Streams":      gen.SliceOf(genStream()),
 		"Opts":         gen.SliceOf(gen.UInt8()),
+		"Tombstone":    gen.Bool(),
+		"Source":       gen.UInt32(),
 	})
 }
 

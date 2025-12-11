@@ -161,10 +161,6 @@ type PredecessorRetirementReportCache interface {
 	CheckAttestedRetirementReport(predecessorConfigDigest ocr2types.ConfigDigest, attestedRetirementReport []byte) (RetirementReport, error)
 }
 
-type ChannelDefinitionCache interface {
-	Definitions() llotypes.ChannelDefinitions
-}
-
 // A ReportingPlugin allows plugging custom logic into the OCR3 protocol. The OCR
 // protocol handles cryptography, networking, ensuring that a sufficient number
 // of nodes is in agreement about any report, transmitting the report to the
@@ -225,7 +221,7 @@ type PluginFactoryParams struct {
 	PredecessorRetirementReportCache
 	ShouldRetireCache
 	RetirementReportCodec
-	ChannelDefinitionCache
+	llotypes.ChannelDefinitionCache
 	DataSource
 	logger.Logger
 	OnchainConfigCodec
@@ -319,7 +315,8 @@ type Plugin struct {
 	ConfigDigest                     types.ConfigDigest
 	PredecessorRetirementReportCache PredecessorRetirementReportCache
 	ShouldRetireCache                ShouldRetireCache
-	ChannelDefinitionCache           ChannelDefinitionCache
+	ChannelDefinitionCache           llotypes.ChannelDefinitionCache
+	ChannelDefinitionOptsCache       ChannelDefinitionOptsCache
 	DataSource                       DataSource
 	Logger                           logger.Logger
 	N                                int
