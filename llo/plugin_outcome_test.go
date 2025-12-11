@@ -253,8 +253,8 @@ func testOutcome(t *testing.T, outcomeCodec OutcomeCodec) {
 			}
 
 			// Verify channel is reportable before tombstoning
-			require.Nil(t, previousOutcome.IsReportable(channelID, 1, uint64(100*time.Millisecond)))
-			reportable, _ := previousOutcome.ReportableChannels(1, uint64(100*time.Millisecond))
+			require.Nil(t, previousOutcome.IsReportable(channelID, 1, uint64(100*time.Millisecond), p.ReportCodecs, p.ChannelDefinitionOptsCache))
+			reportable, _ := previousOutcome.ReportableChannels(1, uint64(100*time.Millisecond), p.ReportCodecs, p.ChannelDefinitionOptsCache)
 			assert.Contains(t, reportable, channelID)
 
 			// Encode previous outcome
@@ -294,12 +294,12 @@ func testOutcome(t *testing.T, outcomeCodec OutcomeCodec) {
 			assert.Equal(t, tombstonedCd, decoded.ChannelDefinitions[channelID])
 
 			// Verify channel is no longer reportable
-			err = decoded.IsReportable(channelID, 1, uint64(100*time.Millisecond))
+			err = decoded.IsReportable(channelID, 1, uint64(100*time.Millisecond), p.ReportCodecs, p.ChannelDefinitionOptsCache)
 			require.NotNil(t, err)
 			assert.Contains(t, err.Error(), "tombstone channel")
 
 			// Verify ReportableChannels excludes the tombstoned channel
-			reportable, unreportable := decoded.ReportableChannels(1, uint64(100*time.Millisecond))
+			reportable, unreportable := decoded.ReportableChannels(1, uint64(100*time.Millisecond), p.ReportCodecs, p.ChannelDefinitionOptsCache)
 			assert.NotContains(t, reportable, channelID, "Tombstoned channel should not be in reportable list")
 			require.Len(t, unreportable, 1)
 			assert.Equal(t, channelID, unreportable[0].ChannelID)
