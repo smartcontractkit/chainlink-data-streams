@@ -48,7 +48,7 @@ jobs:
       actions: read
     steps:
       - name: ci-lint
-        uses: smartcontractkit/.github/actions/ci-lint-go@bfaf6327551cb73461928845c80e758c44d07b27  # version 0.3.1
+        uses: smartcontractkit/.github/actions/ci-lint-go@944f2dce535bee4b9bf9677b6983d8a3b78111bf
         with:
           # env inputs
           use-env-files: "true"
@@ -57,14 +57,13 @@ jobs:
           use-go-cache: true
           go-cache-dep-path: "**/go.sum"
           go-version-file: go.mod
-          golangci-lint-version: "v1.64.5"
-          golangci-lint-args: --out-format colored-line-number,checkstyle:golangci-lint-report.xml ${{ needs.init.outputs.lint_args_packages }}
+          golangci-lint-version: "latest"
 
   ci-lint-misc:
     runs-on: ubuntu-latest
     steps:
       - name: ci-lint-misc
-        uses: smartcontractkit/.github/actions/ci-lint-misc@6b08487b176ef7cad086526d0b54ddff6691c044 # ci-lint-misc@0.1.1
+        uses: smartcontractkit/.github/actions/ci-lint-misc@944f2dce535bee4b9bf9677b6983d8a3b78111bf
 
   ci-test:
     runs-on: ubuntu-latest

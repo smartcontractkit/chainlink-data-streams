@@ -15,6 +15,10 @@ func VerifyChannelDefinitions(codecs map[llotypes.ReportFormat]ReportCodec, chan
 	}
 	uniqueStreamIDs := make(map[llotypes.StreamID]struct{}, len(channelDefs))
 	for channelID, cd := range channelDefs {
+		if cd.Tombstone {
+			continue
+		}
+
 		if len(cd.Streams) == 0 {
 			merr = errors.Join(merr, fmt.Errorf("ChannelDefinition with ID %d has no streams", channelID))
 			continue

@@ -78,6 +78,8 @@ func makeChannelDefinitionProto(d llotypes.ChannelDefinition) *LLOChannelDefinit
 		ReportFormat: uint32(d.ReportFormat),
 		Streams:      streams,
 		Opts:         d.Opts,
+		Tombstone:    d.Tombstone,
+		Source:       d.Source,
 	}
 }
 
@@ -101,6 +103,8 @@ func channelDefinitionsFromProtoOutcome(in []*LLOChannelIDAndDefinitionProto) (o
 				ReportFormat: llotypes.ReportFormat(d.ChannelDefinition.ReportFormat),
 				Streams:      streams,
 				Opts:         d.ChannelDefinition.Opts,
+				Tombstone:    d.ChannelDefinition.Tombstone,
+				Source:       d.ChannelDefinition.Source,
 			}
 		}
 	}
