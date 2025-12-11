@@ -147,6 +147,86 @@ func testOutcome(t *testing.T, outcomeCodec OutcomeCodec) {
 			assert.Equal(t, newCd, decoded.ChannelDefinitions[42])
 		})
 
+		t.Run("replaces channel definition with tombstoned version and stops generating reports", func(t *testing.T) {
+			channelID := llotypes.ChannelID(42)
+			originalCd := llotypes.ChannelDefinition{
+				ReportFormat: llotypes.ReportFormatJSON,
+				Streams:      []llotypes.Stream{{StreamID: 1, Aggregator: llotypes.AggregatorMedian}, {StreamID: 2, Aggregator: llotypes.AggregatorMedian}},
+				Tombstone:    false,
+			}
+			tombstonedCd := llotypes.ChannelDefinition{
+				ReportFormat: llotypes.ReportFormatJSON,
+				Streams:      []llotypes.Stream{{StreamID: 1, Aggregator: llotypes.AggregatorMedian}, {StreamID: 2, Aggregator: llotypes.AggregatorMedian}},
+				Tombstone:    true,
+			}
+
+			// Create previous outcome with a non-tombstoned, reportable channel
+			previousObsTS := testStartNanos + uint64(2*time.Second)
+			previousOutcome := Outcome{
+				LifeCycleStage:                  LifeCycleStageProduction,
+				ObservationTimestampNanoseconds: previousObsTS,
+				ChannelDefinitions: map[llotypes.ChannelID]llotypes.ChannelDefinition{
+					channelID: originalCd,
+				},
+				ValidAfterNanoseconds: map[llotypes.ChannelID]uint64{
+					channelID: testStartNanos, // Channel is reportable
+				},
+			}
+
+			// Verify channel is reportable before tombstoning
+			require.Nil(t, previousOutcome.IsReportable(channelID, 1, uint64(100*time.Millisecond), p.ReportCodecs, p.ChannelDefinitionOptsCache))
+			reportable, _ := previousOutcome.ReportableChannels(1, uint64(100*time.Millisecond), p.ReportCodecs, p.ChannelDefinitionOptsCache)
+			assert.Contains(t, reportable, channelID)
+
+			// Encode previous outcome
+			encodedPreviousOutcome, err := p.OutcomeCodec.Encode(previousOutcome)
+			require.NoError(t, err)
+
+			// Create observations voting to update channel to tombstoned version
+			obs, err := p.ObservationCodec.Encode(Observation{
+				UpdateChannelDefinitions: map[llotypes.ChannelID]llotypes.ChannelDefinition{
+					channelID: tombstonedCd,
+				},
+				UnixTimestampNanoseconds: previousObsTS + uint64(1*time.Second),
+			})
+			require.NoError(t, err)
+
+			aos := []types.AttributedObservation{}
+			for i := uint8(0); i < 4; i++ {
+				aos = append(aos,
+					types.AttributedObservation{
+						Observation: obs,
+						Observer:    commontypes.OracleID(i),
+					})
+			}
+
+			// Generate new outcome with tombstoned channel
+			outcome, err := p.Outcome(ctx, ocr3types.OutcomeContext{
+				PreviousOutcome: encodedPreviousOutcome,
+				SeqNr:           3,
+			}, types.Query{}, aos)
+			require.NoError(t, err)
+
+			decoded, err := p.OutcomeCodec.Decode(outcome)
+			require.NoError(t, err)
+
+			// Verify channel definition was replaced with tombstoned version
+			assert.True(t, decoded.ChannelDefinitions[channelID].Tombstone, "Channel should be tombstoned")
+			assert.Equal(t, tombstonedCd, decoded.ChannelDefinitions[channelID])
+
+			// Verify channel is no longer reportable
+			err = decoded.IsReportable(channelID, 1, uint64(100*time.Millisecond), p.ReportCodecs, p.ChannelDefinitionOptsCache)
+			require.NotNil(t, err)
+			assert.Contains(t, err.Error(), "tombstone channel")
+
+			// Verify ReportableChannels excludes the tombstoned channel
+			reportable, unreportable := decoded.ReportableChannels(1, uint64(100*time.Millisecond), p.ReportCodecs, p.ChannelDefinitionOptsCache)
+			assert.NotContains(t, reportable, channelID, "Tombstoned channel should not be in reportable list")
+			require.Len(t, unreportable, 1)
+			assert.Equal(t, channelID, unreportable[0].ChannelID)
+			assert.Contains(t, unreportable[0].Error(), "tombstone channel")
+		})
+
 		t.Run("does not add channels beyond MaxOutcomeChannelDefinitionsLength", func(t *testing.T) {
 			newCd := llotypes.ChannelDefinition{
 				ReportFormat: llotypes.ReportFormat(2),

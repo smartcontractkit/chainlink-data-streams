@@ -539,6 +539,10 @@ func evalDecimal(stmt string, env map[string]any) (decimal.Decimal, error) {
 // EncodeUnpackedExpr format and returns each result as a decimal.Decimal
 func (p *Plugin) ProcessCalculatedStreams(outcome *Outcome) {
 	for cid, cd := range outcome.ChannelDefinitions {
+		if cd.Tombstone {
+			continue
+		}
+
 		if cd.ReportFormat != llotypes.ReportFormatEVMABIEncodeUnpackedExpr {
 			continue
 		}

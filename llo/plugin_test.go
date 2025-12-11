@@ -29,9 +29,31 @@ type mockChannelDefinitionCache struct {
 	definitions llotypes.ChannelDefinitions
 }
 
-func (m *mockChannelDefinitionCache) Definitions() llotypes.ChannelDefinitions {
+func (m *mockChannelDefinitionCache) Definitions(previous llotypes.ChannelDefinitions) llotypes.ChannelDefinitions {
 	return m.definitions
 }
+
+func (m *mockChannelDefinitionCache) Close() error {
+	return nil
+}
+
+func (m *mockChannelDefinitionCache) HealthReport() map[string]error {
+	return nil
+}
+
+func (m *mockChannelDefinitionCache) Name() string {
+	return "mockChannelDefinitionCache"
+}
+
+func (m *mockChannelDefinitionCache) Ready() error {
+	return nil
+}
+
+func (m *mockChannelDefinitionCache) Start(ctx context.Context) error {
+	return nil
+}
+
+var _ llotypes.ChannelDefinitionCache = &mockChannelDefinitionCache{}
 
 type mockDataSource struct {
 	s   StreamValues

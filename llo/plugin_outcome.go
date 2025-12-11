@@ -202,6 +202,10 @@ func (p *Plugin) outcome(outctx ocr3types.OutcomeContext, query types.Query, aos
 	// pair) and re-use the same result, in case multiple channels share the
 	// same stream/aggregator pair.
 	for cid, cd := range outcome.ChannelDefinitions {
+		if cd.Tombstone {
+			continue
+		}
+
 		for _, strm := range cd.Streams {
 			sid, agg := strm.StreamID, strm.Aggregator
 
@@ -408,6 +412,11 @@ func (out *Outcome) IsReportable(channelID llotypes.ChannelID, protocolVersion u
 	cd, exists := out.ChannelDefinitions[channelID]
 	if !exists {
 		return &UnreportableChannelError{nil, "IsReportable=false; no channel definition with this ID", channelID}
+	}
+
+	if cd.Tombstone {
+		// Tombstone channels are not reportable
+		return &UnreportableChannelError{nil, "IsReportable=false; tombstone channel", channelID}
 	}
 
 	validAfterNanos, ok := out.ValidAfterNanoseconds[channelID]
