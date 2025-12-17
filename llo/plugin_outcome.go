@@ -152,8 +152,17 @@ func (p *Plugin) outcome(outctx ocr3types.OutcomeContext, query types.Query, aos
 		}
 		outcome.ChannelDefinitions[defWithID.ChannelID] = defWithID.ChannelDefinition
 
-		// Parse and cache opts to avoid repeated JSON parsing where opts are needed
-		p.parseAndCacheChannelOpts(defWithID.ChannelID, defWithID.ChannelDefinition)
+		// Invalidate cache if the channel is added or updated
+		p.ChannelDefinitionOptsCache.Delete(defWithID.ChannelID)
+	}
+
+	// at this point the outcome.ChannelDefinitions is fully populated both from carry forward of previousOutcome 
+	// and from the new channels added/updated via voting.
+	// only once we've assembled the outcome.ChannelDefinitions we should cache the opts for all channels.
+	for channelID, cd := range outcome.ChannelDefinitions {
+		if _, cached := p.ChannelDefinitionOptsCache.Get(channelID); !cached {
+			p.parseAndCacheChannelOpts(channelID, cd)
+		}
 	}
 
 	/////////////////////////////////
