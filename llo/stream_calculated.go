@@ -547,23 +547,6 @@ func (p *Plugin) ProcessCalculatedStreams(outcome *Outcome) {
 
 		var err error
 		env := NewEnv(outcome)
-		for _, stream := range cd.Streams {
-			if stream.Aggregator == llotypes.AggregatorCalculated {
-				continue
-			}
-
-			p.Logger.Debugw("setting stream value", "channelID", cid, "streamID", stream.StreamID, "aggregator", stream.Aggregator)
-
-			if err = env.SetStreamValue(stream.StreamID, outcome.StreamAggregates[stream.StreamID][stream.Aggregator]); err != nil {
-				p.Logger.Errorw("failed to set stream value", "channelID", cid, "error", err, "streamID", stream.StreamID, "aggregator", stream.Aggregator)
-				env.release()
-				break
-			}
-		}
-
-		if err != nil {
-			continue
-		}
 
 		abiEntries, abiErr := p.getCalculatedStreamABI(cid, cd)
 		if abiErr != nil {
@@ -580,8 +563,31 @@ func (p *Plugin) ProcessCalculatedStreams(outcome *Outcome) {
 					StreamID:   abi.ExpressionStreamID,
 					Aggregator: llotypes.AggregatorCalculated,
 				})
+
+				// update the outcome with the new stream aggregate
+				outcome.StreamAggregates[abi.ExpressionStreamID] = map[llotypes.Aggregator]StreamValue{
+					llotypes.AggregatorCalculated: nil,
+				}
 			}
 			outcome.ChannelDefinitions[cid] = cd
+		}
+
+		for _, stream := range cd.Streams {
+			if stream.Aggregator == llotypes.AggregatorCalculated {
+				continue
+			}
+
+			p.Logger.Debugw("setting stream value", "channelID", cid, "streamID", stream.StreamID, "aggregator", stream.Aggregator)
+
+			if err = env.SetStreamValue(stream.StreamID, outcome.StreamAggregates[stream.StreamID][stream.Aggregator]); err != nil {
+				p.Logger.Errorw("failed to set stream value", "channelID", cid, "error", err, "streamID", stream.StreamID, "aggregator", stream.Aggregator)
+				env.release()
+				break
+			}
+		}
+
+		if err != nil {
+			continue
 		}
 
 		if err := p.evalCalculatedExpression(abiEntries, cid, env, outcome); err != nil {
@@ -634,7 +640,12 @@ func (p *Plugin) evalCalculatedExpression(abiEntries []CalculatedStreamABI, cid 
 				cid, abi.ExpressionStreamID)
 		}
 
-		if len(outcome.StreamAggregates[abi.ExpressionStreamID]) > 0 {
+		// Prevent overwriting an existing, already-computed calculated aggregate.
+		// Note: `ProcessCalculatedStreams` intentionally may pre-create a placeholder like:
+		// outcome.StreamAggregates[exprID][AggregatorCalculated] = nil
+		// so that failures still leave a nil value behind. That placeholder should NOT
+		// block evaluation.
+		if value := outcome.StreamAggregates[abi.ExpressionStreamID][llotypes.AggregatorCalculated]; value != nil {
 			return fmt.Errorf(
 				"calculated stream aggregate ID already exists, channelID: %d, expressionStreamID: %d, expression: %s",
 				cid, abi.ExpressionStreamID, abi.Expression)
