@@ -52,7 +52,7 @@ func VerifyChannelDefinitions(codecs map[llotypes.ReportFormat]ReportCodec, chan
 func subtractChannelDefinitions(minuend llotypes.ChannelDefinitions, subtrahend llotypes.ChannelDefinitions, limit int) llotypes.ChannelDefinitions {
 	differenceList := []ChannelDefinitionWithID{}
 	for channelID, channelDefinition := range minuend {
-		if _, ok := subtrahend[channelID]; !ok {
+		if _, ok := subtrahend[channelID]; !ok || channelDefinition.Tombstone {
 			differenceList = append(differenceList, ChannelDefinitionWithID{channelDefinition, channelID})
 		}
 	}

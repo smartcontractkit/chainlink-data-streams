@@ -316,7 +316,6 @@ type Plugin struct {
 	PredecessorRetirementReportCache PredecessorRetirementReportCache
 	ShouldRetireCache                ShouldRetireCache
 	ChannelDefinitionCache           llotypes.ChannelDefinitionCache
-	ChannelDefinitionOptsCache       ChannelDefinitionOptsCache
 	DataSource                       DataSource
 	Logger                           logger.Logger
 	N                                int
