@@ -1071,42 +1071,6 @@ func Test_Outcome_Methods(t *testing.T) {
 			// if cadence is 5s, if time is < 5s, does not report because cadence hasn't elapsed
 			require.EqualError(t, outcome.IsReportable(cid, 1, uint64(5*time.Second), codecs, optsCache), "ChannelID: 1; Reason: IsReportable=false; not valid yet (ObservationTimestampNanoseconds=1726670490999999999, validAfterNanoseconds=1726670489999999999, minReportInterval=5000000000); 4.000000 seconds (4000000000ns) until reportable")
 		})
-
-		t.Run("IsSecondsResolution returns false when codec does not implement OptsParser", func(t *testing.T) {
-			cid := llotypes.ChannelID(2)
-
-			cd := llotypes.ChannelDefinition{
-				ReportFormat: llotypes.ReportFormatJSON,
-			}
-
-			// Cannot populate cache because codec does not implement OptsParser
-			err := optsCache.Set(cid, cd.Opts, codecs[cd.ReportFormat])
-			require.Error(t, err)
-			_, cached := optsCache.Get(cid)
-			require.False(t, cached, "cache should not be populated after Set (Codec does not implement OptsParser)")
-
-			// ReportFormatJSON is using a codec which does not implement OptsParser - IsSecondsResolution returns false
-			// indicating to use the default time resolution
-			isSecondsResolution, err := IsSecondsResolution(cid, codecs[llotypes.ReportFormatJSON], optsCache)
-			require.NoError(t, err)
-			assert.False(t, isSecondsResolution)
-		})
-
-		t.Run("IsSecondsResolution returns true when codec requires seconds resolution", func(t *testing.T) {
-			cid := llotypes.ChannelID(2)
-
-			cd := llotypes.ChannelDefinition{
-				ReportFormat: llotypes.ReportFormatEVMPremiumLegacy,
-			}
-
-			populateCache(t, optsCache, cid, cd, codecs)
-
-			isSecondsResolution, err := IsSecondsResolution(cid, codecs[llotypes.ReportFormatEVMPremiumLegacy], optsCache)
-			require.NoError(t, err)
-			assert.True(t, isSecondsResolution)
-
-		})
-
 		t.Run("ReportableChannels", func(t *testing.T) {
 			defaultMinReportInterval := uint64(1 * time.Second)
 

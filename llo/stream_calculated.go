@@ -12,7 +12,6 @@ import (
 	"github.com/expr-lang/expr"
 	"github.com/expr-lang/expr/ast"
 	"github.com/expr-lang/expr/parser"
-	"github.com/goccy/go-json"
 	"github.com/shopspring/decimal"
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
 )
