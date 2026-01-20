@@ -571,6 +571,11 @@ func (p *Plugin) ProcessCalculatedStreams(outcome *Outcome) {
 					StreamID:   abi.ExpressionStreamID,
 					Aggregator: llotypes.AggregatorCalculated,
 				})
+
+				// update the outcome with the new stream aggregate
+				outcome.StreamAggregates[abi.ExpressionStreamID] = map[llotypes.Aggregator]StreamValue{
+					llotypes.AggregatorCalculated: nil,
+				}
 			}
 			outcome.ChannelDefinitions[cid] = cd
 		}
