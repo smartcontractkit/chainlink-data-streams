@@ -547,39 +547,6 @@ func (p *Plugin) ProcessCalculatedStreams(outcome *Outcome) {
 		}
 
 		var err error
-
-		// TODO: we can potentially cache the opts for each channel definition
-		// and avoid unmarshalling the options on outcome.
-		// for now keep it simple as this will require invalidating on
-		// channel definitions updates.
-		copt := opts{}
-		if err := json.Unmarshal(cd.Opts, &copt); err != nil {
-			p.Logger.Errorw("failed to unmarshal channel definition options", "channelID", cid, "error", err)
-			continue
-		}
-
-		if len(copt.ABI) == 0 {
-			p.Logger.Errorw("no expressions found in channel definition", "channelID", cid)
-			continue
-		}
-
-		// channel definitions are inherited from the previous outcome,
-		// so we only update the channel definition streams if we haven't done it before
-		if cd.Streams[len(cd.Streams)-1].StreamID != copt.ABI[len(copt.ABI)-1].ExpressionStreamID {
-			for _, abi := range copt.ABI {
-				cd.Streams = append(cd.Streams, llotypes.Stream{
-					StreamID:   abi.ExpressionStreamID,
-					Aggregator: llotypes.AggregatorCalculated,
-				})
-
-				// update the outcome with the new stream aggregate
-				outcome.StreamAggregates[abi.ExpressionStreamID] = map[llotypes.Aggregator]StreamValue{
-					llotypes.AggregatorCalculated: nil,
-				}
-			}
-			outcome.ChannelDefinitions[cid] = cd
-		}
-
 		env := NewEnv(outcome)
 		for _, stream := range cd.Streams {
 			if stream.Aggregator == llotypes.AggregatorCalculated {
@@ -597,6 +564,25 @@ func (p *Plugin) ProcessCalculatedStreams(outcome *Outcome) {
 
 		if err != nil {
 			continue
+		}
+
+		abiEntries, abiErr := p.getCalculatedStreamABI(cid, cd)
+		if abiErr != nil {
+			p.Logger.Errorw("failed to get calculated stream ABI", "channelID", cid, "error", abiErr)
+			env.release()
+			continue
+		}
+
+		// channel definitions are inherited from the previous outcome,
+		// so we only update the channel definition streams if we haven't done it before
+		if cd.Streams[len(cd.Streams)-1].StreamID != abiEntries[len(abiEntries)-1].ExpressionStreamID {
+			for _, abi := range abiEntries {
+				cd.Streams = append(cd.Streams, llotypes.Stream{
+					StreamID:   abi.ExpressionStreamID,
+					Aggregator: llotypes.AggregatorCalculated,
+				})
+			}
+			outcome.ChannelDefinitions[cid] = cd
 		}
 
 		if err := p.evalCalculatedExpression(abiEntries, cid, env, outcome); err != nil {
@@ -649,12 +635,7 @@ func (p *Plugin) evalCalculatedExpression(abiEntries []CalculatedStreamABI, cid 
 				cid, abi.ExpressionStreamID)
 		}
 
-		// Prevent overwriting an existing, already-computed calculated aggregate.
-		// Note: `ProcessCalculatedStreams` intentionally may pre-create a placeholder like:
-		// outcome.StreamAggregates[exprID][AggregatorCalculated] = nil
-		// so that failures still leave a nil value behind. That placeholder should NOT
-		// block evaluation.
-		if value := outcome.StreamAggregates[abi.ExpressionStreamID][llotypes.AggregatorCalculated]; value != nil {
+		if len(outcome.StreamAggregates[abi.ExpressionStreamID]) > 0 {
 			return fmt.Errorf(
 				"calculated stream aggregate ID already exists, channelID: %d, expressionStreamID: %d, expression: %s",
 				cid, abi.ExpressionStreamID, abi.Expression)
