@@ -51,11 +51,11 @@ func TestReportFormatEVMABIEncodeOpts_Decode_Encode_properties(t *testing.T) {
 	properties.Property("Encodes values", prop.ForAll(
 		runTest,
 		gen.StrictStruct(reflect.TypeOf(&ReportFormatEVMABIEncodeOpts{}), map[string]gopter.Gen{
-			"BaseUSDFee":       genBaseUSDFee(),
-			"ExpirationWindow": genExpirationWindow(),
-			"FeedID":           genFeedID(),
-			"ABI":              genABI(),
-			"TimeResolution":   genTimeResolution(),
+			"BaseUSDFee":         genBaseUSDFee(),
+			"ExpirationWindow":   genExpirationWindow(),
+			"FeedID":             genFeedID(),
+			"ABI":                genABI(),
+			"TimestampPrecision": genTimestampPrecision(),
 		})))
 
 	properties.TestingRun(t)
@@ -115,10 +115,10 @@ func TestReportCodecEVMABIEncodeUnpacked_Encode_properties(t *testing.T) {
 			}
 
 			opts := ReportFormatEVMABIEncodeOpts{
-				BaseUSDFee:       sampleBaseUSDFee,
-				ExpirationWindow: sampleExpirationWindow,
-				FeedID:           sampleFeedID,
-				TimeResolution:   llo.ResolutionSeconds,
+				BaseUSDFee:         sampleBaseUSDFee,
+				ExpirationWindow:   sampleExpirationWindow,
+				FeedID:             sampleFeedID,
+				TimestampPrecision: PrecisionSeconds,
 				ABI: []ABIEncoder{
 					// benchmark price
 					newSingleABIEncoder("int192", priceMultiplier),
@@ -153,7 +153,7 @@ func TestReportCodecEVMABIEncodeUnpacked_Encode_properties(t *testing.T) {
 				Opts: serializedOpts,
 			}
 
-			encoded, err := codec.Encode(report, cd, nil)
+			encoded, err := codec.Encode(report, cd)
 			require.NoError(t, err)
 
 			values, err := expectedDEXBasedAssetSchema.Unpack(encoded)
@@ -168,7 +168,7 @@ func TestReportCodecEVMABIEncodeUnpacked_Encode_properties(t *testing.T) {
 			for i := range report.Values {
 				report.Values[i] = nil
 			}
-			_, err = codec.Encode(report, cd, nil)
+			_, err = codec.Encode(report, cd)
 			require.Error(t, err)
 
 			return AllTrue([]bool{
@@ -230,10 +230,10 @@ func TestReportCodecEVMABIEncodeUnpacked_Encode_properties(t *testing.T) {
 			}
 
 			opts := ReportFormatEVMABIEncodeOpts{
-				BaseUSDFee:       sampleBaseUSDFee,
-				ExpirationWindow: sampleExpirationWindow,
-				FeedID:           sampleFeedID,
-				TimeResolution:   llo.ResolutionSeconds,
+				BaseUSDFee:         sampleBaseUSDFee,
+				ExpirationWindow:   sampleExpirationWindow,
+				FeedID:             sampleFeedID,
+				TimestampPrecision: PrecisionSeconds,
 				ABI: []ABIEncoder{
 					// market status
 					newSingleABIEncoder("uint32", nil),
@@ -264,7 +264,7 @@ func TestReportCodecEVMABIEncodeUnpacked_Encode_properties(t *testing.T) {
 				Opts: serializedOpts,
 			}
 
-			encoded, err := codec.Encode(report, cd, nil)
+			encoded, err := codec.Encode(report, cd)
 			require.NoError(t, err)
 
 			values, err := expectedRWASchema.Unpack(encoded)
@@ -279,7 +279,7 @@ func TestReportCodecEVMABIEncodeUnpacked_Encode_properties(t *testing.T) {
 			for i := range report.Values {
 				report.Values[i] = nil
 			}
-			_, err = codec.Encode(report, cd, nil)
+			_, err = codec.Encode(report, cd)
 			require.Error(t, err)
 
 			return AllTrue([]bool{
@@ -334,10 +334,10 @@ func TestReportCodecEVMABIEncodeUnpacked_Encode_properties(t *testing.T) {
 			}
 
 			opts := ReportFormatEVMABIEncodeOpts{
-				BaseUSDFee:       sampleBaseUSDFee,
-				ExpirationWindow: sampleExpirationWindow,
-				FeedID:           sampleFeedID,
-				TimeResolution:   llo.ResolutionSeconds,
+				BaseUSDFee:         sampleBaseUSDFee,
+				ExpirationWindow:   sampleExpirationWindow,
+				FeedID:             sampleFeedID,
+				TimestampPrecision: PrecisionSeconds,
 				ABI: []ABIEncoder{
 					// benchmark price
 					newSingleABIEncoder("int192", priceMultiplier),
@@ -362,7 +362,7 @@ func TestReportCodecEVMABIEncodeUnpacked_Encode_properties(t *testing.T) {
 				Opts: serializedOpts,
 			}
 
-			encoded, err := codec.Encode(report, cd, nil)
+			encoded, err := codec.Encode(report, cd)
 			require.NoError(t, err)
 
 			values, err := expectedDEXBasedAssetSchema.Unpack(encoded)
@@ -377,7 +377,7 @@ func TestReportCodecEVMABIEncodeUnpacked_Encode_properties(t *testing.T) {
 			for i := range report.Values {
 				report.Values[i] = nil
 			}
-			_, err = codec.Encode(report, cd, nil)
+			_, err = codec.Encode(report, cd)
 			require.Error(t, err)
 
 			return AllTrue([]bool{
@@ -409,10 +409,10 @@ func TestReportCodecEVMABIEncodeUnpacked_Encode_properties(t *testing.T) {
 	})
 
 	t.Run("varying timestamp precision schemas", func(t *testing.T) {
-		runTest := func(sampleFeedID common.Hash, sampleObservationTimestampNanoseconds, sampleValidAfterNanoseconds uint64, sampleExpirationWindow uint32, priceMultiplier *ubig.Big, sampleBaseUSDFee, sampleLinkBenchmarkPrice, sampleNativeBenchmarkPrice, sampleBenchmarkPrice decimal.Decimal, sampleTimeResolution llo.TimeResolution) bool {
+		runTest := func(sampleFeedID common.Hash, sampleObservationTimestampNanoseconds, sampleValidAfterNanoseconds uint64, sampleExpirationWindow uint32, priceMultiplier *ubig.Big, sampleBaseUSDFee, sampleLinkBenchmarkPrice, sampleNativeBenchmarkPrice, sampleBenchmarkPrice decimal.Decimal, sampleTimestampPrecision TimestampPrecision) bool {
 			// Determine timestamp type based on precision
 			timestampType := "uint64"
-			if sampleTimeResolution == llo.ResolutionSeconds {
+			if sampleTimestampPrecision == PrecisionSeconds {
 				timestampType = "uint32"
 			}
 
@@ -441,10 +441,10 @@ func TestReportCodecEVMABIEncodeUnpacked_Encode_properties(t *testing.T) {
 			}
 
 			opts := ReportFormatEVMABIEncodeOpts{
-				BaseUSDFee:       sampleBaseUSDFee,
-				ExpirationWindow: sampleExpirationWindow,
-				FeedID:           sampleFeedID,
-				TimeResolution:   sampleTimeResolution,
+				BaseUSDFee:         sampleBaseUSDFee,
+				ExpirationWindow:   sampleExpirationWindow,
+				FeedID:             sampleFeedID,
+				TimestampPrecision: sampleTimestampPrecision,
 				ABI: []ABIEncoder{
 					newSingleABIEncoder("int192", priceMultiplier),
 				},
@@ -468,7 +468,7 @@ func TestReportCodecEVMABIEncodeUnpacked_Encode_properties(t *testing.T) {
 				Opts: serializedOpts,
 			}
 
-			encoded, err := codec.Encode(report, cd, nil)
+			encoded, err := codec.Encode(report, cd)
 			require.NoError(t, err)
 
 			values, err := schema.Unpack(encoded)
@@ -486,8 +486,8 @@ func TestReportCodecEVMABIEncodeUnpacked_Encode_properties(t *testing.T) {
 			}
 
 			// Verify timestamps per precision type
-			expectedValidFrom := ConvertTimestamp(sampleValidAfterNanoseconds, sampleTimeResolution) + 1
-			expectedObservationTimestamp := ConvertTimestamp(sampleObservationTimestampNanoseconds, sampleTimeResolution)
+			expectedValidFrom := ConvertTimestamp(sampleValidAfterNanoseconds, sampleTimestampPrecision) + 1
+			expectedObservationTimestamp := ConvertTimestamp(sampleObservationTimestampNanoseconds, sampleTimestampPrecision)
 			expectedExpiresAt := expectedObservationTimestamp + uint64(sampleExpirationWindow)
 			if timestampType == "uint32" {
 				checks = append(checks,
@@ -518,7 +518,7 @@ func TestReportCodecEVMABIEncodeUnpacked_Encode_properties(t *testing.T) {
 			genLinkBenchmarkPrice(),
 			genNativeBenchmarkPrice(),
 			genBenchmarkPrice(),
-			genTimeResolution(),
+			genTimestampPrecision(),
 		))
 		properties.TestingRun(t)
 	})
@@ -560,10 +560,10 @@ func TestReportCodecEVMABIEncodeUnpacked_Encode_properties(t *testing.T) {
 			}
 
 			opts := ReportFormatEVMABIEncodeOpts{
-				BaseUSDFee:       sampleBaseUSDFee,
-				ExpirationWindow: sampleExpirationWindow,
-				FeedID:           sampleFeedID,
-				TimeResolution:   llo.ResolutionSeconds,
+				BaseUSDFee:         sampleBaseUSDFee,
+				ExpirationWindow:   sampleExpirationWindow,
+				FeedID:             sampleFeedID,
+				TimestampPrecision: PrecisionSeconds,
 				ABI: []ABIEncoder{
 					newSingleABIEncoder("int192", nil),
 					newSingleABIEncoder("uint32", nil),
@@ -598,7 +598,7 @@ func TestReportCodecEVMABIEncodeUnpacked_Encode_properties(t *testing.T) {
 				Opts: serializedOpts,
 			}
 
-			encoded, err := codec.Encode(report, cd, nil)
+			encoded, err := codec.Encode(report, cd)
 			require.NoError(t, err)
 
 			values, err := expectedFundingRateSchema.Unpack(encoded)
@@ -613,7 +613,7 @@ func TestReportCodecEVMABIEncodeUnpacked_Encode_properties(t *testing.T) {
 			for i := range report.Values {
 				report.Values[i] = nil
 			}
-			_, err = codec.Encode(report, cd, nil)
+			_, err = codec.Encode(report, cd)
 			require.Error(t, err)
 
 			return AllTrue([]bool{
@@ -699,11 +699,11 @@ func TestReportCodecEVMABIEncodeUnpacked_Encode(t *testing.T) {
 		}
 
 		codec := ReportCodecEVMABIEncodeUnpacked{}
-		_, err = codec.Encode(report, cd, nil)
+		_, err = codec.Encode(report, cd)
 		require.EqualError(t, err, "failed to build payload; ABI and values length mismatch; ABI: 0, Values: 3")
 
 		report.Values = []llo.StreamValue{}
-		_, err = codec.Encode(report, cd, nil)
+		_, err = codec.Encode(report, cd)
 		require.EqualError(t, err, "ReportCodecEVMABIEncodeUnpacked requires at least 2 values (NativePrice, LinkPrice, ...); got report.Values: []")
 	})
 }
@@ -737,8 +737,8 @@ func genTimestampThatFitsUint32Seconds() gopter.Gen {
 	})
 }
 
-func genTimeResolution() gopter.Gen {
-	return gen.OneConstOf(llo.ResolutionSeconds, llo.ResolutionMilliseconds, llo.ResolutionMicroseconds, llo.ResolutionNanoseconds)
+func genTimestampPrecision() gopter.Gen {
+	return gen.OneConstOf(PrecisionSeconds, PrecisionMilliseconds, PrecisionMicroseconds, PrecisionNanoseconds)
 }
 
 func genExpirationWindow() gopter.Gen {
@@ -936,13 +936,13 @@ func newSingleABIEncoder(t string, m *ubig.Big) ABIEncoder {
 
 // TestReportCodecEVMABIEncodeUnpacked_EncodeOpts
 func TestReportCodecEVMABIEncodeUnpacked_EncodeOpts(t *testing.T) {
-	t.Run("zero value is llo.ResolutionSeconds", func(t *testing.T) {
-		var defaultPrecision llo.TimeResolution
-		assert.Equal(t, llo.ResolutionSeconds, defaultPrecision, "zero value must be llo.ResolutionSeconds for backward compatibility")
-		assert.Equal(t, llo.TimeResolution(0), llo.ResolutionSeconds, "llo.ResolutionSeconds must be 0")
+	t.Run("zero value is PrecisionSeconds", func(t *testing.T) {
+		var defaultPrecision TimestampPrecision
+		assert.Equal(t, PrecisionSeconds, defaultPrecision, "zero value must be PrecisionSeconds for backward compatibility")
+		assert.Equal(t, TimestampPrecision(0), PrecisionSeconds, "PrecisionSeconds must be 0")
 	})
 
-	t.Run("JSON opts without timeResolution defaults to seconds", func(t *testing.T) {
+	t.Run("JSON opts without timestampPrecision defaults to seconds", func(t *testing.T) {
 		jsonConfig := `{
 			"baseUSDFee": "1.5",
 			"expirationWindow": 3600,
@@ -954,34 +954,34 @@ func TestReportCodecEVMABIEncodeUnpacked_EncodeOpts(t *testing.T) {
 		err := opts.Decode([]byte(jsonConfig))
 		require.NoError(t, err)
 
-		assert.Equal(t, llo.ResolutionSeconds, opts.TimeResolution)
+		assert.Equal(t, PrecisionSeconds, opts.TimestampPrecision)
 	})
 
-	t.Run("JSON opts with timeResolution uses correct value", func(t *testing.T) {
+	t.Run("JSON opts with timestampPrecision uses correct value", func(t *testing.T) {
 		testCases := []struct {
 			name              string
 			jsonPrecision     string
-			expectedPrecision llo.TimeResolution
+			expectedPrecision TimestampPrecision
 		}{
 			{
 				name:              "seconds",
 				jsonPrecision:     "s",
-				expectedPrecision: llo.ResolutionSeconds,
+				expectedPrecision: PrecisionSeconds,
 			},
 			{
 				name:              "milliseconds",
 				jsonPrecision:     "ms",
-				expectedPrecision: llo.ResolutionMilliseconds,
+				expectedPrecision: PrecisionMilliseconds,
 			},
 			{
 				name:              "microseconds",
 				jsonPrecision:     "us",
-				expectedPrecision: llo.ResolutionMicroseconds,
+				expectedPrecision: PrecisionMicroseconds,
 			},
 			{
 				name:              "nanoseconds",
 				jsonPrecision:     "ns",
-				expectedPrecision: llo.ResolutionNanoseconds,
+				expectedPrecision: PrecisionNanoseconds,
 			},
 		}
 
@@ -992,97 +992,15 @@ func TestReportCodecEVMABIEncodeUnpacked_EncodeOpts(t *testing.T) {
 					"expirationWindow": 3600,
 					"feedID": "0x0001020304050607080910111213141516171819202122232425262728293031",
 					"abi": [{"type": "uint192"}],
-					"timeResolution": "%s"
+					"timestampPrecision": "%s"
 				}`, tc.jsonPrecision)
 
 				var opts ReportFormatEVMABIEncodeOpts
 				err := opts.Decode([]byte(jsonConfig))
 				require.NoError(t, err)
 
-				assert.Equal(t, tc.expectedPrecision, opts.TimeResolution)
+				assert.Equal(t, tc.expectedPrecision, opts.TimestampPrecision)
 			})
 		}
-	})
-}
-
-func TestReportCodecEVMABIEncodeUnpacked_WithAndWithoutParsedOpts(t *testing.T) {
-	codec := ReportCodecEVMABIEncodeUnpacked{}
-
-	optsJSON := []byte(`{
-		"baseUSDFee": "1.5",
-		"expirationWindow": 3600,
-		"feedID": "0x0001020304050607080910111213141516171819202122232425262728293031",
-		"abi": [{"type": "uint192"}]
-	}`)
-
-	cd := llotypes.ChannelDefinition{
-		ReportFormat: llotypes.ReportFormatEVMABIEncodeUnpacked,
-		Streams:      []llotypes.Stream{{StreamID: 1}, {StreamID: 2}, {StreamID: 3}},
-		Opts:         optsJSON,
-	}
-
-	report := llo.Report{
-		ValidAfterNanoseconds:           1234567890000000000,
-		ObservationTimestampNanoseconds: 1234567891000000000,
-		Values: []llo.StreamValue{
-			llo.ToDecimal(decimal.NewFromFloat(1.5)),
-			llo.ToDecimal(decimal.NewFromFloat(2.5)),
-			llo.ToDecimal(decimal.NewFromFloat(100.123)),
-		},
-	}
-
-	parsedOpts, err := codec.ParseOpts(optsJSON)
-	require.NoError(t, err)
-
-	// Encode with parsed opts
-	encodedWithCache, err := codec.Encode(report, cd, parsedOpts)
-	require.NoError(t, err)
-
-	// Encode without parsed opts
-	encodedWithoutCache, err := codec.Encode(report, cd, nil)
-	require.NoError(t, err)
-
-	// Both paths should produce identical output
-	assert.Equal(t, encodedWithCache, encodedWithoutCache)
-}
-
-func TestReportCodecEVMABIEncodeUnpacked_ParseOpts(t *testing.T) {
-	codec := ReportCodecEVMABIEncodeUnpacked{}
-
-	t.Run("valid opts", func(t *testing.T) {
-		opts := []byte(`{"baseUSDFee":"1.5","expirationWindow":3600,"feedID":"0x0001020304050607080910111213141516171819202122232425262728293031","abi":[],"timeResolution":"ms"}`)
-		result, err := codec.ParseOpts(opts)
-		require.NoError(t, err)
-		require.NotNil(t, result)
-
-		parsed, ok := result.(ReportFormatEVMABIEncodeOpts)
-		require.True(t, ok)
-		require.Equal(t, "1.5", parsed.BaseUSDFee.String())
-		require.Equal(t, uint32(3600), parsed.ExpirationWindow)
-		require.Equal(t, llo.ResolutionMilliseconds, parsed.TimeResolution)
-	})
-
-	t.Run("invalid JSON", func(t *testing.T) {
-		_, err := codec.ParseOpts([]byte(`{invalid`))
-		require.Error(t, err)
-		require.Contains(t, err.Error(), "failed to parse EVMABIEncodeUnpacked opts")
-	})
-}
-
-func TestReportCodecEVMABIEncodeUnpacked_TimeResolution(t *testing.T) {
-	codec := ReportCodecEVMABIEncodeUnpacked{}
-
-	t.Run("valid parsed opts", func(t *testing.T) {
-		opts := ReportFormatEVMABIEncodeOpts{TimeResolution: llo.ResolutionMilliseconds}
-		res, err := codec.TimeResolution(opts)
-		require.NoError(t, err)
-		require.Equal(t, llo.ResolutionMilliseconds, res)
-	})
-
-	t.Run("invalid type", func(t *testing.T) {
-		type wrongType struct{}
-		_, err := codec.TimeResolution(wrongType{})
-		require.Error(t, err)
-		require.Contains(t, err.Error(), "expected ReportFormatEVMABIEncodeOpts")
 	})
 }

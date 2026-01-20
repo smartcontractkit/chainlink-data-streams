@@ -28,8 +28,7 @@ func NewReportCodecStreamlined() ReportCodecEVMStreamlined {
 
 type ReportCodecEVMStreamlined struct{}
 
-func (rc ReportCodecEVMStreamlined) Encode(r llo.Report, cd llotypes.ChannelDefinition, _ any) (payload []byte, err error) {
-	// TODO: implement OptsParser. This codec does not implement it so parsedOpts is ignored
+func (rc ReportCodecEVMStreamlined) Encode(r llo.Report, cd llotypes.ChannelDefinition) (payload []byte, err error) {
 	opts := ReportFormatEVMStreamlinedOpts{}
 	if err = (&opts).Decode(cd.Opts); err != nil {
 		return nil, fmt.Errorf("failed to decode opts; got: '%s'; %w", cd.Opts, err)

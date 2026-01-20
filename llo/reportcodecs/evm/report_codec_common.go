@@ -16,16 +16,64 @@ import (
 	ubig "github.com/smartcontractkit/chainlink-data-streams/llo/reportcodecs/evm/utils"
 )
 
+// TimestampPrecision represents the precision for timestamp conversion
+type TimestampPrecision uint8
+
+const (
+	PrecisionSeconds TimestampPrecision = iota
+	PrecisionMilliseconds
+	PrecisionMicroseconds
+	PrecisionNanoseconds
+)
+
+func (tp TimestampPrecision) MarshalJSON() ([]byte, error) {
+	var s string
+	switch tp {
+	case PrecisionSeconds:
+		s = "s"
+	case PrecisionMilliseconds:
+		s = "ms"
+	case PrecisionMicroseconds:
+		s = "us"
+	case PrecisionNanoseconds:
+		s = "ns"
+	default:
+		return nil, fmt.Errorf("invalid timestamp precision %d", tp)
+	}
+	return json.Marshal(s)
+}
+
+// UnmarshalJSON unmarshals TimestampPrecision from JSON - used to unmarshal from the Opts structs.
+func (tp *TimestampPrecision) UnmarshalJSON(data []byte) error {
+	var s string
+	if err := json.Unmarshal(data, &s); err != nil {
+		return err
+	}
+	switch s {
+	case "s":
+		*tp = PrecisionSeconds
+	case "ms":
+		*tp = PrecisionMilliseconds
+	case "us":
+		*tp = PrecisionMicroseconds
+	case "ns":
+		*tp = PrecisionNanoseconds
+	default:
+		return fmt.Errorf("invalid timestamp precision %q", s)
+	}
+	return nil
+}
+
 // ConvertTimestamp converts a nanosecond timestamp to a specified precision.
-func ConvertTimestamp(timestampNanos uint64, precision llo.TimeResolution) uint64 {
+func ConvertTimestamp(timestampNanos uint64, precision TimestampPrecision) uint64 {
 	switch precision {
-	case llo.ResolutionSeconds:
+	case PrecisionSeconds:
 		return timestampNanos / 1e9
-	case llo.ResolutionMilliseconds:
+	case PrecisionMilliseconds:
 		return timestampNanos / 1e6
-	case llo.ResolutionMicroseconds:
+	case PrecisionMicroseconds:
 		return timestampNanos / 1e3
-	case llo.ResolutionNanoseconds:
+	case PrecisionNanoseconds:
 		return timestampNanos
 	default:
 		return timestampNanos

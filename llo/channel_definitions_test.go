@@ -13,7 +13,7 @@ type mockReportCodec struct {
 	err error
 }
 
-func (m mockReportCodec) Encode(Report, llotypes.ChannelDefinition, any) ([]byte, error) {
+func (m mockReportCodec) Encode(Report, llotypes.ChannelDefinition) ([]byte, error) {
 	return nil, nil
 }
 
@@ -120,110 +120,5 @@ func Test_VerifyChannelDefinitions(t *testing.T) {
 		}
 		err := VerifyChannelDefinitions(codecs, channelDefs)
 		require.NoError(t, err)
-	})
-}
-
-func Test_ChannelDefinitionsOptsCache(t *testing.T) {
-	t.Run("Set and Get with OptsParser codec", func(t *testing.T) {
-		cache := NewChannelDefinitionOptsCache()
-		codec := mockCodec{timeResolution: 4}
-		channelID := llotypes.ChannelID(1)
-
-		setErr := cache.Set(channelID, llotypes.ChannelOpts{}, codec)
-		require.NoError(t, setErr)
-
-		val, exists := cache.Get(channelID)
-		require.True(t, exists)
-		require.NotNil(t, val)
-	})
-
-	t.Run("Set returns error when codec does not implement OptsParser", func(t *testing.T) {
-		cache := NewChannelDefinitionOptsCache()
-		codec := mockReportCodec{}
-
-		err := cache.Set(llotypes.ChannelID(1), llotypes.ChannelOpts{}, codec)
-		require.Error(t, err)
-		require.Contains(t, err.Error(), "does not implement OptsParser")
-
-		val, exists := cache.Get(llotypes.ChannelID(1))
-		require.False(t, exists)
-		require.Nil(t, val)
-	})
-
-	t.Run("Set replaces existing value", func(t *testing.T) {
-		cache := NewChannelDefinitionOptsCache()
-		codec1 := mockCodec{timeResolution: 4}
-		codec2 := mockCodec{timeResolution: 3}
-		channelID := llotypes.ChannelID(1)
-
-		cache.Set(channelID, llotypes.ChannelOpts{}, codec1)
-		cache.Set(channelID, llotypes.ChannelOpts{}, codec2)
-
-		val, exists := cache.Get(channelID)
-		require.True(t, exists)
-		mc := val.(mockCodec)
-		require.Equal(t, codec2.timeResolution, mc.timeResolution)
-	})
-
-	t.Run("Multiple items in cache", func(t *testing.T) {
-		cache := NewChannelDefinitionOptsCache()
-		codec := mockCodec{timeResolution: 4}
-
-		cache.Set(llotypes.ChannelID(1), llotypes.ChannelOpts{}, codec)
-		cache.Set(llotypes.ChannelID(2), llotypes.ChannelOpts{}, codec)
-		cache.Set(llotypes.ChannelID(3), llotypes.ChannelOpts{}, codec)
-
-		val1, exists1 := cache.Get(llotypes.ChannelID(1))
-		require.True(t, exists1)
-		require.Equal(t, codec.timeResolution, val1.(mockCodec).timeResolution)
-
-		val2, exists2 := cache.Get(llotypes.ChannelID(2))
-		require.True(t, exists2)
-		require.Equal(t, codec.timeResolution, val2.(mockCodec).timeResolution)
-
-		val3, exists3 := cache.Get(llotypes.ChannelID(3))
-		require.True(t, exists3)
-		require.Equal(t, codec.timeResolution, val3.(mockCodec).timeResolution)
-	})
-
-	t.Run("Delete removes item", func(t *testing.T) {
-		cache := NewChannelDefinitionOptsCache()
-		codec := mockCodec{}
-		channelID := llotypes.ChannelID(1)
-
-		cache.Set(channelID, llotypes.ChannelOpts{}, codec)
-		cache.Delete(channelID)
-
-		val, exists := cache.Get(channelID)
-		require.False(t, exists)
-		require.Nil(t, val)
-	})
-
-	t.Run("Delete does not affect other items", func(t *testing.T) {
-		cache := NewChannelDefinitionOptsCache()
-		codec := mockCodec{timeResolution: 4}
-
-		cache.Set(llotypes.ChannelID(1), llotypes.ChannelOpts{}, codec)
-		cache.Set(llotypes.ChannelID(2), llotypes.ChannelOpts{}, codec)
-
-		val1, exists1 := cache.Get(llotypes.ChannelID(1))
-		require.True(t, exists1)
-		require.NotNil(t, val1)
-		
-		val2, exists2 := cache.Get(llotypes.ChannelID(2))
-		require.True(t, exists2)
-		require.NotNil(t, val2)
-
-		cache.Delete(llotypes.ChannelID(1))
-
-		// ChannelID 1 should be deleted
-		val, exists := cache.Get(llotypes.ChannelID(1))
-		require.False(t, exists)
-		require.Nil(t, val)
-
-		// ChannelID 2 should still exist
-		val, exists = cache.Get(llotypes.ChannelID(2))
-		require.True(t, exists)
-		require.NotNil(t, val)
 	})
 }
