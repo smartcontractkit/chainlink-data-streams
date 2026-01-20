@@ -46,7 +46,16 @@ func (r ReportCodecEVMABIEncodeUnpackedExpr) Encode(report llo.Report, cd llotyp
 	// as Opts is small.
 	opts := ReportFormatEVMABIEncodeOpts{}
 	if err = (&opts).Decode(cd.Opts); err != nil {
-		return nil, fmt.Errorf("failed to decode opts; got: '%s'; %w", cd.Opts, err)
+		return nil, fmt.Errorf("ReportCodecEVMABIEncodeUnpackedExpr failed to decode opts; got: '%s'; %w", cd.Opts, err)
+	}
+
+	if len(opts.ABI) < 1 {
+		return nil, fmt.Errorf("ReportCodecEVMABIEncodeUnpackedExpr no expressions found in channel definition")
+	}
+
+	// not enough streams for calculated feed
+	if cd.Streams[len(cd.Streams)-1].StreamID != opts.ABI[len(opts.ABI)-1].encoders[0].ExpressionStreamID {
+		return nil, fmt.Errorf("ReportCodecEVMABIEncodeUnpackedExpr not enough streams for calculated streams; expected: %d, got: %d", opts.ABI[len(opts.ABI)-1].encoders[0].ExpressionStreamID, len(cd.Streams))
 	}
 
 	validAfter := ConvertTimestamp(report.ValidAfterNanoseconds, opts.TimestampPrecision)

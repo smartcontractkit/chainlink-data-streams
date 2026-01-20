@@ -578,8 +578,8 @@ func (p *Plugin) ProcessCalculatedStreams(outcome *Outcome) {
 			continue
 		}
 
-		if len(copt.ABI) == 0 {
-			p.Logger.Errorw("no expressions found in channel definition", "channelID", cid)
+		if len(copt.ABI) == 0 || len(cd.Streams) == 0 {
+			p.Logger.Errorw("no streams or expressions found in channel definition", "channelID", cid)
 			env.release()
 			continue
 

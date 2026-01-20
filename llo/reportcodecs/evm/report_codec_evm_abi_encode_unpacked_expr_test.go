@@ -74,7 +74,7 @@ func TestReportCodecEVMABIEncodeUnpackedExpr_Encode(t *testing.T) {
 		codec := ReportCodecEVMABIEncodeUnpackedExpr{}
 		_, err = codec.Encode(report, cd)
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "ABI and values length mismatch")
+		assert.Contains(t, err.Error(), "ReportCodecEVMABIEncodeUnpackedExpr no expressions found in channel definition")
 	})
 
 	t.Run("DEX-based asset schema example", func(t *testing.T) {
