@@ -24,10 +24,8 @@ import (
 )
 
 var (
-	_            llo.ReportCodec            = ReportCodecPremiumLegacy{}
-	_            llo.OptsParser             = ReportCodecPremiumLegacy{}
-	_            llo.TimeResolutionProvider = ReportCodecPremiumLegacy{}
-	PayloadTypes                            = getPayloadTypes()
+	_            llo.ReportCodec = ReportCodecPremiumLegacy{}
+	PayloadTypes                 = getPayloadTypes()
 )
 
 func getPayloadTypes() abi.Arguments {
@@ -79,7 +77,7 @@ func (r *ReportFormatEVMPremiumLegacyOpts) Decode(opts []byte) error {
 	return decoder.Decode(r)
 }
 
-func (r ReportCodecPremiumLegacy) Encode(report llo.Report, cd llotypes.ChannelDefinition, parsedOpts any) ([]byte, error) {
+func (r ReportCodecPremiumLegacy) Encode(report llo.Report, cd llotypes.ChannelDefinition) ([]byte, error) {
 	if report.Specimen {
 		return nil, errors.New("ReportCodecPremiumLegacy does not support encoding specimen reports")
 	}
@@ -88,19 +86,12 @@ func (r ReportCodecPremiumLegacy) Encode(report llo.Report, cd llotypes.ChannelD
 		return nil, fmt.Errorf("ReportCodecPremiumLegacy cannot encode; got unusable report; %w", err)
 	}
 
-	var opts ReportFormatEVMPremiumLegacyOpts
-	if parsedOpts != nil {
-		// Use cached opts
-		var ok bool
-		opts, ok = parsedOpts.(ReportFormatEVMPremiumLegacyOpts)
-		if !ok {
-			return nil, fmt.Errorf("expected ReportFormatEVMPremiumLegacyOpts, got %T", parsedOpts)
-		}
-	} else {
-		// Fall back to parsing JSON
-		if err = (&opts).Decode(cd.Opts); err != nil {
-			return nil, fmt.Errorf("failed to decode opts; got: '%s'; %w", cd.Opts, err)
-		}
+	// NOTE: It seems suboptimal to have to parse the opts on every encode but
+	// not sure how to avoid it. Should be negligible performance hit as long
+	// as Opts is small.
+	opts := ReportFormatEVMPremiumLegacyOpts{}
+	if err = (&opts).Decode(cd.Opts); err != nil {
+		return nil, fmt.Errorf("failed to decode opts; got: '%s'; %w", cd.Opts, err)
 	}
 	var multiplier decimal.Decimal
 	if opts.Multiplier == nil {
@@ -278,17 +269,4 @@ func LegacyReportContext(cd ocr2types.ConfigDigest, seqNr uint64, donID uint32) 
 		},
 		ExtraHash: LLOExtraHash(donID), // ExtraHash is always zero for mercury, we use LLOExtraHash here to differentiate from the legacy plugin
 	}, nil
-}
-
-func (r ReportCodecPremiumLegacy) ParseOpts(opts []byte) (any, error) {
-	var o ReportFormatEVMPremiumLegacyOpts
-	if err := json.Unmarshal(opts, &o); err != nil {
-		return nil, fmt.Errorf("failed to parse EVMPremiumLegacy opts: %w", err)
-	}
-	return o, nil
-}
-
-func (r ReportCodecPremiumLegacy) TimeResolution(parsedOpts any) (llo.TimeResolution, error) {
-	// Premium legacy always uses seconds resolution
-	return llo.ResolutionSeconds, nil
 }
