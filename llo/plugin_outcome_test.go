@@ -2,6 +2,7 @@ package llo
 
 import (
 	"fmt"
+	"os"
 	"testing"
 	"time"
 
@@ -22,6 +23,132 @@ func Test_Outcome(t *testing.T) {
 	for _, codec := range []OutcomeCodec{protoOutcomeCodecV0{}, protoOutcomeCodecV1{}} {
 		t.Run(fmt.Sprintf("OutcomeCodec: %T", codec), func(t *testing.T) {
 			testOutcome(t, codec)
+		})
+	}
+}
+
+// Test_Outcome_GoldenFiles verifies that Plugin.Outcome() correctly decodes and advances from
+// golden-encoded previous outcomes. Uses V1 codec only; golden files live in testdata/outcome_serialization/.
+func Test_Outcome_GoldenFiles(t *testing.T) {
+	ctx := tests.Context(t)
+	obsCodec, err := NewProtoObservationCodec(logger.Nop(), true)
+	require.NoError(t, err)
+	codec := OffchainConfig{
+		ProtocolVersion:                     1,
+		DefaultMinReportIntervalNanoseconds: 1,
+	}.GetOutcomeCodec()
+	p := &Plugin{
+		Config:                           Config{true},
+		OutcomeCodec:                     codec,
+		Logger:                           logger.Test(t),
+		ObservationCodec:                 obsCodec,
+		DonID:                            10000043,
+		ConfigDigest:                     types.ConfigDigest{1, 2, 3, 4},
+		ProtocolVersion:                 1,
+		DefaultMinReportIntervalNanoseconds: 1,
+	}
+	// Minimal observations (timestamp only) so the plugin advances from previous outcome without new channel defs or stream values.
+	obs, err := p.ObservationCodec.Encode(Observation{UnixTimestampNanoseconds: 9876543210 + uint64(time.Second)})
+	require.NoError(t, err)
+	aos := make([]types.AttributedObservation, 4)
+	for i := range aos {
+		aos[i] = types.AttributedObservation{Observation: obs, Observer: commontypes.OracleID(i)}
+	}
+
+	for _, tc := range GoldenOutcomeCases() {
+		t.Run(tc.Name, func(t *testing.T) {
+			golden, err := os.ReadFile(tc.OutputFile)
+			if err != nil {
+				if os.IsNotExist(err) {
+					t.Skip("golden file not found; run llo/tools/generate_golden to generate")
+				}
+				require.NoError(t, err)
+			}
+			outcome, err := p.Outcome(ctx, ocr3types.OutcomeContext{
+				PreviousOutcome: golden,
+				SeqNr:           2,
+			}, types.Query{}, aos)
+			require.NoError(t, err)
+			decoded, err := p.OutcomeCodec.Decode(outcome)
+			require.NoError(t, err)
+			// Plugin should have decoded the golden previous outcome and produced a valid next outcome.
+			assert.Equal(t, tc.Outcome.LifeCycleStage, decoded.LifeCycleStage)
+			if len(tc.Outcome.ChannelDefinitions) > 0 {
+				assert.Equal(t, tc.Outcome.ChannelDefinitions, decoded.ChannelDefinitions)
+			}
+		})
+	}
+}
+
+// Test_Outcome_EncodedMatchesGolden verifies that Plugin.Outcome() encoded output matches golden files
+// for scenarios that the plugin can produce. Runs only for "initial" (seq 1) and "from_full" (previous=full).
+func Test_Outcome_EncodedMatchesGolden(t *testing.T) {
+	ctx := tests.Context(t)
+	obsCodec, err := NewProtoObservationCodec(logger.Nop(), true)
+	require.NoError(t, err)
+	codec := OffchainConfig{
+		ProtocolVersion:                     1,
+		DefaultMinReportIntervalNanoseconds: 1,
+	}.GetOutcomeCodec()
+	p := &Plugin{
+		Config:                             Config{true},
+		OutcomeCodec:                       codec,
+		Logger:                             logger.Test(t),
+		ObservationCodec:                   obsCodec,
+		DonID:                              10000043,
+		ConfigDigest:                       types.ConfigDigest{1, 2, 3, 4},
+		ProtocolVersion:                   1,
+		DefaultMinReportIntervalNanoseconds: 1,
+	}
+
+	// Golden cases that the plugin produces; "full" is only used as previous outcome, not produced here.
+	pluginProducedCases := map[string]bool{"initial": true, "from_full": true}
+
+	for _, tc := range GoldenOutcomeCases() {
+		if !pluginProducedCases[tc.Name] {
+			continue
+		}
+		t.Run(tc.Name, func(t *testing.T) {
+			golden, err := os.ReadFile(tc.OutputFile)
+			if err != nil {
+				if os.IsNotExist(err) {
+					t.Skip("golden file not found; run llo/tools/generate_golden to generate")
+				}
+				require.NoError(t, err)
+			}
+
+			var outcome ocr3types.Outcome
+			switch tc.Name {
+			case "initial":
+				emptyObs, err := p.ObservationCodec.Encode(Observation{})
+				require.NoError(t, err)
+				aos := make([]types.AttributedObservation, 4)
+				for i := range aos {
+					aos[i] = types.AttributedObservation{Observation: emptyObs, Observer: commontypes.OracleID(i)}
+				}
+				outcome, err = p.Outcome(ctx, ocr3types.OutcomeContext{SeqNr: 1}, types.Query{}, aos)
+				require.NoError(t, err)
+			case "from_full":
+				fullGolden, err := os.ReadFile("testdata/outcome_serialization/full.bin")
+				require.NoError(t, err)
+				obsTS := uint64(9876543210 + 1e9)
+				obs, err := p.ObservationCodec.Encode(Observation{UnixTimestampNanoseconds: obsTS})
+				require.NoError(t, err)
+				aos := make([]types.AttributedObservation, 4)
+				for i := range aos {
+					aos[i] = types.AttributedObservation{Observation: obs, Observer: commontypes.OracleID(i)}
+				}
+				outcome, err = p.Outcome(ctx, ocr3types.OutcomeContext{
+					PreviousOutcome: fullGolden,
+					SeqNr:          2,
+				}, types.Query{}, aos)
+				require.NoError(t, err)
+			default:
+				t.Skipf("plugin does not produce golden case %q", tc.Name)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, golden, []byte(outcome), "Plugin.Outcome() encoded output should match golden file")
 		})
 	}
 }
