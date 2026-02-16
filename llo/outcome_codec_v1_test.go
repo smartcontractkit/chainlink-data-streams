@@ -1,6 +1,7 @@
 package llo
 
 import (
+	"os"
 	reflect "reflect"
 	"testing"
 
@@ -77,6 +78,30 @@ func Test_protoOutcomeCodecV1(t *testing.T) {
 
 		assert.Equal(t, outcome, outcome2)
 	})
+}
+
+// Test_protoOutcomeCodecV1_GoldenFiles asserts outcome serialization against committed golden files.
+// Expected outcomes come from GoldenOutcomeCases() (see outcome_golden_cases.go).
+func Test_protoOutcomeCodecV1_GoldenFiles(t *testing.T) {
+	codec := OffchainConfig{
+		ProtocolVersion:                     1,
+		DefaultMinReportIntervalNanoseconds: 1,
+	}.GetOutcomeCodec()
+
+	for _, tc := range GoldenOutcomeCases() {
+		t.Run(tc.Name, func(t *testing.T) {
+			golden, err := os.ReadFile(tc.OutputFile)
+			require.NoError(t, err, "golden file not found; run llo/tools/generate_golden/gen.sh to generate")
+
+			decoded, err := codec.Decode(golden)
+			require.NoError(t, err)
+			assert.True(t, equalOutcomes(t, tc.Outcome, decoded), "decode: golden bytes should decode to expected outcome")
+
+			encoded, err := codec.Encode(tc.Outcome)
+			require.NoError(t, err)
+			assert.Equal(t, golden, []byte(encoded), "encode: expected outcome should encode to golden bytes")
+		})
+	}
 }
 
 func Fuzz_protoOutcomeCodecV1_Decode(f *testing.F) {
