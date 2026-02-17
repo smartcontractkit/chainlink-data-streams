@@ -708,6 +708,82 @@ func TestReportCodecEVMABIEncodeUnpacked_Encode(t *testing.T) {
 	})
 }
 
+func TestReportCodecEVMABIEncodeUnpacked_Encode_Quote(t *testing.T) {
+	codec := ReportCodecEVMABIEncodeUnpacked{}
+	feedID := common.HexToHash("0x0001020304050607080910111213141516171819202122232425262728293031")
+	multiplier := ubig.NewI(1e18)
+
+	report := llo.Report{
+		ConfigDigest:                    types.ConfigDigest{0x01},
+		SeqNr:                           0x02,
+		ChannelID:                       llotypes.ChannelID(0x03),
+		ValidAfterNanoseconds:           uint64(1726670489) * 1e9,
+		ObservationTimestampNanoseconds: uint64(1726670490) * 1e9,
+		Values: []llo.StreamValue{
+			llo.ToDecimal(decimal.NewFromFloat(7.4)),
+			llo.ToDecimal(decimal.NewFromFloat(10.0)),
+			&llo.Quote{Benchmark: decimal.NewFromFloat(100.5), Bid: decimal.NewFromFloat(100.0), Ask: decimal.NewFromFloat(101.0)},
+		},
+		Specimen: false,
+	}
+
+	opts := ReportFormatEVMABIEncodeOpts{
+		BaseUSDFee:       decimal.NewFromFloat(0.1),
+		ExpirationWindow: 3600,
+		FeedID:           feedID,
+		TimeResolution:   PrecisionMilliseconds,
+		ABI: []ABIEncoder{
+			{encoders: []singleABIEncoder{
+				{Type: "int192", Multiplier: multiplier},
+				{Type: "int192", Multiplier: multiplier},
+				{Type: "int192", Multiplier: multiplier},
+			}},
+		},
+	}
+	serializedOpts, err := opts.Encode()
+	require.NoError(t, err)
+
+	cd := llotypes.ChannelDefinition{
+		ReportFormat: llotypes.ReportFormatEVMABIEncodeUnpacked,
+		Streams: []llotypes.Stream{
+			{Aggregator: llotypes.AggregatorMedian},
+			{Aggregator: llotypes.AggregatorMedian},
+			{Aggregator: llotypes.AggregatorQuote},
+		},
+		Opts: serializedOpts,
+	}
+
+	encoded, err := codec.Encode(report, cd)
+	require.NoError(t, err)
+
+	schema := abi.Arguments([]abi.Argument{
+		{Name: "feedId", Type: mustNewABIType("bytes32")},
+		{Name: "validFromTimestamp", Type: mustNewABIType("uint64")},
+		{Name: "observationsTimestamp", Type: mustNewABIType("uint64")},
+		{Name: "nativeFee", Type: mustNewABIType("uint192")},
+		{Name: "linkFee", Type: mustNewABIType("uint192")},
+		{Name: "expiresAt", Type: mustNewABIType("uint64")},
+		{Name: "benchmarkPrice", Type: mustNewABIType("int192")},
+		{Name: "bid", Type: mustNewABIType("int192")},
+		{Name: "ask", Type: mustNewABIType("int192")},
+	})
+
+	values, err := schema.Unpack(encoded)
+	require.NoError(t, err)
+	require.Len(t, values, 9)
+
+	expectedObsMs := uint64(1726670490) * 1e3
+	assert.Equal(t, feedID, common.Hash(values[0].([32]byte)))
+	assert.Equal(t, uint64(1726670489)*1e3+1, values[1].(uint64)) // validFrom = validAfterMs + 1
+	assert.Equal(t, expectedObsMs, values[2].(uint64))            // observationsTimestamp in ms
+	assert.Equal(t, expectedObsMs+3600, values[5].(uint64))       // expiresAt in ms
+
+	mul := decimal.NewFromBigInt(multiplier.ToInt(), 0)
+	assert.Equal(t, decimal.NewFromFloat(100.5).Mul(mul).BigInt(), values[6].(*big.Int)) // benchmark
+	assert.Equal(t, decimal.NewFromFloat(100.0).Mul(mul).BigInt(), values[7].(*big.Int)) // bid
+	assert.Equal(t, decimal.NewFromFloat(101.0).Mul(mul).BigInt(), values[8].(*big.Int)) // ask
+}
+
 func genFeedID() gopter.Gen {
 	return func(p *gopter.GenParameters) *gopter.GenResult {
 		var feedID common.Hash

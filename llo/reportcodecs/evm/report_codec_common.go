@@ -186,8 +186,36 @@ func (a ABIEncoder) EncodePadded(sv llo.StreamValue) ([]byte, error) {
 			return nil, fmt.Errorf("unhandled type; supported nested types for *llo.TimestampedStreamValue are: *llo.Decimal; got: %T", d)
 		}
 		return append(encodedTimestamp, encodedDecimal...), nil
+	case *llo.Quote:
+		if len(a.encoders) != 3 {
+			return nil, fmt.Errorf("expected exactly three encoders for *llo.Quote; got: %d", len(a.encoders))
+		}
+		if v == nil {
+			return nil, fmt.Errorf("expected non-nil *Quote")
+		}
+		// encode as three zero-padded 32 byte evm words:
+		// <type0> benchmark
+		// <type1> bid
+		// <type2> ask
+		encodedBenchmark, err := a.encoders[0].encodeDecimalStreamValuePadded(llo.ToDecimal(v.Benchmark))
+		if err != nil {
+			return nil, fmt.Errorf("failed to encode quote benchmark; %w", err)
+		}
+		encodedBid, err := a.encoders[1].encodeDecimalStreamValuePadded(llo.ToDecimal(v.Bid))
+		if err != nil {
+			return nil, fmt.Errorf("failed to encode quote bid; %w", err)
+		}
+		encodedAsk, err := a.encoders[2].encodeDecimalStreamValuePadded(llo.ToDecimal(v.Ask))
+		if err != nil {
+			return nil, fmt.Errorf("failed to encode quote ask; %w", err)
+		}
+		result := make([]byte, 0, len(encodedBenchmark)+len(encodedBid)+len(encodedAsk))
+		result = append(result, encodedBenchmark...)
+		result = append(result, encodedBid...)
+		result = append(result, encodedAsk...)
+		return result, nil
 	default:
-		return nil, fmt.Errorf("unhandled type; supported types are: *llo.Decimal or *llo.TimestampedStreamValue; got: %T", sv)
+		return nil, fmt.Errorf("unhandled type; supported types are: *llo.Decimal, *llo.TimestampedStreamValue, or *llo.Quote; got: %T", sv)
 	}
 }
 
