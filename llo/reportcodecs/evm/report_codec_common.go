@@ -16,17 +16,17 @@ import (
 	ubig "github.com/smartcontractkit/chainlink-data-streams/llo/reportcodecs/evm/utils"
 )
 
-// TimestampPrecision represents the precision for timestamp conversion
-type TimestampPrecision uint8
+// TimeResolution represents the resolution for timestamp conversion
+type TimeResolution uint8
 
 const (
-	PrecisionSeconds TimestampPrecision = iota
+	PrecisionSeconds TimeResolution = iota
 	PrecisionMilliseconds
 	PrecisionMicroseconds
 	PrecisionNanoseconds
 )
 
-func (tp TimestampPrecision) MarshalJSON() ([]byte, error) {
+func (tp TimeResolution) MarshalJSON() ([]byte, error) {
 	var s string
 	switch tp {
 	case PrecisionSeconds:
@@ -38,13 +38,13 @@ func (tp TimestampPrecision) MarshalJSON() ([]byte, error) {
 	case PrecisionNanoseconds:
 		s = "ns"
 	default:
-		return nil, fmt.Errorf("invalid timestamp precision %d", tp)
+		return nil, fmt.Errorf("invalid timestamp resolution %d", tp)
 	}
 	return json.Marshal(s)
 }
 
-// UnmarshalJSON unmarshals TimestampPrecision from JSON - used to unmarshal from the Opts structs.
-func (tp *TimestampPrecision) UnmarshalJSON(data []byte) error {
+// UnmarshalJSON unmarshals TimeResolution from JSON - used to unmarshal from the Opts structs.
+func (tp *TimeResolution) UnmarshalJSON(data []byte) error {
 	var s string
 	if err := json.Unmarshal(data, &s); err != nil {
 		return err
@@ -59,14 +59,14 @@ func (tp *TimestampPrecision) UnmarshalJSON(data []byte) error {
 	case "ns":
 		*tp = PrecisionNanoseconds
 	default:
-		return fmt.Errorf("invalid timestamp precision %q", s)
+		return fmt.Errorf("invalid timestamp resolution %q", s)
 	}
 	return nil
 }
 
-// ConvertTimestamp converts a nanosecond timestamp to a specified precision.
-func ConvertTimestamp(timestampNanos uint64, precision TimestampPrecision) uint64 {
-	switch precision {
+// ConvertTimestamp converts a nanosecond timestamp to a specified resolution.
+func ConvertTimestamp(timestampNanos uint64, resolution TimeResolution) uint64 {
+	switch resolution {
 	case PrecisionSeconds:
 		return timestampNanos / 1e9
 	case PrecisionMilliseconds:
