@@ -58,8 +58,8 @@ func (r ReportCodecEVMABIEncodeUnpackedExpr) Encode(report llo.Report, cd llotyp
 		return nil, fmt.Errorf("ReportCodecEVMABIEncodeUnpackedExpr not enough streams for calculated streams; expected: %d, got: %d", opts.ABI[len(opts.ABI)-1].encoders[0].ExpressionStreamID, len(cd.Streams))
 	}
 
-	validAfter := ConvertTimestamp(report.ValidAfterNanoseconds, opts.TimeResolution)
-	observationTimestamp := ConvertTimestamp(report.ObservationTimestampNanoseconds, opts.TimeResolution)
+	validAfter := llo.ConvertTimestamp(report.ValidAfterNanoseconds, opts.TimeResolution)
+	observationTimestamp := llo.ConvertTimestamp(report.ObservationTimestampNanoseconds, opts.TimeResolution)
 
 	rf := BaseReportFields{
 		FeedID:             opts.FeedID,
@@ -100,7 +100,7 @@ func (r ReportCodecEVMABIEncodeUnpackedExpr) Verify(cd llotypes.ChannelDefinitio
 	return nil
 }
 
-func (r ReportCodecEVMABIEncodeUnpackedExpr) buildHeader(rf BaseReportFields, resolution TimeResolution) ([]byte, error) {
+func (r ReportCodecEVMABIEncodeUnpackedExpr) buildHeader(rf BaseReportFields, resolution llo.TimeResolution) ([]byte, error) {
 	var merr error
 	if rf.LinkFee == nil {
 		merr = errors.Join(merr, errors.New("linkFee may not be nil"))
@@ -118,7 +118,7 @@ func (r ReportCodecEVMABIEncodeUnpackedExpr) buildHeader(rf BaseReportFields, re
 
 	var b []byte
 	var err error
-	if resolution == PrecisionSeconds {
+	if resolution == llo.ResolutionSeconds {
 		if rf.ValidFromTimestamp > math.MaxUint32 {
 			return nil, fmt.Errorf("validFromTimestamp %d exceeds uint32 range", rf.ValidFromTimestamp)
 		}

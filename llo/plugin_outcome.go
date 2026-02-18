@@ -467,13 +467,13 @@ func IsSecondsResolution(reportFormat llotypes.ReportFormat, opts llotypes.Chann
 		return true
 	case llotypes.ReportFormatEVMABIEncodeUnpacked:
 		var parsed struct {
-			TimeResolution string `json:"TimeResolution"`
+			TimeResolution TimeResolution `json:"TimeResolution"`
 		}
 		if err := json.Unmarshal(opts, &parsed); err != nil {
 			// If we can't parse opts, default to seconds
 			return true
 		}
-		return parsed.TimeResolution == "s" || parsed.TimeResolution == ""
+		return parsed.TimeResolution == ResolutionSeconds
 	default:
 		return false
 	}

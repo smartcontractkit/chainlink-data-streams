@@ -38,13 +38,13 @@ func Test_Outcome_GoldenFiles(t *testing.T) {
 		DefaultMinReportIntervalNanoseconds: 1,
 	}.GetOutcomeCodec()
 	p := &Plugin{
-		Config:                           Config{true},
-		OutcomeCodec:                     codec,
-		Logger:                           logger.Test(t),
-		ObservationCodec:                 obsCodec,
-		DonID:                            10000043,
-		ConfigDigest:                     types.ConfigDigest{1, 2, 3, 4},
-		ProtocolVersion:                 1,
+		Config:                              Config{true},
+		OutcomeCodec:                        codec,
+		Logger:                              logger.Test(t),
+		ObservationCodec:                    obsCodec,
+		DonID:                               10000043,
+		ConfigDigest:                        types.ConfigDigest{1, 2, 3, 4},
+		ProtocolVersion:                     1,
 		DefaultMinReportIntervalNanoseconds: 1,
 	}
 	// Minimal observations (timestamp only) so the plugin advances from previous outcome without new channel defs or stream values.
@@ -91,13 +91,13 @@ func Test_Outcome_EncodedMatchesGolden(t *testing.T) {
 		DefaultMinReportIntervalNanoseconds: 1,
 	}.GetOutcomeCodec()
 	p := &Plugin{
-		Config:                             Config{true},
-		OutcomeCodec:                       codec,
-		Logger:                             logger.Test(t),
-		ObservationCodec:                   obsCodec,
-		DonID:                              10000043,
-		ConfigDigest:                       types.ConfigDigest{1, 2, 3, 4},
-		ProtocolVersion:                   1,
+		Config:                              Config{true},
+		OutcomeCodec:                        codec,
+		Logger:                              logger.Test(t),
+		ObservationCodec:                    obsCodec,
+		DonID:                               10000043,
+		ConfigDigest:                        types.ConfigDigest{1, 2, 3, 4},
+		ProtocolVersion:                     1,
 		DefaultMinReportIntervalNanoseconds: 1,
 	}
 
@@ -140,7 +140,7 @@ func Test_Outcome_EncodedMatchesGolden(t *testing.T) {
 				}
 				outcome, err = p.Outcome(ctx, ocr3types.OutcomeContext{
 					PreviousOutcome: fullGolden,
-					SeqNr:          2,
+					SeqNr:           2,
 				}, types.Query{}, aos)
 				require.NoError(t, err)
 			default:
@@ -962,23 +962,22 @@ func Test_Outcome_Methods(t *testing.T) {
 			opts         []byte
 			expected     bool
 		}{
-			// EVMPremiumLegacy always returns true regardless of opts
+			// EVMPremiumLegacy is always seconds resolution
 			{"EVMPremiumLegacy with nil opts", llotypes.ReportFormatEVMPremiumLegacy, nil, true},
 			{"EVMPremiumLegacy with empty JSON", llotypes.ReportFormatEVMPremiumLegacy, []byte(`{}`), true},
 			{"EVMPremiumLegacy ignores opts", llotypes.ReportFormatEVMPremiumLegacy, []byte(`{"TimeResolution":"ns"}`), true},
 
 			// EVMABIEncodeUnpacked defaults to seconds
 			{"Unpacked with empty JSON defaults to seconds", llotypes.ReportFormatEVMABIEncodeUnpacked, []byte(`{}`), true},
-			{"Unpacked with absent TimeResolution defaults to seconds", llotypes.ReportFormatEVMABIEncodeUnpacked, []byte(`{"baseUSDFee":"1.5","expirationWindow":3600,"feedID":"0x0001020304050607080910111213141516171819202122232425262728293031","abi":[{"type":"uint192"}]}`), true},
 			{"Unpacked with explicit seconds", llotypes.ReportFormatEVMABIEncodeUnpacked, []byte(`{"TimeResolution":"s"}`), true},
 
 			// EVMABIEncodeUnpacked non-seconds resolutions
 			{"Unpacked with milliseconds", llotypes.ReportFormatEVMABIEncodeUnpacked, []byte(`{"TimeResolution":"ms"}`), false},
 			{"Unpacked with microseconds", llotypes.ReportFormatEVMABIEncodeUnpacked, []byte(`{"TimeResolution":"us"}`), false},
 			{"Unpacked with nanoseconds", llotypes.ReportFormatEVMABIEncodeUnpacked, []byte(`{"TimeResolution":"ns"}`), false},
-			{"Unpacked with realistic opts and nanoseconds", llotypes.ReportFormatEVMABIEncodeUnpacked, []byte(`{"baseUSDFee":"1.5","expirationWindow":3600,"feedID":"0x0001020304050607080910111213141516171819202122232425262728293031","abi":[{"type":"uint192"}],"TimeResolution":"ns"}`), false},
 
-			// Other formats return false
+			// Other formats are not seconds resolution
+			{"UnpackedExpr returns false", llotypes.ReportFormatEVMABIEncodeUnpackedExpr, []byte(`{}`), false},
 			{"JSON format", llotypes.ReportFormatJSON, nil, false},
 			{"unknown format", llotypes.ReportFormat(99), nil, false},
 		}

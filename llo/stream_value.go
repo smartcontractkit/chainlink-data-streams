@@ -178,6 +178,14 @@ func (v *Quote) UnmarshalText(data []byte) error {
 	return v.Ask.UnmarshalText([]byte(ask))
 }
 
+func (v *Quote) String() string {
+	b, err := v.MarshalText()
+	if err != nil {
+		return fmt.Sprintf("<error: %v>", err)
+	}
+	return string(b)
+}
+
 func (v *Quote) Type() LLOStreamValue_Type {
 	return LLOStreamValue_Quote
 }
@@ -324,6 +332,14 @@ func (v *TimestampedStreamValue) UnmarshalText(data []byte) error {
 	}
 	v.StreamValue = sv
 	return nil
+}
+
+func (v *TimestampedStreamValue) String() string {
+	b, err := v.MarshalText()
+	if err != nil {
+		return fmt.Sprintf("<error: %v>", err)
+	}
+	return string(b)
 }
 
 func (v *TimestampedStreamValue) Type() LLOStreamValue_Type {

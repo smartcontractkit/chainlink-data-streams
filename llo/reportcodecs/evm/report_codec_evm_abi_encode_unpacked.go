@@ -59,7 +59,7 @@ type ReportFormatEVMABIEncodeOpts struct {
 	// TimeResolution is the resolution of the timestamps in the report.
 	// Seconds use uint32 ABI encoding, while milliseconds/microseconds/nanoseconds use uint64.
 	// Defaults to "s" (seconds) if not specified.
-	TimeResolution TimeResolution `json:"TimeResolution,omitempty"`
+	TimeResolution llo.TimeResolution `json:"TimeResolution,omitempty"`
 }
 
 func (r *ReportFormatEVMABIEncodeOpts) Decode(opts []byte) error {
@@ -105,8 +105,8 @@ func (r ReportCodecEVMABIEncodeUnpacked) Encode(report llo.Report, cd llotypes.C
 		return nil, fmt.Errorf("failed to decode opts; got: '%s'; %w", cd.Opts, err)
 	}
 
-	validAfter := ConvertTimestamp(report.ValidAfterNanoseconds, opts.TimeResolution)
-	observationTimestamp := ConvertTimestamp(report.ObservationTimestampNanoseconds, opts.TimeResolution)
+	validAfter := llo.ConvertTimestamp(report.ValidAfterNanoseconds, opts.TimeResolution)
+	observationTimestamp := llo.ConvertTimestamp(report.ObservationTimestampNanoseconds, opts.TimeResolution)
 
 	rf := BaseReportFields{
 		FeedID:             opts.FeedID,
@@ -205,7 +205,7 @@ func getBaseSchema(timestampType string) abi.Arguments {
 	})
 }
 
-func (r ReportCodecEVMABIEncodeUnpacked) buildHeader(rf BaseReportFields, resolution TimeResolution) ([]byte, error) {
+func (r ReportCodecEVMABIEncodeUnpacked) buildHeader(rf BaseReportFields, resolution llo.TimeResolution) ([]byte, error) {
 	var merr error
 	if rf.LinkFee == nil {
 		merr = errors.Join(merr, errors.New("linkFee may not be nil"))
@@ -223,7 +223,7 @@ func (r ReportCodecEVMABIEncodeUnpacked) buildHeader(rf BaseReportFields, resolu
 
 	var b []byte
 	var err error
-	if resolution == PrecisionSeconds {
+	if resolution == llo.ResolutionSeconds {
 		if rf.ValidFromTimestamp > math.MaxUint32 {
 			return nil, fmt.Errorf("validFromTimestamp %d exceeds uint32 range", rf.ValidFromTimestamp)
 		}
