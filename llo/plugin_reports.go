@@ -55,7 +55,11 @@ func (p *Plugin) reports(ctx context.Context, seqNr uint64, rawOutcome ocr3types
 		cd := outcome.ChannelDefinitions[cid]
 		values := make([]StreamValue, 0, len(cd.Streams))
 		for _, strm := range cd.Streams {
-			values = append(values, outcome.StreamAggregates[strm.StreamID][strm.Aggregator])
+			if aggregates, ok := outcome.StreamAggregates[strm.StreamID]; !ok {
+				values = append(values, nil)
+			} else {
+				values = append(values, aggregates[strm.Aggregator])
+			}
 		}
 
 		report := Report{

@@ -585,6 +585,11 @@ func (p *Plugin) ProcessCalculatedStreams(outcome *Outcome) {
 
 		}
 
+		if len(cd.Streams) < 1 {
+			p.Logger.Errorw("no streams or expressions found in channel definition", "channelID", cid)
+			continue
+		}
+
 		// channel definitions are inherited from the previous outcome,
 		// so we only update the channel definition streams if we haven't done it before
 		if cd.Streams[len(cd.Streams)-1].StreamID != copt.ABI[len(copt.ABI)-1].ExpressionStreamID {
