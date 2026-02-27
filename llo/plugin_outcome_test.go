@@ -38,13 +38,13 @@ func Test_Outcome_GoldenFiles(t *testing.T) {
 		DefaultMinReportIntervalNanoseconds: 1,
 	}.GetOutcomeCodec()
 	p := &Plugin{
-		Config:                           Config{true},
-		OutcomeCodec:                     codec,
-		Logger:                           logger.Test(t),
-		ObservationCodec:                 obsCodec,
-		DonID:                            10000043,
-		ConfigDigest:                     types.ConfigDigest{1, 2, 3, 4},
-		ProtocolVersion:                 1,
+		Config:                              Config{true},
+		OutcomeCodec:                        codec,
+		Logger:                              logger.Test(t),
+		ObservationCodec:                    obsCodec,
+		DonID:                               10000043,
+		ConfigDigest:                        types.ConfigDigest{1, 2, 3, 4},
+		ProtocolVersion:                     1,
 		DefaultMinReportIntervalNanoseconds: 1,
 	}
 	// Minimal observations (timestamp only) so the plugin advances from previous outcome without new channel defs or stream values.
@@ -91,13 +91,13 @@ func Test_Outcome_EncodedMatchesGolden(t *testing.T) {
 		DefaultMinReportIntervalNanoseconds: 1,
 	}.GetOutcomeCodec()
 	p := &Plugin{
-		Config:                             Config{true},
-		OutcomeCodec:                       codec,
-		Logger:                             logger.Test(t),
-		ObservationCodec:                   obsCodec,
-		DonID:                              10000043,
-		ConfigDigest:                       types.ConfigDigest{1, 2, 3, 4},
-		ProtocolVersion:                   1,
+		Config:                              Config{true},
+		OutcomeCodec:                        codec,
+		Logger:                              logger.Test(t),
+		ObservationCodec:                    obsCodec,
+		DonID:                               10000043,
+		ConfigDigest:                        types.ConfigDigest{1, 2, 3, 4},
+		ProtocolVersion:                     1,
 		DefaultMinReportIntervalNanoseconds: 1,
 	}
 
@@ -140,7 +140,7 @@ func Test_Outcome_EncodedMatchesGolden(t *testing.T) {
 				}
 				outcome, err = p.Outcome(ctx, ocr3types.OutcomeContext{
 					PreviousOutcome: fullGolden,
-					SeqNr:          2,
+					SeqNr:           2,
 				}, types.Query{}, aos)
 				require.NoError(t, err)
 			default:
@@ -954,6 +954,39 @@ func Test_Outcome_Methods(t *testing.T) {
 			require.Len(t, unreportable, 1)
 			assert.Equal(t, "ChannelID: 2; Reason: IsReportable=false; no ValidAfterNanoseconds entry yet, this must be a new channel", unreportable[0].Error())
 		})
+	})
+	t.Run("IsSecondsResolution", func(t *testing.T) {
+		testCases := []struct {
+			name         string
+			reportFormat llotypes.ReportFormat
+			opts         []byte
+			expected     bool
+		}{
+			// EVMPremiumLegacy is always seconds resolution
+			{"EVMPremiumLegacy with nil opts", llotypes.ReportFormatEVMPremiumLegacy, nil, true},
+			{"EVMPremiumLegacy with empty JSON", llotypes.ReportFormatEVMPremiumLegacy, []byte(`{}`), true},
+			{"EVMPremiumLegacy ignores opts", llotypes.ReportFormatEVMPremiumLegacy, []byte(`{"TimeResolution":"ns"}`), true},
+
+			// EVMABIEncodeUnpacked defaults to seconds
+			{"Unpacked with empty JSON defaults to seconds", llotypes.ReportFormatEVMABIEncodeUnpacked, []byte(`{}`), true},
+			{"Unpacked with explicit seconds", llotypes.ReportFormatEVMABIEncodeUnpacked, []byte(`{"TimeResolution":"s"}`), true},
+
+			// EVMABIEncodeUnpacked non-seconds resolutions
+			{"Unpacked with milliseconds", llotypes.ReportFormatEVMABIEncodeUnpacked, []byte(`{"TimeResolution":"ms"}`), false},
+			{"Unpacked with microseconds", llotypes.ReportFormatEVMABIEncodeUnpacked, []byte(`{"TimeResolution":"us"}`), false},
+			{"Unpacked with nanoseconds", llotypes.ReportFormatEVMABIEncodeUnpacked, []byte(`{"TimeResolution":"ns"}`), false},
+
+			// Other formats are not seconds resolution
+			{"UnpackedExpr returns false", llotypes.ReportFormatEVMABIEncodeUnpackedExpr, []byte(`{}`), false},
+			{"JSON format", llotypes.ReportFormatJSON, nil, false},
+			{"unknown format", llotypes.ReportFormat(99), nil, false},
+		}
+
+		for _, tc := range testCases {
+			t.Run(tc.name, func(t *testing.T) {
+				assert.Equal(t, tc.expected, IsSecondsResolution(tc.reportFormat, tc.opts))
+			})
+		}
 	})
 	t.Run("protocol version > 0", func(t *testing.T) {
 		t.Run("IsReportable", func(t *testing.T) {

@@ -457,3 +457,84 @@ func Test_ABIEncoder_EncodePadded_EncodePacked(t *testing.T) {
 		}
 	})
 }
+
+func Test_ABIEncoder_EncodePadded_Quote(t *testing.T) {
+	multiplier := ubig.NewI(1e18)
+
+	t.Run("encodes quote as three padded words (benchmark, bid, ask)", func(t *testing.T) {
+		enc := ABIEncoder{
+			encoders: []singleABIEncoder{
+				{Type: "int192", Multiplier: multiplier},
+				{Type: "int192", Multiplier: multiplier},
+				{Type: "int192", Multiplier: multiplier},
+			},
+		}
+		quote := &llo.Quote{
+			Benchmark: decimal.NewFromFloat(100.5),
+			Bid:       decimal.NewFromFloat(100.0),
+			Ask:       decimal.NewFromFloat(101.0),
+		}
+		padded, err := enc.EncodePadded(quote)
+		require.NoError(t, err)
+		// 3 words x 32 bytes = 96 bytes
+		assert.Len(t, padded, 96)
+
+		benchmarkExpected := decimal.NewFromFloat(100.5).Mul(decimal.NewFromBigInt(multiplier.ToInt(), 0)).BigInt()
+		bidExpected := decimal.NewFromFloat(100.0).Mul(decimal.NewFromBigInt(multiplier.ToInt(), 0)).BigInt()
+		askExpected := decimal.NewFromFloat(101.0).Mul(decimal.NewFromBigInt(multiplier.ToInt(), 0)).BigInt()
+
+		benchmarkBytes := padded[0:32]
+		bidBytes := padded[32:64]
+		askBytes := padded[64:96]
+
+		assert.Equal(t, benchmarkExpected, new(big.Int).SetBytes(benchmarkBytes))
+		assert.Equal(t, bidExpected, new(big.Int).SetBytes(bidBytes))
+		assert.Equal(t, askExpected, new(big.Int).SetBytes(askBytes))
+	})
+
+	t.Run("applies different multipliers per field", func(t *testing.T) {
+		enc := ABIEncoder{
+			encoders: []singleABIEncoder{
+				{Type: "int192", Multiplier: ubig.NewI(1e18)},
+				{Type: "int192", Multiplier: ubig.NewI(1e8)},
+				{Type: "int192", Multiplier: ubig.NewI(1e8)},
+			},
+		}
+		quote := &llo.Quote{
+			Benchmark: decimal.NewFromInt(50),
+			Bid:       decimal.NewFromInt(49),
+			Ask:       decimal.NewFromInt(51),
+		}
+		padded, err := enc.EncodePadded(quote)
+		require.NoError(t, err)
+		assert.Len(t, padded, 96)
+
+		assert.Equal(t, decimal.NewFromInt(50).Mul(decimal.NewFromInt(1e18)).BigInt(), new(big.Int).SetBytes(padded[0:32]))
+		assert.Equal(t, decimal.NewFromInt(49).Mul(decimal.NewFromInt(1e8)).BigInt(), new(big.Int).SetBytes(padded[32:64]))
+		assert.Equal(t, decimal.NewFromInt(51).Mul(decimal.NewFromInt(1e8)).BigInt(), new(big.Int).SetBytes(padded[64:96]))
+	})
+
+	t.Run("errors when encoder count is not 3", func(t *testing.T) {
+		enc := ABIEncoder{
+			encoders: []singleABIEncoder{
+				{Type: "int192", Multiplier: multiplier},
+			},
+		}
+		_, err := enc.EncodePadded(&llo.Quote{})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "expected exactly three encoders for *llo.Quote; got: 1")
+	})
+
+	t.Run("errors on nil quote", func(t *testing.T) {
+		enc := ABIEncoder{
+			encoders: []singleABIEncoder{
+				{Type: "int192", Multiplier: multiplier},
+				{Type: "int192", Multiplier: multiplier},
+				{Type: "int192", Multiplier: multiplier},
+			},
+		}
+		_, err := enc.EncodePadded((*llo.Quote)(nil))
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "expected non-nil *Quote")
+	})
+}

@@ -16,70 +16,6 @@ import (
 	ubig "github.com/smartcontractkit/chainlink-data-streams/llo/reportcodecs/evm/utils"
 )
 
-// TimestampPrecision represents the precision for timestamp conversion
-type TimestampPrecision uint8
-
-const (
-	PrecisionSeconds TimestampPrecision = iota
-	PrecisionMilliseconds
-	PrecisionMicroseconds
-	PrecisionNanoseconds
-)
-
-func (tp TimestampPrecision) MarshalJSON() ([]byte, error) {
-	var s string
-	switch tp {
-	case PrecisionSeconds:
-		s = "s"
-	case PrecisionMilliseconds:
-		s = "ms"
-	case PrecisionMicroseconds:
-		s = "us"
-	case PrecisionNanoseconds:
-		s = "ns"
-	default:
-		return nil, fmt.Errorf("invalid timestamp precision %d", tp)
-	}
-	return json.Marshal(s)
-}
-
-// UnmarshalJSON unmarshals TimestampPrecision from JSON - used to unmarshal from the Opts structs.
-func (tp *TimestampPrecision) UnmarshalJSON(data []byte) error {
-	var s string
-	if err := json.Unmarshal(data, &s); err != nil {
-		return err
-	}
-	switch s {
-	case "s":
-		*tp = PrecisionSeconds
-	case "ms":
-		*tp = PrecisionMilliseconds
-	case "us":
-		*tp = PrecisionMicroseconds
-	case "ns":
-		*tp = PrecisionNanoseconds
-	default:
-		return fmt.Errorf("invalid timestamp precision %q", s)
-	}
-	return nil
-}
-
-// ConvertTimestamp converts a nanosecond timestamp to a specified precision.
-func ConvertTimestamp(timestampNanos uint64, precision TimestampPrecision) uint64 {
-	switch precision {
-	case PrecisionSeconds:
-		return timestampNanos / 1e9
-	case PrecisionMilliseconds:
-		return timestampNanos / 1e6
-	case PrecisionMicroseconds:
-		return timestampNanos / 1e3
-	case PrecisionNanoseconds:
-		return timestampNanos
-	default:
-		return timestampNanos
-	}
-}
-
 // Extracts nanosecond timestamps as uint32 number of seconds
 func ExtractTimestamps(report llo.Report) (validAfterSeconds, observationTimestampSeconds uint32, err error) {
 	vas := report.ValidAfterNanoseconds / 1e9
@@ -186,8 +122,36 @@ func (a ABIEncoder) EncodePadded(sv llo.StreamValue) ([]byte, error) {
 			return nil, fmt.Errorf("unhandled type; supported nested types for *llo.TimestampedStreamValue are: *llo.Decimal; got: %T", d)
 		}
 		return append(encodedTimestamp, encodedDecimal...), nil
+	case *llo.Quote:
+		if len(a.encoders) != 3 {
+			return nil, fmt.Errorf("expected exactly three encoders for *llo.Quote; got: %d", len(a.encoders))
+		}
+		if v == nil {
+			return nil, fmt.Errorf("expected non-nil *Quote")
+		}
+		// encode as three zero-padded 32 byte evm words:
+		// <type0> benchmark
+		// <type1> bid
+		// <type2> ask
+		encodedBenchmark, err := a.encoders[0].encodeDecimalStreamValuePadded(llo.ToDecimal(v.Benchmark))
+		if err != nil {
+			return nil, fmt.Errorf("failed to encode quote benchmark; %w", err)
+		}
+		encodedBid, err := a.encoders[1].encodeDecimalStreamValuePadded(llo.ToDecimal(v.Bid))
+		if err != nil {
+			return nil, fmt.Errorf("failed to encode quote bid; %w", err)
+		}
+		encodedAsk, err := a.encoders[2].encodeDecimalStreamValuePadded(llo.ToDecimal(v.Ask))
+		if err != nil {
+			return nil, fmt.Errorf("failed to encode quote ask; %w", err)
+		}
+		result := make([]byte, 0, len(encodedBenchmark)+len(encodedBid)+len(encodedAsk))
+		result = append(result, encodedBenchmark...)
+		result = append(result, encodedBid...)
+		result = append(result, encodedAsk...)
+		return result, nil
 	default:
-		return nil, fmt.Errorf("unhandled type; supported types are: *llo.Decimal or *llo.TimestampedStreamValue; got: %T", sv)
+		return nil, fmt.Errorf("unhandled type; supported types are: *llo.Decimal, *llo.TimestampedStreamValue, or *llo.Quote; got: %T", sv)
 	}
 }
 
