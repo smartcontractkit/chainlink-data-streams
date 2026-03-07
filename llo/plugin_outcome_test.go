@@ -38,13 +38,13 @@ func Test_Outcome_GoldenFiles(t *testing.T) {
 		DefaultMinReportIntervalNanoseconds: 1,
 	}.GetOutcomeCodec()
 	p := &Plugin{
-		Config:                           Config{true},
-		OutcomeCodec:                     codec,
-		Logger:                           logger.Test(t),
-		ObservationCodec:                 obsCodec,
-		DonID:                            10000043,
-		ConfigDigest:                     types.ConfigDigest{1, 2, 3, 4},
-		ProtocolVersion:                 1,
+		Config:                              Config{true},
+		OutcomeCodec:                        codec,
+		Logger:                              logger.Test(t),
+		ObservationCodec:                    obsCodec,
+		DonID:                               10000043,
+		ConfigDigest:                        types.ConfigDigest{1, 2, 3, 4},
+		ProtocolVersion:                     1,
 		DefaultMinReportIntervalNanoseconds: 1,
 	}
 	// Minimal observations (timestamp only) so the plugin advances from previous outcome without new channel defs or stream values.
@@ -91,13 +91,13 @@ func Test_Outcome_EncodedMatchesGolden(t *testing.T) {
 		DefaultMinReportIntervalNanoseconds: 1,
 	}.GetOutcomeCodec()
 	p := &Plugin{
-		Config:                             Config{true},
-		OutcomeCodec:                       codec,
-		Logger:                             logger.Test(t),
-		ObservationCodec:                   obsCodec,
-		DonID:                              10000043,
-		ConfigDigest:                       types.ConfigDigest{1, 2, 3, 4},
-		ProtocolVersion:                   1,
+		Config:                              Config{true},
+		OutcomeCodec:                        codec,
+		Logger:                              logger.Test(t),
+		ObservationCodec:                    obsCodec,
+		DonID:                               10000043,
+		ConfigDigest:                        types.ConfigDigest{1, 2, 3, 4},
+		ProtocolVersion:                     1,
 		DefaultMinReportIntervalNanoseconds: 1,
 	}
 
@@ -140,7 +140,7 @@ func Test_Outcome_EncodedMatchesGolden(t *testing.T) {
 				}
 				outcome, err = p.Outcome(ctx, ocr3types.OutcomeContext{
 					PreviousOutcome: fullGolden,
-					SeqNr:          2,
+					SeqNr:           2,
 				}, types.Query{}, aos)
 				require.NoError(t, err)
 			default:
@@ -165,14 +165,14 @@ func testOutcome(t *testing.T, outcomeCodec OutcomeCodec) {
 		ObservationCodec: obsCodec,
 		DonID:            10000043,
 		ConfigDigest:     types.ConfigDigest{1, 2, 3, 4},
+		F:                1,
 	}
 	testStartTS := time.Now()
 	testStartNanos := uint64(testStartTS.UnixNano()) //nolint:gosec // safe cast in tests
 
 	t.Run("if number of observers < 2f+1, errors", func(t *testing.T) {
 		_, err := p.Outcome(ctx, ocr3types.OutcomeContext{SeqNr: 1}, types.Query{}, []types.AttributedObservation{})
-		require.EqualError(t, err, "invariant violation: expected at least 2f+1 attributed observations, got 0 (f: 0)")
-		p.F = 1
+		require.EqualError(t, err, "invariant violation: expected at least 2f+1 attributed observations, got 0 (f: 1)")
 		_, err = p.Outcome(ctx, ocr3types.OutcomeContext{SeqNr: 1}, types.Query{}, []types.AttributedObservation{{}, {}})
 		require.EqualError(t, err, "invariant violation: expected at least 2f+1 attributed observations, got 2 (f: 1)")
 	})
@@ -674,6 +674,111 @@ func testOutcome(t *testing.T, outcomeCodec OutcomeCodec) {
 			assert.Equal(t, map[llotypes.Aggregator]StreamValue{
 				llotypes.AggregatorQuote: &Quote{Bid: decimal.NewFromInt(320), Benchmark: decimal.NewFromInt(330), Ask: decimal.NewFromInt(340)},
 			}, decoded.StreamAggregates[3])
+		})
+		t.Run("ValidAfterNanoseconds should not advance on channels with missing stream values", func(t *testing.T) {
+			channelDef := map[llotypes.ChannelID]llotypes.ChannelDefinition{
+				1: {
+					ReportFormat: llotypes.ReportFormatJSON,
+					Streams:      []llotypes.Stream{{StreamID: 1, Aggregator: llotypes.AggregatorMedian}, {StreamID: 2, Aggregator: llotypes.AggregatorMedian}},
+				},
+				2: {
+					ReportFormat: llotypes.ReportFormatEVMPremiumLegacy,
+					Streams:      []llotypes.Stream{{StreamID: 2, Aggregator: llotypes.AggregatorMedian}, {StreamID: 3, Aggregator: llotypes.AggregatorQuote}},
+				},
+			}
+			// previous outcome successfully reported
+			previousOutcome := Outcome{
+				LifeCycleStage:                  llotypes.LifeCycleStage("test"),
+				ObservationTimestampNanoseconds: uint64(101 * time.Second),
+				ChannelDefinitions:              channelDef,
+				ValidAfterNanoseconds: map[llotypes.ChannelID]uint64{
+					1: uint64(100 * time.Second),
+					2: uint64(100 * time.Second),
+				},
+				StreamAggregates: map[llotypes.StreamID]map[llotypes.Aggregator]StreamValue{
+					1: {
+						llotypes.AggregatorMedian: ToDecimal(decimal.NewFromInt(120)),
+					},
+					2: {
+						llotypes.AggregatorMedian: ToDecimal(decimal.NewFromInt(220)),
+					},
+					3: {
+						llotypes.AggregatorQuote: &Quote{Bid: decimal.NewFromInt(320), Benchmark: decimal.NewFromInt(330), Ask: decimal.NewFromInt(340)},
+					},
+				},
+			}
+			encodedPreviousOutcome, err := p.OutcomeCodec.Encode(previousOutcome)
+			require.NoError(t, err)
+			outctx1 := ocr3types.OutcomeContext{SeqNr: 2, PreviousOutcome: encodedPreviousOutcome}
+
+			// generate attributed observations for next round for channels 1 and 2
+			// stream value 1 only has one observation, which is not enough to aggregate into a valid value
+			aos := []types.AttributedObservation{}
+			for i := 0; i < 4; i++ {
+				var sv StreamValue
+				// only one reported a value; not enough
+				if i == 0 {
+					sv = ToDecimal(decimal.NewFromInt(121))
+				}
+				obs := Observation{
+					UnixTimestampNanoseconds: uint64(102 * time.Second),
+					StreamValues: map[llotypes.StreamID]StreamValue{
+						1: sv,
+						// 2 and 3 ok
+						2: ToDecimal(decimal.NewFromInt(221)),
+						3: &Quote{Bid: decimal.NewFromInt(int64(321)), Benchmark: decimal.NewFromInt(int64(331)), Ask: decimal.NewFromInt(int64(341))},
+					}}
+				encoded, err2 := p.ObservationCodec.Encode(obs)
+				require.NoError(t, err2)
+				aos = append(aos,
+					types.AttributedObservation{
+						Observation: encoded,
+						Observer:    commontypes.OracleID(i), //nolint:gosec // will never be > 4
+					})
+			}
+			outcome1, err := p.Outcome(ctx, outctx1, types.Query{}, aos)
+			require.NoError(t, err)
+
+			decoded, err := p.OutcomeCodec.Decode(outcome1)
+			require.NoError(t, err)
+
+			// validAfterNanoseconds for channel `1` should should not update because stream values are missing
+			// todo: test currently fails here due to the bug
+			assert.Equal(t, uint64(100*time.Second), decoded.ValidAfterNanoseconds[1])
+			// validAfterNanoseconds for channel `2` should update to previous ObservationTimestampNanoseconds
+			assert.Equal(t, uint64(101*time.Second), decoded.ValidAfterNanoseconds[2])
+
+			// start a new round with the previous outcome
+			outctx2 := ocr3types.OutcomeContext{SeqNr: 3, PreviousOutcome: outcome1}
+
+			// generate attributed observations for next round for channels 1 and 2 - all present
+			aos = []types.AttributedObservation{}
+			for i := 0; i < 4; i++ {
+				obs := Observation{
+					UnixTimestampNanoseconds: uint64(103 * time.Second),
+					StreamValues: map[llotypes.StreamID]StreamValue{
+						1: ToDecimal(decimal.NewFromInt(122)),
+						2: ToDecimal(decimal.NewFromInt(222)),
+						3: &Quote{Bid: decimal.NewFromInt(int64(322)), Benchmark: decimal.NewFromInt(int64(332)), Ask: decimal.NewFromInt(int64(342))},
+					}}
+				encoded, err2 := p.ObservationCodec.Encode(obs)
+				require.NoError(t, err2)
+				aos = append(aos,
+					types.AttributedObservation{
+						Observation: encoded,
+						Observer:    commontypes.OracleID(i), //nolint:gosec // will never be > 4
+					})
+			}
+			outcome2, err := p.Outcome(ctx, outctx2, types.Query{}, aos)
+			require.NoError(t, err)
+
+			decoded, err = p.OutcomeCodec.Decode(outcome2)
+			require.NoError(t, err)
+
+			// validAfterNanoseconds for channel `1` should update to previous ObservationTimestampNanoseconds
+			assert.Equal(t, uint64(102*time.Second), decoded.ValidAfterNanoseconds[1])
+			// validAfterNanoseconds for channel `2` should update to previous ObservationTimestampNanoseconds
+			assert.Equal(t, uint64(102*time.Second), decoded.ValidAfterNanoseconds[2])
 		})
 		t.Run("sends outcome telemetry if channel is specified", func(t *testing.T) {
 			ch := make(chan *LLOOutcomeTelemetry, 10000)
