@@ -166,7 +166,7 @@ func testReports(t *testing.T, outcomeCodec OutcomeCodec) {
 		require.Empty(t, rwis)
 	})
 
-	t.Run("(temp: remove after fix) results in a report gap due to validAfterNanoseconds being updated even if stream aggregation fails", func(t *testing.T) {
+	t.Run("(temp: remove after fix) results in a report gap due to validAfter being updated even if previous report was dropped", func(t *testing.T) {
 		// Round 1: all streams present → reports generated covering [100s, 200s].
 		outcome1 := Outcome{
 			ObservationTimestampNanoseconds: uint64(200 * time.Second),
@@ -205,8 +205,6 @@ func testReports(t *testing.T, outcomeCodec OutcomeCodec) {
 			ObservationTimestampNanoseconds: uint64(300 * time.Second),
 			ValidAfterNanoseconds: map[llotypes.ChannelID]uint64{
 				1: uint64(200 * time.Second),
-				// This is currently incorrectly updated to previous ObservationTimestampNanoseconds
-				// already in the outcome. See test "ValidAfterNanoseconds should not advance on channels with missing stream values".
 				2: uint64(200 * time.Second),
 			},
 			ChannelDefinitions: smallDefinitions,
@@ -236,7 +234,7 @@ func testReports(t *testing.T, outcomeCodec OutcomeCodec) {
 			ObservationTimestampNanoseconds: uint64(400 * time.Second),
 			ValidAfterNanoseconds: map[llotypes.ChannelID]uint64{
 				1: uint64(300 * time.Second),
-				2: uint64(300 * time.Second),
+				2: uint64(300 * time.Second), // <-- this is incorrectly updated to previous ObservationTimestampNanoseconds, should be 200s
 			},
 			ChannelDefinitions: smallDefinitions,
 			StreamAggregates: map[llotypes.StreamID]map[llotypes.Aggregator]StreamValue{
@@ -262,10 +260,10 @@ func testReports(t *testing.T, outcomeCodec OutcomeCodec) {
 		assert.Contains(t, string(rwis3[0].ReportWithInfo.Report), `"ChannelID":1,"ValidAfterNanoseconds":300000000000,"ObservationTimestampNanoseconds":400000000000`)
 		assert.Contains(t, string(rwis3[1].ReportWithInfo.Report), `"ChannelID":2,"ValidAfterNanoseconds":300000000000,"ObservationTimestampNanoseconds":400000000000`)
 
-		// validAfterNanoseconds has advanced to 300s (outcome2's obsTs) because
-		// outcome2 passed the IsReportable timing check despite its report being
-		// dropped. The new report covers [300s, 400s] — leaving [200s, 300s]
-		// unaccounted for = report gap.
+		// validAfterNanoseconds has advanced to 300s (outcome2's obsTs) because outcome2 passed the IsReportable
+		// timing check despite its report being dropped. The new report covers [300s, 400s] — leaving [200s, 300s]
+		// unaccounted for = report gap. The expected behaviour is that validAfterNanoseconds should not update to
+		// previous ObservationTimestampNanoseconds and we produce reports for ranges [100s, 200s] and [200s, 400s].
 	})
 
 	t.Run("does not generate reports for tombstoned channels", func(t *testing.T) {
