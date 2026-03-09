@@ -38,10 +38,14 @@ func Test_Outcome_GoldenFiles(t *testing.T) {
 		DefaultMinReportIntervalNanoseconds: 1,
 	}.GetOutcomeCodec()
 	p := &Plugin{
-		Config:                              Config{true},
-		OutcomeCodec:                        codec,
-		Logger:                              logger.Test(t),
-		ObservationCodec:                    obsCodec,
+		Config:           Config{true},
+		OutcomeCodec:     codec,
+		Logger:           logger.Test(t),
+		ObservationCodec: obsCodec,
+		ReportCodecs: map[llotypes.ReportFormat]ReportCodec{
+			llotypes.ReportFormatJSON:             JSONReportCodec{},
+			llotypes.ReportFormatEVMPremiumLegacy: JSONReportCodec{},
+		},
 		DonID:                               10000043,
 		ConfigDigest:                        types.ConfigDigest{1, 2, 3, 4},
 		ProtocolVersion:                     1,
@@ -91,10 +95,14 @@ func Test_Outcome_EncodedMatchesGolden(t *testing.T) {
 		DefaultMinReportIntervalNanoseconds: 1,
 	}.GetOutcomeCodec()
 	p := &Plugin{
-		Config:                              Config{true},
-		OutcomeCodec:                        codec,
-		Logger:                              logger.Test(t),
-		ObservationCodec:                    obsCodec,
+		Config:           Config{true},
+		OutcomeCodec:     codec,
+		Logger:           logger.Test(t),
+		ObservationCodec: obsCodec,
+		ReportCodecs: map[llotypes.ReportFormat]ReportCodec{
+			llotypes.ReportFormatJSON:             JSONReportCodec{},
+			llotypes.ReportFormatEVMPremiumLegacy: JSONReportCodec{},
+		},
 		DonID:                               10000043,
 		ConfigDigest:                        types.ConfigDigest{1, 2, 3, 4},
 		ProtocolVersion:                     1,
@@ -163,9 +171,13 @@ func testOutcome(t *testing.T, outcomeCodec OutcomeCodec) {
 		OutcomeCodec:     outcomeCodec,
 		Logger:           logger.Test(t),
 		ObservationCodec: obsCodec,
-		DonID:            10000043,
-		ConfigDigest:     types.ConfigDigest{1, 2, 3, 4},
-		F:                1,
+		ReportCodecs: map[llotypes.ReportFormat]ReportCodec{
+			llotypes.ReportFormatJSON:             JSONReportCodec{},
+			llotypes.ReportFormatEVMPremiumLegacy: JSONReportCodec{},
+		},
+		DonID:        10000043,
+		ConfigDigest: types.ConfigDigest{1, 2, 3, 4},
+		F:            1,
 	}
 	testStartTS := time.Now()
 	testStartNanos := uint64(testStartTS.UnixNano()) //nolint:gosec // safe cast in tests
@@ -737,7 +749,7 @@ func testOutcome(t *testing.T, outcomeCodec OutcomeCodec) {
 			// validAfterNanoseconds for channel `1` should update to previous ObservationTimestampNanoseconds
 			assert.Equal(t, uint64(101*time.Second), decoded.ValidAfterNanoseconds[1])
 			// validAfterNanoseconds for channel `2` should **not** update to previous ObservationTimestampNanoseconds
-			assert.Equal(t, uint64(100*time.Second), decoded.ValidAfterNanoseconds[2]) // <-- test currently fails on this assertion
+			assert.Equal(t, uint64(100*time.Second), decoded.ValidAfterNanoseconds[2])
 		})
 		t.Run("sends outcome telemetry if channel is specified", func(t *testing.T) {
 			ch := make(chan *LLOOutcomeTelemetry, 10000)
@@ -1112,6 +1124,74 @@ func Test_Outcome_Methods(t *testing.T) {
 			assert.Equal(t, []llotypes.ChannelID{1, 3}, reportable)
 			require.Len(t, unreportable, 1)
 			assert.Equal(t, "ChannelID: 2; Reason: IsReportable=false; no ValidAfterNanoseconds entry yet, this must be a new channel", unreportable[0].Error())
+		})
+	})
+
+	t.Run("IsEncodable", func(t *testing.T) {
+		cid := llotypes.ChannelID(1)
+		baseOutcome := Outcome{
+			LifeCycleStage:                  LifeCycleStageProduction,
+			ObservationTimestampNanoseconds: uint64(1726670490 * time.Second),
+			ChannelDefinitions: map[llotypes.ChannelID]llotypes.ChannelDefinition{
+				cid: {
+					ReportFormat: llotypes.ReportFormatJSON,
+					Streams: []llotypes.Stream{
+						{StreamID: 1, Aggregator: llotypes.AggregatorMedian},
+						{StreamID: 2, Aggregator: llotypes.AggregatorQuote},
+					},
+				},
+			},
+			ValidAfterNanoseconds: map[llotypes.ChannelID]uint64{
+				cid: uint64(1726670480 * time.Second),
+			},
+			StreamAggregates: map[llotypes.StreamID]map[llotypes.Aggregator]StreamValue{
+				1: {
+					llotypes.AggregatorMedian: ToDecimal(decimal.NewFromInt(123)),
+				},
+				2: {
+					llotypes.AggregatorQuote: &Quote{
+						Bid:       decimal.NewFromInt(100),
+						Benchmark: decimal.NewFromInt(101),
+						Ask:       decimal.NewFromInt(102),
+					},
+				},
+			},
+		}
+
+		t.Run("returns nil if report simulation encodes successfully", func(t *testing.T) {
+			err := baseOutcome.IsEncodable(cid, map[llotypes.ReportFormat]ReportCodec{
+				llotypes.ReportFormatJSON: JSONReportCodec{},
+			})
+			require.NoError(t, err)
+		})
+
+		t.Run("returns error if channel definition is missing", func(t *testing.T) {
+			err := baseOutcome.IsEncodable(999, map[llotypes.ReportFormat]ReportCodec{
+				llotypes.ReportFormatJSON: JSONReportCodec{},
+			})
+			require.EqualError(t, err, "no channel definition with this ID")
+		})
+
+		t.Run("returns error if codec for report format is missing", func(t *testing.T) {
+			err := baseOutcome.IsEncodable(cid, map[llotypes.ReportFormat]ReportCodec{})
+			require.EqualError(t, err, "codec missing for ReportFormat=\"json\"")
+		})
+
+		t.Run("returns wrapped encoding error if stream aggregate is missing", func(t *testing.T) {
+			outcomeWithMissingAggregate := baseOutcome
+			outcomeWithMissingAggregate.StreamAggregates = map[llotypes.StreamID]map[llotypes.Aggregator]StreamValue{
+				1: {
+					llotypes.AggregatorMedian: ToDecimal(decimal.NewFromInt(123)),
+				},
+				// stream 2 quote is missing
+			}
+
+			err := outcomeWithMissingAggregate.IsEncodable(cid, map[llotypes.ReportFormat]ReportCodec{
+				llotypes.ReportFormatJSON: JSONReportCodec{},
+			})
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "report encoding simulation failed for channelID=1")
+			assert.Contains(t, err.Error(), "nil stream value")
 		})
 	})
 }
