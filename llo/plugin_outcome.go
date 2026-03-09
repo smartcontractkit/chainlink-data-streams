@@ -168,12 +168,6 @@ func (p *Plugin) outcome(outctx ocr3types.OutcomeContext, query types.Query, aos
 				}
 				// previous outcome did not report; keep the same ValidAfterNanoseconds
 				outcome.ValidAfterNanoseconds[channelID] = previousValidAfterNanoseconds
-			} else if err4 := previousOutcome.IsEncodable(channelID, p.ReportCodecs); err4 != nil {
-				if p.Config.VerboseLogging {
-					p.Logger.Debugw("Channel is not encodable", "channelID", channelID, "err", err4, "stage", "Outcome", "seqNr", outctx.SeqNr)
-				}
-				// previous outcome would have failed to generate a report; keep the same ValidAfterNanoseconds
-				outcome.ValidAfterNanoseconds[channelID] = previousValidAfterNanoseconds
 			} else {
 				// previous outcome reported; update ValidAfterNanoseconds to the previousObservationTimestamp
 				outcome.ValidAfterNanoseconds[channelID] = previousOutcome.ObservationTimestampNanoseconds
@@ -406,10 +400,8 @@ func (out *Outcome) GenRetirementReport(protocolVersion uint32) RetirementReport
 // ObservationTimestampNanoseconds > ValidAfterNanoseconds(previous observation timestamp)+MinReportInterval
 
 // Indicates whether a report can be generated for the given channel.
-// Returns nil if channel is reportable
-// NOTE: A channel is still reportable even if missing some or all stream
-// values. The report codec is expected to handle nils and act accordingly
-// (e.g. some values may be optional).
+// Checks if channel is retired, tombstoned, has missing stream values, and if ValidAfterNanoseconds is set.
+// Returns nil if channel is reportable.
 func (out *Outcome) IsReportable(channelID llotypes.ChannelID, protocolVersion uint32, minReportInterval uint64) *UnreportableChannelError {
 	if out.LifeCycleStage == LifeCycleStageRetired {
 		return &UnreportableChannelError{nil, "IsReportable=false; retired channel", channelID}
@@ -423,6 +415,12 @@ func (out *Outcome) IsReportable(channelID llotypes.ChannelID, protocolVersion u
 	if cd.Tombstone {
 		// Tombstone channels are not reportable
 		return &UnreportableChannelError{nil, "IsReportable=false; tombstone channel", channelID}
+	}
+
+	for _, strm := range cd.Streams {
+		if out.StreamAggregates[strm.StreamID][strm.Aggregator] == nil {
+			return &UnreportableChannelError{nil, fmt.Sprintf("IsReportable=false; missing stream value for streamID=%d aggregator=%q", strm.StreamID, strm.Aggregator), channelID}
+		}
 	}
 
 	validAfterNanos, ok := out.ValidAfterNanoseconds[channelID]
@@ -459,38 +457,6 @@ func (out *Outcome) IsReportable(channelID llotypes.ChannelID, protocolVersion u
 		}
 	}
 
-	return nil
-}
-
-// IsEncodable checks if a channel can be encoded into a report.
-// It simulates the report encoding step using the outcome stream values to check if the channel is encodable.
-func (out *Outcome) IsEncodable(channelID llotypes.ChannelID, reportCodecs map[llotypes.ReportFormat]ReportCodec) error {
-	cd, exists := out.ChannelDefinitions[channelID]
-	if !exists {
-		return fmt.Errorf("no channel definition with this ID")
-	}
-	codec, exists := reportCodecs[cd.ReportFormat]
-	if !exists {
-		return fmt.Errorf("codec missing for ReportFormat=%q", cd.ReportFormat)
-	}
-
-	// build simulated report for channel using outcome stream values
-	values := make([]StreamValue, 0, len(cd.Streams))
-	for _, strm := range cd.Streams {
-		values = append(values, out.StreamAggregates[strm.StreamID][strm.Aggregator])
-	}
-	report := Report{
-		ChannelID:                       channelID,
-		ValidAfterNanoseconds:           out.ValidAfterNanoseconds[channelID],
-		ObservationTimestampNanoseconds: out.ObservationTimestampNanoseconds,
-		Values:                          values,
-		Specimen:                        out.LifeCycleStage != LifeCycleStageProduction,
-	}
-
-	// check if report can be encoded
-	if _, err := codec.Encode(report, cd); err != nil {
-		return fmt.Errorf("report encoding simulation failed for channelID=%d, reportFormat=%q: %w", channelID, cd.ReportFormat, err)
-	}
 	return nil
 }
 
