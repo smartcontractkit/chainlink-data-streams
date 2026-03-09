@@ -687,13 +687,13 @@ func testOutcome(t *testing.T, outcomeCodec OutcomeCodec) {
 				llotypes.AggregatorQuote: &Quote{Bid: decimal.NewFromInt(320), Benchmark: decimal.NewFromInt(330), Ask: decimal.NewFromInt(340)},
 			}, decoded.StreamAggregates[3])
 		})
-		t.Run("ValidAfterNanoseconds should not update to previous ObservationTimestamp if previous report was not generated", func(t *testing.T) {
+		t.Run("ValidAfterNanoseconds should not update to previous ObservationTimestamp if previous outcome fails report encoding simulation", func(t *testing.T) {
 			channelDef := map[llotypes.ChannelID]llotypes.ChannelDefinition{
-				1: {
+				1: { // requires streams 1 and 2
 					ReportFormat: llotypes.ReportFormatJSON,
 					Streams:      []llotypes.Stream{{StreamID: 1, Aggregator: llotypes.AggregatorMedian}, {StreamID: 2, Aggregator: llotypes.AggregatorMedian}},
 				},
-				2: {
+				2: { // requires streams 2 and 3
 					ReportFormat: llotypes.ReportFormatEVMPremiumLegacy,
 					Streams:      []llotypes.Stream{{StreamID: 2, Aggregator: llotypes.AggregatorMedian}, {StreamID: 3, Aggregator: llotypes.AggregatorQuote}},
 				},
@@ -716,6 +716,7 @@ func testOutcome(t *testing.T, outcomeCodec OutcomeCodec) {
 					2: {
 						llotypes.AggregatorMedian: ToDecimal(decimal.NewFromInt(220)),
 					},
+					// missing stream value 3
 				},
 			}
 			encodedPreviousOutcome, err := p.OutcomeCodec.Encode(previousOutcome)

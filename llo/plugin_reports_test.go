@@ -166,7 +166,7 @@ func testReports(t *testing.T, outcomeCodec OutcomeCodec) {
 		require.Empty(t, rwis)
 	})
 
-	t.Run("(temp: remove after fix) results in a report gap due to validAfter being updated even if previous report was dropped", func(t *testing.T) {
+	t.Run("(bug demo) results in a report gap due to validAfter being updated even if previous report was dropped", func(t *testing.T) {
 		// Round 1: all streams present → reports generated covering [100s, 200s].
 		outcome1 := Outcome{
 			ObservationTimestampNanoseconds: uint64(200 * time.Second),
