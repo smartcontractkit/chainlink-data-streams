@@ -113,3 +113,19 @@ func ConvertTimestamp(timestampNanos uint64, resolution TimeResolution) uint64 {
 		return timestampNanos
 	}
 }
+
+// ScaleSeconds converts a duration in seconds to a target resolution.
+func ScaleSeconds(seconds uint32, resolution TimeResolution) uint64 {
+	switch resolution {
+	case ResolutionSeconds:
+		return uint64(seconds)
+	case ResolutionMilliseconds:
+		return uint64(seconds) * 1e3
+	case ResolutionMicroseconds:
+		return uint64(seconds) * 1e6
+	case ResolutionNanoseconds:
+		return uint64(seconds) * 1e9
+	default:
+		return uint64(seconds)
+	}
+}

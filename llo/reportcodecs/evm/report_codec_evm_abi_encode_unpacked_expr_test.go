@@ -157,6 +157,9 @@ func TestReportCodecEVMABIEncodeUnpackedExpr_Encode(t *testing.T) {
 
 			require.Len(t, values, len(expectedDEXBasedAssetSchema))
 
+			expectedLinkFee := CalculateFee(sampleLinkBenchmarkPrice, sampleBaseUSDFee)
+			expectedNativeFee := CalculateFee(sampleNativeBenchmarkPrice, sampleBaseUSDFee)
+
 			// doesn't crash if values are nil
 			for i := range report.Values {
 				report.Values[i] = nil
@@ -164,7 +167,14 @@ func TestReportCodecEVMABIEncodeUnpackedExpr_Encode(t *testing.T) {
 			_, err = codec.Encode(report, cd)
 			require.Error(t, err)
 
-			return true
+			return AllTrue([]bool{
+				assert.Equal(t, sampleFeedID, (common.Hash)(values[0].([32]byte))),                                                                  //nolint:testifylint // false positive // feedId
+				assert.Equal(t, uint32(sampleValidAfterNanoseconds/1e9)+1, values[1].(uint32)),                                                      //nolint:gosec // G115 // validFromTimestamp
+				assert.Equal(t, uint32(sampleObservationTimestampNanoseconds/1e9), values[2].(uint32)),                                              //nolint:gosec // G115 // observationsTimestamp
+				assert.Equal(t, expectedLinkFee.String(), values[3].(*big.Int).String()),                                                            // nativeFee (Values[0] is link benchmark in test data)
+				assert.Equal(t, expectedNativeFee.String(), values[4].(*big.Int).String()),                                                          // linkFee (Values[1] is native benchmark in test data)
+				assert.Equal(t, uint32(sampleObservationTimestampNanoseconds/1e9)+sampleExpirationWindow, values[5].(uint32)),                       //nolint:gosec // G115 // expiresAt (seconds resolution, no scaling needed)
+			})
 		}
 
 		properties.Property("Encodes values", prop.ForAll(
@@ -284,7 +294,7 @@ func TestReportCodecEVMABIEncodeUnpackedExpr_Encode(t *testing.T) {
 			// Verify timestamps per resolution type
 			expectedValidFrom := llo.ConvertTimestamp(sampleValidAfterNanoseconds, sampleTimeResolution) + 1
 			expectedObservationTimestamp := llo.ConvertTimestamp(sampleObservationTimestampNanoseconds, sampleTimeResolution)
-			expectedExpiresAt := expectedObservationTimestamp + uint64(sampleExpirationWindow)
+			expectedExpiresAt := expectedObservationTimestamp + llo.ScaleSeconds(sampleExpirationWindow, sampleTimeResolution)
 			if timestampType == "uint32" {
 				checks = append(checks,
 					assert.Equal(t, uint32(expectedValidFrom), values[1].(uint32)),

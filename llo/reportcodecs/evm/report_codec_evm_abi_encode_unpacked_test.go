@@ -488,7 +488,7 @@ func TestReportCodecEVMABIEncodeUnpacked_Encode_properties(t *testing.T) {
 			// Verify timestamps per resolution type
 			expectedValidFrom := llo.ConvertTimestamp(sampleValidAfterNanoseconds, sampleTimeResolution) + 1
 			expectedObservationTimestamp := llo.ConvertTimestamp(sampleObservationTimestampNanoseconds, sampleTimeResolution)
-			expectedExpiresAt := expectedObservationTimestamp + uint64(sampleExpirationWindow)
+			expectedExpiresAt := expectedObservationTimestamp + llo.ScaleSeconds(sampleExpirationWindow, sampleTimeResolution)
 			if timestampType == "uint32" {
 				checks = append(checks,
 					assert.Equal(t, uint32(expectedValidFrom), values[1].(uint32)),
@@ -776,7 +776,7 @@ func TestReportCodecEVMABIEncodeUnpacked_Encode_Quote(t *testing.T) {
 	assert.Equal(t, feedID, common.Hash(values[0].([32]byte)))
 	assert.Equal(t, uint64(1726670489)*1e3+1, values[1].(uint64)) // validFrom = validAfterMs + 1
 	assert.Equal(t, expectedObsMs, values[2].(uint64))            // observationsTimestamp in ms
-	assert.Equal(t, expectedObsMs+3600, values[5].(uint64))       // expiresAt in ms
+	assert.Equal(t, expectedObsMs+3600*1e3, values[5].(uint64))   // expiresAt in ms (3600s scaled to ms)
 
 	mul := decimal.NewFromBigInt(multiplier.ToInt(), 0)
 	assert.Equal(t, decimal.NewFromFloat(100.5).Mul(mul).BigInt(), values[6].(*big.Int)) // benchmark
