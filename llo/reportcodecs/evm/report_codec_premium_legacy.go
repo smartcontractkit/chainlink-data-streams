@@ -65,6 +65,11 @@ type ReportFormatEVMPremiumLegacyOpts struct {
 	// Multiplier is used to scale the bid, benchmark and ask values in the
 	// report. If not specified, or zero is used, a multiplier of 1 is assumed.
 	Multiplier *ubig.Big `json:"multiplier"`
+	// EnableNilStreamValues controls whether channels with nil stream values
+	// are reportable. When nil or true (default), nil stream values are
+	// allowed and channels are reportable. Set to false to make channels with
+	// missing stream values unreportable.
+	EnableNilStreamValues *bool `json:"enableNilStreamValues,omitempty"`
 }
 
 func (r *ReportFormatEVMPremiumLegacyOpts) Decode(opts []byte) error {

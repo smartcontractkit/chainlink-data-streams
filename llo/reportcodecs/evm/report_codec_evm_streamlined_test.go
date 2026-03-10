@@ -80,6 +80,13 @@ func TestReportCodecEVMStreamlined(t *testing.T) {
 				Opts: []byte(`{"feedID":"0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef","abi":[{"type":"int160"}]}`),
 			})
 			require.NoError(t, err)
+			err = codec.Verify(llotypes.ChannelDefinition{
+				Streams: []llotypes.Stream{
+					{StreamID: 123, Aggregator: llotypes.AggregatorMedian},
+				},
+				Opts: []byte(`{"abi":[{"type":"int160"}], "enableNilStreamValues":true}`),
+			})
+			require.NoError(t, err)
 			t.Run("with invalid opts", func(t *testing.T) {
 				err := codec.Verify(llotypes.ChannelDefinition{
 					Opts: []byte(`{"abi":[{"type":"int160"}]}`),

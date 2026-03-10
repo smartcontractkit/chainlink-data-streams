@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"sort"
 
+	"github.com/goccy/go-json"
 	"github.com/smartcontractkit/libocr/offchainreporting2/types"
 	"github.com/smartcontractkit/libocr/offchainreporting2plus/ocr3types"
 
@@ -417,9 +418,11 @@ func (out *Outcome) IsReportable(channelID llotypes.ChannelID, protocolVersion u
 		return &UnreportableChannelError{nil, "IsReportable=false; tombstone channel", channelID}
 	}
 
-	for _, strm := range cd.Streams {
-		if out.StreamAggregates[strm.StreamID][strm.Aggregator] == nil {
-			return &UnreportableChannelError{nil, fmt.Sprintf("IsReportable=false; missing stream value for streamID=%d aggregator=%q", strm.StreamID, strm.Aggregator), channelID}
+	if !nilStreamValuesEnabled(cd.Opts) {
+		for _, strm := range cd.Streams {
+			if out.StreamAggregates[strm.StreamID][strm.Aggregator] == nil {
+				return &UnreportableChannelError{nil, fmt.Sprintf("IsReportable=false; missing stream value for streamID=%d aggregator=%q", strm.StreamID, strm.Aggregator), channelID}
+			}
 		}
 	}
 
@@ -458,6 +461,26 @@ func (out *Outcome) IsReportable(channelID llotypes.ChannelID, protocolVersion u
 	}
 
 	return nil
+}
+
+// nilStreamValuesEnabled returns true (the default) when nil stream values are
+// allowed for the channel, meaning channels will remain reportable even if
+// some stream aggregate values are missing. Returns false only when the opts
+// JSON explicitly sets "enableNilStreamValues" to false, which causes channels
+// with missing stream values to be treated as unreportable.
+func nilStreamValuesEnabled(opts []byte) bool {
+	if len(opts) == 0 {
+		return true
+	}
+
+	// loose JSON unmarshal of just enableNilStreamValues field — no dependency on the codec package
+	var v struct {
+		EnableNilStreamValues *bool `json:"enableNilStreamValues"`
+	}
+	if err := json.Unmarshal(opts, &v); err != nil {
+		return true
+	}
+	return v.EnableNilStreamValues == nil || *v.EnableNilStreamValues
 }
 
 func IsSecondsResolution(reportFormat llotypes.ReportFormat) bool {

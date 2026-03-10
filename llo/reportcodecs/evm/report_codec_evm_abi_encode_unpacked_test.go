@@ -46,16 +46,19 @@ func TestReportFormatEVMABIEncodeOpts_Decode_Encode_properties(t *testing.T) {
 		err = decoded.Decode(encoded)
 		require.NoError(t, err)
 
-		return decoded.BaseUSDFee.Equal(opts.BaseUSDFee) && decoded.ExpirationWindow == opts.ExpirationWindow && decoded.FeedID == opts.FeedID && assert.Equal(t, opts.ABI, decoded.ABI)
+		nilStreamValuesMatch := (opts.EnableNilStreamValues == nil && decoded.EnableNilStreamValues == nil) ||
+			(opts.EnableNilStreamValues != nil && decoded.EnableNilStreamValues != nil && *opts.EnableNilStreamValues == *decoded.EnableNilStreamValues)
+		return decoded.BaseUSDFee.Equal(opts.BaseUSDFee) && decoded.ExpirationWindow == opts.ExpirationWindow && decoded.FeedID == opts.FeedID && assert.Equal(t, opts.ABI, decoded.ABI) && nilStreamValuesMatch
 	}
 	properties.Property("Encodes values", prop.ForAll(
 		runTest,
 		gen.StrictStruct(reflect.TypeOf(&ReportFormatEVMABIEncodeOpts{}), map[string]gopter.Gen{
-			"BaseUSDFee":         genBaseUSDFee(),
-			"ExpirationWindow":   genExpirationWindow(),
-			"FeedID":             genFeedID(),
-			"ABI":                genABI(),
-			"TimestampPrecision": genTimestampPrecision(),
+			"BaseUSDFee":            genBaseUSDFee(),
+			"ExpirationWindow":      genExpirationWindow(),
+			"FeedID":                genFeedID(),
+			"ABI":                   genABI(),
+			"TimestampPrecision":    genTimestampPrecision(),
+			"EnableNilStreamValues": genOptionalBool(),
 		})))
 
 	properties.TestingRun(t)
@@ -807,6 +810,22 @@ func genFundingTime() gopter.Gen {
 func genFundingIntervalHours() gopter.Gen {
 	return gen.UInt32().Map(func(i uint32) decimal.Decimal {
 		return decimal.NewFromInt(int64(i))
+	})
+}
+
+func genOptionalBool() gopter.Gen {
+	// Generates nil, *true, or *false with equal probability
+	return gen.UInt8Range(0, 2).Map(func(i uint8) *bool {
+		switch i {
+		case 0:
+			return nil
+		case 1:
+			v := true
+			return &v
+		default:
+			v := false
+			return &v
+		}
 	})
 }
 
