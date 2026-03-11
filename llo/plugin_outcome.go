@@ -401,8 +401,15 @@ func (out *Outcome) GenRetirementReport(protocolVersion uint32) RetirementReport
 // ObservationTimestampNanoseconds > ValidAfterNanoseconds(previous observation timestamp)+MinReportInterval
 
 // Indicates whether a report can be generated for the given channel.
-// Checks if channel is retired, tombstoned, has missing stream values, and if ValidAfterNanoseconds is set.
-// Returns nil if channel is reportable.
+// Checks if channel is retired, tombstoned, has missing stream values (when
+// disableNilStreamValues is set in channel opts), and if ValidAfterNanoseconds
+// is set. Returns nil if channel is reportable.
+//
+// Note: this is not a complete guarantee that a report will be successfully
+// generated. Reports can still be silently dropped at the encoding step for
+// other reasons (e.g. codec errors, bid/mid/ask validation failures). Those
+// failure modes are not covered here and can still result in report gaps if
+// disableNilStreamValues is not set or if the failure is unrelated to nil values.
 func (out *Outcome) IsReportable(channelID llotypes.ChannelID, protocolVersion uint32, minReportInterval uint64) *UnreportableChannelError {
 	if out.LifeCycleStage == LifeCycleStageRetired {
 		return &UnreportableChannelError{nil, "IsReportable=false; retired channel", channelID}
