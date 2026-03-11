@@ -166,6 +166,146 @@ func testReports(t *testing.T, outcomeCodec OutcomeCodec) {
 		require.Empty(t, rwis)
 	})
 
+	t.Run("(bug demo) results in a report gap due to validAfter being updated even if previous report was dropped", func(t *testing.T) {
+		// Round 1: all streams present → reports generated covering [100s, 200s].
+		outcome1 := Outcome{
+			ObservationTimestampNanoseconds: uint64(200 * time.Second),
+			ValidAfterNanoseconds: map[llotypes.ChannelID]uint64{
+				1: uint64(100 * time.Second),
+				2: uint64(100 * time.Second),
+			},
+			ChannelDefinitions: smallDefinitions,
+			StreamAggregates: map[llotypes.StreamID]map[llotypes.Aggregator]StreamValue{
+				1: {
+					llotypes.AggregatorMedian: ToDecimal(decimal.NewFromFloat(1.1)),
+				},
+				2: {
+					llotypes.AggregatorMedian: ToDecimal(decimal.NewFromFloat(2.2)),
+				},
+				3: {
+					llotypes.AggregatorQuote: &Quote{Ask: decimal.NewFromFloat(3.3), Benchmark: decimal.NewFromFloat(4.4), Bid: decimal.NewFromFloat(5.5)},
+				},
+				4: {
+					llotypes.AggregatorQuote: &Quote{Ask: decimal.NewFromFloat(6.6), Benchmark: decimal.NewFromFloat(7.7), Bid: decimal.NewFromFloat(8.8)},
+				},
+			},
+		}
+		encoded1, err := p.OutcomeCodec.Encode(outcome1)
+		require.NoError(t, err)
+		rwis1, err := p.Reports(ctx, 2, encoded1)
+		require.NoError(t, err)
+		require.Len(t, rwis1, 2)
+		assert.Contains(t, string(rwis1[0].ReportWithInfo.Report), `"ChannelID":1,"ValidAfterNanoseconds":100000000000,"ObservationTimestampNanoseconds":200000000000`)
+		assert.Contains(t, string(rwis1[1].ReportWithInfo.Report), `"ChannelID":2,"ValidAfterNanoseconds":100000000000,"ObservationTimestampNanoseconds":200000000000`)
+
+		// Round 2: stream 4 is missing from aggregates.
+		// Report generated for channel 1 covering [200s, 300s].
+		// Report for channel 2 is dropped because of the missing stream value.
+		outcome2 := Outcome{
+			ObservationTimestampNanoseconds: uint64(300 * time.Second),
+			ValidAfterNanoseconds: map[llotypes.ChannelID]uint64{
+				1: uint64(200 * time.Second),
+				2: uint64(200 * time.Second),
+			},
+			ChannelDefinitions: smallDefinitions,
+			StreamAggregates: map[llotypes.StreamID]map[llotypes.Aggregator]StreamValue{
+				1: {
+					llotypes.AggregatorMedian: ToDecimal(decimal.NewFromFloat(1.1)),
+				},
+				2: {
+					llotypes.AggregatorMedian: ToDecimal(decimal.NewFromFloat(2.2)),
+				},
+				3: {
+					llotypes.AggregatorQuote: &Quote{Ask: decimal.NewFromFloat(3.3), Benchmark: decimal.NewFromFloat(4.4), Bid: decimal.NewFromFloat(5.5)},
+				},
+			},
+		}
+		encoded2, err := p.OutcomeCodec.Encode(outcome2)
+		require.NoError(t, err)
+		rwis2, err := p.Reports(ctx, 2, encoded2)
+		require.NoError(t, err)
+		require.Len(t, rwis2, 1)
+		assert.Contains(t, string(rwis2[0].ReportWithInfo.Report), `"ChannelID":1,"ValidAfterNanoseconds":200000000000,"ObservationTimestampNanoseconds":300000000000`)
+
+		// Round 3: all streams present again.
+		// Report generated for channel 1 covering [300s, 400s].
+		// Report generated for channel 2 covering [300s, 400s].
+		outcome3 := Outcome{
+			ObservationTimestampNanoseconds: uint64(400 * time.Second),
+			ValidAfterNanoseconds: map[llotypes.ChannelID]uint64{
+				1: uint64(300 * time.Second),
+				2: uint64(300 * time.Second), // <-- this is incorrectly updated to previous ObservationTimestampNanoseconds, should be 200s
+			},
+			ChannelDefinitions: smallDefinitions,
+			StreamAggregates: map[llotypes.StreamID]map[llotypes.Aggregator]StreamValue{
+				1: {
+					llotypes.AggregatorMedian: ToDecimal(decimal.NewFromFloat(1.1)),
+				},
+				2: {
+					llotypes.AggregatorMedian: ToDecimal(decimal.NewFromFloat(2.2)),
+				},
+				3: {
+					llotypes.AggregatorQuote: &Quote{Ask: decimal.NewFromFloat(3.3), Benchmark: decimal.NewFromFloat(4.4), Bid: decimal.NewFromFloat(5.5)},
+				},
+				4: {
+					llotypes.AggregatorQuote: &Quote{Ask: decimal.NewFromFloat(6.6), Benchmark: decimal.NewFromFloat(7.7), Bid: decimal.NewFromFloat(8.8)},
+				},
+			},
+		}
+		encoded3, err := p.OutcomeCodec.Encode(outcome3)
+		require.NoError(t, err)
+		rwis3, err := p.Reports(ctx, 2, encoded3)
+		require.NoError(t, err)
+		require.Len(t, rwis3, 2)
+		assert.Contains(t, string(rwis3[0].ReportWithInfo.Report), `"ChannelID":1,"ValidAfterNanoseconds":300000000000,"ObservationTimestampNanoseconds":400000000000`)
+		assert.Contains(t, string(rwis3[1].ReportWithInfo.Report), `"ChannelID":2,"ValidAfterNanoseconds":300000000000,"ObservationTimestampNanoseconds":400000000000`)
+
+		// validAfterNanoseconds has advanced to 300s (outcome2's obsTs) because outcome2 passed the IsReportable
+		// timing check despite its report being dropped. The new report covers [300s, 400s] — leaving [200s, 300s]
+		// unaccounted for = report gap. The expected behaviour is that validAfterNanoseconds should not update to
+		// previous ObservationTimestampNanoseconds and we produce reports for ranges [100s, 200s] and [200s, 400s].
+	})
+
+	t.Run("channels with nil stream values that pass IsReportable are still dropped at encodeReport", func(t *testing.T) {
+		// This test shows that the two code paths produce the same "no report emitted" end result:
+		//   1. disableNilStreamValues=false (legacy): channel passes IsReportable, encodeReport fails on nil → no report
+		//   2. disableNilStreamValues=true  (fix):    channel fails IsReportable early                      → no report
+		// The critical difference is ValidAfterNanoseconds: path 1 still advances it (report gap risk);
+		// path 2 does not. This test exercises path 1 to confirm encodeReport is the fallback gate.
+		outcome := Outcome{
+			ObservationTimestampNanoseconds: uint64(200 * time.Second),
+			ValidAfterNanoseconds: map[llotypes.ChannelID]uint64{
+				1: uint64(100 * time.Second),
+			},
+			ChannelDefinitions: map[llotypes.ChannelID]llotypes.ChannelDefinition{
+				1: {
+					ReportFormat: llotypes.ReportFormatJSON,
+					Streams: []llotypes.Stream{
+						{StreamID: 1, Aggregator: llotypes.AggregatorMedian},
+						{StreamID: 2, Aggregator: llotypes.AggregatorMedian},
+					},
+					// disableNilStreamValues not set: channel passes IsReportable despite nil stream 2
+				},
+			},
+			StreamAggregates: map[llotypes.StreamID]map[llotypes.Aggregator]StreamValue{
+				1: {llotypes.AggregatorMedian: ToDecimal(decimal.NewFromFloat(1.1))},
+				// stream 2 is missing (nil)
+			},
+		}
+
+		// Confirm channel 1 IS reportable (timing check passes, no disableNilStreamValues gate)
+		require.Nil(t, outcome.IsReportable(1, protocolVersion, uint64(minReportInterval)))
+
+		encoded, err := p.OutcomeCodec.Encode(outcome)
+		require.NoError(t, err)
+
+		// No report is produced: channel 1 passes IsReportable but encodeReport fails
+		// because the JSONReportCodec rejects the nil stream value (ErrNilStreamValue).
+		rwis, err := p.Reports(ctx, 2, encoded)
+		require.NoError(t, err)
+		require.Empty(t, rwis)
+	})
+
 	t.Run("does not generate reports for tombstoned channels", func(t *testing.T) {
 		tombstonedDefinitions := map[llotypes.ChannelID]llotypes.ChannelDefinition{
 			1: {
