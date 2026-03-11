@@ -463,7 +463,7 @@ func (out *Outcome) IsReportable(channelID llotypes.ChannelID, protocolVersion u
 	// This keeps compatibility with old nodes that may not have nanosecond resolution
 	//
 	// Also use seconds resolution for report formats that require it to prevent overlap
-	if protocolVersion == 0 || IsSecondsResolution(cd.ReportFormat) {
+	if protocolVersion == 0 || IsSecondsResolution(cd.ReportFormat, cd.Opts) {
 		validAfterSeconds := validAfterNanos / 1e9
 		obsTsSeconds := obsTsNanos / 1e9
 		if validAfterSeconds >= obsTsSeconds {
@@ -494,13 +494,22 @@ func nilStreamValuesDisabled(opts []byte) bool {
 	return v.DisableNilStreamValues
 }
 
-func IsSecondsResolution(reportFormat llotypes.ReportFormat) bool {
+func IsSecondsResolution(reportFormat llotypes.ReportFormat, opts llotypes.ChannelOpts) bool {
 	switch reportFormat {
 	// TODO: Might be cleaner to expose a TimeResolution() uint64 field on the
 	// ReportCodec so that the plugin doesn't have to have special knowledge of
 	// the report format details
-	case llotypes.ReportFormatEVMPremiumLegacy, llotypes.ReportFormatEVMABIEncodeUnpacked:
+	case llotypes.ReportFormatEVMPremiumLegacy:
 		return true
+	case llotypes.ReportFormatEVMABIEncodeUnpacked:
+		var parsed struct {
+			TimeResolution TimeResolution `json:"TimeResolution"`
+		}
+		if err := json.Unmarshal(opts, &parsed); err != nil {
+			// If we can't parse opts, default to seconds
+			return true
+		}
+		return parsed.TimeResolution == ResolutionSeconds
 	default:
 		return false
 	}

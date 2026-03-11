@@ -56,10 +56,10 @@ type ReportFormatEVMABIEncodeOpts struct {
 	// top-level elements in this ABI array (stream 0 is always the native
 	// token price and stream 1 is the link token price).
 	ABI []ABIEncoder `json:"abi"`
-	// TimestampPrecision is the precision of the timestamps in the report.
+	// TimeResolution is the resolution of the timestamps in the report.
 	// Seconds use uint32 ABI encoding, while milliseconds/microseconds/nanoseconds use uint64.
 	// Defaults to "s" (seconds) if not specified.
-	TimestampPrecision TimestampPrecision `json:"timestampPrecision,omitempty"`
+	TimeResolution llo.TimeResolution `json:"TimeResolution,omitempty"`
 	// DisableNilStreamValues controls whether channels with nil stream values
 	// are reportable. When false (default), nil stream values are allowed and
 	// channels are reportable. Set to true to make channels with missing
@@ -115,8 +115,9 @@ func (r ReportCodecEVMABIEncodeUnpacked) Encode(report llo.Report, cd llotypes.C
 		return nil, fmt.Errorf("failed to decode opts; got: '%s'; %w", cd.Opts, err)
 	}
 
-	validAfter := ConvertTimestamp(report.ValidAfterNanoseconds, opts.TimestampPrecision)
-	observationTimestamp := ConvertTimestamp(report.ObservationTimestampNanoseconds, opts.TimestampPrecision)
+	validAfter := llo.ConvertTimestamp(report.ValidAfterNanoseconds, opts.TimeResolution)
+	observationTimestamp := llo.ConvertTimestamp(report.ObservationTimestampNanoseconds, opts.TimeResolution)
+	expiresAt := observationTimestamp + llo.ScaleSeconds(opts.ExpirationWindow, opts.TimeResolution)
 
 	rf := BaseReportFields{
 		FeedID:             opts.FeedID,
@@ -124,10 +125,10 @@ func (r ReportCodecEVMABIEncodeUnpacked) Encode(report llo.Report, cd llotypes.C
 		Timestamp:          observationTimestamp,
 		NativeFee:          CalculateFee(nativePrice, opts.BaseUSDFee),
 		LinkFee:            CalculateFee(linkPrice, opts.BaseUSDFee),
-		ExpiresAt:          observationTimestamp + uint64(opts.ExpirationWindow),
+		ExpiresAt:          expiresAt,
 	}
 
-	header, err := r.buildHeader(rf, opts.TimestampPrecision)
+	header, err := r.buildHeader(rf, opts.TimeResolution)
 	if err != nil {
 		return nil, fmt.Errorf("failed to build base report; %w", err)
 	}
@@ -215,7 +216,7 @@ func getBaseSchema(timestampType string) abi.Arguments {
 	})
 }
 
-func (r ReportCodecEVMABIEncodeUnpacked) buildHeader(rf BaseReportFields, precision TimestampPrecision) ([]byte, error) {
+func (r ReportCodecEVMABIEncodeUnpacked) buildHeader(rf BaseReportFields, resolution llo.TimeResolution) ([]byte, error) {
 	var merr error
 	if rf.LinkFee == nil {
 		merr = errors.Join(merr, errors.New("linkFee may not be nil"))
@@ -233,7 +234,7 @@ func (r ReportCodecEVMABIEncodeUnpacked) buildHeader(rf BaseReportFields, precis
 
 	var b []byte
 	var err error
-	if precision == PrecisionSeconds {
+	if resolution == llo.ResolutionSeconds {
 		if rf.ValidFromTimestamp > math.MaxUint32 {
 			return nil, fmt.Errorf("validFromTimestamp %d exceeds uint32 range", rf.ValidFromTimestamp)
 		}

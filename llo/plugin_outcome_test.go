@@ -1041,6 +1041,39 @@ func Test_Outcome_Methods(t *testing.T) {
 			assert.Equal(t, "ChannelID: 2; Reason: IsReportable=false; no ValidAfterNanoseconds entry yet, this must be a new channel", unreportable[0].Error())
 		})
 	})
+	t.Run("IsSecondsResolution", func(t *testing.T) {
+		testCases := []struct {
+			name         string
+			reportFormat llotypes.ReportFormat
+			opts         []byte
+			expected     bool
+		}{
+			// EVMPremiumLegacy is always seconds resolution
+			{"EVMPremiumLegacy with nil opts", llotypes.ReportFormatEVMPremiumLegacy, nil, true},
+			{"EVMPremiumLegacy with empty JSON", llotypes.ReportFormatEVMPremiumLegacy, []byte(`{}`), true},
+			{"EVMPremiumLegacy ignores opts", llotypes.ReportFormatEVMPremiumLegacy, []byte(`{"TimeResolution":"ns"}`), true},
+
+			// EVMABIEncodeUnpacked defaults to seconds
+			{"Unpacked with empty JSON defaults to seconds", llotypes.ReportFormatEVMABIEncodeUnpacked, []byte(`{}`), true},
+			{"Unpacked with explicit seconds", llotypes.ReportFormatEVMABIEncodeUnpacked, []byte(`{"TimeResolution":"s"}`), true},
+
+			// EVMABIEncodeUnpacked non-seconds resolutions
+			{"Unpacked with milliseconds", llotypes.ReportFormatEVMABIEncodeUnpacked, []byte(`{"TimeResolution":"ms"}`), false},
+			{"Unpacked with microseconds", llotypes.ReportFormatEVMABIEncodeUnpacked, []byte(`{"TimeResolution":"us"}`), false},
+			{"Unpacked with nanoseconds", llotypes.ReportFormatEVMABIEncodeUnpacked, []byte(`{"TimeResolution":"ns"}`), false},
+
+			// Other formats are not seconds resolution
+			{"UnpackedExpr returns false", llotypes.ReportFormatEVMABIEncodeUnpackedExpr, []byte(`{}`), false},
+			{"JSON format", llotypes.ReportFormatJSON, nil, false},
+			{"unknown format", llotypes.ReportFormat(99), nil, false},
+		}
+
+		for _, tc := range testCases {
+			t.Run(tc.name, func(t *testing.T) {
+				assert.Equal(t, tc.expected, IsSecondsResolution(tc.reportFormat, tc.opts))
+			})
+		}
+	})
 	t.Run("protocol version > 0", func(t *testing.T) {
 		t.Run("IsReportable", func(t *testing.T) {
 			defaultMinReportInterval := uint64(100 * time.Millisecond)

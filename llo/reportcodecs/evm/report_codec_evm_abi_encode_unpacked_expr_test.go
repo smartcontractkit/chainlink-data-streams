@@ -41,8 +41,8 @@ func TestReportCodecEVMABIEncodeUnpackedExpr_Encode(t *testing.T) {
 		}
 
 		opts := ReportFormatEVMABIEncodeOpts{
-			TimestampPrecision: PrecisionSeconds,
-			ABI:                []ABIEncoder{},
+			TimeResolution: llo.ResolutionSeconds,
+			ABI:            []ABIEncoder{},
 		}
 		serializedOpts, err := opts.Encode()
 		require.NoError(t, err)
@@ -110,10 +110,10 @@ func TestReportCodecEVMABIEncodeUnpackedExpr_Encode(t *testing.T) {
 			}
 
 			opts := ReportFormatEVMABIEncodeOpts{
-				BaseUSDFee:         sampleBaseUSDFee,
-				ExpirationWindow:   sampleExpirationWindow,
-				FeedID:             sampleFeedID,
-				TimestampPrecision: PrecisionSeconds,
+				BaseUSDFee:       sampleBaseUSDFee,
+				ExpirationWindow: sampleExpirationWindow,
+				FeedID:           sampleFeedID,
+				TimeResolution:   llo.ResolutionSeconds,
 				ABI: []ABIEncoder{
 					// benchmark price
 					newSingleABIEncoder("int192", priceMultiplier),
@@ -157,6 +157,9 @@ func TestReportCodecEVMABIEncodeUnpackedExpr_Encode(t *testing.T) {
 
 			require.Len(t, values, len(expectedDEXBasedAssetSchema))
 
+			expectedLinkFee := CalculateFee(sampleLinkBenchmarkPrice, sampleBaseUSDFee)
+			expectedNativeFee := CalculateFee(sampleNativeBenchmarkPrice, sampleBaseUSDFee)
+
 			// doesn't crash if values are nil
 			for i := range report.Values {
 				report.Values[i] = nil
@@ -164,7 +167,14 @@ func TestReportCodecEVMABIEncodeUnpackedExpr_Encode(t *testing.T) {
 			_, err = codec.Encode(report, cd)
 			require.Error(t, err)
 
-			return true
+			return AllTrue([]bool{
+				assert.Equal(t, sampleFeedID, (common.Hash)(values[0].([32]byte))),                                                                  //nolint:testifylint // false positive // feedId
+				assert.Equal(t, uint32(sampleValidAfterNanoseconds/1e9)+1, values[1].(uint32)),                                                      //nolint:gosec // G115 // validFromTimestamp
+				assert.Equal(t, uint32(sampleObservationTimestampNanoseconds/1e9), values[2].(uint32)),                                              //nolint:gosec // G115 // observationsTimestamp
+				assert.Equal(t, expectedLinkFee.String(), values[3].(*big.Int).String()),                                                            // nativeFee (Values[0] is link benchmark in test data)
+				assert.Equal(t, expectedNativeFee.String(), values[4].(*big.Int).String()),                                                          // linkFee (Values[1] is native benchmark in test data)
+				assert.Equal(t, uint32(sampleObservationTimestampNanoseconds/1e9)+sampleExpirationWindow, values[5].(uint32)),                       //nolint:gosec // G115 // expiresAt (seconds resolution, no scaling needed)
+			})
 		}
 
 		properties.Property("Encodes values", prop.ForAll(
@@ -186,11 +196,11 @@ func TestReportCodecEVMABIEncodeUnpackedExpr_Encode(t *testing.T) {
 		properties.TestingRun(t)
 	})
 
-	t.Run("varying timestamp precision schemas", func(t *testing.T) {
-		runTest := func(sampleFeedID common.Hash, sampleObservationTimestampNanoseconds, sampleValidAfterNanoseconds uint64, sampleExpirationWindow uint32, priceMultiplier, marketDepthMultiplier *ubig.Big, sampleBaseUSDFee, sampleLinkBenchmarkPrice, sampleNativeBenchmarkPrice, sampleDexBasedAssetPrice, sampleBaseMarketDepth, sampleQuoteMarketDepth decimal.Decimal, sampleTimestampPrecision TimestampPrecision) bool {
-			// Determine timestamp type based on precision
+	t.Run("varying timestamp resolution schemas", func(t *testing.T) {
+		runTest := func(sampleFeedID common.Hash, sampleObservationTimestampNanoseconds, sampleValidAfterNanoseconds uint64, sampleExpirationWindow uint32, priceMultiplier, marketDepthMultiplier *ubig.Big, sampleBaseUSDFee, sampleLinkBenchmarkPrice, sampleNativeBenchmarkPrice, sampleDexBasedAssetPrice, sampleBaseMarketDepth, sampleQuoteMarketDepth decimal.Decimal, sampleTimeResolution llo.TimeResolution) bool {
+			// Determine timestamp type based on resolution
 			timestampType := "uint64"
-			if sampleTimestampPrecision == PrecisionSeconds {
+			if sampleTimeResolution == llo.ResolutionSeconds {
 				timestampType = "uint32"
 			}
 
@@ -223,10 +233,10 @@ func TestReportCodecEVMABIEncodeUnpackedExpr_Encode(t *testing.T) {
 			}
 
 			opts := ReportFormatEVMABIEncodeOpts{
-				BaseUSDFee:         sampleBaseUSDFee,
-				ExpirationWindow:   sampleExpirationWindow,
-				FeedID:             sampleFeedID,
-				TimestampPrecision: sampleTimestampPrecision,
+				BaseUSDFee:       sampleBaseUSDFee,
+				ExpirationWindow: sampleExpirationWindow,
+				FeedID:           sampleFeedID,
+				TimeResolution:   sampleTimeResolution,
 				ABI: []ABIEncoder{
 					// benchmark price
 					newSingleABIEncoder("int192", priceMultiplier),
@@ -281,10 +291,10 @@ func TestReportCodecEVMABIEncodeUnpackedExpr_Encode(t *testing.T) {
 				assert.Equal(t, expectedLinkFee.String(), values[4].(*big.Int).String()),
 			}
 
-			// Verify timestamps per precision type
-			expectedValidFrom := ConvertTimestamp(sampleValidAfterNanoseconds, sampleTimestampPrecision) + 1
-			expectedObservationTimestamp := ConvertTimestamp(sampleObservationTimestampNanoseconds, sampleTimestampPrecision)
-			expectedExpiresAt := expectedObservationTimestamp + uint64(sampleExpirationWindow)
+			// Verify timestamps per resolution type
+			expectedValidFrom := llo.ConvertTimestamp(sampleValidAfterNanoseconds, sampleTimeResolution) + 1
+			expectedObservationTimestamp := llo.ConvertTimestamp(sampleObservationTimestampNanoseconds, sampleTimeResolution)
+			expectedExpiresAt := expectedObservationTimestamp + llo.ScaleSeconds(sampleExpirationWindow, sampleTimeResolution)
 			if timestampType == "uint32" {
 				checks = append(checks,
 					assert.Equal(t, uint32(expectedValidFrom), values[1].(uint32)),
@@ -317,7 +327,7 @@ func TestReportCodecEVMABIEncodeUnpackedExpr_Encode(t *testing.T) {
 			genDexBasedAssetPrice(),
 			genMarketDepth(),
 			genMarketDepth(),
-			genTimestampPrecision(),
+			genTimeResolution(),
 		))
 		properties.TestingRun(t)
 	})
@@ -435,13 +445,13 @@ func genMarketDepth() gopter.Gen {
 
 // TestReportCodecEVMABIEncodeUnpackedExpr_EncodeOpts
 func TestReportCodecEVMABIEncodeUnpackedExpr_EncodeOpts(t *testing.T) {
-	t.Run("zero value is PrecisionSeconds", func(t *testing.T) {
-		var defaultPrecision TimestampPrecision
-		assert.Equal(t, PrecisionSeconds, defaultPrecision, "zero value must be PrecisionSeconds for backward compatibility")
-		assert.Equal(t, TimestampPrecision(0), PrecisionSeconds, "PrecisionSeconds must be 0")
+	t.Run("zero value is ResolutionSeconds", func(t *testing.T) {
+		var defaultPrecision llo.TimeResolution
+		assert.Equal(t, llo.ResolutionSeconds, defaultPrecision, "zero value must be ResolutionSeconds for backward compatibility")
+		assert.Equal(t, llo.TimeResolution(0), llo.ResolutionSeconds, "ResolutionSeconds must be 0")
 	})
 
-	t.Run("JSON opts without timestampPrecision defaults to seconds", func(t *testing.T) {
+	t.Run("JSON opts without TimeResolution defaults to seconds", func(t *testing.T) {
 		jsonConfig := `{
 			"baseUSDFee": "1.5",
 			"expirationWindow": 3600,
@@ -453,34 +463,34 @@ func TestReportCodecEVMABIEncodeUnpackedExpr_EncodeOpts(t *testing.T) {
 		err := opts.Decode([]byte(jsonConfig))
 		require.NoError(t, err)
 
-		assert.Equal(t, PrecisionSeconds, opts.TimestampPrecision)
+		assert.Equal(t, llo.ResolutionSeconds, opts.TimeResolution)
 	})
 
-	t.Run("JSON opts with timestampPrecision uses correct value", func(t *testing.T) {
+	t.Run("JSON opts with TimeResolution uses correct value", func(t *testing.T) {
 		testCases := []struct {
 			name              string
 			jsonPrecision     string
-			expectedPrecision TimestampPrecision
+			expectedPrecision llo.TimeResolution
 		}{
 			{
 				name:              "seconds",
 				jsonPrecision:     "s",
-				expectedPrecision: PrecisionSeconds,
+				expectedPrecision: llo.ResolutionSeconds,
 			},
 			{
 				name:              "milliseconds",
 				jsonPrecision:     "ms",
-				expectedPrecision: PrecisionMilliseconds,
+				expectedPrecision: llo.ResolutionMilliseconds,
 			},
 			{
 				name:              "microseconds",
 				jsonPrecision:     "us",
-				expectedPrecision: PrecisionMicroseconds,
+				expectedPrecision: llo.ResolutionMicroseconds,
 			},
 			{
 				name:              "nanoseconds",
 				jsonPrecision:     "ns",
-				expectedPrecision: PrecisionNanoseconds,
+				expectedPrecision: llo.ResolutionNanoseconds,
 			},
 		}
 
@@ -491,14 +501,14 @@ func TestReportCodecEVMABIEncodeUnpackedExpr_EncodeOpts(t *testing.T) {
 					"expirationWindow": 3600,
 					"feedID": "0x0001020304050607080910111213141516171819202122232425262728293031",
 					"abi": [{"type": "uint192"}],
-					"timestampPrecision": "%s"
+					"TimeResolution": "%s"
 				}`, tc.jsonPrecision)
 
 				var opts ReportFormatEVMABIEncodeOpts
 				err := opts.Decode([]byte(jsonConfig))
 				require.NoError(t, err)
 
-				assert.Equal(t, tc.expectedPrecision, opts.TimestampPrecision)
+				assert.Equal(t, tc.expectedPrecision, opts.TimeResolution)
 			})
 		}
 	})
