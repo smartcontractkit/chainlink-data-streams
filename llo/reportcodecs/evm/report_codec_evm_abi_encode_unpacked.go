@@ -60,11 +60,11 @@ type ReportFormatEVMABIEncodeOpts struct {
 	// Seconds use uint32 ABI encoding, while milliseconds/microseconds/nanoseconds use uint64.
 	// Defaults to "s" (seconds) if not specified.
 	TimestampPrecision TimestampPrecision `json:"timestampPrecision,omitempty"`
-	// EnableNilStreamValues controls whether channels with nil stream values
-	// are reportable. When nil or true (default), nil stream values are
-	// allowed and channels are reportable. Set to false to make channels with
-	// missing stream values unreportable.
-	EnableNilStreamValues *bool `json:"enableNilStreamValues,omitempty"`
+	// DisableNilStreamValues controls whether channels with nil stream values
+	// are reportable. When false (default), nil stream values are allowed and
+	// channels are reportable. Set to true to make channels with missing
+	// stream values unreportable.
+	DisableNilStreamValues bool `json:"disableNilStreamValues,omitempty"`
 }
 
 func (r *ReportFormatEVMABIEncodeOpts) Decode(opts []byte) error {

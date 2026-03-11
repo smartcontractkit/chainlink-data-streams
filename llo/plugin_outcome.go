@@ -418,7 +418,11 @@ func (out *Outcome) IsReportable(channelID llotypes.ChannelID, protocolVersion u
 		return &UnreportableChannelError{nil, "IsReportable=false; tombstone channel", channelID}
 	}
 
-	if !nilStreamValuesEnabled(cd.Opts) {
+	if nilStreamValuesDisabled(cd.Opts) {
+		// check if all stream values are present
+		// note: post-deployment/rollout of the disableNilStreamValues channel opt config,
+		// we should ensure all channels have disableNilStreamValues: true as this fixes
+		// a bug related to report gaps.
 		for _, strm := range cd.Streams {
 			if out.StreamAggregates[strm.StreamID][strm.Aggregator] == nil {
 				return &UnreportableChannelError{nil, fmt.Sprintf("IsReportable=false; missing stream value for streamID=%d aggregator=%q", strm.StreamID, strm.Aggregator), channelID}
@@ -463,24 +467,24 @@ func (out *Outcome) IsReportable(channelID llotypes.ChannelID, protocolVersion u
 	return nil
 }
 
-// nilStreamValuesEnabled returns true (the default) when nil stream values are
-// allowed for the channel, meaning channels will remain reportable even if
-// some stream aggregate values are missing. Returns false only when the opts
-// JSON explicitly sets "enableNilStreamValues" to false, which causes channels
+// nilStreamValuesDisabled returns false (the default) when nil stream values
+// are allowed for the channel, meaning channels will remain reportable even if
+// some stream aggregate values are missing. Returns true only when the opts
+// JSON explicitly sets "disableNilStreamValues" to true, which causes channels
 // with missing stream values to be treated as unreportable.
-func nilStreamValuesEnabled(opts []byte) bool {
+func nilStreamValuesDisabled(opts []byte) bool {
 	if len(opts) == 0 {
-		return true
+		return false
 	}
 
-	// loose JSON unmarshal of just enableNilStreamValues field — no dependency on the codec package
+	// loose JSON unmarshal of just disableNilStreamValues field — no dependency on the codec package
 	var v struct {
-		EnableNilStreamValues *bool `json:"enableNilStreamValues"`
+		DisableNilStreamValues bool `json:"disableNilStreamValues"`
 	}
 	if err := json.Unmarshal(opts, &v); err != nil {
-		return true
+		return false // default to false if unmarshal fails (not set during initial rollout)
 	}
-	return v.EnableNilStreamValues == nil || *v.EnableNilStreamValues
+	return v.DisableNilStreamValues
 }
 
 func IsSecondsResolution(reportFormat llotypes.ReportFormat) bool {

@@ -168,11 +168,11 @@ type ReportFormatEVMStreamlinedOpts struct {
 	// The total number of streams must be n, where n is the number of
 	// top-level elements in this ABI array
 	ABI []ABIEncoder `json:"abi"`
-	// EnableNilStreamValues controls whether channels with nil stream values
-	// are reportable. When nil or true (default), nil stream values are
-	// allowed and channels are reportable. Set to false to make channels with
-	// missing stream values unreportable.
-	EnableNilStreamValues *bool `json:"enableNilStreamValues,omitempty"`
+	// DisableNilStreamValues controls whether channels with nil stream values
+	// are reportable. When false (default), nil stream values are allowed and
+	// channels are reportable. Set to true to make channels with missing
+	// stream values unreportable.
+	DisableNilStreamValues bool `json:"disableNilStreamValues,omitempty"`
 }
 
 func (r *ReportFormatEVMStreamlinedOpts) Decode(opts []byte) error {

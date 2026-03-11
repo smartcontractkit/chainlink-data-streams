@@ -327,7 +327,7 @@ func Test_ReportCodecPremiumLegacy_Verify(t *testing.T) {
 		err := c.Verify(cd)
 		require.NoError(t, err)
 	})
-	t.Run("enableNilStreamValues=undefined does not error", func(t *testing.T) {
+	t.Run("disableNilStreamValues=undefined does not error", func(t *testing.T) {
 		cd := llotypes.ChannelDefinition{
 			Streams: []llotypes.Stream{
 				{StreamID: 1, Aggregator: llotypes.AggregatorMedian},
@@ -340,7 +340,7 @@ func Test_ReportCodecPremiumLegacy_Verify(t *testing.T) {
 		err := c.Verify(cd)
 		require.NoError(t, err)
 	})
-	t.Run("enableNilStreamValues=false is a known field and does not error", func(t *testing.T) {
+	t.Run("disableNilStreamValues=true is a known field and does not error", func(t *testing.T) {
 		cd := llotypes.ChannelDefinition{
 			Streams: []llotypes.Stream{
 				{StreamID: 1, Aggregator: llotypes.AggregatorMedian},
@@ -348,12 +348,12 @@ func Test_ReportCodecPremiumLegacy_Verify(t *testing.T) {
 				{StreamID: 3, Aggregator: llotypes.AggregatorMedian},
 			},
 			ReportFormat: llotypes.ReportFormatEVMABIEncodeUnpacked,
-			Opts:         []byte(`{"baseUSDFee":"1","feedID":"0x1111111111111111111111111111111111111111111111111111111111111111","enableNilStreamValues":false}`),
+			Opts:         []byte(`{"baseUSDFee":"1","feedID":"0x1111111111111111111111111111111111111111111111111111111111111111","disableNilStreamValues":true}`),
 		}
 		err := c.Verify(cd)
 		require.NoError(t, err)
 	})
-	t.Run("enableNilStreamValues=true is a known field and does not error", func(t *testing.T) {
+	t.Run("disableNilStreamValues=false is a known field and does not error", func(t *testing.T) {
 		cd := llotypes.ChannelDefinition{
 			Streams: []llotypes.Stream{
 				{StreamID: 1, Aggregator: llotypes.AggregatorMedian},
@@ -361,7 +361,7 @@ func Test_ReportCodecPremiumLegacy_Verify(t *testing.T) {
 				{StreamID: 3, Aggregator: llotypes.AggregatorMedian},
 			},
 			ReportFormat: llotypes.ReportFormatEVMABIEncodeUnpacked,
-			Opts:         []byte(`{"baseUSDFee":"1","feedID":"0x1111111111111111111111111111111111111111111111111111111111111111","enableNilStreamValues":true}`),
+			Opts:         []byte(`{"baseUSDFee":"1","feedID":"0x1111111111111111111111111111111111111111111111111111111111111111","disableNilStreamValues":false}`),
 		}
 		err := c.Verify(cd)
 		require.NoError(t, err)
