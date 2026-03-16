@@ -84,7 +84,7 @@ func TestReportCodecEVMStreamlined(t *testing.T) {
 				Streams: []llotypes.Stream{
 					{StreamID: 123, Aggregator: llotypes.AggregatorMedian},
 				},
-				Opts: []byte(`{"abi":[{"type":"int160"}], "disableNilStreamValues":false}`),
+				Opts: []byte(`{"abi":[{"type":"int160"}]}`),
 			})
 			require.NoError(t, err)
 			t.Run("with invalid opts", func(t *testing.T) {

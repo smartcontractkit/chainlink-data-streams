@@ -400,16 +400,16 @@ func (out *Outcome) GenRetirementReport(protocolVersion uint32) RetirementReport
 // Channel becomes reportable when:
 // ObservationTimestampNanoseconds > ValidAfterNanoseconds(previous observation timestamp)+MinReportInterval
 
-// Indicates whether a report can be generated for the given channel.
+// IsReportable checks if a report can be generated for the given channel.
 // Checks if channel is retired, tombstoned, has missing stream values (when
-// disableNilStreamValues is set in channel opts), and if ValidAfterNanoseconds
-// is set. Returns nil if channel is reportable.
+// AllowNilStreamValues is false), and if ValidAfterNanoseconds is set.
+// Returns nil if channel is reportable.
 //
 // Note: this is not a complete guarantee that a report will be successfully
 // generated. Reports can still be silently dropped at the encoding step for
 // other reasons (e.g. codec errors, bid/mid/ask validation failures). Those
 // failure modes are not covered here and can still result in report gaps if
-// disableNilStreamValues is not set or if the failure is unrelated to nil values.
+// AllowNilStreamValues is set or if the report codec fails to encode the report.
 func (out *Outcome) IsReportable(channelID llotypes.ChannelID, protocolVersion uint32, minReportInterval uint64) *UnreportableChannelError {
 	if out.LifeCycleStage == LifeCycleStageRetired {
 		return &UnreportableChannelError{nil, "IsReportable=false; retired channel", channelID}
@@ -425,14 +425,11 @@ func (out *Outcome) IsReportable(channelID llotypes.ChannelID, protocolVersion u
 		return &UnreportableChannelError{nil, "IsReportable=false; tombstone channel", channelID}
 	}
 
-	if nilStreamValuesDisabled(cd.Opts) {
-		// check if all stream values are present
-		// note: post-deployment/rollout of the disableNilStreamValues channel opt config,
-		// we should ensure all channels have disableNilStreamValues: true as this fixes
-		// a bug related to report gaps.
+	// If AllowNilStreamValues is false, check if all stream values are present
+	if !cd.AllowNilStreamValues {
 		for _, strm := range cd.Streams {
 			if out.StreamAggregates[strm.StreamID][strm.Aggregator] == nil {
-				return &UnreportableChannelError{nil, fmt.Sprintf("IsReportable=false; missing stream value for streamID=%d aggregator=%q", strm.StreamID, strm.Aggregator), channelID}
+				return &UnreportableChannelError{nil, fmt.Sprintf("IsReportable=false; nil stream value for streamID=%d aggregator=%q", strm.StreamID, strm.Aggregator), channelID}
 			}
 		}
 	}
@@ -472,26 +469,6 @@ func (out *Outcome) IsReportable(channelID llotypes.ChannelID, protocolVersion u
 	}
 
 	return nil
-}
-
-// nilStreamValuesDisabled returns false (the default) when nil stream values
-// are allowed for the channel, meaning channels will remain reportable even if
-// some stream aggregate values are missing. Returns true only when the opts
-// JSON explicitly sets "disableNilStreamValues" to true, which causes channels
-// with missing stream values to be treated as unreportable.
-func nilStreamValuesDisabled(opts []byte) bool {
-	if len(opts) == 0 {
-		return false
-	}
-
-	// loose JSON unmarshal of just disableNilStreamValues field — no dependency on the codec package
-	var v struct {
-		DisableNilStreamValues bool `json:"disableNilStreamValues"`
-	}
-	if err := json.Unmarshal(opts, &v); err != nil {
-		return false // default to false if unmarshal fails (not set during initial rollout)
-	}
-	return v.DisableNilStreamValues
 }
 
 func IsSecondsResolution(reportFormat llotypes.ReportFormat, opts llotypes.ChannelOpts) bool {

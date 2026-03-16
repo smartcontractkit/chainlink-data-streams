@@ -75,11 +75,12 @@ func makeChannelDefinitionProto(d llotypes.ChannelDefinition) *LLOChannelDefinit
 		}
 	}
 	return &LLOChannelDefinitionProto{
-		ReportFormat: uint32(d.ReportFormat),
-		Streams:      streams,
-		Opts:         d.Opts,
-		Tombstone:    d.Tombstone,
-		Source:       d.Source,
+		ReportFormat:           uint32(d.ReportFormat),
+		Streams:                streams,
+		Opts:                   d.Opts,
+		Tombstone:              d.Tombstone,
+		Source:                 d.Source,
+		AllowNilStreamValues: d.AllowNilStreamValues,
 	}
 }
 
@@ -100,11 +101,12 @@ func channelDefinitionsFromProtoOutcome(in []*LLOChannelIDAndDefinitionProto) (o
 				}
 			}
 			out[d.ChannelID] = llotypes.ChannelDefinition{
-				ReportFormat: llotypes.ReportFormat(d.ChannelDefinition.ReportFormat),
-				Streams:      streams,
-				Opts:         d.ChannelDefinition.Opts,
-				Tombstone:    d.ChannelDefinition.Tombstone,
-				Source:       d.ChannelDefinition.Source,
+				ReportFormat:           llotypes.ReportFormat(d.ChannelDefinition.ReportFormat),
+				Streams:                streams,
+				Opts:                   d.ChannelDefinition.Opts,
+				Tombstone:              d.ChannelDefinition.Tombstone,
+				Source:                 d.ChannelDefinition.Source,
+				AllowNilStreamValues: d.ChannelDefinition.AllowNilStreamValues,
 			}
 		}
 	}

@@ -60,11 +60,12 @@ func genStreamValuesMap() gopter.Gen {
 
 func genChannelDefinition() gopter.Gen {
 	return gen.StrictStruct(reflect.TypeOf(llotypes.ChannelDefinition{}), map[string]gopter.Gen{
-		"ReportFormat": genReportFormat(),
-		"Streams":      gen.SliceOf(genStream()),
-		"Opts":         gen.SliceOf(gen.UInt8()),
-		"Tombstone":    gen.Bool(),
-		"Source":       gen.UInt32(),
+		"ReportFormat":           genReportFormat(),
+		"Streams":                gen.SliceOf(genStream()),
+		"Opts":                   gen.SliceOf(gen.UInt8()),
+		"Tombstone":              gen.Bool(),
+		"Source":                 gen.UInt32(),
+		"AllowNilStreamValues": gen.Bool(),
 	})
 }
 

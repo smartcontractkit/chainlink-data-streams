@@ -65,16 +65,6 @@ type ReportFormatEVMPremiumLegacyOpts struct {
 	// Multiplier is used to scale the bid, benchmark and ask values in the
 	// report. If not specified, or zero is used, a multiplier of 1 is assumed.
 	Multiplier *ubig.Big `json:"multiplier"`
-	// DisableNilStreamValues controls whether channels with nil stream values
-	// are reportable. When false (default), nil stream values are allowed and
-	// channels are reportable. Set to true to make channels with missing
-	// stream values unreportable.
-	//
-	// This field is also read by the outcome plugin via independent JSON
-	// parsing (see nilStreamValuesDisabled in plugin_outcome.go). It is
-	// declared here so that Decode's DisallowUnknownFields does not reject
-	// channel opts that include it; the codec itself does not act on it.
-	DisableNilStreamValues bool `json:"disableNilStreamValues,omitempty"`
 }
 
 func (r *ReportFormatEVMPremiumLegacyOpts) Decode(opts []byte) error {

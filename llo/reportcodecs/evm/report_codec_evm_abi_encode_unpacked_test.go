@@ -46,7 +46,7 @@ func TestReportFormatEVMABIEncodeOpts_Decode_Encode_properties(t *testing.T) {
 		err = decoded.Decode(encoded)
 		require.NoError(t, err)
 
-		return decoded.BaseUSDFee.Equal(opts.BaseUSDFee) && decoded.ExpirationWindow == opts.ExpirationWindow && decoded.FeedID == opts.FeedID && assert.Equal(t, opts.ABI, decoded.ABI) && decoded.DisableNilStreamValues == opts.DisableNilStreamValues
+		return decoded.BaseUSDFee.Equal(opts.BaseUSDFee) && decoded.ExpirationWindow == opts.ExpirationWindow && decoded.FeedID == opts.FeedID && assert.Equal(t, opts.ABI, decoded.ABI)
 	}
 	properties.Property("Encodes values", prop.ForAll(
 		runTest,
@@ -56,7 +56,6 @@ func TestReportFormatEVMABIEncodeOpts_Decode_Encode_properties(t *testing.T) {
 			"FeedID":           genFeedID(),
 			"ABI":              genABI(),
 			"TimeResolution":   genTimeResolution(),
-			"DisableNilStreamValues": gen.Bool(),
 		})))
 
 	properties.TestingRun(t)
@@ -810,7 +809,6 @@ func genFundingIntervalHours() gopter.Gen {
 		return decimal.NewFromInt(int64(i))
 	})
 }
-
 
 func mustNewABIType(t string) abi.Type {
 	result, err := abi.NewType(t, "", []abi.ArgumentMarshaling{})

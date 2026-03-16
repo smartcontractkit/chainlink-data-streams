@@ -58,6 +58,7 @@ message LLOChannelDefinitionProto {
     bytes opts = 3;
     bool tombstone = 4;
     uint32 source = 5;
+    bool allowNilStreamValues = 6;
 }
 
 message LLOStreamDefinition {
