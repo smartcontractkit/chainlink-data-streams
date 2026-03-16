@@ -51,7 +51,7 @@ var (
 				"Ceil":               Ceil,
 				"Floor":              Floor,
 				"Avg":                Avg,
-				"Duration":           Duration,
+				"Duration":           ParseDuration,
 			}
 		},
 	}
@@ -475,8 +475,8 @@ func Truncate(x any, precision int) (decimal.Decimal, error) {
 	return n.Truncate(int32(precision)), nil
 }
 
-// Duration parses a duration string into a time.Duration
-func Duration(x string) (time.Duration, error) {
+// ParseDuration parses a duration string into a time.ParseDuration
+func ParseDuration(x string) (time.Duration, error) {
 	return time.ParseDuration(x)
 }
 

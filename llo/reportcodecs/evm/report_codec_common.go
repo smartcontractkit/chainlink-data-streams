@@ -11,6 +11,7 @@ import (
 
 	"github.com/shopspring/decimal"
 
+	"github.com/smartcontractkit/chainlink-common/pkg/logger"
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
 	"github.com/smartcontractkit/chainlink-data-streams/llo"
 	ubig "github.com/smartcontractkit/chainlink-data-streams/llo/reportcodecs/evm/utils"
@@ -301,4 +302,24 @@ func EncodePackedBigInt(value *big.Int, typeStr string) ([]byte, error) {
 	result := make([]byte, byteLen)
 	modValue.FillBytes(result)
 	return result, nil
+}
+
+// ClampReportRange clamps the report range to the max report range if it exceeds the max range.
+// Returns the clamped valid after nanoseconds.
+// If the report range is within the max range, returns the valid after nanoseconds unchanged.
+// If the max report range is not specified, uses the default max report range.
+func ClampReportRange(r logger.Logger, report llo.Report, maxReportRange llo.Duration) uint64 {
+	if maxReportRange == 0 {
+		maxReportRange = llo.DefaultMaxReportRange
+	}
+
+	if report.ObservationTimestampNanoseconds-report.ValidAfterNanoseconds > uint64(maxReportRange) {
+		r.Warnw("Report range exceeds max report range",
+			"channelID", report.ChannelID, "seqNr", report.SeqNr,
+			"maxReportRange", maxReportRange, "clamping to max range", maxReportRange.String())
+
+		return report.ObservationTimestampNanoseconds - uint64(maxReportRange)
+	}
+
+	return report.ValidAfterNanoseconds
 }

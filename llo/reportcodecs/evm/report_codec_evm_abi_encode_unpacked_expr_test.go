@@ -18,6 +18,7 @@ import (
 
 	ubig "github.com/smartcontractkit/chainlink-data-streams/llo/reportcodecs/evm/utils"
 
+	"github.com/smartcontractkit/chainlink-common/pkg/logger"
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
 	"github.com/smartcontractkit/chainlink-data-streams/llo"
 )
@@ -148,7 +149,9 @@ func TestReportCodecEVMABIEncodeUnpackedExpr_Encode(t *testing.T) {
 				Opts: serializedOpts,
 			}
 
-			codec := ReportCodecEVMABIEncodeUnpackedExpr{}
+			codec := ReportCodecEVMABIEncodeUnpackedExpr{Logger: logger.Nop()}
+			clampedValidAfterNanos := ClampReportRange(logger.Nop(), report, 0)
+
 			encoded, err := codec.Encode(report, cd)
 			require.NoError(t, err)
 
@@ -169,7 +172,7 @@ func TestReportCodecEVMABIEncodeUnpackedExpr_Encode(t *testing.T) {
 
 			return AllTrue([]bool{
 				assert.Equal(t, sampleFeedID, (common.Hash)(values[0].([32]byte))),                                                                  //nolint:testifylint // false positive // feedId
-				assert.Equal(t, uint32(sampleValidAfterNanoseconds/1e9)+1, values[1].(uint32)),                                                      //nolint:gosec // G115 // validFromTimestamp
+				assert.Equal(t, uint32(clampedValidAfterNanos/1e9)+1, values[1].(uint32)),                                                           //nolint:gosec // G115 // validFromTimestamp
 				assert.Equal(t, uint32(sampleObservationTimestampNanoseconds/1e9), values[2].(uint32)),                                              //nolint:gosec // G115 // observationsTimestamp
 				assert.Equal(t, expectedLinkFee.String(), values[3].(*big.Int).String()),                                                            // nativeFee (Values[0] is link benchmark in test data)
 				assert.Equal(t, expectedNativeFee.String(), values[4].(*big.Int).String()),                                                          // linkFee (Values[1] is native benchmark in test data)
@@ -271,7 +274,9 @@ func TestReportCodecEVMABIEncodeUnpackedExpr_Encode(t *testing.T) {
 				Opts: serializedOpts,
 			}
 
-			codec := ReportCodecEVMABIEncodeUnpackedExpr{}
+			codec := ReportCodecEVMABIEncodeUnpackedExpr{Logger: logger.Nop()}
+			clampedValidAfterNanos := ClampReportRange(logger.Nop(), report, 0)
+
 			encoded, err := codec.Encode(report, cd)
 			require.NoError(t, err)
 
@@ -292,7 +297,7 @@ func TestReportCodecEVMABIEncodeUnpackedExpr_Encode(t *testing.T) {
 			}
 
 			// Verify timestamps per resolution type
-			expectedValidFrom := llo.ConvertTimestamp(sampleValidAfterNanoseconds, sampleTimeResolution) + 1
+			expectedValidFrom := llo.ConvertTimestamp(clampedValidAfterNanos, sampleTimeResolution) + 1
 			expectedObservationTimestamp := llo.ConvertTimestamp(sampleObservationTimestampNanoseconds, sampleTimeResolution)
 			expectedExpiresAt := expectedObservationTimestamp + llo.ScaleSeconds(sampleExpirationWindow, sampleTimeResolution)
 			if timestampType == "uint32" {

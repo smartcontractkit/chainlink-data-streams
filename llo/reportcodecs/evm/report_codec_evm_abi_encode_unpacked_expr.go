@@ -58,6 +58,7 @@ func (r ReportCodecEVMABIEncodeUnpackedExpr) Encode(report llo.Report, cd llotyp
 		return nil, fmt.Errorf("ReportCodecEVMABIEncodeUnpackedExpr not enough streams for calculated streams; expected: %d, got: %d", opts.ABI[len(opts.ABI)-1].encoders[0].ExpressionStreamID, len(cd.Streams))
 	}
 
+	report.ValidAfterNanoseconds = ClampReportRange(r, report, opts.MaxReportRange)
 	validAfter := llo.ConvertTimestamp(report.ValidAfterNanoseconds, opts.TimeResolution)
 	observationTimestamp := llo.ConvertTimestamp(report.ObservationTimestampNanoseconds, opts.TimeResolution)
 	expiresAt := observationTimestamp + llo.ScaleSeconds(opts.ExpirationWindow, opts.TimeResolution)

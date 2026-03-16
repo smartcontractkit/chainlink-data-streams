@@ -65,6 +65,10 @@ type ReportFormatEVMPremiumLegacyOpts struct {
 	// Multiplier is used to scale the bid, benchmark and ask values in the
 	// report. If not specified, or zero is used, a multiplier of 1 is assumed.
 	Multiplier *ubig.Big `json:"multiplier"`
+	// MaxReportRange is the maximum range of the report.
+	// The range will be limited to ObservationTimestamp + MaxReportRange if the report is longer than the max range.
+	// Defaults to 5 minutes if not specified.
+	MaxReportRange llo.Duration `json:"maxReportRange,omitempty"`
 }
 
 func (r *ReportFormatEVMPremiumLegacyOpts) Decode(opts []byte) error {
@@ -93,6 +97,8 @@ func (r ReportCodecPremiumLegacy) Encode(report llo.Report, cd llotypes.ChannelD
 	if err = (&opts).Decode(cd.Opts); err != nil {
 		return nil, fmt.Errorf("failed to decode opts; got: '%s'; %w", cd.Opts, err)
 	}
+
+	report.ValidAfterNanoseconds = ClampReportRange(r, report, opts.MaxReportRange)
 	var multiplier decimal.Decimal
 	if opts.Multiplier == nil {
 		multiplier = decimal.NewFromInt(1)

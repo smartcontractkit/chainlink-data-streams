@@ -60,6 +60,10 @@ type ReportFormatEVMABIEncodeOpts struct {
 	// Seconds use uint32 ABI encoding, while milliseconds/microseconds/nanoseconds use uint64.
 	// Defaults to "s" (seconds) if not specified.
 	TimeResolution llo.TimeResolution `json:"TimeResolution,omitempty"`
+	// MaxReportRange is the maximum range of the report.
+	// The range will be limited to ObservationTimestamp + MaxReportRange if the report is longer than the max range.
+	// Defaults to 5 minutes if not specified.
+	MaxReportRange llo.Duration `json:"maxReportRange,omitempty"`
 }
 
 func (r *ReportFormatEVMABIEncodeOpts) Decode(opts []byte) error {
@@ -105,6 +109,7 @@ func (r ReportCodecEVMABIEncodeUnpacked) Encode(report llo.Report, cd llotypes.C
 		return nil, fmt.Errorf("failed to decode opts; got: '%s'; %w", cd.Opts, err)
 	}
 
+	report.ValidAfterNanoseconds = ClampReportRange(r, report, opts.MaxReportRange)
 	validAfter := llo.ConvertTimestamp(report.ValidAfterNanoseconds, opts.TimeResolution)
 	observationTimestamp := llo.ConvertTimestamp(report.ObservationTimestampNanoseconds, opts.TimeResolution)
 	expiresAt := observationTimestamp + llo.ScaleSeconds(opts.ExpirationWindow, opts.TimeResolution)
