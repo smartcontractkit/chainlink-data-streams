@@ -28,10 +28,10 @@ func NewReportCodecStreamlined() ReportCodecEVMStreamlined {
 
 type ReportCodecEVMStreamlined struct{}
 
-func (rc ReportCodecEVMStreamlined) Encode(r llo.Report, cd llotypes.ChannelDefinition) (payload []byte, err error) {
-	opts := ReportFormatEVMStreamlinedOpts{}
-	if err = (&opts).Decode(cd.Opts); err != nil {
-		return nil, fmt.Errorf("failed to decode opts; got: '%s'; %w", cd.Opts, err)
+func (rc ReportCodecEVMStreamlined) Encode(r llo.Report, cd llotypes.ChannelDefinition, optsCache *llo.OptsCache) (payload []byte, err error) {
+	opts, getErr := llo.GetOpts[ReportFormatEVMStreamlinedOpts](optsCache, r.ChannelID)
+	if getErr != nil {
+		return nil, fmt.Errorf("opts not in cache for channel %d: %w", r.ChannelID, getErr)
 	}
 
 	if opts.FeedID == nil {

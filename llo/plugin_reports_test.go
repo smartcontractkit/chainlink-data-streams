@@ -44,6 +44,7 @@ func testReports(t *testing.T, outcomeCodec OutcomeCodec) {
 		RetirementReportCodec:               StandardRetirementReportCodec{},
 		DefaultMinReportIntervalNanoseconds: uint64(minReportInterval), //nolint:gosec // time won't be negative
 		ProtocolVersion:                     protocolVersion,
+		OptsCache:                           NewOptsCache(),
 	}
 
 	t.Run("ignores seqnr=0", func(t *testing.T) {
@@ -293,7 +294,7 @@ func testReports(t *testing.T, outcomeCodec OutcomeCodec) {
 		}
 
 		// Confirm channel 1 IS reportable (timing check passes, AllowNilStreamValues=true)
-		require.Nil(t, outcome.IsReportable(1, protocolVersion, uint64(minReportInterval)))
+		require.Nil(t, outcome.IsReportable(1, protocolVersion, uint64(minReportInterval), nil))
 
 		encoded, err := p.OutcomeCodec.Encode(outcome)
 		require.NoError(t, err)
@@ -338,12 +339,12 @@ func testReports(t *testing.T, outcomeCodec OutcomeCodec) {
 		}
 
 		// Verify tombstoned channel is not reportable
-		unreportableErr := outcome.IsReportable(1, protocolVersion, uint64(minReportInterval))
+		unreportableErr := outcome.IsReportable(1, protocolVersion, uint64(minReportInterval), nil)
 		require.NotNil(t, unreportableErr)
 		assert.Contains(t, unreportableErr.Error(), "tombstone channel")
 
 		// Verify non-tombstoned channel is reportable
-		require.Nil(t, outcome.IsReportable(2, protocolVersion, uint64(minReportInterval)))
+		require.Nil(t, outcome.IsReportable(2, protocolVersion, uint64(minReportInterval), nil))
 
 		encoded, err := p.OutcomeCodec.Encode(outcome)
 		require.NoError(t, err)

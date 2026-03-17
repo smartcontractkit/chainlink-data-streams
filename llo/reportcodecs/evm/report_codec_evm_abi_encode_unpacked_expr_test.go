@@ -72,8 +72,10 @@ func TestReportCodecEVMABIEncodeUnpackedExpr_Encode(t *testing.T) {
 			Opts: serializedOpts,
 		}
 
+		cache := llo.NewOptsCache()
+		cache.Set(report.ChannelID, cd.Opts)
 		codec := ReportCodecEVMABIEncodeUnpackedExpr{}
-		_, err = codec.Encode(report, cd)
+		_, err = codec.Encode(report, cd, cache)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "ReportCodecEVMABIEncodeUnpackedExpr no expressions found in channel definition")
 	})
@@ -152,7 +154,9 @@ func TestReportCodecEVMABIEncodeUnpackedExpr_Encode(t *testing.T) {
 			codec := ReportCodecEVMABIEncodeUnpackedExpr{Logger: logger.Nop()}
 			clampedValidAfterNanos := ClampReportRange(logger.Nop(), report, 0)
 
-			encoded, err := codec.Encode(report, cd)
+			cache := llo.NewOptsCache()
+			cache.Set(report.ChannelID, cd.Opts)
+			encoded, err := codec.Encode(report, cd, cache)
 			require.NoError(t, err)
 
 			values, err := expectedDEXBasedAssetSchema.Unpack(encoded)
@@ -167,7 +171,7 @@ func TestReportCodecEVMABIEncodeUnpackedExpr_Encode(t *testing.T) {
 			for i := range report.Values {
 				report.Values[i] = nil
 			}
-			_, err = codec.Encode(report, cd)
+			_, err = codec.Encode(report, cd, cache)
 			require.Error(t, err)
 
 			return AllTrue([]bool{
@@ -277,7 +281,9 @@ func TestReportCodecEVMABIEncodeUnpackedExpr_Encode(t *testing.T) {
 			codec := ReportCodecEVMABIEncodeUnpackedExpr{Logger: logger.Nop()}
 			clampedValidAfterNanos := ClampReportRange(logger.Nop(), report, 0)
 
-			encoded, err := codec.Encode(report, cd)
+			cache := llo.NewOptsCache()
+			cache.Set(report.ChannelID, cd.Opts)
+			encoded, err := codec.Encode(report, cd, cache)
 			require.NoError(t, err)
 
 			values, err := schema.Unpack(encoded)

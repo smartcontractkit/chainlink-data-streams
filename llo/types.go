@@ -31,8 +31,9 @@ type OutcomeCodec interface {
 type ReportCodec interface {
 	// Encode may be lossy, so no Decode function is expected
 	// Encode should handle nil stream aggregate values without panicking (it
-	// may return error instead)
-	Encode(Report, llotypes.ChannelDefinition) ([]byte, error)
+	// may return error instead).
+	// Codecs may use GetOpts(optsCache, report.ChannelID) to get cached parsed opts.
+	Encode(Report, llotypes.ChannelDefinition, *OptsCache) ([]byte, error)
 	// Verify may optionally verify a channel definition to ensure it is valid
 	// for the given report codec. If a codec does not wish to implement
 	// validation it may simply return nil here. If any definition fails

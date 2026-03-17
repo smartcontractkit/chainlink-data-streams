@@ -162,7 +162,9 @@ func TestReportCodecEVMABIEncodeUnpacked_Encode_properties(t *testing.T) {
 
 			clampedValidAfterNanos := ClampReportRange(logger.Nop(), report, 0)
 
-			encoded, err := codec.Encode(report, cd)
+			cache := llo.NewOptsCache()
+			cache.Set(report.ChannelID, cd.Opts)
+			encoded, err := codec.Encode(report, cd, cache)
 			require.NoError(t, err)
 
 			values, err := expectedDEXBasedAssetSchema.Unpack(encoded)
@@ -177,7 +179,7 @@ func TestReportCodecEVMABIEncodeUnpacked_Encode_properties(t *testing.T) {
 			for i := range report.Values {
 				report.Values[i] = nil
 			}
-			_, err = codec.Encode(report, cd)
+			_, err = codec.Encode(report, cd, cache)
 			require.Error(t, err)
 
 			return AllTrue([]bool{
@@ -275,7 +277,9 @@ func TestReportCodecEVMABIEncodeUnpacked_Encode_properties(t *testing.T) {
 
 			clampedValidAfterNanos := ClampReportRange(logger.Nop(), report, 0)
 
-			encoded, err := codec.Encode(report, cd)
+			cache := llo.NewOptsCache()
+			cache.Set(report.ChannelID, cd.Opts)
+			encoded, err := codec.Encode(report, cd, cache)
 			require.NoError(t, err)
 
 			values, err := expectedRWASchema.Unpack(encoded)
@@ -290,7 +294,7 @@ func TestReportCodecEVMABIEncodeUnpacked_Encode_properties(t *testing.T) {
 			for i := range report.Values {
 				report.Values[i] = nil
 			}
-			_, err = codec.Encode(report, cd)
+			_, err = codec.Encode(report, cd, cache)
 			require.Error(t, err)
 
 			return AllTrue([]bool{
@@ -375,7 +379,9 @@ func TestReportCodecEVMABIEncodeUnpacked_Encode_properties(t *testing.T) {
 
 			clampedValidAfterNanos := ClampReportRange(logger.Nop(), report, 0)
 
-			encoded, err := codec.Encode(report, cd)
+			cache := llo.NewOptsCache()
+			cache.Set(report.ChannelID, cd.Opts)
+			encoded, err := codec.Encode(report, cd, cache)
 			require.NoError(t, err)
 
 			values, err := expectedDEXBasedAssetSchema.Unpack(encoded)
@@ -390,7 +396,7 @@ func TestReportCodecEVMABIEncodeUnpacked_Encode_properties(t *testing.T) {
 			for i := range report.Values {
 				report.Values[i] = nil
 			}
-			_, err = codec.Encode(report, cd)
+			_, err = codec.Encode(report, cd, cache)
 			require.Error(t, err)
 
 			return AllTrue([]bool{
@@ -483,7 +489,9 @@ func TestReportCodecEVMABIEncodeUnpacked_Encode_properties(t *testing.T) {
 
 			clampedValidAfterNanos := ClampReportRange(logger.Nop(), report, 0)
 
-			encoded, err := codec.Encode(report, cd)
+			cache := llo.NewOptsCache()
+			cache.Set(report.ChannelID, cd.Opts)
+			encoded, err := codec.Encode(report, cd, cache)
 			require.NoError(t, err)
 
 			values, err := schema.Unpack(encoded)
@@ -615,7 +623,9 @@ func TestReportCodecEVMABIEncodeUnpacked_Encode_properties(t *testing.T) {
 
 			clampedValidAfterNanos := ClampReportRange(logger.Nop(), report, 0)
 
-			encoded, err := codec.Encode(report, cd)
+			cache := llo.NewOptsCache()
+			cache.Set(report.ChannelID, cd.Opts)
+			encoded, err := codec.Encode(report, cd, cache)
 			require.NoError(t, err)
 
 			values, err := expectedFundingRateSchema.Unpack(encoded)
@@ -630,7 +640,7 @@ func TestReportCodecEVMABIEncodeUnpacked_Encode_properties(t *testing.T) {
 			for i := range report.Values {
 				report.Values[i] = nil
 			}
-			_, err = codec.Encode(report, cd)
+			_, err = codec.Encode(report, cd, cache)
 			require.Error(t, err)
 
 			return AllTrue([]bool{
@@ -715,12 +725,14 @@ func TestReportCodecEVMABIEncodeUnpacked_Encode(t *testing.T) {
 			Opts: serializedOpts,
 		}
 
+		cache := llo.NewOptsCache()
+		cache.Set(report.ChannelID, cd.Opts)
 		codec := ReportCodecEVMABIEncodeUnpacked{}
-		_, err = codec.Encode(report, cd)
+		_, err = codec.Encode(report, cd, cache)
 		require.EqualError(t, err, "failed to build payload; ABI and values length mismatch; ABI: 0, Values: 3")
 
 		report.Values = []llo.StreamValue{}
-		_, err = codec.Encode(report, cd)
+		_, err = codec.Encode(report, cd, cache)
 		require.EqualError(t, err, "ReportCodecEVMABIEncodeUnpacked requires at least 2 values (NativePrice, LinkPrice, ...); got report.Values: []")
 	})
 }

@@ -292,6 +292,7 @@ func (f *PluginFactory) NewReportingPlugin(ctx context.Context, cfg ocr3types.Re
 			f.OutcomeTelemetryCh,
 			f.ReportTelemetryCh,
 			f.DonID,
+			NewOptsCache(),
 			cfg.MaxDurationObservation,
 			offchainConfig.ProtocolVersion,
 			offchainConfig.DefaultMinReportIntervalNanoseconds,
@@ -326,7 +327,8 @@ type Plugin struct {
 	ReportCodecs                     map[llotypes.ReportFormat]ReportCodec
 	OutcomeTelemetryCh               chan<- *LLOOutcomeTelemetry
 	ReportTelemetryCh                chan<- *LLOReportTelemetry
-	DonID                            uint32
+	DonID     uint32
+	OptsCache *OptsCache // must be non-nil; set by NewReportingPlugin or by tests that exercise Outcome/Reports
 
 	// From ReportingPluginConfig
 	MaxDurationObservation time.Duration

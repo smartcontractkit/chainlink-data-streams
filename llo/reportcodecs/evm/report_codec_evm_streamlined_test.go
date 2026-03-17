@@ -27,13 +27,15 @@ func TestReportCodecEVMStreamlined(t *testing.T) {
 				ReportFormat: 42,
 				Opts:         []byte(`{"abi":[{"type":"int128"}]}`),
 			}
+			cache := llo.NewOptsCache()
+			cache.Set(1, cd.Opts)
 			payload, err := codec.Encode(llo.Report{
 				ChannelID:             1,
 				ValidAfterNanoseconds: 1234567890,
 				Values: []llo.StreamValue{
 					llo.ToDecimal(decimal.NewFromFloat(1123455935.123)),
 				},
-			}, cd)
+			}, cd, cache)
 			require.NoError(t, err)
 			require.Len(t, payload, 32)
 			// Report Format
@@ -50,13 +52,15 @@ func TestReportCodecEVMStreamlined(t *testing.T) {
 			cd := llotypes.ChannelDefinition{
 				Opts: []byte(fmt.Sprintf(`{"abi":[{"type":"int192"}], "feedID":"0x%s"}`, feedID)),
 			}
+			cache := llo.NewOptsCache()
+			cache.Set(1, cd.Opts)
 			payload, err := codec.Encode(llo.Report{
 				ChannelID:             1,
 				ValidAfterNanoseconds: 1234567890,
 				Values: []llo.StreamValue{
 					llo.ToDecimal(decimal.NewFromFloat(1123455935.123)),
 				},
-			}, cd)
+			}, cd, cache)
 			require.NoError(t, err)
 			require.Len(t, payload, 64)
 			assert.Equal(t, feedID, hex.EncodeToString(payload[:32]))                                             // feed id
