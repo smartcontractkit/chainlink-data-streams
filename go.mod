@@ -13,7 +13,7 @@ require (
 	github.com/pkg/errors v0.9.1
 	github.com/prometheus/client_golang v1.23.0
 	github.com/shopspring/decimal v1.4.0
-	github.com/smartcontractkit/chainlink-common v0.10.1-0.20260217160002-b56cb5356cc7
+	github.com/smartcontractkit/chainlink-common v0.10.1-0.20260317141303-08016f5b4637
 	github.com/smartcontractkit/chainlink-common/keystore v1.0.2
 	github.com/smartcontractkit/libocr v0.0.0-20260130195252-6e18e2a30acc
 	github.com/smartcontractkit/wsrpc v0.8.5-0.20250502134807-c57d3d995945
@@ -97,7 +97,7 @@ require (
 	github.com/shirou/gopsutil v3.21.11+incompatible // indirect
 	github.com/smartcontractkit/chain-selectors v1.0.91 // indirect
 	github.com/smartcontractkit/chainlink-common/pkg/chipingress v0.0.10 // indirect
-	github.com/smartcontractkit/chainlink-protos/cre/go v0.0.0-20260217043601-5cc966896c4f // indirect
+	github.com/smartcontractkit/chainlink-protos/cre/go v0.0.0-20260226130359-963f935e0396 // indirect
 	github.com/smartcontractkit/chainlink-protos/linking-service/go v0.0.0-20251002192024-d2ad9222409b // indirect
 	github.com/smartcontractkit/chainlink-protos/node-platform v0.0.0-20260205130626-db2a2aab956b // indirect
 	github.com/smartcontractkit/freeport v0.1.3-0.20250716200817-cb5dfd0e369e // indirect
