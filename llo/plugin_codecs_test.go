@@ -124,6 +124,15 @@ func equalObservations(obs, obs2 Observation) bool {
 		if !bytes.Equal(v.Opts, v2.Opts) {
 			return false
 		}
+		if v.AllowNilStreamValues != v2.AllowNilStreamValues {
+			return false
+		}
+		if v.Tombstone != v2.Tombstone {
+			return false
+		}
+		if v.Source != v2.Source {
+			return false
+		}
 	}
 
 	if len(obs.StreamValues) != len(obs2.StreamValues) {
@@ -170,6 +179,18 @@ func equalOutcomes(t *testing.T, outcome, outcome2 Outcome) bool {
 		}
 		if !bytes.Equal(v.Opts, v2.Opts) {
 			t.Logf("Outcomes not equal; ChannelDefinitions: %v != %v", outcome.ChannelDefinitions, outcome2.ChannelDefinitions)
+			return false
+		}
+		if v.AllowNilStreamValues != v2.AllowNilStreamValues {
+			t.Logf("Outcomes not equal; ChannelDefinitions AllowNilStreamValues: %v != %v", outcome.ChannelDefinitions, outcome2.ChannelDefinitions)
+			return false
+		}
+		if v.Tombstone != v2.Tombstone {
+			t.Logf("Outcomes not equal; ChannelDefinitions Tombstone: %v != %v", outcome.ChannelDefinitions, outcome2.ChannelDefinitions)
+			return false
+		}
+		if v.Source != v2.Source {
+			t.Logf("Outcomes not equal; ChannelDefinitions Source: %v != %v", outcome.ChannelDefinitions, outcome2.ChannelDefinitions)
 			return false
 		}
 	}

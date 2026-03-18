@@ -372,7 +372,7 @@ func (p *Plugin) decodeObservations(aos []types.AttributedObservation, outctx oc
 			streamObservations[id] = append(streamObservations[id], sv)
 		}
 		if p.Config.VerboseLogging {
-			p.Logger.Debugw("Got observations from peer", "stage", "Outcome", "sv", streamObservations, "oracleID", ao.Observer, "seqNr", outctx.SeqNr)
+			p.Logger.Debugw("Got observations from peer", "stage", "Outcome", "oracleID", ao.Observer, "seqNr", outctx.SeqNr)
 		}
 	}
 

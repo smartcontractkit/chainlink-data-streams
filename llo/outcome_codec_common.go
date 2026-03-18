@@ -50,6 +50,24 @@ func makeLLOStreamValue(v StreamValue) (*LLOStreamValue, error) {
 	return &LLOStreamValue{Type: v.Type(), Value: value}, nil
 }
 
+func makeChannelDefinitionProto(d llotypes.ChannelDefinition) *LLOChannelDefinitionProto {
+	streams := make([]*LLOStreamDefinition, len(d.Streams))
+	for i, strm := range d.Streams {
+		streams[i] = &LLOStreamDefinition{
+			StreamID:   strm.StreamID,
+			Aggregator: uint32(strm.Aggregator),
+		}
+	}
+	return &LLOChannelDefinitionProto{
+		ReportFormat:         uint32(d.ReportFormat),
+		Streams:              streams,
+		Opts:                 d.Opts,
+		Tombstone:            d.Tombstone,
+		Source:               d.Source,
+		AllowNilStreamValues: d.AllowNilStreamValues,
+	}
+}
+
 func channelDefinitionsToProtoOutcome(in llotypes.ChannelDefinitions) (out []*LLOChannelIDAndDefinitionProto) {
 	if len(in) > 0 {
 		out = make([]*LLOChannelIDAndDefinitionProto, 0, len(in))
@@ -64,24 +82,6 @@ func channelDefinitionsToProtoOutcome(in llotypes.ChannelDefinitions) (out []*LL
 		})
 	}
 	return
-}
-
-func makeChannelDefinitionProto(d llotypes.ChannelDefinition) *LLOChannelDefinitionProto {
-	streams := make([]*LLOStreamDefinition, len(d.Streams))
-	for i, strm := range d.Streams {
-		streams[i] = &LLOStreamDefinition{
-			StreamID:   strm.StreamID,
-			Aggregator: uint32(strm.Aggregator),
-		}
-	}
-	return &LLOChannelDefinitionProto{
-		ReportFormat:           uint32(d.ReportFormat),
-		Streams:                streams,
-		Opts:                   d.Opts,
-		Tombstone:              d.Tombstone,
-		Source:                 d.Source,
-		AllowNilStreamValues: d.AllowNilStreamValues,
-	}
 }
 
 func channelDefinitionsFromProtoOutcome(in []*LLOChannelIDAndDefinitionProto) (out llotypes.ChannelDefinitions, err error) {
@@ -101,11 +101,11 @@ func channelDefinitionsFromProtoOutcome(in []*LLOChannelIDAndDefinitionProto) (o
 				}
 			}
 			out[d.ChannelID] = llotypes.ChannelDefinition{
-				ReportFormat:           llotypes.ReportFormat(d.ChannelDefinition.ReportFormat),
-				Streams:                streams,
-				Opts:                   d.ChannelDefinition.Opts,
-				Tombstone:              d.ChannelDefinition.Tombstone,
-				Source:                 d.ChannelDefinition.Source,
+				ReportFormat:         llotypes.ReportFormat(d.ChannelDefinition.ReportFormat),
+				Streams:              streams,
+				Opts:                 d.ChannelDefinition.Opts,
+				Tombstone:            d.ChannelDefinition.Tombstone,
+				Source:               d.ChannelDefinition.Source,
 				AllowNilStreamValues: d.ChannelDefinition.AllowNilStreamValues,
 			}
 		}
