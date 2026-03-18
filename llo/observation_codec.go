@@ -187,11 +187,12 @@ func channelDefinitionsFromProtoObservation(channelDefinitions map[uint32]*LLOCh
 			}
 		}
 		dfns[id] = llotypes.ChannelDefinition{
-			ReportFormat: llotypes.ReportFormat(d.ReportFormat),
-			Streams:      streams,
-			Opts:         d.Opts,
-			Tombstone:    d.Tombstone,
-			Source:       d.Source,
+			ReportFormat:         llotypes.ReportFormat(d.ReportFormat),
+			Streams:              streams,
+			Opts:                 d.Opts,
+			Tombstone:            d.Tombstone,
+			Source:               d.Source,
+			AllowNilStreamValues: d.AllowNilStreamValues,
 		}
 	}
 	return dfns
