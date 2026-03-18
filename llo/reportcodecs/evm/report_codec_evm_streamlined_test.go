@@ -13,13 +13,14 @@ import (
 
 	ocr2types "github.com/smartcontractkit/libocr/offchainreporting2plus/types"
 
+	"github.com/smartcontractkit/chainlink-common/pkg/logger"
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
 	"github.com/smartcontractkit/chainlink-data-streams/llo"
 )
 
 func TestReportCodecEVMStreamlined(t *testing.T) {
 	t.Parallel()
-	codec := ReportCodecEVMStreamlined{}
+	codec := ReportCodecEVMStreamlined{Logger: logger.Nop()}
 
 	t.Run("Encode", func(t *testing.T) {
 		t.Run("one value, without feed ID - fits into one evm word", func(t *testing.T) {
@@ -29,9 +30,11 @@ func TestReportCodecEVMStreamlined(t *testing.T) {
 			}
 			cache := llo.NewOptsCache()
 			cache.Set(1, cd.Opts)
+			validAfter := uint64(1234567890)
 			payload, err := codec.Encode(llo.Report{
-				ChannelID:             1,
-				ValidAfterNanoseconds: 1234567890,
+				ChannelID:                       1,
+				ValidAfterNanoseconds:           validAfter,
+				ObservationTimestampNanoseconds: validAfter, // within range so ClampReportRange does not change validAfter
 				Values: []llo.StreamValue{
 					llo.ToDecimal(decimal.NewFromFloat(1123455935.123)),
 				},
@@ -54,9 +57,11 @@ func TestReportCodecEVMStreamlined(t *testing.T) {
 			}
 			cache := llo.NewOptsCache()
 			cache.Set(1, cd.Opts)
+			validAfter := uint64(1234567890)
 			payload, err := codec.Encode(llo.Report{
-				ChannelID:             1,
-				ValidAfterNanoseconds: 1234567890,
+				ChannelID:                       1,
+				ValidAfterNanoseconds:           validAfter,
+				ObservationTimestampNanoseconds: validAfter, // within range so ClampReportRange does not change validAfter
 				Values: []llo.StreamValue{
 					llo.ToDecimal(decimal.NewFromFloat(1123455935.123)),
 				},
