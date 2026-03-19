@@ -84,20 +84,20 @@ func Test_protoOutcomeCodecV1(t *testing.T) {
 			ObservationTimestampNanoseconds:  1,
 			ChannelDefinitions: map[llotypes.ChannelID]llotypes.ChannelDefinition{
 				1: {
-					ReportFormat:         llotypes.ReportFormatJSON,
-					Streams:              []llotypes.Stream{{StreamID: 1, Aggregator: llotypes.AggregatorMedian}},
-					AllowNilStreamValues: false,
-					Opts:                 []byte(`{}`),
-					Tombstone:            false,
-					Source:               1,
+					ReportFormat:          llotypes.ReportFormatJSON,
+					Streams:               []llotypes.Stream{{StreamID: 1, Aggregator: llotypes.AggregatorMedian}},
+					DisableNilStreamValues: true,
+					Opts:                  []byte(`{}`),
+					Tombstone:             false,
+					Source:                1,
 				},
 				2: {
-					ReportFormat:         llotypes.ReportFormatJSON,
-					Streams:              []llotypes.Stream{{StreamID: 2, Aggregator: llotypes.AggregatorQuote}},
-					AllowNilStreamValues: true,
-					Opts:                 []byte(`{}`),
-					Tombstone:            true,
-					Source:               2,
+					ReportFormat:          llotypes.ReportFormatJSON,
+					Streams:               []llotypes.Stream{{StreamID: 2, Aggregator: llotypes.AggregatorQuote}},
+					DisableNilStreamValues: false,
+					Opts:                  []byte(`{}`),
+					Tombstone:             true,
+					Source:                2,
 				},
 			},
 		}
@@ -106,8 +106,8 @@ func Test_protoOutcomeCodecV1(t *testing.T) {
 		outcome2, err := (protoOutcomeCodecV1{}).Decode(outcomeBytes)
 		require.NoError(t, err)
 		assert.Equal(t, outcome.ChannelDefinitions, outcome2.ChannelDefinitions)
-		assert.False(t, outcome2.ChannelDefinitions[1].AllowNilStreamValues)
-		assert.True(t, outcome2.ChannelDefinitions[2].AllowNilStreamValues)
+		assert.True(t, outcome2.ChannelDefinitions[1].DisableNilStreamValues)
+		assert.False(t, outcome2.ChannelDefinitions[2].DisableNilStreamValues)
 	})
 }
 

@@ -735,21 +735,21 @@ func testOutcome(t *testing.T, outcomeCodec OutcomeCodec) {
 		})
 		t.Run("ValidAfterNanoseconds update behaviour when previous outcome has missing stream values", func(t *testing.T) {
 			// channel 1 always has all stream values; channel 2 is missing stream 3 in the previous outcome.
-		// The test verifies the gap-prevention behaviour of allowNilStreamValues for channel 2.
+		// The test verifies the gap-prevention behaviour of DisableNilStreamValues for channel 2.
 		tests := []struct {
-			name                 string
-			allowNilStreamValues bool
-			wantValidAfter2      uint64
+			name                  string
+			disableNilStreamValues bool
+			wantValidAfter2       uint64
 		}{
 			{
-				name:                 "allowNilStreamValues=true: ValidAfterNanoseconds still advances despite missing stream values",
-				allowNilStreamValues: true,
-				wantValidAfter2:      uint64(101 * time.Second), // validAfterNanoseconds still updated; gap behaviour preserved
+				name:                   "DisableNilStreamValues=false: ValidAfterNanoseconds still advances despite missing stream values",
+				disableNilStreamValues: false,
+				wantValidAfter2:        uint64(101 * time.Second), // validAfterNanoseconds still updated; gap behaviour preserved
 			},
 			{
-				name:                 "default (allowNilStreamValues absent): ValidAfterNanoseconds does not advance when previous outcome has missing stream values",
-				allowNilStreamValues: false,
-				wantValidAfter2:      uint64(100 * time.Second), // validAfterNanoseconds not updated; report gap prevented
+				name:                   "default (DisableNilStreamValues true): ValidAfterNanoseconds does not advance when previous outcome has missing stream values",
+				disableNilStreamValues: true,
+				wantValidAfter2:        uint64(100 * time.Second), // validAfterNanoseconds not updated; report gap prevented
 			},
 			}
 			for _, tc := range tests {
@@ -760,9 +760,9 @@ func testOutcome(t *testing.T, outcomeCodec OutcomeCodec) {
 							Streams:      []llotypes.Stream{{StreamID: 1, Aggregator: llotypes.AggregatorMedian}, {StreamID: 2, Aggregator: llotypes.AggregatorMedian}},
 						},
 						2: { // requires streams 2 and 3; stream 3 is missing in the previous outcome
-							ReportFormat:           llotypes.ReportFormatEVMPremiumLegacy,
-							Streams:                []llotypes.Stream{{StreamID: 2, Aggregator: llotypes.AggregatorMedian}, {StreamID: 3, Aggregator: llotypes.AggregatorQuote}},
-							AllowNilStreamValues: tc.allowNilStreamValues,
+							ReportFormat:          llotypes.ReportFormatEVMPremiumLegacy,
+							Streams:               []llotypes.Stream{{StreamID: 2, Aggregator: llotypes.AggregatorMedian}, {StreamID: 3, Aggregator: llotypes.AggregatorQuote}},
+							DisableNilStreamValues: tc.disableNilStreamValues,
 						},
 					}
 					// previous outcome: channel 1 would have reported; channel 2 would not
@@ -810,7 +810,7 @@ func testOutcome(t *testing.T, outcomeCodec OutcomeCodec) {
 
 					// channel 1 always advances (had all stream values in the previous outcome)
 					assert.Equal(t, uint64(101*time.Second), decoded.ValidAfterNanoseconds[1])
-					// channel 2 depends on allowNilStreamValues
+					// channel 2 depends on DisableNilStreamValues
 					assert.Equal(t, tc.wantValidAfter2, decoded.ValidAfterNanoseconds[2])
 				})
 			}
@@ -1164,7 +1164,7 @@ func Test_Outcome_Methods(t *testing.T) {
 			outcome.ChannelDefinitions = map[llotypes.ChannelID]llotypes.ChannelDefinition{}
 			require.EqualError(t, outcome.IsReportable(cid, 1, defaultMinReportInterval, nil), "ChannelID: 1; Reason: IsReportable=false; no channel definition with this ID")
 
-		// Missing stream aggregate value; IsReportable=false when allowNilStreamValues is absent (default=false)
+		// DisableNilStreamValues absent (default=false): nil stream values allowed, so next failure is ValidAfterNanoseconds
 		outcome.ChannelDefinitions[cid] = llotypes.ChannelDefinition{
 			Streams: []llotypes.Stream{
 				{StreamID: 1, Aggregator: llotypes.AggregatorMedian},
@@ -1175,25 +1175,25 @@ func Test_Outcome_Methods(t *testing.T) {
 			1: {llotypes.AggregatorMedian: ToDecimal(decimal.NewFromInt(100))},
 			// stream 2 quote is missing
 		}
-		require.EqualError(t, outcome.IsReportable(cid, 1, defaultMinReportInterval, nil), `ChannelID: 1; Reason: IsReportable=false; nil stream value for streamID=2 aggregator="quote"`)
+		require.EqualError(t, outcome.IsReportable(cid, 1, defaultMinReportInterval, nil), "ChannelID: 1; Reason: IsReportable=false; no ValidAfterNanoseconds entry yet, this must be a new channel")
 
-		// Missing stream aggregate value; IsReportable=false when allowNilStreamValues=false
+		// Missing stream aggregate value; IsReportable=false when DisableNilStreamValues=true
 		outcome.ChannelDefinitions[cid] = llotypes.ChannelDefinition{
 			Streams: []llotypes.Stream{
 				{StreamID: 1, Aggregator: llotypes.AggregatorMedian},
 				{StreamID: 2, Aggregator: llotypes.AggregatorQuote},
 			},
-			AllowNilStreamValues: false,
+			DisableNilStreamValues: true,
 		}
 		require.EqualError(t, outcome.IsReportable(cid, 1, defaultMinReportInterval, nil), `ChannelID: 1; Reason: IsReportable=false; nil stream value for streamID=2 aggregator="quote"`)
 
-		// Missing stream aggregate value; IsReportable=true when allowNilStreamValues=true
+		// Missing stream aggregate value; IsReportable=true when DisableNilStreamValues=false
 		outcome.ChannelDefinitions[cid] = llotypes.ChannelDefinition{
 			Streams: []llotypes.Stream{
 				{StreamID: 1, Aggregator: llotypes.AggregatorMedian},
 				{StreamID: 2, Aggregator: llotypes.AggregatorQuote},
 			},
-			AllowNilStreamValues: true,
+			DisableNilStreamValues: false,
 		}
 		outcome.ValidAfterNanoseconds = map[llotypes.ChannelID]uint64{cid: obsTSNanos - uint64(100*time.Millisecond)}
 		require.Nil(t, outcome.IsReportable(cid, 1, defaultMinReportInterval, nil))

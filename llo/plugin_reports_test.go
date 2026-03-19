@@ -267,9 +267,9 @@ func testReports(t *testing.T, outcomeCodec OutcomeCodec) {
 		// previous ObservationTimestampNanoseconds and we produce reports for ranges [100s, 200s] and [200s, 400s].
 	})
 
-	t.Run("channels with nil stream values that pass IsReportable do not produce reports if AllowNilStreamValues is true", func(t *testing.T) {
-		// This test shows that when AllowNilStreamValues=true, the channel passes IsReportable
-		// but encodeReport fails on nil → no report. The critical difference vs AllowNilStreamValues=false
+	t.Run("channels with nil stream values that pass IsReportable do not produce reports if DisableNilStreamValues is false", func(t *testing.T) {
+		// This test shows that when DisableNilStreamValues=false, the channel passes IsReportable
+		// but encodeReport fails on nil → no report. The critical difference vs DisableNilStreamValues=true
 		// is that ValidAfterNanoseconds still advances (report gap risk).
 		// This test exercises the encodeReport fallback gate.
 		outcome := Outcome{
@@ -284,7 +284,7 @@ func testReports(t *testing.T, outcomeCodec OutcomeCodec) {
 					{StreamID: 1, Aggregator: llotypes.AggregatorMedian},
 					{StreamID: 2, Aggregator: llotypes.AggregatorMedian},
 				},
-				AllowNilStreamValues: true, // channel passes IsReportable despite nil stream 2
+				DisableNilStreamValues: false, // channel passes IsReportable despite nil stream 2
 			},
 			},
 			StreamAggregates: map[llotypes.StreamID]map[llotypes.Aggregator]StreamValue{
@@ -293,7 +293,7 @@ func testReports(t *testing.T, outcomeCodec OutcomeCodec) {
 			},
 		}
 
-		// Confirm channel 1 IS reportable (timing check passes, AllowNilStreamValues=true)
+		// Confirm channel 1 IS reportable (timing check passes, DisableNilStreamValues=false)
 		require.Nil(t, outcome.IsReportable(1, protocolVersion, uint64(minReportInterval), nil))
 
 		encoded, err := p.OutcomeCodec.Encode(outcome)

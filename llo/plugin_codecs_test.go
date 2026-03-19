@@ -65,7 +65,7 @@ func genChannelDefinition() gopter.Gen {
 		"Opts":                   gen.SliceOf(gen.UInt8()),
 		"Tombstone":              gen.Bool(),
 		"Source":                 gen.UInt32(),
-		"AllowNilStreamValues": gen.Bool(),
+		"DisableNilStreamValues": gen.Bool(),
 	})
 }
 
@@ -124,7 +124,7 @@ func equalObservations(obs, obs2 Observation) bool {
 		if !bytes.Equal(v.Opts, v2.Opts) {
 			return false
 		}
-		if v.AllowNilStreamValues != v2.AllowNilStreamValues {
+		if v.DisableNilStreamValues != v2.DisableNilStreamValues {
 			return false
 		}
 		if v.Tombstone != v2.Tombstone {
@@ -181,8 +181,8 @@ func equalOutcomes(t *testing.T, outcome, outcome2 Outcome) bool {
 			t.Logf("Outcomes not equal; ChannelDefinitions: %v != %v", outcome.ChannelDefinitions, outcome2.ChannelDefinitions)
 			return false
 		}
-		if v.AllowNilStreamValues != v2.AllowNilStreamValues {
-			t.Logf("Outcomes not equal; ChannelDefinitions AllowNilStreamValues: %v != %v", outcome.ChannelDefinitions, outcome2.ChannelDefinitions)
+		if v.DisableNilStreamValues != v2.DisableNilStreamValues {
+			t.Logf("Outcomes not equal; ChannelDefinitions DisableNilStreamValues: %v != %v", outcome.ChannelDefinitions, outcome2.ChannelDefinitions)
 			return false
 		}
 		if v.Tombstone != v2.Tombstone {

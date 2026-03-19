@@ -18,23 +18,20 @@ type GoldenOutcomeCase struct {
 // fullChannelDefinitions is shared between the "full" and "from_full" golden cases.
 var fullChannelDefinitions = map[llotypes.ChannelID]llotypes.ChannelDefinition{
 	1: {
-		ReportFormat: llotypes.ReportFormatJSON,
-		Streams: []llotypes.Stream{
-			{StreamID: 1, Aggregator: llotypes.AggregatorMedian},
-			{StreamID: 2, Aggregator: llotypes.AggregatorQuote},
-		},
-		Opts:      []byte(`{"foo":"bar"}`),
-		Tombstone: true,
-		Source:    0,
+		ReportFormat:          llotypes.ReportFormatJSON,
+		Streams:                []llotypes.Stream{{StreamID: 1, Aggregator: llotypes.AggregatorMedian}, {StreamID: 2, Aggregator: llotypes.AggregatorQuote}},
+		Opts:                  []byte(`{"foo":"bar"}`),
+		Tombstone:              true,
+		Source:                 0,
+		DisableNilStreamValues: true,
 	},
 	2: {
-		ReportFormat: llotypes.ReportFormatJSON,
-		Streams: []llotypes.Stream{
-			{StreamID: 3, Aggregator: llotypes.AggregatorMedian},
-		},
-		Opts:      []byte(`{"baz":"qux"}`),
-		Source:    1001,
-		Tombstone: false,
+		ReportFormat:          llotypes.ReportFormatJSON,
+		Streams:                []llotypes.Stream{{StreamID: 3, Aggregator: llotypes.AggregatorMedian}},
+		Opts:                  []byte(`{"baz":"qux"}`),
+		Source:                 1001,
+		Tombstone:              false,
+		DisableNilStreamValues: true,
 	},
 }
 

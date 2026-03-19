@@ -337,15 +337,15 @@ func (x *LLOTimestampedStreamValue) GetStreamValue() *LLOStreamValue {
 }
 
 type LLOChannelDefinitionProto struct {
-	state                protoimpl.MessageState `protogen:"open.v1"`
-	ReportFormat         uint32                 `protobuf:"varint,1,opt,name=reportFormat,proto3" json:"reportFormat,omitempty"`
-	Streams              []*LLOStreamDefinition `protobuf:"bytes,2,rep,name=streams,proto3" json:"streams,omitempty"`
-	Opts                 []byte                 `protobuf:"bytes,3,opt,name=opts,proto3" json:"opts,omitempty"`
-	Tombstone            bool                   `protobuf:"varint,4,opt,name=tombstone,proto3" json:"tombstone,omitempty"`
-	Source               uint32                 `protobuf:"varint,5,opt,name=source,proto3" json:"source,omitempty"`
-	AllowNilStreamValues bool                   `protobuf:"varint,6,opt,name=allowNilStreamValues,proto3" json:"allowNilStreamValues,omitempty"`
-	unknownFields        protoimpl.UnknownFields
-	sizeCache            protoimpl.SizeCache
+	state                  protoimpl.MessageState `protogen:"open.v1"`
+	ReportFormat           uint32                 `protobuf:"varint,1,opt,name=reportFormat,proto3" json:"reportFormat,omitempty"`
+	Streams                []*LLOStreamDefinition `protobuf:"bytes,2,rep,name=streams,proto3" json:"streams,omitempty"`
+	Opts                   []byte                 `protobuf:"bytes,3,opt,name=opts,proto3" json:"opts,omitempty"`
+	Tombstone              bool                   `protobuf:"varint,4,opt,name=tombstone,proto3" json:"tombstone,omitempty"`
+	Source                 uint32                 `protobuf:"varint,5,opt,name=source,proto3" json:"source,omitempty"`
+	DisableNilStreamValues bool                   `protobuf:"varint,6,opt,name=disableNilStreamValues,proto3" json:"disableNilStreamValues,omitempty"`
+	unknownFields          protoimpl.UnknownFields
+	sizeCache              protoimpl.SizeCache
 }
 
 func (x *LLOChannelDefinitionProto) Reset() {
@@ -413,9 +413,9 @@ func (x *LLOChannelDefinitionProto) GetSource() uint32 {
 	return 0
 }
 
-func (x *LLOChannelDefinitionProto) GetAllowNilStreamValues() bool {
+func (x *LLOChannelDefinitionProto) GetDisableNilStreamValues() bool {
 	if x != nil {
-		return x.AllowNilStreamValues
+		return x.DisableNilStreamValues
 	}
 	return false
 }
@@ -926,14 +926,14 @@ const file_plugin_codecs_proto_rawDesc = "" +
 	"\x03ask\x18\x03 \x01(\fR\x03ask\"\x87\x01\n" +
 	"\x19LLOTimestampedStreamValue\x124\n" +
 	"\x15observedAtNanoseconds\x18\x01 \x01(\x04R\x15observedAtNanoseconds\x124\n" +
-	"\vstreamValue\x18\x02 \x01(\v2\x12.v1.LLOStreamValueR\vstreamValue\"\xf0\x01\n" +
+	"\vstreamValue\x18\x02 \x01(\v2\x12.v1.LLOStreamValueR\vstreamValue\"\xf4\x01\n" +
 	"\x19LLOChannelDefinitionProto\x12\"\n" +
 	"\freportFormat\x18\x01 \x01(\rR\freportFormat\x121\n" +
 	"\astreams\x18\x02 \x03(\v2\x17.v1.LLOStreamDefinitionR\astreams\x12\x12\n" +
 	"\x04opts\x18\x03 \x01(\fR\x04opts\x12\x1c\n" +
 	"\ttombstone\x18\x04 \x01(\bR\ttombstone\x12\x16\n" +
-	"\x06source\x18\x05 \x01(\rR\x06source\x122\n" +
-	"\x14allowNilStreamValues\x18\x06 \x01(\bR\x14allowNilStreamValues\"Q\n" +
+	"\x06source\x18\x05 \x01(\rR\x06source\x126\n" +
+	"\x16disableNilStreamValues\x18\x06 \x01(\bR\x16disableNilStreamValues\"Q\n" +
 	"\x13LLOStreamDefinition\x12\x1a\n" +
 	"\bstreamID\x18\x01 \x01(\rR\bstreamID\x12\x1e\n" +
 	"\n" +

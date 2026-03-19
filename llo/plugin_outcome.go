@@ -415,7 +415,7 @@ type timeResolutionOpts struct {
 
 // IsReportable checks if a report can be generated for the given channel.
 // Checks if channel is retired, tombstoned, has missing stream values (when
-// AllowNilStreamValues is false), and if ValidAfterNanoseconds is set.
+// DisableNilStreamValues is true), and if ValidAfterNanoseconds is set.
 // Returns nil if channel is reportable.
 // Time-resolution for overlap checks uses IsSecondsResolution, which tries the cache when available and falls back to decoding opts (e.g. after node restart).
 //
@@ -423,7 +423,7 @@ type timeResolutionOpts struct {
 // generated. Reports can still be silently dropped at the encoding step for
 // other reasons (e.g. codec errors, bid/mid/ask validation failures). Those
 // failure modes are not covered here and can still result in report gaps if
-// AllowNilStreamValues is set or if the report codec fails to encode the report.
+// DisableNilStreamValues is false or if the report codec fails to encode the report.
 func (out *Outcome) IsReportable(channelID llotypes.ChannelID, protocolVersion uint32, minReportInterval uint64, optsCache *OptsCache) *UnreportableChannelError {
 	if out.LifeCycleStage == LifeCycleStageRetired {
 		return &UnreportableChannelError{nil, "IsReportable=false; retired channel", channelID}
@@ -439,8 +439,8 @@ func (out *Outcome) IsReportable(channelID llotypes.ChannelID, protocolVersion u
 		return &UnreportableChannelError{nil, "IsReportable=false; tombstone channel", channelID}
 	}
 
-	// If AllowNilStreamValues is false, check if all stream values are present
-	if !cd.AllowNilStreamValues {
+	// If DisableNilStreamValues is true, check if all stream values are present
+	if cd.DisableNilStreamValues {
 		for _, strm := range cd.Streams {
 			if out.StreamAggregates[strm.StreamID][strm.Aggregator] == nil {
 				return &UnreportableChannelError{nil, fmt.Sprintf("IsReportable=false; nil stream value for streamID=%d aggregator=%q", strm.StreamID, strm.Aggregator), channelID}

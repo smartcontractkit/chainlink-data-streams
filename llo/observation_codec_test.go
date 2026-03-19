@@ -76,20 +76,20 @@ func Test_protoObservationCodec(t *testing.T) {
 			UnixTimestampNanoseconds: 1,
 			UpdateChannelDefinitions: map[llotypes.ChannelID]llotypes.ChannelDefinition{
 				1: {
-					ReportFormat:         llotypes.ReportFormatJSON,
-					Streams:              []llotypes.Stream{{StreamID: 1, Aggregator: llotypes.AggregatorMedian}},
-					AllowNilStreamValues: false,
-					Opts:                 []byte(`{}`),
-					Tombstone:            false,
-					Source:               1,
+					ReportFormat:          llotypes.ReportFormatJSON,
+					Streams:               []llotypes.Stream{{StreamID: 1, Aggregator: llotypes.AggregatorMedian}},
+					DisableNilStreamValues: true,
+					Opts:                  []byte(`{}`),
+					Tombstone:             false,
+					Source:                1,
 				},
 				2: {
-					ReportFormat:         llotypes.ReportFormatJSON,
-					Streams:              []llotypes.Stream{{StreamID: 2, Aggregator: llotypes.AggregatorQuote}},
-					AllowNilStreamValues: true,
-					Opts:                 []byte(`{}`),
-					Tombstone:            true,
-					Source:               2,
+					ReportFormat:          llotypes.ReportFormatJSON,
+					Streams:               []llotypes.Stream{{StreamID: 2, Aggregator: llotypes.AggregatorQuote}},
+					DisableNilStreamValues: false,
+					Opts:                  []byte(`{}`),
+					Tombstone:             true,
+					Source:                2,
 				},
 			},
 		}
@@ -100,8 +100,8 @@ func Test_protoObservationCodec(t *testing.T) {
 		obs2, err := codec.Decode(obsBytes)
 		require.NoError(t, err)
 		assert.Equal(t, obs.UpdateChannelDefinitions, obs2.UpdateChannelDefinitions)
-		assert.False(t, obs2.UpdateChannelDefinitions[1].AllowNilStreamValues)
-		assert.True(t, obs2.UpdateChannelDefinitions[2].AllowNilStreamValues)
+		assert.True(t, obs2.UpdateChannelDefinitions[1].DisableNilStreamValues)
+		assert.False(t, obs2.UpdateChannelDefinitions[2].DisableNilStreamValues)
 	})
 	t.Run("decoding with invalid data", func(t *testing.T) {
 		t.Run("not a protobuf", func(t *testing.T) {
