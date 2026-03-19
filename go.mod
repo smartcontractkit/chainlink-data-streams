@@ -13,7 +13,7 @@ require (
 	github.com/pkg/errors v0.9.1
 	github.com/prometheus/client_golang v1.23.0
 	github.com/shopspring/decimal v1.4.0
-	github.com/smartcontractkit/chainlink-common v0.10.1-0.20260317141303-08016f5b4637
+	github.com/smartcontractkit/chainlink-common v0.10.1-0.20260319155722-325b0156b188
 	github.com/smartcontractkit/chainlink-common/keystore v1.0.2
 	github.com/smartcontractkit/libocr v0.0.0-20260130195252-6e18e2a30acc
 	github.com/smartcontractkit/wsrpc v0.8.5-0.20250502134807-c57d3d995945
