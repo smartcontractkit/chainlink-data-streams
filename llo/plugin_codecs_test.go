@@ -60,11 +60,12 @@ func genStreamValuesMap() gopter.Gen {
 
 func genChannelDefinition() gopter.Gen {
 	return gen.StrictStruct(reflect.TypeOf(llotypes.ChannelDefinition{}), map[string]gopter.Gen{
-		"ReportFormat": genReportFormat(),
-		"Streams":      gen.SliceOf(genStream()),
-		"Opts":         gen.SliceOf(gen.UInt8()),
-		"Tombstone":    gen.Bool(),
-		"Source":       gen.UInt32(),
+		"ReportFormat":           genReportFormat(),
+		"Streams":                gen.SliceOf(genStream()),
+		"Opts":                   gen.SliceOf(gen.UInt8()),
+		"Tombstone":              gen.Bool(),
+		"Source":                 gen.UInt32(),
+		"DisableNilStreamValues": gen.Bool(),
 	})
 }
 
@@ -123,6 +124,15 @@ func equalObservations(obs, obs2 Observation) bool {
 		if !bytes.Equal(v.Opts, v2.Opts) {
 			return false
 		}
+		if v.DisableNilStreamValues != v2.DisableNilStreamValues {
+			return false
+		}
+		if v.Tombstone != v2.Tombstone {
+			return false
+		}
+		if v.Source != v2.Source {
+			return false
+		}
 	}
 
 	if len(obs.StreamValues) != len(obs2.StreamValues) {
@@ -169,6 +179,18 @@ func equalOutcomes(t *testing.T, outcome, outcome2 Outcome) bool {
 		}
 		if !bytes.Equal(v.Opts, v2.Opts) {
 			t.Logf("Outcomes not equal; ChannelDefinitions: %v != %v", outcome.ChannelDefinitions, outcome2.ChannelDefinitions)
+			return false
+		}
+		if v.DisableNilStreamValues != v2.DisableNilStreamValues {
+			t.Logf("Outcomes not equal; ChannelDefinitions DisableNilStreamValues: %v != %v", outcome.ChannelDefinitions, outcome2.ChannelDefinitions)
+			return false
+		}
+		if v.Tombstone != v2.Tombstone {
+			t.Logf("Outcomes not equal; ChannelDefinitions Tombstone: %v != %v", outcome.ChannelDefinitions, outcome2.ChannelDefinitions)
+			return false
+		}
+		if v.Source != v2.Source {
+			t.Logf("Outcomes not equal; ChannelDefinitions Source: %v != %v", outcome.ChannelDefinitions, outcome2.ChannelDefinitions)
 			return false
 		}
 	}

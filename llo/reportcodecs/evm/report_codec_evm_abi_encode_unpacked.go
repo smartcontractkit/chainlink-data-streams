@@ -60,16 +60,10 @@ type ReportFormatEVMABIEncodeOpts struct {
 	// Seconds use uint32 ABI encoding, while milliseconds/microseconds/nanoseconds use uint64.
 	// Defaults to "s" (seconds) if not specified.
 	TimeResolution llo.TimeResolution `json:"TimeResolution,omitempty"`
-	// DisableNilStreamValues controls whether channels with nil stream values
-	// are reportable. When false (default), nil stream values are allowed and
-	// channels are reportable. Set to true to make channels with missing
-	// stream values unreportable.
-	//
-	// This field is also read by the outcome plugin via independent JSON
-	// parsing (see nilStreamValuesDisabled in plugin_outcome.go). It is
-	// declared here so that Decode's DisallowUnknownFields does not reject
-	// channel opts that include it; the codec itself does not act on it.
-	DisableNilStreamValues bool `json:"disableNilStreamValues,omitempty"`
+	// MaxReportRange is the maximum range of the report.
+	// The range will be limited to ObservationTimestamp + MaxReportRange if the report is longer than the max range.
+	// Defaults to 5 minutes if not specified.
+	MaxReportRange llo.Duration `json:"maxReportRange,omitempty"`
 }
 
 func (r *ReportFormatEVMABIEncodeOpts) Decode(opts []byte) error {
@@ -91,7 +85,7 @@ type BaseReportFields struct {
 	ExpiresAt          uint64
 }
 
-func (r ReportCodecEVMABIEncodeUnpacked) Encode(report llo.Report, cd llotypes.ChannelDefinition) ([]byte, error) {
+func (r ReportCodecEVMABIEncodeUnpacked) Encode(report llo.Report, cd llotypes.ChannelDefinition, optsCache *llo.OptsCache) ([]byte, error) {
 	if report.Specimen {
 		return nil, errors.New("ReportCodecEVMABIEncodeUnpacked does not support encoding specimen reports")
 	}
@@ -107,14 +101,12 @@ func (r ReportCodecEVMABIEncodeUnpacked) Encode(report llo.Report, cd llotypes.C
 		return nil, fmt.Errorf("ReportCodecEVMABIEncodeUnpacked failed to extract link price: %w", err)
 	}
 
-	// NOTE: It seems suboptimal to have to parse the opts on every encode but
-	// not sure how to avoid it. Should be negligible performance hit as long
-	// as Opts is small.
-	opts := ReportFormatEVMABIEncodeOpts{}
-	if err = (&opts).Decode(cd.Opts); err != nil {
-		return nil, fmt.Errorf("failed to decode opts; got: '%s'; %w", cd.Opts, err)
+	opts, getErr := llo.GetOpts[ReportFormatEVMABIEncodeOpts](optsCache, report.ChannelID)
+	if getErr != nil {
+		return nil, fmt.Errorf("opts not in cache for channel %d: %w", report.ChannelID, getErr)
 	}
 
+	report.ValidAfterNanoseconds = ClampReportRange(r, report, opts.MaxReportRange)
 	validAfter := llo.ConvertTimestamp(report.ValidAfterNanoseconds, opts.TimeResolution)
 	observationTimestamp := llo.ConvertTimestamp(report.ObservationTimestampNanoseconds, opts.TimeResolution)
 	expiresAt := observationTimestamp + llo.ScaleSeconds(opts.ExpirationWindow, opts.TimeResolution)

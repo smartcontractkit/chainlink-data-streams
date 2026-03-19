@@ -1730,7 +1730,10 @@ func TestProcessStreamCalculated(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			lggr, err := logger.New()
 			require.NoError(t, err)
-			p := &Plugin{Logger: lggr}
+			p := &Plugin{Logger: lggr, OptsCache: NewOptsCache()}
+			for cid, cd := range tt.outcome.ChannelDefinitions {
+				p.OptsCache.Set(cid, cd.Opts)
+			}
 			p.ProcessCalculatedStreams(&tt.outcome)
 
 			for streamID, expectedValue := range tt.expectedValues {
@@ -1767,7 +1770,10 @@ func BenchmarkProcessCalculatedStreams(b *testing.B) {
 		StreamAggregates: aggr,
 	}
 
-	p := &Plugin{Logger: logger.Nop()}
+	p := &Plugin{Logger: logger.Nop(), OptsCache: NewOptsCache()}
+	for cid, cd := range outcome.ChannelDefinitions {
+		p.OptsCache.Set(cid, cd.Opts)
+	}
 
 	for i := 0; i < b.N; i++ {
 		p.ProcessCalculatedStreams(&outcome)

@@ -65,16 +65,10 @@ type ReportFormatEVMPremiumLegacyOpts struct {
 	// Multiplier is used to scale the bid, benchmark and ask values in the
 	// report. If not specified, or zero is used, a multiplier of 1 is assumed.
 	Multiplier *ubig.Big `json:"multiplier"`
-	// DisableNilStreamValues controls whether channels with nil stream values
-	// are reportable. When false (default), nil stream values are allowed and
-	// channels are reportable. Set to true to make channels with missing
-	// stream values unreportable.
-	//
-	// This field is also read by the outcome plugin via independent JSON
-	// parsing (see nilStreamValuesDisabled in plugin_outcome.go). It is
-	// declared here so that Decode's DisallowUnknownFields does not reject
-	// channel opts that include it; the codec itself does not act on it.
-	DisableNilStreamValues bool `json:"disableNilStreamValues,omitempty"`
+	// MaxReportRange is the maximum range of the report.
+	// The range will be limited to ObservationTimestamp + MaxReportRange if the report is longer than the max range.
+	// Defaults to 5 minutes if not specified.
+	MaxReportRange llo.Duration `json:"maxReportRange,omitempty"`
 }
 
 func (r *ReportFormatEVMPremiumLegacyOpts) Decode(opts []byte) error {
@@ -87,7 +81,7 @@ func (r *ReportFormatEVMPremiumLegacyOpts) Decode(opts []byte) error {
 	return decoder.Decode(r)
 }
 
-func (r ReportCodecPremiumLegacy) Encode(report llo.Report, cd llotypes.ChannelDefinition) ([]byte, error) {
+func (r ReportCodecPremiumLegacy) Encode(report llo.Report, cd llotypes.ChannelDefinition, optsCache *llo.OptsCache) ([]byte, error) {
 	if report.Specimen {
 		return nil, errors.New("ReportCodecPremiumLegacy does not support encoding specimen reports")
 	}
@@ -96,13 +90,12 @@ func (r ReportCodecPremiumLegacy) Encode(report llo.Report, cd llotypes.ChannelD
 		return nil, fmt.Errorf("ReportCodecPremiumLegacy cannot encode; got unusable report; %w", err)
 	}
 
-	// NOTE: It seems suboptimal to have to parse the opts on every encode but
-	// not sure how to avoid it. Should be negligible performance hit as long
-	// as Opts is small.
-	opts := ReportFormatEVMPremiumLegacyOpts{}
-	if err = (&opts).Decode(cd.Opts); err != nil {
-		return nil, fmt.Errorf("failed to decode opts; got: '%s'; %w", cd.Opts, err)
+	opts, getErr := llo.GetOpts[ReportFormatEVMPremiumLegacyOpts](optsCache, report.ChannelID)
+	if getErr != nil {
+		return nil, fmt.Errorf("opts not in cache for channel %d: %w", report.ChannelID, getErr)
 	}
+
+	report.ValidAfterNanoseconds = ClampReportRange(r, report, opts.MaxReportRange)
 	var multiplier decimal.Decimal
 	if opts.Multiplier == nil {
 		multiplier = decimal.NewFromInt(1)

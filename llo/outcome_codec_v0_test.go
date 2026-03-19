@@ -78,6 +78,37 @@ func Test_protoOutcomeCodecV0(t *testing.T) {
 
 		assert.Equal(t, outcome, outcome2)
 	})
+	t.Run("encode and decode preserves attributes in channel definitions", func(t *testing.T) {
+		outcome := Outcome{
+			LifeCycleStage:                  llotypes.LifeCycleStage("staging"),
+			ObservationTimestampNanoseconds:  1,
+			ChannelDefinitions: map[llotypes.ChannelID]llotypes.ChannelDefinition{
+				1: {
+					ReportFormat:          llotypes.ReportFormatJSON,
+					Streams:               []llotypes.Stream{{StreamID: 1, Aggregator: llotypes.AggregatorMedian}},
+					DisableNilStreamValues: true,
+					Opts:                  []byte(`{}`),
+					Tombstone:             false,
+					Source:                1,
+				},
+				2: {
+					ReportFormat:          llotypes.ReportFormatJSON,
+					Streams:               []llotypes.Stream{{StreamID: 2, Aggregator: llotypes.AggregatorQuote}},
+					DisableNilStreamValues: false,
+					Opts:                  []byte(`{}`),
+					Tombstone:             true,
+					Source:                2,
+				},
+			},
+		}
+		outcomeBytes, err := (protoOutcomeCodecV0{}).Encode(outcome)
+		require.NoError(t, err)
+		outcome2, err := (protoOutcomeCodecV0{}).Decode(outcomeBytes)
+		require.NoError(t, err)
+		assert.Equal(t, outcome.ChannelDefinitions, outcome2.ChannelDefinitions)
+		assert.True(t, outcome2.ChannelDefinitions[1].DisableNilStreamValues)
+		assert.False(t, outcome2.ChannelDefinitions[2].DisableNilStreamValues)
+	})
 }
 
 func Fuzz_protoOutcomeCodecV0_Decode(f *testing.F) {

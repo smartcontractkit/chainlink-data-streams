@@ -1,7 +1,9 @@
 package llo
 
 import (
+	"errors"
 	"fmt"
+	"time"
 
 	"github.com/goccy/go-json"
 
@@ -9,6 +11,11 @@ import (
 	"github.com/smartcontractkit/libocr/offchainreporting2plus/ocr3types"
 
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
+)
+
+const (
+	// DefaultMaxReportRange is the default maximum range of the report if unset in the opts.
+	DefaultMaxReportRange = Duration(5 * time.Minute)
 )
 
 type ObservationCodec interface {
@@ -24,8 +31,9 @@ type OutcomeCodec interface {
 type ReportCodec interface {
 	// Encode may be lossy, so no Decode function is expected
 	// Encode should handle nil stream aggregate values without panicking (it
-	// may return error instead)
-	Encode(Report, llotypes.ChannelDefinition) ([]byte, error)
+	// may return error instead).
+	// Codecs may use GetOpts(optsCache, report.ChannelID) to get cached parsed opts.
+	Encode(Report, llotypes.ChannelDefinition, *OptsCache) ([]byte, error)
 	// Verify may optionally verify a channel definition to ensure it is valid
 	// for the given report codec. If a codec does not wish to implement
 	// validation it may simply return nil here. If any definition fails
@@ -127,5 +135,36 @@ func ScaleSeconds(seconds uint32, resolution TimeResolution) uint64 {
 		return uint64(seconds) * 1e9
 	default:
 		return uint64(seconds)
+	}
+}
+
+type Duration time.Duration
+
+func (d Duration) String() string {
+	return time.Duration(d).String()
+}
+
+func (d Duration) MarshalJSON() ([]byte, error) {
+	return json.Marshal(time.Duration(d).String())
+}
+
+func (d *Duration) UnmarshalJSON(b []byte) error {
+	var v interface{}
+	if err := json.Unmarshal(b, &v); err != nil {
+		return err
+	}
+	switch value := v.(type) {
+	case float64:
+		*d = Duration(time.Duration(value))
+		return nil
+	case string:
+		tmp, err := time.ParseDuration(value)
+		if err != nil {
+			return err
+		}
+		*d = Duration(tmp)
+		return nil
+	default:
+		return errors.New("invalid duration")
 	}
 }

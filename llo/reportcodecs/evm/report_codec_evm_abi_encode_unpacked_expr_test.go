@@ -18,6 +18,7 @@ import (
 
 	ubig "github.com/smartcontractkit/chainlink-data-streams/llo/reportcodecs/evm/utils"
 
+	"github.com/smartcontractkit/chainlink-common/pkg/logger"
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
 	"github.com/smartcontractkit/chainlink-data-streams/llo"
 )
@@ -71,8 +72,10 @@ func TestReportCodecEVMABIEncodeUnpackedExpr_Encode(t *testing.T) {
 			Opts: serializedOpts,
 		}
 
+		cache := llo.NewOptsCache()
+		cache.Set(report.ChannelID, cd.Opts)
 		codec := ReportCodecEVMABIEncodeUnpackedExpr{}
-		_, err = codec.Encode(report, cd)
+		_, err = codec.Encode(report, cd, cache)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "ReportCodecEVMABIEncodeUnpackedExpr no expressions found in channel definition")
 	})
@@ -148,8 +151,12 @@ func TestReportCodecEVMABIEncodeUnpackedExpr_Encode(t *testing.T) {
 				Opts: serializedOpts,
 			}
 
-			codec := ReportCodecEVMABIEncodeUnpackedExpr{}
-			encoded, err := codec.Encode(report, cd)
+			codec := ReportCodecEVMABIEncodeUnpackedExpr{Logger: logger.Nop()}
+			clampedValidAfterNanos := ClampReportRange(logger.Nop(), report, 0)
+
+			cache := llo.NewOptsCache()
+			cache.Set(report.ChannelID, cd.Opts)
+			encoded, err := codec.Encode(report, cd, cache)
 			require.NoError(t, err)
 
 			values, err := expectedDEXBasedAssetSchema.Unpack(encoded)
@@ -164,12 +171,12 @@ func TestReportCodecEVMABIEncodeUnpackedExpr_Encode(t *testing.T) {
 			for i := range report.Values {
 				report.Values[i] = nil
 			}
-			_, err = codec.Encode(report, cd)
+			_, err = codec.Encode(report, cd, cache)
 			require.Error(t, err)
 
 			return AllTrue([]bool{
 				assert.Equal(t, sampleFeedID, (common.Hash)(values[0].([32]byte))),                                                                  //nolint:testifylint // false positive // feedId
-				assert.Equal(t, uint32(sampleValidAfterNanoseconds/1e9)+1, values[1].(uint32)),                                                      //nolint:gosec // G115 // validFromTimestamp
+				assert.Equal(t, uint32(clampedValidAfterNanos/1e9)+1, values[1].(uint32)),                                                           //nolint:gosec // G115 // validFromTimestamp
 				assert.Equal(t, uint32(sampleObservationTimestampNanoseconds/1e9), values[2].(uint32)),                                              //nolint:gosec // G115 // observationsTimestamp
 				assert.Equal(t, expectedLinkFee.String(), values[3].(*big.Int).String()),                                                            // nativeFee (Values[0] is link benchmark in test data)
 				assert.Equal(t, expectedNativeFee.String(), values[4].(*big.Int).String()),                                                          // linkFee (Values[1] is native benchmark in test data)
@@ -271,8 +278,12 @@ func TestReportCodecEVMABIEncodeUnpackedExpr_Encode(t *testing.T) {
 				Opts: serializedOpts,
 			}
 
-			codec := ReportCodecEVMABIEncodeUnpackedExpr{}
-			encoded, err := codec.Encode(report, cd)
+			codec := ReportCodecEVMABIEncodeUnpackedExpr{Logger: logger.Nop()}
+			clampedValidAfterNanos := ClampReportRange(logger.Nop(), report, 0)
+
+			cache := llo.NewOptsCache()
+			cache.Set(report.ChannelID, cd.Opts)
+			encoded, err := codec.Encode(report, cd, cache)
 			require.NoError(t, err)
 
 			values, err := schema.Unpack(encoded)
@@ -292,7 +303,7 @@ func TestReportCodecEVMABIEncodeUnpackedExpr_Encode(t *testing.T) {
 			}
 
 			// Verify timestamps per resolution type
-			expectedValidFrom := llo.ConvertTimestamp(sampleValidAfterNanoseconds, sampleTimeResolution) + 1
+			expectedValidFrom := llo.ConvertTimestamp(clampedValidAfterNanos, sampleTimeResolution) + 1
 			expectedObservationTimestamp := llo.ConvertTimestamp(sampleObservationTimestampNanoseconds, sampleTimeResolution)
 			expectedExpiresAt := expectedObservationTimestamp + llo.ScaleSeconds(sampleExpirationWindow, sampleTimeResolution)
 			if timestampType == "uint32" {

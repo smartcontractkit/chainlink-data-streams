@@ -14,6 +14,7 @@ import (
 
 	ocr2types "github.com/smartcontractkit/libocr/offchainreporting2plus/types"
 
+	"github.com/smartcontractkit/chainlink-common/pkg/logger"
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
 	"github.com/smartcontractkit/chainlink-data-streams/llo"
 )
@@ -22,17 +23,20 @@ var (
 	_ llo.ReportCodec = ReportCodecEVMStreamlined{}
 )
 
-func NewReportCodecStreamlined() ReportCodecEVMStreamlined {
-	return ReportCodecEVMStreamlined{}
+func NewReportCodecStreamlined(lggr logger.Logger) ReportCodecEVMStreamlined {
+	return ReportCodecEVMStreamlined{logger.Sugared(lggr).Named("ReportCodecEVMStreamlined")}
 }
 
-type ReportCodecEVMStreamlined struct{}
+type ReportCodecEVMStreamlined struct {
+	logger.Logger
+}
 
-func (rc ReportCodecEVMStreamlined) Encode(r llo.Report, cd llotypes.ChannelDefinition) (payload []byte, err error) {
-	opts := ReportFormatEVMStreamlinedOpts{}
-	if err = (&opts).Decode(cd.Opts); err != nil {
-		return nil, fmt.Errorf("failed to decode opts; got: '%s'; %w", cd.Opts, err)
+func (rc ReportCodecEVMStreamlined) Encode(r llo.Report, cd llotypes.ChannelDefinition, optsCache *llo.OptsCache) (payload []byte, err error) {
+	opts, getErr := llo.GetOpts[ReportFormatEVMStreamlinedOpts](optsCache, r.ChannelID)
+	if getErr != nil {
+		return nil, fmt.Errorf("opts not in cache for channel %d: %w", r.ChannelID, getErr)
 	}
+	r.ValidAfterNanoseconds = ClampReportRange(rc, r, opts.MaxReportRange)
 
 	if opts.FeedID == nil {
 		payload = append(
@@ -168,16 +172,10 @@ type ReportFormatEVMStreamlinedOpts struct {
 	// The total number of streams must be n, where n is the number of
 	// top-level elements in this ABI array
 	ABI []ABIEncoder `json:"abi"`
-	// DisableNilStreamValues controls whether channels with nil stream values
-	// are reportable. When false (default), nil stream values are allowed and
-	// channels are reportable. Set to true to make channels with missing
-	// stream values unreportable.
-	//
-	// This field is also read by the outcome plugin via independent JSON
-	// parsing (see nilStreamValuesDisabled in plugin_outcome.go). It is
-	// declared here so that Decode's DisallowUnknownFields does not reject
-	// channel opts that include it; the codec itself does not act on it.
-	DisableNilStreamValues bool `json:"disableNilStreamValues,omitempty"`
+	// MaxReportRange is the maximum range of the report.
+	// The range will be limited to ObservationTimestamp + MaxReportRange if the report is longer than the max range.
+	// Defaults to 5 minutes if not specified.
+	MaxReportRange llo.Duration `json:"maxReportRange,omitempty"`
 }
 
 func (r *ReportFormatEVMStreamlinedOpts) Decode(opts []byte) error {

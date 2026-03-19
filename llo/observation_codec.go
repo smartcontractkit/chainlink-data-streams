@@ -87,29 +87,6 @@ func (c protoObservationCodec) Encode(obs Observation) (types.Observation, error
 	return b, nil
 }
 
-func channelDefinitionsToProtoObservation(in llotypes.ChannelDefinitions) (out map[uint32]*LLOChannelDefinitionProto) {
-	if len(in) > 0 {
-		out = make(map[uint32]*LLOChannelDefinitionProto, len(in))
-		for id, d := range in {
-			streams := make([]*LLOStreamDefinition, len(d.Streams))
-			for i, strm := range d.Streams {
-				streams[i] = &LLOStreamDefinition{
-					StreamID:   strm.StreamID,
-					Aggregator: uint32(strm.Aggregator),
-				}
-			}
-			out[id] = &LLOChannelDefinitionProto{
-				ReportFormat: uint32(d.ReportFormat),
-				Streams:      streams,
-				Opts:         d.Opts,
-				Tombstone:    d.Tombstone,
-				Source:       d.Source,
-			}
-		}
-	}
-	return
-}
-
 func (c protoObservationCodec) Decode(b types.Observation) (Observation, error) {
 	var err error
 	if c.enableCompression {
@@ -187,12 +164,37 @@ func channelDefinitionsFromProtoObservation(channelDefinitions map[uint32]*LLOCh
 			}
 		}
 		dfns[id] = llotypes.ChannelDefinition{
-			ReportFormat: llotypes.ReportFormat(d.ReportFormat),
-			Streams:      streams,
-			Opts:         d.Opts,
-			Tombstone:    d.Tombstone,
-			Source:       d.Source,
+			ReportFormat:          llotypes.ReportFormat(d.ReportFormat),
+			Streams:               streams,
+			Opts:                  d.Opts,
+			Tombstone:             d.Tombstone,
+			Source:                d.Source,
+			DisableNilStreamValues: d.DisableNilStreamValues,
 		}
 	}
 	return dfns
+}
+
+func channelDefinitionsToProtoObservation(in llotypes.ChannelDefinitions) (out map[uint32]*LLOChannelDefinitionProto) {
+	if len(in) > 0 {
+		out = make(map[uint32]*LLOChannelDefinitionProto, len(in))
+		for id, d := range in {
+			streams := make([]*LLOStreamDefinition, len(d.Streams))
+			for i, strm := range d.Streams {
+				streams[i] = &LLOStreamDefinition{
+					StreamID:   strm.StreamID,
+					Aggregator: uint32(strm.Aggregator),
+				}
+			}
+			out[id] = &LLOChannelDefinitionProto{
+				ReportFormat:          uint32(d.ReportFormat),
+				Streams:               streams,
+				Opts:                  d.Opts,
+				Tombstone:             d.Tombstone,
+				Source:                d.Source,
+				DisableNilStreamValues: d.DisableNilStreamValues,
+			}
+		}
+	}
+	return
 }

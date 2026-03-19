@@ -13,13 +13,14 @@ import (
 
 	ocr2types "github.com/smartcontractkit/libocr/offchainreporting2plus/types"
 
+	"github.com/smartcontractkit/chainlink-common/pkg/logger"
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
 	"github.com/smartcontractkit/chainlink-data-streams/llo"
 )
 
 func TestReportCodecEVMStreamlined(t *testing.T) {
 	t.Parallel()
-	codec := ReportCodecEVMStreamlined{}
+	codec := ReportCodecEVMStreamlined{Logger: logger.Nop()}
 
 	t.Run("Encode", func(t *testing.T) {
 		t.Run("one value, without feed ID - fits into one evm word", func(t *testing.T) {
@@ -27,13 +28,17 @@ func TestReportCodecEVMStreamlined(t *testing.T) {
 				ReportFormat: 42,
 				Opts:         []byte(`{"abi":[{"type":"int128"}]}`),
 			}
+			cache := llo.NewOptsCache()
+			cache.Set(1, cd.Opts)
+			validAfter := uint64(1234567890)
 			payload, err := codec.Encode(llo.Report{
-				ChannelID:             1,
-				ValidAfterNanoseconds: 1234567890,
+				ChannelID:                       1,
+				ValidAfterNanoseconds:           validAfter,
+				ObservationTimestampNanoseconds: validAfter, // within range so ClampReportRange does not change validAfter
 				Values: []llo.StreamValue{
 					llo.ToDecimal(decimal.NewFromFloat(1123455935.123)),
 				},
-			}, cd)
+			}, cd, cache)
 			require.NoError(t, err)
 			require.Len(t, payload, 32)
 			// Report Format
@@ -50,13 +55,17 @@ func TestReportCodecEVMStreamlined(t *testing.T) {
 			cd := llotypes.ChannelDefinition{
 				Opts: []byte(fmt.Sprintf(`{"abi":[{"type":"int192"}], "feedID":"0x%s"}`, feedID)),
 			}
+			cache := llo.NewOptsCache()
+			cache.Set(1, cd.Opts)
+			validAfter := uint64(1234567890)
 			payload, err := codec.Encode(llo.Report{
-				ChannelID:             1,
-				ValidAfterNanoseconds: 1234567890,
+				ChannelID:                       1,
+				ValidAfterNanoseconds:           validAfter,
+				ObservationTimestampNanoseconds: validAfter, // within range so ClampReportRange does not change validAfter
 				Values: []llo.StreamValue{
 					llo.ToDecimal(decimal.NewFromFloat(1123455935.123)),
 				},
-			}, cd)
+			}, cd, cache)
 			require.NoError(t, err)
 			require.Len(t, payload, 64)
 			assert.Equal(t, feedID, hex.EncodeToString(payload[:32]))                                             // feed id
@@ -84,7 +93,7 @@ func TestReportCodecEVMStreamlined(t *testing.T) {
 				Streams: []llotypes.Stream{
 					{StreamID: 123, Aggregator: llotypes.AggregatorMedian},
 				},
-				Opts: []byte(`{"abi":[{"type":"int160"}], "disableNilStreamValues":false}`),
+				Opts: []byte(`{"abi":[{"type":"int160"}]}`),
 			})
 			require.NoError(t, err)
 			t.Run("with invalid opts", func(t *testing.T) {

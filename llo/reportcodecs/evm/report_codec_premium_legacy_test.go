@@ -31,8 +31,10 @@ func FuzzReportCodecPremiumLegacy_Decode(f *testing.F) {
 	cd := llotypes.ChannelDefinition{Opts: llotypes.ChannelOpts(fmt.Sprintf(`{"baseUSDFee":"10.50","expirationWindow":60,"feedId":"0x%x","multiplier":10}`, feedID))}
 
 	codec := ReportCodecPremiumLegacy{logger.Test(f), 100002}
+	cache := llo.NewOptsCache()
+	cache.Set(validReport.ChannelID, cd.Opts)
 
-	validEncodedReport, err := codec.Encode(validReport, cd)
+	validEncodedReport, err := codec.Encode(validReport, cd, cache)
 	require.NoError(f, err)
 	f.Add(validEncodedReport)
 
@@ -60,7 +62,9 @@ func Test_ReportCodecPremiumLegacy(t *testing.T) {
 	cd := llotypes.ChannelDefinition{Opts: llotypes.ChannelOpts(fmt.Sprintf(`{"baseUSDFee":"10.50","expirationWindow":60,"feedId":"0x%x","multiplier":10}`, feedID))}
 
 	t.Run("Encode errors if no values", func(t *testing.T) {
-		_, err := rc.Encode(llo.Report{}, cd)
+		cache := llo.NewOptsCache()
+		cache.Set(0, cd.Opts)
+		_, err := rc.Encode(llo.Report{}, cd, cache)
 		require.Error(t, err)
 
 		assert.Contains(t, err.Error(), "ReportCodecPremiumLegacy cannot encode; got unusable report; ReportCodecPremiumLegacy requires exactly 3 values (NativePrice, LinkPrice, Quote{Bid, Mid, Ask}); got report.Values: []")
@@ -69,16 +73,20 @@ func Test_ReportCodecPremiumLegacy(t *testing.T) {
 	t.Run("does not encode specimen reports", func(t *testing.T) {
 		report := newValidPremiumLegacyReport()
 		report.Specimen = true
+		cache := llo.NewOptsCache()
+		cache.Set(report.ChannelID, cd.Opts)
 
-		_, err := rc.Encode(report, cd)
+		_, err := rc.Encode(report, cd, cache)
 		require.Error(t, err)
 		require.EqualError(t, err, "ReportCodecPremiumLegacy does not support encoding specimen reports")
 	})
 
 	t.Run("Encode constructs a report from observations", func(t *testing.T) {
 		report := newValidPremiumLegacyReport()
+		cache := llo.NewOptsCache()
+		cache.Set(report.ChannelID, cd.Opts)
 
-		encoded, err := rc.Encode(report, cd)
+		encoded, err := rc.Encode(report, cd, cache)
 		require.NoError(t, err)
 
 		assert.Len(t, encoded, 288)
@@ -118,8 +126,10 @@ func Test_ReportCodecPremiumLegacy(t *testing.T) {
 		report := llo.Report{
 			Values: []llo.StreamValue{nil, nil, &llo.Quote{Bid: decimal.NewFromInt(37), Benchmark: decimal.NewFromInt(38), Ask: decimal.NewFromInt(39)}},
 		}
+		cache := llo.NewOptsCache()
+		cache.Set(report.ChannelID, cd.Opts)
 
-		encoded, err := rc.Encode(report, cd)
+		encoded, err := rc.Encode(report, cd, cache)
 		require.NoError(t, err)
 
 		assert.Len(t, encoded, 288)
@@ -323,45 +333,6 @@ func Test_ReportCodecPremiumLegacy_Verify(t *testing.T) {
 			},
 			ReportFormat: llotypes.ReportFormatEVMABIEncodeUnpacked,
 			Opts:         []byte(`{"baseUSDFee":"1","feedID":"0x1111111111111111111111111111111111111111111111111111111111111111"}`),
-		}
-		err := c.Verify(cd)
-		require.NoError(t, err)
-	})
-	t.Run("disableNilStreamValues=undefined does not error", func(t *testing.T) {
-		cd := llotypes.ChannelDefinition{
-			Streams: []llotypes.Stream{
-				{StreamID: 1, Aggregator: llotypes.AggregatorMedian},
-				{StreamID: 2, Aggregator: llotypes.AggregatorMedian},
-				{StreamID: 3, Aggregator: llotypes.AggregatorMedian},
-			},
-			ReportFormat: llotypes.ReportFormatEVMABIEncodeUnpacked,
-			Opts:         []byte(`{"baseUSDFee":"1","feedID":"0x1111111111111111111111111111111111111111111111111111111111111111"}`),
-		}
-		err := c.Verify(cd)
-		require.NoError(t, err)
-	})
-	t.Run("disableNilStreamValues=true is a known field and does not error", func(t *testing.T) {
-		cd := llotypes.ChannelDefinition{
-			Streams: []llotypes.Stream{
-				{StreamID: 1, Aggregator: llotypes.AggregatorMedian},
-				{StreamID: 2, Aggregator: llotypes.AggregatorMedian},
-				{StreamID: 3, Aggregator: llotypes.AggregatorMedian},
-			},
-			ReportFormat: llotypes.ReportFormatEVMABIEncodeUnpacked,
-			Opts:         []byte(`{"baseUSDFee":"1","feedID":"0x1111111111111111111111111111111111111111111111111111111111111111","disableNilStreamValues":true}`),
-		}
-		err := c.Verify(cd)
-		require.NoError(t, err)
-	})
-	t.Run("disableNilStreamValues=false is a known field and does not error", func(t *testing.T) {
-		cd := llotypes.ChannelDefinition{
-			Streams: []llotypes.Stream{
-				{StreamID: 1, Aggregator: llotypes.AggregatorMedian},
-				{StreamID: 2, Aggregator: llotypes.AggregatorMedian},
-				{StreamID: 3, Aggregator: llotypes.AggregatorMedian},
-			},
-			ReportFormat: llotypes.ReportFormatEVMABIEncodeUnpacked,
-			Opts:         []byte(`{"baseUSDFee":"1","feedID":"0x1111111111111111111111111111111111111111111111111111111111111111","disableNilStreamValues":false}`),
 		}
 		err := c.Verify(cd)
 		require.NoError(t, err)

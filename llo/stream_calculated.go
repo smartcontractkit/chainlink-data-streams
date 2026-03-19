@@ -9,8 +9,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/goccy/go-json"
-
 	"github.com/expr-lang/expr"
 	"github.com/expr-lang/expr/ast"
 	"github.com/expr-lang/expr/parser"
@@ -51,7 +49,7 @@ var (
 				"Ceil":               Ceil,
 				"Floor":              Floor,
 				"Avg":                Avg,
-				"Duration":           Duration,
+				"Duration":           ParseDuration,
 			}
 		},
 	}
@@ -475,8 +473,8 @@ func Truncate(x any, precision int) (decimal.Decimal, error) {
 	return n.Truncate(int32(precision)), nil
 }
 
-// Duration parses a duration string into a time.Duration
-func Duration(x string) (time.Duration, error) {
+// ParseDuration parses a duration string into a time.ParseDuration
+func ParseDuration(x string) (time.Duration, error) {
 	return time.ParseDuration(x)
 }
 
@@ -567,13 +565,9 @@ func (p *Plugin) ProcessCalculatedStreams(outcome *Outcome) {
 			continue
 		}
 
-		// TODO: we can potentially cache the opts for each channel definition
-		// and avoid unmarshalling the options on outcome.
-		// for now keep it simple as this will require invalidating on
-		// channel definitions updates.
-		copt := opts{}
-		if err := json.Unmarshal(cd.Opts, &copt); err != nil {
-			p.Logger.Errorw("failed to unmarshal channel definition options", "channelID", cid, "error", err)
+		copt, getErr := GetOpts[calculatedStreamOpts](p.OptsCache, cid)
+		if getErr != nil {
+			p.Logger.Errorw("channel opts not in cache", "channelID", cid, "error", getErr)
 			env.release()
 			continue
 		}
@@ -604,7 +598,7 @@ func (p *Plugin) ProcessCalculatedStreams(outcome *Outcome) {
 	}
 }
 
-func (p *Plugin) evalExpression(o *opts, cid llotypes.ChannelID, env environment, outcome *Outcome) error {
+func (p *Plugin) evalExpression(o *calculatedStreamOpts, cid llotypes.ChannelID, env environment, outcome *Outcome) error {
 	for _, abi := range o.ABI {
 		if abi.ExpressionStreamID == 0 {
 			return fmt.Errorf("expression stream ID is 0, channelID: %d, expression: %s",
@@ -638,7 +632,9 @@ func (p *Plugin) evalExpression(o *opts, cid llotypes.ChannelID, env environment
 	return nil
 }
 
-type opts struct {
+// calculatedStreamOpts is the options structure for expression/calculated streams.
+// It is used with OptsCache for decoding channel opts in ProcessCalculatedStreams.
+type calculatedStreamOpts struct {
 	ABI []struct {
 		Type               string            `json:"type"`
 		Expression         string            `json:"expression"`
@@ -713,7 +709,7 @@ func (p *Plugin) ProcessCalculatedStreamsDryRun(expression string) error {
 	}
 
 	// Process the calculated streams
-	o := &opts{
+	o := &calculatedStreamOpts{
 		ABI: []struct {
 			Type               string            `json:"type"`
 			Expression         string            `json:"expression"`

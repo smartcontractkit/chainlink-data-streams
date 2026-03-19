@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
@@ -21,6 +22,7 @@ import (
 
 	ubig "github.com/smartcontractkit/chainlink-data-streams/llo/reportcodecs/evm/utils"
 
+	"github.com/smartcontractkit/chainlink-common/pkg/logger"
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
 	"github.com/smartcontractkit/chainlink-data-streams/llo"
 )
@@ -46,7 +48,7 @@ func TestReportFormatEVMABIEncodeOpts_Decode_Encode_properties(t *testing.T) {
 		err = decoded.Decode(encoded)
 		require.NoError(t, err)
 
-		return decoded.BaseUSDFee.Equal(opts.BaseUSDFee) && decoded.ExpirationWindow == opts.ExpirationWindow && decoded.FeedID == opts.FeedID && assert.Equal(t, opts.ABI, decoded.ABI) && decoded.DisableNilStreamValues == opts.DisableNilStreamValues
+		return decoded.BaseUSDFee.Equal(opts.BaseUSDFee) && decoded.ExpirationWindow == opts.ExpirationWindow && decoded.FeedID == opts.FeedID && assert.Equal(t, opts.ABI, decoded.ABI)
 	}
 	properties.Property("Encodes values", prop.ForAll(
 		runTest,
@@ -56,7 +58,7 @@ func TestReportFormatEVMABIEncodeOpts_Decode_Encode_properties(t *testing.T) {
 			"FeedID":           genFeedID(),
 			"ABI":              genABI(),
 			"TimeResolution":   genTimeResolution(),
-			"DisableNilStreamValues": gen.Bool(),
+			"MaxReportRange":   genMaxReportRange(),
 		})))
 
 	properties.TestingRun(t)
@@ -81,8 +83,12 @@ func genSingleABIEncoder() gopter.Gen {
 	})
 }
 
+func genMaxReportRange() gopter.Gen {
+	return gen.OneConstOf(llo.Duration(0), llo.Duration(60*time.Minute))
+}
+
 func TestReportCodecEVMABIEncodeUnpacked_Encode_properties(t *testing.T) {
-	codec := ReportCodecEVMABIEncodeUnpacked{}
+	codec := ReportCodecEVMABIEncodeUnpacked{Logger: logger.Nop()}
 
 	properties := gopter.NewProperties(nil)
 
@@ -154,7 +160,11 @@ func TestReportCodecEVMABIEncodeUnpacked_Encode_properties(t *testing.T) {
 				Opts: serializedOpts,
 			}
 
-			encoded, err := codec.Encode(report, cd)
+			clampedValidAfterNanos := ClampReportRange(logger.Nop(), report, 0)
+
+			cache := llo.NewOptsCache()
+			cache.Set(report.ChannelID, cd.Opts)
+			encoded, err := codec.Encode(report, cd, cache)
 			require.NoError(t, err)
 
 			values, err := expectedDEXBasedAssetSchema.Unpack(encoded)
@@ -169,12 +179,12 @@ func TestReportCodecEVMABIEncodeUnpacked_Encode_properties(t *testing.T) {
 			for i := range report.Values {
 				report.Values[i] = nil
 			}
-			_, err = codec.Encode(report, cd)
+			_, err = codec.Encode(report, cd, cache)
 			require.Error(t, err)
 
 			return AllTrue([]bool{
 				assert.Equal(t, sampleFeedID, (common.Hash)(values[0].([32]byte))),                                                                  //nolint:testifylint // false positive // feedId
-				assert.Equal(t, uint32(sampleValidAfterNanoseconds/1e9)+1, values[1].(uint32)),                                                      //nolint:gosec // G115 // validFromTimestamp
+				assert.Equal(t, uint32(clampedValidAfterNanos/1e9)+1, values[1].(uint32)),                                                           //nolint:gosec // G115 // validFromTimestamp
 				assert.Equal(t, uint32(sampleObservationTimestampNanoseconds/1e9), values[2].(uint32)),                                              //nolint:gosec // G115 // observationsTimestamp
 				assert.Equal(t, expectedLinkFee.String(), values[3].(*big.Int).String()),                                                            // linkFee
 				assert.Equal(t, expectedNativeFee.String(), values[4].(*big.Int).String()),                                                          // nativeFee
@@ -265,7 +275,11 @@ func TestReportCodecEVMABIEncodeUnpacked_Encode_properties(t *testing.T) {
 				Opts: serializedOpts,
 			}
 
-			encoded, err := codec.Encode(report, cd)
+			clampedValidAfterNanos := ClampReportRange(logger.Nop(), report, 0)
+
+			cache := llo.NewOptsCache()
+			cache.Set(report.ChannelID, cd.Opts)
+			encoded, err := codec.Encode(report, cd, cache)
 			require.NoError(t, err)
 
 			values, err := expectedRWASchema.Unpack(encoded)
@@ -280,12 +294,12 @@ func TestReportCodecEVMABIEncodeUnpacked_Encode_properties(t *testing.T) {
 			for i := range report.Values {
 				report.Values[i] = nil
 			}
-			_, err = codec.Encode(report, cd)
+			_, err = codec.Encode(report, cd, cache)
 			require.Error(t, err)
 
 			return AllTrue([]bool{
 				assert.Equal(t, sampleFeedID, (common.Hash)(values[0].([32]byte))),                                            //nolint:testifylint // false positive // feedId
-				assert.Equal(t, uint32(sampleValidAfterNanoseconds/1e9)+1, values[1].(uint32)),                                //nolint:gosec // G115 // validFromTimestamp
+				assert.Equal(t, uint32(clampedValidAfterNanos/1e9)+1, values[1].(uint32)),                                     //nolint:gosec // G115 // validFromTimestamp
 				assert.Equal(t, uint32(sampleObservationTimestampNanoseconds/1e9), values[2].(uint32)),                        //nolint:gosec // G115 //  observationsTimestamp
 				assert.Equal(t, expectedLinkFee.String(), values[3].(*big.Int).String()),                                      // linkFee
 				assert.Equal(t, expectedNativeFee.String(), values[4].(*big.Int).String()),                                    // nativeFee
@@ -363,7 +377,11 @@ func TestReportCodecEVMABIEncodeUnpacked_Encode_properties(t *testing.T) {
 				Opts: serializedOpts,
 			}
 
-			encoded, err := codec.Encode(report, cd)
+			clampedValidAfterNanos := ClampReportRange(logger.Nop(), report, 0)
+
+			cache := llo.NewOptsCache()
+			cache.Set(report.ChannelID, cd.Opts)
+			encoded, err := codec.Encode(report, cd, cache)
 			require.NoError(t, err)
 
 			values, err := expectedDEXBasedAssetSchema.Unpack(encoded)
@@ -378,12 +396,12 @@ func TestReportCodecEVMABIEncodeUnpacked_Encode_properties(t *testing.T) {
 			for i := range report.Values {
 				report.Values[i] = nil
 			}
-			_, err = codec.Encode(report, cd)
+			_, err = codec.Encode(report, cd, cache)
 			require.Error(t, err)
 
 			return AllTrue([]bool{
 				assert.Equal(t, sampleFeedID, (common.Hash)(values[0].([32]byte))),                                                          //nolint:testifylint // false positive // feedId
-				assert.Equal(t, uint32(sampleValidAfterNanoseconds/1e9)+1, values[1].(uint32)),                                              //nolint:gosec // G115 // validFromTimestamp
+				assert.Equal(t, uint32(clampedValidAfterNanos/1e9)+1, values[1].(uint32)),                                                   //nolint:gosec // G115 // validFromTimestamp
 				assert.Equal(t, uint32(sampleObservationTimestampNanoseconds/1e9), values[2].(uint32)),                                      //nolint:gosec // G115 //  observationsTimestamp
 				assert.Equal(t, expectedLinkFee.String(), values[3].(*big.Int).String()),                                                    // linkFee
 				assert.Equal(t, expectedNativeFee.String(), values[4].(*big.Int).String()),                                                  // nativeFee
@@ -469,7 +487,11 @@ func TestReportCodecEVMABIEncodeUnpacked_Encode_properties(t *testing.T) {
 				Opts: serializedOpts,
 			}
 
-			encoded, err := codec.Encode(report, cd)
+			clampedValidAfterNanos := ClampReportRange(logger.Nop(), report, 0)
+
+			cache := llo.NewOptsCache()
+			cache.Set(report.ChannelID, cd.Opts)
+			encoded, err := codec.Encode(report, cd, cache)
 			require.NoError(t, err)
 
 			values, err := schema.Unpack(encoded)
@@ -487,7 +509,7 @@ func TestReportCodecEVMABIEncodeUnpacked_Encode_properties(t *testing.T) {
 			}
 
 			// Verify timestamps per resolution type
-			expectedValidFrom := llo.ConvertTimestamp(sampleValidAfterNanoseconds, sampleTimeResolution) + 1
+			expectedValidFrom := llo.ConvertTimestamp(clampedValidAfterNanos, sampleTimeResolution) + 1
 			expectedObservationTimestamp := llo.ConvertTimestamp(sampleObservationTimestampNanoseconds, sampleTimeResolution)
 			expectedExpiresAt := expectedObservationTimestamp + llo.ScaleSeconds(sampleExpirationWindow, sampleTimeResolution)
 			if timestampType == "uint32" {
@@ -599,7 +621,11 @@ func TestReportCodecEVMABIEncodeUnpacked_Encode_properties(t *testing.T) {
 				Opts: serializedOpts,
 			}
 
-			encoded, err := codec.Encode(report, cd)
+			clampedValidAfterNanos := ClampReportRange(logger.Nop(), report, 0)
+
+			cache := llo.NewOptsCache()
+			cache.Set(report.ChannelID, cd.Opts)
+			encoded, err := codec.Encode(report, cd, cache)
 			require.NoError(t, err)
 
 			values, err := expectedFundingRateSchema.Unpack(encoded)
@@ -614,12 +640,12 @@ func TestReportCodecEVMABIEncodeUnpacked_Encode_properties(t *testing.T) {
 			for i := range report.Values {
 				report.Values[i] = nil
 			}
-			_, err = codec.Encode(report, cd)
+			_, err = codec.Encode(report, cd, cache)
 			require.Error(t, err)
 
 			return AllTrue([]bool{
 				assert.Equal(t, sampleFeedID, (common.Hash)(values[0].([32]byte))),                                            //nolint:testifylint // false positive // feedId
-				assert.Equal(t, uint32(sampleValidAfterNanoseconds/1e9)+1, values[1].(uint32)),                                //nolint:gosec // G115 // validFromTimestamp
+				assert.Equal(t, uint32(clampedValidAfterNanos/1e9)+1, values[1].(uint32)),                                     //nolint:gosec // G115 // validFromTimestamp
 				assert.Equal(t, uint32(sampleObservationTimestampNanoseconds/1e9), values[2].(uint32)),                        //nolint:gosec // G115 //  observationsTimestamp
 				assert.Equal(t, expectedLinkFee.String(), values[3].(*big.Int).String()),                                      // linkFee
 				assert.Equal(t, expectedNativeFee.String(), values[4].(*big.Int).String()),                                    // nativeFee
@@ -699,12 +725,14 @@ func TestReportCodecEVMABIEncodeUnpacked_Encode(t *testing.T) {
 			Opts: serializedOpts,
 		}
 
+		cache := llo.NewOptsCache()
+		cache.Set(report.ChannelID, cd.Opts)
 		codec := ReportCodecEVMABIEncodeUnpacked{}
-		_, err = codec.Encode(report, cd)
+		_, err = codec.Encode(report, cd, cache)
 		require.EqualError(t, err, "failed to build payload; ABI and values length mismatch; ABI: 0, Values: 3")
 
 		report.Values = []llo.StreamValue{}
-		_, err = codec.Encode(report, cd)
+		_, err = codec.Encode(report, cd, cache)
 		require.EqualError(t, err, "ReportCodecEVMABIEncodeUnpacked requires at least 2 values (NativePrice, LinkPrice, ...); got report.Values: []")
 	})
 }
@@ -810,7 +838,6 @@ func genFundingIntervalHours() gopter.Gen {
 		return decimal.NewFromInt(int64(i))
 	})
 }
-
 
 func mustNewABIType(t string) abi.Type {
 	result, err := abi.NewType(t, "", []abi.ArgumentMarshaling{})

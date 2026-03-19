@@ -71,6 +71,38 @@ func Test_protoObservationCodec(t *testing.T) {
 
 		assert.Equal(t, expectedObs, obs2)
 	})
+	t.Run("encode and decode preserves properties in channel definitions", func(t *testing.T) {
+		obs := Observation{
+			UnixTimestampNanoseconds: 1,
+			UpdateChannelDefinitions: map[llotypes.ChannelID]llotypes.ChannelDefinition{
+				1: {
+					ReportFormat:          llotypes.ReportFormatJSON,
+					Streams:               []llotypes.Stream{{StreamID: 1, Aggregator: llotypes.AggregatorMedian}},
+					DisableNilStreamValues: true,
+					Opts:                  []byte(`{}`),
+					Tombstone:             false,
+					Source:                1,
+				},
+				2: {
+					ReportFormat:          llotypes.ReportFormatJSON,
+					Streams:               []llotypes.Stream{{StreamID: 2, Aggregator: llotypes.AggregatorQuote}},
+					DisableNilStreamValues: false,
+					Opts:                  []byte(`{}`),
+					Tombstone:             true,
+					Source:                2,
+				},
+			},
+		}
+		codec, err := NewProtoObservationCodec(logger.Nop(), true)
+		require.NoError(t, err)
+		obsBytes, err := codec.Encode(obs)
+		require.NoError(t, err)
+		obs2, err := codec.Decode(obsBytes)
+		require.NoError(t, err)
+		assert.Equal(t, obs.UpdateChannelDefinitions, obs2.UpdateChannelDefinitions)
+		assert.True(t, obs2.UpdateChannelDefinitions[1].DisableNilStreamValues)
+		assert.False(t, obs2.UpdateChannelDefinitions[2].DisableNilStreamValues)
+	})
 	t.Run("decoding with invalid data", func(t *testing.T) {
 		t.Run("not a protobuf", func(t *testing.T) {
 			codec, err := NewProtoObservationCodec(logger.Nop(), true)
