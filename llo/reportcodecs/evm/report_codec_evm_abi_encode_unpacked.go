@@ -15,6 +15,7 @@ import (
 
 	"github.com/smartcontractkit/chainlink-common/pkg/logger"
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
+
 	"github.com/smartcontractkit/chainlink-data-streams/llo"
 )
 
@@ -68,7 +69,7 @@ type ReportFormatEVMABIEncodeOpts struct {
 
 func (r *ReportFormatEVMABIEncodeOpts) Decode(opts []byte) error {
 	decoder := json.NewDecoder(bytes.NewReader(opts))
-	decoder.DisallowUnknownFields() // Error on unrecognized fields
+	// decoder.DisallowUnknownFields() // Error on unrecognized fields
 	return decoder.Decode(r)
 }
 

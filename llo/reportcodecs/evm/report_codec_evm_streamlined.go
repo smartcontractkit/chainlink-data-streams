@@ -180,7 +180,7 @@ type ReportFormatEVMStreamlinedOpts struct {
 
 func (r *ReportFormatEVMStreamlinedOpts) Decode(opts []byte) error {
 	decoder := json.NewDecoder(bytes.NewReader(opts))
-	decoder.DisallowUnknownFields() // Error on unrecognized fields
+	// decoder.DisallowUnknownFields() // Error on unrecognized fields
 	return decoder.Decode(r)
 }
 
