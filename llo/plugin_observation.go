@@ -131,11 +131,27 @@ func (p *Plugin) observation(ctx context.Context, outctx ocr3types.OutcomeContex
 		if len(previousOutcome.ChannelDefinitions) == 0 {
 			p.Logger.Debugw("ChannelDefinitions is empty, will not generate any observations", "stage", "Observation", "seqNr", outctx.SeqNr)
 		} else {
+			// candidateObsNanos approximates whether channels are reportable at observation
+			// entry (see ShouldObserveChannelAtObservationStart consensus caveat).
+			candidateObsNanos := uint64(time.Now().UnixNano())
+			optsTime := time.Unix(int64(candidateObsNanos/1e9), int64(candidateObsNanos%1e9))
+
 			obs.StreamValues = make(StreamValues)
-			for _, channelDefinition := range previousOutcome.ChannelDefinitions {
+			for channelID, channelDefinition := range previousOutcome.ChannelDefinitions {
 				if channelDefinition.Tombstone {
 					continue
 				}
+				if !previousOutcome.ShouldObserveChannelAtObservationStart(
+					channelID,
+					candidateObsNanos,
+					p.ProtocolVersion,
+					p.DefaultMinReportIntervalNanoseconds,
+					p.OptsCache,
+				) {
+					observationChannelFilterDecisionTotal.WithLabelValues(metricObservationChannelFilterDecisionSkip).Inc()
+					continue
+				}
+				observationChannelFilterDecisionTotal.WithLabelValues(metricObservationChannelFilterDecisionInclude).Inc()
 
 				for _, strm := range channelDefinition.Streams {
 					// Calculated streams have no values to observe
@@ -152,7 +168,7 @@ func (p *Plugin) observation(ctx context.Context, outctx ocr3types.OutcomeContex
 			observationCtx, cancel := context.WithTimeout(ctx, p.MaxDurationObservation)
 			defer cancel()
 
-			opts := &dsOpts{p.Config.VerboseLogging, outctx, p.ConfigDigest, p.OutcomeCodec, time.Now()}
+			opts := &dsOpts{p.Config.VerboseLogging, outctx, p.ConfigDigest, p.OutcomeCodec, optsTime}
 			if err = p.DataSource.Observe(observationCtx, obs.StreamValues, opts); err != nil {
 				return nil, fmt.Errorf("DataSource.Observe error: %w", err)
 			}
@@ -180,9 +196,7 @@ type Observation struct {
 	AttestedPredecessorRetirement []byte
 	// Should this protocol instance be retired?
 	ShouldRetire bool
-	// Timestamp from when observation is made
-	// Note that this is the timestamp immediately before we initiate any
-	// observations
+	// Timestamp from when observation is made (after DataSource.Observe returns).
 	UnixTimestampNanoseconds uint64
 	// Votes to remove/add channels. Subject to MAX_OBSERVATION_*_LENGTH limits
 	RemoveChannelIDs map[llotypes.ChannelID]struct{}

@@ -425,6 +425,15 @@ type timeResolutionOpts struct {
 // failure modes are not covered here and can still result in report gaps if
 // DisableNilStreamValues is false or if the report codec fails to encode the report.
 func (out *Outcome) IsReportable(channelID llotypes.ChannelID, protocolVersion uint32, minReportInterval uint64, optsCache *OptsCache) *UnreportableChannelError {
+	if err := out.unreportableNonTime(channelID, optsCache); err != nil {
+		return err
+	}
+	return out.unreportableTimeGates(channelID, protocolVersion, minReportInterval, optsCache)
+}
+
+// unreportableNonTime returns an error if the channel cannot be reportable for
+// reasons other than observation-time gates (lifecycle, defs, nil streams, ValidAfter).
+func (out *Outcome) unreportableNonTime(channelID llotypes.ChannelID, optsCache *OptsCache) *UnreportableChannelError {
 	if out.LifeCycleStage == LifeCycleStageRetired {
 		return &UnreportableChannelError{nil, "IsReportable=false; retired channel", channelID}
 	}
@@ -448,13 +457,20 @@ func (out *Outcome) IsReportable(channelID llotypes.ChannelID, protocolVersion u
 		}
 	}
 
-	validAfterNanos, ok := out.ValidAfterNanoseconds[channelID]
-	if !ok {
+	if _, ok := out.ValidAfterNanoseconds[channelID]; !ok {
 		// No ValidAfterNanoseconds entry yet, this must be a new channel.
 		// ValidAfterNanoseconds will be populated in Outcome() so the channel
 		// becomes reportable in later protocol rounds.
 		return &UnreportableChannelError{nil, "IsReportable=false; no ValidAfterNanoseconds entry yet, this must be a new channel", channelID}
 	}
+
+	return nil
+}
+
+// unreportableTimeGates assumes unreportableNonTime returned nil for this channelID.
+func (out *Outcome) unreportableTimeGates(channelID llotypes.ChannelID, protocolVersion uint32, minReportInterval uint64, optsCache *OptsCache) *UnreportableChannelError {
+	cd := out.ChannelDefinitions[channelID]
+	validAfterNanos := out.ValidAfterNanoseconds[channelID]
 	obsTsNanos := out.ObservationTimestampNanoseconds
 
 	// Enforce minReportInterval
@@ -483,6 +499,35 @@ func (out *Outcome) IsReportable(channelID llotypes.ChannelID, protocolVersion u
 	}
 
 	return nil
+}
+
+// ShouldObserveChannelAtObservationStart reports whether Observation should fetch
+// underlying streams for this channel when assuming the consensus observation time
+// were candidateObsNanos (typically local wall time at observation entry).
+//
+// If only time gates block reportability, returns false so redundant DataSource
+// fetches can be skipped; otherwise returns true (reportable, needs fresh values,
+// missing prerequisites such as ValidAfter, nil aggregates when required, etc.).
+//
+// Consensus caveat: candidateObsNanos is per-node, while outcomes use the median
+// observation timestamp. Honest nodes can disagree on skip vs observe near time
+// boundaries if DefaultMinReportIntervalNanoseconds is small relative to clock skew.
+func (out *Outcome) ShouldObserveChannelAtObservationStart(
+	channelID llotypes.ChannelID,
+	candidateObsNanos uint64,
+	protocolVersion uint32,
+	minReportInterval uint64,
+	optsCache *OptsCache,
+) bool {
+	synth := *out
+	synth.ObservationTimestampNanoseconds = candidateObsNanos
+	if err := synth.unreportableNonTime(channelID, optsCache); err != nil {
+		return true
+	}
+	if err := synth.unreportableTimeGates(channelID, protocolVersion, minReportInterval, optsCache); err != nil {
+		return false
+	}
+	return true
 }
 
 // IsSecondsResolution returns whether the report format uses second-level resolution
