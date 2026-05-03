@@ -1,10 +1,7 @@
-name: pull-request-master
+name: pull-request
 
-on:
-  merge_group:
-  pull_request:
-    branches:
-      - master
+on: [pull_request]
+
 # Only run 1 of this workflow at a time per PR
 concurrency:
   group: chainlink-data-streams-${{ github.ref }}
