@@ -1,0 +1,11 @@
+dir: "{{ .InterfaceDir }}/mocks"
+mockname: "{{ .InterfaceName }}"
+outpkg: mocks
+filename: "{{ .InterfaceName | snakecase }}.go"
+fail-on-missing: true
+packages:
+  github.com/smartcontractkit/chainlink-data-streams/mercury:
+    interfaces:
+      asyncDeleter:
+        config:
+          mockname: AsyncDeleter

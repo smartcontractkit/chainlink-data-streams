@@ -9,8 +9,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/smartcontractkit/chainlink-common/pkg/logger"
+	"github.com/smartcontractkit/chainlink-data-streams/mercury/mocks"
 	"github.com/smartcontractkit/chainlink-data-streams/mercury/wsrpc/pb"
-	"github.com/smartcontractkit/chainlink-evm/pkg/mercury/mocks"
 )
 
 type TestTransmissionWithReport struct {

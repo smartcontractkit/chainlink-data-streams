@@ -30,9 +30,9 @@ import (
 	"github.com/smartcontractkit/chainlink-common/pkg/services"
 	"github.com/smartcontractkit/chainlink-common/pkg/types/mercury"
 	"github.com/smartcontractkit/chainlink-common/pkg/utils"
+	mercuryutils "github.com/smartcontractkit/chainlink-data-streams/mercury/utils"
 	"github.com/smartcontractkit/chainlink-data-streams/mercury/wsrpc"
 	"github.com/smartcontractkit/chainlink-data-streams/mercury/wsrpc/pb"
-	mercuryutils "github.com/smartcontractkit/chainlink-evm/pkg/mercury/utils"
 )
 
 const (

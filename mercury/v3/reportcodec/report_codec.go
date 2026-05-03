@@ -12,8 +12,8 @@ import (
 
 	"github.com/smartcontractkit/chainlink-common/pkg/logger"
 	v3 "github.com/smartcontractkit/chainlink-common/pkg/types/mercury/v3"
-	"github.com/smartcontractkit/chainlink-evm/pkg/mercury/utils"
-	"github.com/smartcontractkit/chainlink-evm/pkg/mercury/v3/types"
+	"github.com/smartcontractkit/chainlink-data-streams/mercury/utils"
+	"github.com/smartcontractkit/chainlink-data-streams/mercury/v3/types"
 )
 
 var ReportTypes = reporttypes.GetSchema()

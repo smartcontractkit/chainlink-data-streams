@@ -20,13 +20,13 @@ import (
 
 	"github.com/smartcontractkit/chainlink-common/pkg/logger"
 	"github.com/smartcontractkit/chainlink-common/pkg/services/servicetest"
+	reportcodecv2 "github.com/smartcontractkit/chainlink-data-streams/mercury/v2/reportcodec"
+	reportcodecv3 "github.com/smartcontractkit/chainlink-data-streams/mercury/v3/reportcodec"
 	"github.com/smartcontractkit/chainlink-evm/gethwrappers/llo-feeds/generated/verifier"
 	"github.com/smartcontractkit/chainlink-evm/gethwrappers/llo-feeds/generated/verifier_proxy"
 	evmclient "github.com/smartcontractkit/chainlink-evm/pkg/client"
 	"github.com/smartcontractkit/chainlink-evm/pkg/heads/headstest"
 	"github.com/smartcontractkit/chainlink-evm/pkg/logpoller"
-	reportcodecv2 "github.com/smartcontractkit/chainlink-evm/pkg/mercury/v2/reportcodec"
-	reportcodecv3 "github.com/smartcontractkit/chainlink-evm/pkg/mercury/v3/reportcodec"
 	"github.com/smartcontractkit/chainlink-evm/pkg/testutils"
 )
 

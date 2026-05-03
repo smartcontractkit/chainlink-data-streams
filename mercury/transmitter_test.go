@@ -16,11 +16,11 @@ import (
 
 	"github.com/smartcontractkit/chainlink-common/pkg/capabilities/triggers"
 	"github.com/smartcontractkit/chainlink-common/pkg/logger"
+	mercurytypes "github.com/smartcontractkit/chainlink-data-streams/mercury/types"
+	mercuryutils "github.com/smartcontractkit/chainlink-data-streams/mercury/utils"
 	"github.com/smartcontractkit/chainlink-data-streams/mercury/wsrpc"
 	"github.com/smartcontractkit/chainlink-data-streams/mercury/wsrpc/mocks"
 	"github.com/smartcontractkit/chainlink-data-streams/mercury/wsrpc/pb"
-	mercurytypes "github.com/smartcontractkit/chainlink-evm/pkg/mercury/types"
-	mercuryutils "github.com/smartcontractkit/chainlink-evm/pkg/mercury/utils"
 	"github.com/smartcontractkit/chainlink-evm/pkg/testutils"
 	"github.com/smartcontractkit/chainlink-evm/pkg/utils"
 )

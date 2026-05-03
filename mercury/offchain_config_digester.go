@@ -12,7 +12,7 @@ import (
 	ocrtypes "github.com/smartcontractkit/libocr/offchainreporting2plus/types"
 	"github.com/smartcontractkit/wsrpc/credentials"
 
-	"github.com/smartcontractkit/chainlink-evm/pkg/mercury/utils"
+	"github.com/smartcontractkit/chainlink-data-streams/mercury/utils"
 )
 
 // Originally sourced from: https://github.com/smartcontractkit/offchain-reporting/blob/991ebe1462fd56826a1ddfb34287d542acb2baee/lib/offchainreporting2/chains/evmutil/offchain_config_digester.go
