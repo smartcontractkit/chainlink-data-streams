@@ -11,8 +11,8 @@ import (
 	ocrtypes "github.com/smartcontractkit/libocr/offchainreporting2plus/types"
 
 	"github.com/smartcontractkit/chainlink-common/pkg/logger"
+	"github.com/smartcontractkit/chainlink-common/pkg/types/mercury"
 	v2 "github.com/smartcontractkit/chainlink-common/pkg/types/mercury/v2"
-	"github.com/smartcontractkit/chainlink-data-streams/mercury/utils"
 	"github.com/smartcontractkit/chainlink-data-streams/mercury/v2/types"
 )
 
@@ -24,7 +24,7 @@ var _ v2.ReportCodec = &ReportCodec{}
 
 type ReportCodec struct {
 	logger logger.Logger
-	feedID utils.FeedID
+	feedID mercury.FeedID
 }
 
 func NewReportCodec(feedID [32]byte, lggr logger.Logger) *ReportCodec {
