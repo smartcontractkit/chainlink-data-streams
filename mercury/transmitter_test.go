@@ -16,8 +16,8 @@ import (
 
 	"github.com/smartcontractkit/chainlink-common/pkg/capabilities/triggers"
 	"github.com/smartcontractkit/chainlink-common/pkg/logger"
+	commontypes "github.com/smartcontractkit/chainlink-common/pkg/types/mercury"
 	mercurytypes "github.com/smartcontractkit/chainlink-data-streams/mercury/types"
-	mercuryutils "github.com/smartcontractkit/chainlink-data-streams/mercury/utils"
 	"github.com/smartcontractkit/chainlink-data-streams/mercury/wsrpc"
 	"github.com/smartcontractkit/chainlink-data-streams/mercury/wsrpc/mocks"
 	"github.com/smartcontractkit/chainlink-data-streams/mercury/wsrpc/pb"
@@ -42,7 +42,7 @@ func Test_MercuryTransmitter_Transmit(t *testing.T) {
 	testutils.MustExec(t, db, `SET CONSTRAINTS mercury_transmit_requests_job_id_fkey DEFERRED`)
 	testutils.MustExec(t, db, `SET CONSTRAINTS feed_latest_reports_job_id_fkey DEFERRED`)
 	codec := new(mockCodec)
-	benchmarkPriceDecoder := func(ctx context.Context, feedID mercuryutils.FeedID, report ocrtypes.Report) (*big.Int, error) {
+	benchmarkPriceDecoder := func(ctx context.Context, feedID commontypes.FeedID, report ocrtypes.Report) (*big.Int, error) {
 		return codec.BenchmarkPriceFromReport(ctx, report)
 	}
 	orm := NewORM(db)
@@ -125,7 +125,7 @@ func Test_MercuryTransmitter_LatestTimestamp(t *testing.T) {
 	db := testutils.NewSqlxDB(t)
 	var jobID int32
 	codec := new(mockCodec)
-	benchmarkPriceDecoder := func(ctx context.Context, feedID mercuryutils.FeedID, report ocrtypes.Report) (*big.Int, error) {
+	benchmarkPriceDecoder := func(ctx context.Context, feedID commontypes.FeedID, report ocrtypes.Report) (*big.Int, error) {
 		return codec.BenchmarkPriceFromReport(ctx, report)
 	}
 
@@ -235,7 +235,7 @@ func Test_MercuryTransmitter_LatestPrice(t *testing.T) {
 	var jobID int32
 
 	codec := new(mockCodec)
-	benchmarkPriceDecoder := func(ctx context.Context, feedID mercuryutils.FeedID, report ocrtypes.Report) (*big.Int, error) {
+	benchmarkPriceDecoder := func(ctx context.Context, feedID commontypes.FeedID, report ocrtypes.Report) (*big.Int, error) {
 		return codec.BenchmarkPriceFromReport(ctx, report)
 	}
 	orm := NewORM(db)
@@ -314,7 +314,7 @@ func Test_MercuryTransmitter_FetchInitialMaxFinalizedBlockNumber(t *testing.T) {
 	db := testutils.NewSqlxDB(t)
 	var jobID int32
 	codec := new(mockCodec)
-	benchmarkPriceDecoder := func(ctx context.Context, feedID mercuryutils.FeedID, report ocrtypes.Report) (*big.Int, error) {
+	benchmarkPriceDecoder := func(ctx context.Context, feedID commontypes.FeedID, report ocrtypes.Report) (*big.Int, error) {
 		return codec.BenchmarkPriceFromReport(ctx, report)
 	}
 	orm := NewORM(db)

@@ -30,7 +30,6 @@ import (
 	"github.com/smartcontractkit/chainlink-common/pkg/services"
 	"github.com/smartcontractkit/chainlink-common/pkg/types/mercury"
 	"github.com/smartcontractkit/chainlink-common/pkg/utils"
-	mercuryutils "github.com/smartcontractkit/chainlink-data-streams/mercury/utils"
 	"github.com/smartcontractkit/chainlink-data-streams/mercury/wsrpc"
 	"github.com/smartcontractkit/chainlink-data-streams/mercury/wsrpc/pb"
 )
@@ -99,7 +98,7 @@ type TransmitterReportDecoder interface {
 	ObservationTimestampFromReport(ctx context.Context, report ocrtypes.Report) (uint32, error)
 }
 
-type BenchmarkPriceDecoder func(ctx context.Context, feedID mercuryutils.FeedID, report ocrtypes.Report) (*big.Int, error)
+type BenchmarkPriceDecoder func(ctx context.Context, feedID mercury.FeedID, report ocrtypes.Report) (*big.Int, error)
 
 var _ Transmitter = (*mercuryTransmitter)(nil)
 
@@ -119,7 +118,7 @@ type mercuryTransmitter struct {
 	benchmarkPriceDecoder BenchmarkPriceDecoder
 	triggerCapability     *triggers.MercuryTriggerService
 
-	feedID      mercuryutils.FeedID
+	feedID      mercury.FeedID
 	jobID       int32
 	fromAccount string
 

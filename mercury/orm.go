@@ -16,7 +16,7 @@ import (
 	ocrtypes "github.com/smartcontractkit/libocr/offchainreporting2plus/types"
 
 	"github.com/smartcontractkit/chainlink-common/pkg/sqlutil"
-	"github.com/smartcontractkit/chainlink-data-streams/mercury/utils"
+	"github.com/smartcontractkit/chainlink-common/pkg/types/mercury"
 	"github.com/smartcontractkit/chainlink-data-streams/mercury/wsrpc/pb"
 )
 
@@ -28,7 +28,7 @@ type ORM interface {
 	LatestReport(ctx context.Context, feedID [32]byte) (report []byte, err error)
 }
 
-func FeedIDFromReport(report ocrtypes.Report) (feedID utils.FeedID, err error) {
+func FeedIDFromReport(report ocrtypes.Report) (feedID mercury.FeedID, err error) {
 	if n := copy(feedID[:], report); n != 32 {
 		return feedID, pkgerrors.Errorf("invalid length for report: %d", len(report))
 	}
