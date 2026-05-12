@@ -11,8 +11,9 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/smartcontractkit/chainlink-common/pkg/logger"
+	"github.com/smartcontractkit/chainlink-common/pkg/utils/tests"
+	"github.com/smartcontractkit/chainlink-data-streams/mercury/testutils"
 	"github.com/smartcontractkit/chainlink-data-streams/mercury/wsrpc/pb"
-	"github.com/smartcontractkit/chainlink-evm/pkg/testutils"
 )
 
 func bootstrapPersistenceManager(t *testing.T, jobID int32, db *sqlx.DB) *PersistenceManager {
@@ -84,7 +85,7 @@ func TestPersistenceManagerAsyncDelete(t *testing.T) {
 	pm.AsyncDelete(&pb.TransmitRequest{Payload: reports[0]})
 
 	// Wait for next poll.
-	testutils.RequireEventually(t, func() bool {
+	tests.AssertEventually(t, func() bool {
 		pm.deleteMu.Lock()
 		defer pm.deleteMu.Unlock()
 		return len(pm.deleteQueue) == 0
@@ -143,7 +144,7 @@ func TestPersistenceManagerPrune(t *testing.T) {
 	err = pm.Start(ctx)
 	require.NoError(t, err)
 
-	testutils.RequireEventually(t, func() bool {
+	tests.AssertEventually(t, func() bool {
 		requests, err2 := pm.Load(t.Context())
 		require.NoError(t, err2)
 		return len(requests) == pm.maxTransmitQueueSize
