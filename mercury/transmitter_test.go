@@ -2,6 +2,7 @@ package mercury
 
 import (
 	"context"
+	"crypto/rand"
 	"math/big"
 	"sync"
 	"testing"
@@ -17,12 +18,11 @@ import (
 	"github.com/smartcontractkit/chainlink-common/pkg/capabilities/triggers"
 	"github.com/smartcontractkit/chainlink-common/pkg/logger"
 	commontypes "github.com/smartcontractkit/chainlink-common/pkg/types/mercury"
+	"github.com/smartcontractkit/chainlink-data-streams/mercury/testutils"
 	mercurytypes "github.com/smartcontractkit/chainlink-data-streams/mercury/types"
 	"github.com/smartcontractkit/chainlink-data-streams/mercury/wsrpc"
 	"github.com/smartcontractkit/chainlink-data-streams/mercury/wsrpc/mocks"
 	"github.com/smartcontractkit/chainlink-data-streams/mercury/wsrpc/pb"
-	"github.com/smartcontractkit/chainlink-evm/pkg/testutils"
-	"github.com/smartcontractkit/chainlink-evm/pkg/utils"
 )
 
 type mockCfg struct{}
@@ -442,7 +442,7 @@ func (m *mockQ) Init(transmissions []*Transmission) {}
 func (m *mockQ) IsEmpty() bool                      { return false }
 
 func Test_MercuryTransmitter_runQueueLoop(t *testing.T) {
-	feedIDHex := utils.NewHash().Hex()
+	feedIDHex := randomBytes32()
 	lggr := logger.Test(t)
 	c := &mocks.MockWSRPCClient{}
 	db := testutils.NewSqlxDB(t)
@@ -575,4 +575,10 @@ func Test_MercuryTransmitter_runQueueLoop(t *testing.T) {
 		close(stopCh)
 		wg.Wait()
 	})
+}
+
+func randomBytes32() string {
+	b := make([]byte, 32)
+	_, _ = rand.Read(b)
+	return hexutil.Encode(b[:])
 }
