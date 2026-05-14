@@ -53,6 +53,72 @@ func (p *Plugin) reports(ctx context.Context, seqNr uint64, rawOutcome ocr3types
 
 	for _, cid := range reportableChannels {
 		cd := outcome.ChannelDefinitions[cid]
+
+		if cd.ReportFormat == llotypes.ReportFormatHistoryBackfill {
+			tsNanos, rawTS, opts, uerr := SelectBackfillCandidate(&outcome, cid)
+			if uerr != nil {
+				p.Logger.Warnw("backfill channel was reportable but selection failed", "channelID", cid, "err", uerr, "stage", "Report", "seqNr", seqNr)
+				continue
+			}
+			targetCD, ok := outcome.ChannelDefinitions[opts.TargetChannelID]
+			if !ok {
+				p.Logger.Warnw("missing target channel for history_backfill", "channelID", cid, "targetChannelID", opts.TargetChannelID, "stage", "Report", "seqNr", seqNr)
+				continue
+			}
+			row := opts.Observations[rawTS]
+			values, err := BuildBackfillStreamValues(targetCD, row)
+			if err != nil {
+				p.Logger.Warnw("Error building backfill stream values", "err", err, "channelID", cid, "stage", "Report", "seqNr", seqNr)
+				continue
+			}
+			resNanos, err := ReportTimestampResolutionNanos(targetCD)
+			if err != nil {
+				p.Logger.Warnw("Error resolving history_backfill report timestamp resolution", "err", err, "channelID", cid, "stage", "Report", "seqNr", seqNr)
+				continue
+			}
+			validAfter := uint64(0)
+			if tsNanos >= resNanos {
+				validAfter = tsNanos - resNanos
+			}
+			report := Report{
+				p.ConfigDigest,
+				seqNr,
+				cid,
+				validAfter,
+				tsNanos,
+				values,
+				outcome.LifeCycleStage != LifeCycleStageProduction,
+			}
+			reportForEncode := report
+			reportForEncode.ChannelID = opts.TargetChannelID
+
+			if p.Config.VerboseLogging {
+				p.Logger.Debugw("Emitting history_backfill report", "lifeCycleStage", outcome.LifeCycleStage, "channelID", cid, "targetChannelID", opts.TargetChannelID, "report", report, "stage", "Report", "seqNr", seqNr)
+			}
+
+			p.captureReportTelemetry(reportForEncode, targetCD)
+			codec, exists := p.ReportCodecs[targetCD.ReportFormat]
+			if !exists {
+				p.Logger.Warnw("Error encoding report", "lifeCycleStage", outcome.LifeCycleStage, "reportFormat", targetCD.ReportFormat, "err", fmt.Errorf("codec missing for ReportFormat=%q", targetCD.ReportFormat), "channelID", cid, "stage", "Report", "seqNr", seqNr)
+				continue
+			}
+			encoded, err := codec.Encode(reportForEncode, targetCD, p.OptsCache)
+			if err != nil {
+				p.Logger.Warnw("Error encoding report", "lifeCycleStage", outcome.LifeCycleStage, "reportFormat", targetCD.ReportFormat, "err", err, "channelID", cid, "stage", "Report", "seqNr", seqNr)
+				continue
+			}
+			rwis = append(rwis, ocr3types.ReportPlus[llotypes.ReportInfo]{
+				ReportWithInfo: ocr3types.ReportWithInfo[llotypes.ReportInfo]{
+					Report: encoded,
+					Info: llotypes.ReportInfo{
+						LifeCycleStage: outcome.LifeCycleStage,
+						ReportFormat:   targetCD.ReportFormat,
+					},
+				},
+			})
+			continue
+		}
+
 		values := make([]StreamValue, 0, len(cd.Streams))
 		for _, strm := range cd.Streams {
 			values = append(values, outcome.StreamAggregates[strm.StreamID][strm.Aggregator])
