@@ -57,6 +57,36 @@ func TestToDecimal(t *testing.T) {
 			expected: decimal.NewFromFloat(123.45),
 		},
 		{
+			name:        "float32 NaN",
+			input:       float32(math.NaN()),
+			expectError: true,
+		},
+		{
+			name:        "float32 +Inf",
+			input:       float32(math.Inf(1)),
+			expectError: true,
+		},
+		{
+			name:        "float32 -Inf",
+			input:       float32(math.Inf(-1)),
+			expectError: true,
+		},
+		{
+			name:        "float64 NaN",
+			input:       math.NaN(),
+			expectError: true,
+		},
+		{
+			name:        "float64 +Inf",
+			input:       math.Inf(1),
+			expectError: true,
+		},
+		{
+			name:        "float64 -Inf",
+			input:       math.Inf(-1),
+			expectError: true,
+		},
+		{
 			name:     "uint",
 			input:    uint(123),
 			expected: decimal.NewFromUint64(123),
