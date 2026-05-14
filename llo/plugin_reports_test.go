@@ -10,7 +10,6 @@ import (
 	"github.com/smartcontractkit/libocr/offchainreporting2plus/ocr3types"
 
 	"github.com/smartcontractkit/chainlink-common/pkg/logger"
-	"github.com/smartcontractkit/chainlink-common/pkg/types/llo"
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
 	"github.com/smartcontractkit/chainlink-common/pkg/utils/tests"
 
@@ -76,7 +75,7 @@ func testReports(t *testing.T, outcomeCodec OutcomeCodec) {
 			rwis, err := p.Reports(ctx, 2, encoded)
 			require.NoError(t, err)
 			require.Len(t, rwis, 1)
-			assert.Equal(t, llo.ReportInfo{LifeCycleStage: LifeCycleStageRetired, ReportFormat: llotypes.ReportFormatRetirement}, rwis[0].ReportWithInfo.Info)
+			assert.Equal(t, llotypes.ReportInfo{LifeCycleStage: LifeCycleStageRetired, ReportFormat: llotypes.ReportFormatRetirement}, rwis[0].ReportWithInfo.Info)
 			assert.Equal(t, fmt.Sprintf(`{"ProtocolVersion":%d,"ValidAfterNanoseconds":null}`, p.ProtocolVersion), string(rwis[0].ReportWithInfo.Report))
 		})
 		t.Run("with ValidAfterNanoseconds", func(t *testing.T) {
@@ -93,7 +92,7 @@ func testReports(t *testing.T, outcomeCodec OutcomeCodec) {
 			rwis, err := p.Reports(ctx, 2, encoded)
 			require.NoError(t, err)
 			require.Len(t, rwis, 1)
-			assert.Equal(t, llo.ReportInfo{LifeCycleStage: LifeCycleStageRetired, ReportFormat: llotypes.ReportFormatRetirement}, rwis[0].ReportWithInfo.Info)
+			assert.Equal(t, llotypes.ReportInfo{LifeCycleStage: LifeCycleStageRetired, ReportFormat: llotypes.ReportFormatRetirement}, rwis[0].ReportWithInfo.Info)
 
 			subSecond := "100000000"
 			if p.ProtocolVersion == 0 {
@@ -165,6 +164,42 @@ func testReports(t *testing.T, outcomeCodec OutcomeCodec) {
 		rwis, err := p.Reports(ctx, 2, encoded)
 		require.NoError(t, err)
 		require.Empty(t, rwis)
+	})
+
+	t.Run("emits history_backfill report using target channel id and JSON format", func(t *testing.T) {
+		streams := []llotypes.Stream{{StreamID: 1, Aggregator: llotypes.AggregatorMedian}}
+		targetID := llotypes.ChannelID(2)
+		backfillID := llotypes.ChannelID(10)
+		chDefs := llotypes.ChannelDefinitions{
+			targetID: {ReportFormat: llotypes.ReportFormatJSON, Streams: streams},
+			backfillID: {
+				ReportFormat: llotypes.ReportFormatHistoryBackfill,
+				Streams:      streams,
+				Opts:         []byte(`{"targetChannelId":2,"observations":{"100":{"1":"1"}}}`),
+			},
+		}
+		outcome := Outcome{
+			LifeCycleStage:                  LifeCycleStageStaging,
+			ObservationTimestampNanoseconds: uint64(300 * time.Second),
+			ChannelDefinitions:              chDefs,
+			ValidAfterNanoseconds: map[llotypes.ChannelID]uint64{
+				targetID:   uint64(300 * time.Second),
+				backfillID: 0,
+			},
+			StreamAggregates: map[llotypes.StreamID]map[llotypes.Aggregator]StreamValue{
+				1: {llotypes.AggregatorMedian: ToDecimal(decimal.NewFromFloat(9.9))},
+			},
+		}
+		encoded, err := p.OutcomeCodec.Encode(outcome)
+		require.NoError(t, err)
+		rwis, err := p.Reports(ctx, 2, encoded)
+		require.NoError(t, err)
+		require.Len(t, rwis, 1)
+		assert.Equal(t, llotypes.ReportFormatJSON, rwis[0].ReportWithInfo.Info.ReportFormat)
+		reportJSON := string(rwis[0].ReportWithInfo.Report)
+		assert.Contains(t, reportJSON, `"ChannelID":2`)
+		assert.NotContains(t, reportJSON, `"ChannelID":10`)
+		assert.Contains(t, reportJSON, `"ObservationTimestampNanoseconds":100000000000`)
 	})
 
 	t.Run("(bug demo) results in a report gap due to validAfter being updated even if previous report was dropped", func(t *testing.T) {
@@ -356,7 +391,7 @@ func testReports(t *testing.T, outcomeCodec OutcomeCodec) {
 		require.Len(t, rwis, 1)
 		assert.Contains(t, string(rwis[0].ReportWithInfo.Report), `"ChannelID":2`)
 		assert.NotContains(t, string(rwis[0].ReportWithInfo.Report), `"ChannelID":1`)
-		assert.Equal(t, llo.ReportInfo{LifeCycleStage: LifeCycleStageProduction, ReportFormat: llotypes.ReportFormatJSON}, rwis[0].ReportWithInfo.Info)
+		assert.Equal(t, llotypes.ReportInfo{LifeCycleStage: LifeCycleStageProduction, ReportFormat: llotypes.ReportFormatJSON}, rwis[0].ReportWithInfo.Info)
 	})
 
 	t.Run("skips reports if codec is missing", func(t *testing.T) {
@@ -422,9 +457,9 @@ func testReports(t *testing.T, outcomeCodec OutcomeCodec) {
 		require.NoError(t, err)
 		require.Len(t, rwis, 2)
 		assert.Equal(t, `{"ConfigDigest":"0000000000000000000000000000000000000000000000000000000000000000","SeqNr":2,"ChannelID":1,"ValidAfterNanoseconds":100000000000,"ObservationTimestampNanoseconds":200000000000,"Values":[{"t":0,"v":"1.1"},{"t":0,"v":"2.2"},{"t":1,"v":"Q{Bid: 5.5, Benchmark: 4.4, Ask: 3.3}"}],"Specimen":true}`, string(rwis[0].ReportWithInfo.Report)) //nolint:testifylint // need to verify exact match including order for determinism
-		assert.Equal(t, llo.ReportInfo{LifeCycleStage: "staging", ReportFormat: llotypes.ReportFormatJSON}, rwis[0].ReportWithInfo.Info)
+		assert.Equal(t, llotypes.ReportInfo{LifeCycleStage: "staging", ReportFormat: llotypes.ReportFormatJSON}, rwis[0].ReportWithInfo.Info)
 		assert.Equal(t, `{"ConfigDigest":"0000000000000000000000000000000000000000000000000000000000000000","SeqNr":2,"ChannelID":2,"ValidAfterNanoseconds":100000000000,"ObservationTimestampNanoseconds":200000000000,"Values":[{"t":0,"v":"1.1"},{"t":0,"v":"2.2"},{"t":1,"v":"Q{Bid: 8.8, Benchmark: 7.7, Ask: 6.6}"}],"Specimen":true}`, string(rwis[1].ReportWithInfo.Report)) //nolint:testifylint // need to verify exact match including order for determinism
-		assert.Equal(t, llo.ReportInfo{LifeCycleStage: "staging", ReportFormat: llotypes.ReportFormatJSON}, rwis[1].ReportWithInfo.Info)
+		assert.Equal(t, llotypes.ReportInfo{LifeCycleStage: "staging", ReportFormat: llotypes.ReportFormatJSON}, rwis[1].ReportWithInfo.Info)
 	})
 
 	t.Run("generates non-specimen reports for production", func(t *testing.T) {
@@ -457,9 +492,9 @@ func testReports(t *testing.T, outcomeCodec OutcomeCodec) {
 		require.NoError(t, err)
 		require.Len(t, rwis, 2)
 		assert.Equal(t, `{"ConfigDigest":"0000000000000000000000000000000000000000000000000000000000000000","SeqNr":2,"ChannelID":1,"ValidAfterNanoseconds":100000000000,"ObservationTimestampNanoseconds":200000000000,"Values":[{"t":0,"v":"1.1"},{"t":0,"v":"2.2"},{"t":1,"v":"Q{Bid: 5.5, Benchmark: 4.4, Ask: 3.3}"}],"Specimen":false}`, string(rwis[0].ReportWithInfo.Report)) //nolint:testifylint // need to verify exact match including order for determinism
-		assert.Equal(t, llo.ReportInfo{LifeCycleStage: "production", ReportFormat: llotypes.ReportFormatJSON}, rwis[0].ReportWithInfo.Info)
+		assert.Equal(t, llotypes.ReportInfo{LifeCycleStage: "production", ReportFormat: llotypes.ReportFormatJSON}, rwis[0].ReportWithInfo.Info)
 		assert.Equal(t, `{"ConfigDigest":"0000000000000000000000000000000000000000000000000000000000000000","SeqNr":2,"ChannelID":2,"ValidAfterNanoseconds":100000000000,"ObservationTimestampNanoseconds":200000000000,"Values":[{"t":0,"v":"1.1"},{"t":0,"v":"2.2"},{"t":1,"v":"Q{Bid: 8.8, Benchmark: 7.7, Ask: 6.6}"}],"Specimen":false}`, string(rwis[1].ReportWithInfo.Report)) //nolint:testifylint // need to verify exact match including order for determinism
-		assert.Equal(t, llo.ReportInfo{LifeCycleStage: "production", ReportFormat: llotypes.ReportFormatJSON}, rwis[1].ReportWithInfo.Info)
+		assert.Equal(t, llotypes.ReportInfo{LifeCycleStage: "production", ReportFormat: llotypes.ReportFormatJSON}, rwis[1].ReportWithInfo.Info)
 	})
 	t.Run("does not produce reports with overlapping timestamps (where IsReportable returns false)", func(t *testing.T) {
 		outcome := Outcome{
@@ -493,7 +528,7 @@ func testReports(t *testing.T, outcomeCodec OutcomeCodec) {
 		// Only second channel is reported because first channel is not valid yet
 		require.Len(t, rwis, 1)
 		assert.Equal(t, `{"ConfigDigest":"0000000000000000000000000000000000000000000000000000000000000000","SeqNr":2,"ChannelID":2,"ValidAfterNanoseconds":100000000000,"ObservationTimestampNanoseconds":200000000000,"Values":[{"t":0,"v":"1.1"},{"t":0,"v":"2.2"},{"t":1,"v":"Q{Bid: 8.8, Benchmark: 7.7, Ask: 6.6}"}],"Specimen":false}`, string(rwis[0].ReportWithInfo.Report)) //nolint:testifylint // need to verify exact match including order for determinism
-		assert.Equal(t, llo.ReportInfo{LifeCycleStage: "production", ReportFormat: llotypes.ReportFormatJSON}, rwis[0].ReportWithInfo.Info)
+		assert.Equal(t, llotypes.ReportInfo{LifeCycleStage: "production", ReportFormat: llotypes.ReportFormatJSON}, rwis[0].ReportWithInfo.Info)
 	})
 	t.Run("sends telemetry on telemetry channel if set, and does not block on full channel", func(t *testing.T) {
 		ch := make(chan *LLOReportTelemetry, 2)
