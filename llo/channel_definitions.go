@@ -33,11 +33,20 @@ func VerifyChannelDefinitions(codecs map[llotypes.ReportFormat]ReportCodec, chan
 			}
 			uniqueStreamIDs[strm.StreamID] = struct{}{}
 		}
+		var verifyErr error
 		if codec, ok := codecs[cd.ReportFormat]; ok {
-			if err := codec.Verify(cd); err != nil {
-				merr = errors.Join(merr, fmt.Errorf("invalid ChannelDefinition with ID %d: %w", channelID, err))
-				continue
+			verifyErr = codec.Verify(cd)
+			if verifyErr != nil {
+				merr = errors.Join(merr, fmt.Errorf("invalid ChannelDefinition with ID %d: %w", channelID, verifyErr))
 			}
+		}
+		if cd.ReportFormat == llotypes.ReportFormatHistoryBackfill {
+			if err := ValidateHistoryBackfillAgainstDefinitions(cd, channelDefs, 0); err != nil {
+				merr = errors.Join(merr, fmt.Errorf("invalid history backfill channel %d: %w", channelID, err))
+			}
+		}
+		if verifyErr != nil {
+			continue
 		}
 	}
 	if merr != nil {

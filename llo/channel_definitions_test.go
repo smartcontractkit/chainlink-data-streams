@@ -25,6 +25,7 @@ func Test_VerifyChannelDefinitions(t *testing.T) {
 	mockReportFormat := llotypes.ReportFormat(0)
 	codecs := make(map[llotypes.ReportFormat]ReportCodec)
 	codecs[mockReportFormat] = mockReportCodec{}
+	codecs[llotypes.ReportFormatHistoryBackfill] = ReportCodecHistoryBackfill{}
 
 	t.Run("fails with too many channels", func(t *testing.T) {
 		channelDefs := make(llotypes.ChannelDefinitions, MaxOutcomeChannelDefinitionsLength+1)
@@ -106,6 +107,44 @@ func Test_VerifyChannelDefinitions(t *testing.T) {
 			},
 		}
 		err := VerifyChannelDefinitions(codecs, channelDefs)
+		require.NoError(t, err)
+	})
+
+	t.Run("history_backfill fails when target missing", func(t *testing.T) {
+		hfCodecs := map[llotypes.ReportFormat]ReportCodec{
+			llotypes.ReportFormatHistoryBackfill: ReportCodecHistoryBackfill{},
+			llotypes.ReportFormatJSON:            JSONReportCodec{},
+		}
+		defs := llotypes.ChannelDefinitions{
+			10: {
+				ReportFormat: llotypes.ReportFormatHistoryBackfill,
+				Streams:      []llotypes.Stream{{StreamID: 1, Aggregator: llotypes.AggregatorMedian}},
+				Opts:         []byte(`{"targetChannelId":99,"observations":{"1000":{"1":"1"}}}`),
+			},
+		}
+		err := VerifyChannelDefinitions(hfCodecs, defs)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "invalid history backfill channel 10")
+	})
+
+	t.Run("history_backfill succeeds", func(t *testing.T) {
+		hfCodecs := map[llotypes.ReportFormat]ReportCodec{
+			llotypes.ReportFormatHistoryBackfill: ReportCodecHistoryBackfill{},
+			llotypes.ReportFormatJSON:            JSONReportCodec{},
+		}
+		streams := []llotypes.Stream{{StreamID: 1, Aggregator: llotypes.AggregatorMedian}}
+		defs := llotypes.ChannelDefinitions{
+			2: {
+				ReportFormat: llotypes.ReportFormatJSON,
+				Streams:      streams,
+			},
+			10: {
+				ReportFormat: llotypes.ReportFormatHistoryBackfill,
+				Streams:      streams,
+				Opts:         []byte(`{"targetChannelId":2,"observations":{"1000":{"1":"1"}}}`),
+			},
+		}
+		err := VerifyChannelDefinitions(hfCodecs, defs)
 		require.NoError(t, err)
 	})
 
