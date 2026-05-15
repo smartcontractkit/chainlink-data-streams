@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	sync "sync"
 	"time"
 
@@ -402,7 +403,23 @@ func (p *Plugin) ValidateObservation(ctx context.Context, outctx ocr3types.Outco
 		return fmt.Errorf("RemoveChannelIDs is too long: %v vs %v", len(observation.RemoveChannelIDs), MaxObservationRemoveChannelIDsLength)
 	}
 
-	if err := VerifyChannelDefinitions(p.ReportCodecs, observation.UpdateChannelDefinitions); err != nil {
+	defsForVerify := observation.UpdateChannelDefinitions
+	if len(observation.UpdateChannelDefinitions) > 0 && outctx.SeqNr > 1 {
+		prevOutcome, prevErr := p.OutcomeCodec.Decode(outctx.PreviousOutcome)
+		if prevErr != nil {
+			return fmt.Errorf("failed to decode previous outcome for channel definition validation: %w", prevErr)
+		}
+		merged := maps.Clone(prevOutcome.ChannelDefinitions)
+		if merged == nil {
+			merged = make(llotypes.ChannelDefinitions)
+		}
+		for id, def := range observation.UpdateChannelDefinitions {
+			merged[id] = def
+		}
+		defsForVerify = merged
+	}
+
+	if err := VerifyChannelDefinitions(p.ReportCodecs, defsForVerify); err != nil {
 		return fmt.Errorf("UpdateChannelDefinitions is invalid: %w", err)
 	}
 
