@@ -171,6 +171,19 @@ func (p *Plugin) outcome(outctx ocr3types.OutcomeContext, query types.Query, aos
 	if outcome.ValidAfterNanoseconds == nil {
 		outcome.ValidAfterNanoseconds = map[llotypes.ChannelID]uint64{}
 		for channelID, previousValidAfterNanoseconds := range previousOutcome.ValidAfterNanoseconds {
+			cd, ok := previousOutcome.ChannelDefinitions[channelID]
+			if ok && cd.ReportFormat == llotypes.ReportFormatHistoryBackfill {
+				tsNanos, _, _, uerr := SelectBackfillCandidate(&previousOutcome, channelID)
+				if uerr != nil {
+					if p.Config.VerboseLogging {
+						p.Logger.Debugw("Channel is not reportable", "channelID", channelID, "err", uerr, "stage", "Outcome", "seqNr", outctx.SeqNr)
+					}
+					outcome.ValidAfterNanoseconds[channelID] = previousValidAfterNanoseconds
+				} else {
+					outcome.ValidAfterNanoseconds[channelID] = tsNanos
+				}
+				continue
+			}
 			if err3 := previousOutcome.IsReportable(channelID, p.ProtocolVersion, p.DefaultMinReportIntervalNanoseconds, p.OptsCache); err3 != nil {
 				if p.Config.VerboseLogging {
 					p.Logger.Debugw("Channel is not reportable", "channelID", channelID, "err", err3, "stage", "Outcome", "seqNr", outctx.SeqNr)
@@ -186,8 +199,14 @@ func (p *Plugin) outcome(outctx ocr3types.OutcomeContext, query types.Query, aos
 
 	for channelID := range outcome.ChannelDefinitions {
 		if _, ok := outcome.ValidAfterNanoseconds[channelID]; !ok {
-			// new channel, set ValidAfterNanoseconds to observations timestamp
-			outcome.ValidAfterNanoseconds[channelID] = outcome.ObservationTimestampNanoseconds
+			cd := outcome.ChannelDefinitions[channelID]
+			if cd.ReportFormat == llotypes.ReportFormatHistoryBackfill {
+				// Watermark for backfill progress; first selectable observation must be > 0 and < round obs time.
+				outcome.ValidAfterNanoseconds[channelID] = 0
+			} else {
+				// new channel, set ValidAfterNanoseconds to observations timestamp
+				outcome.ValidAfterNanoseconds[channelID] = outcome.ObservationTimestampNanoseconds
+			}
 		}
 	}
 
@@ -212,6 +231,9 @@ func (p *Plugin) outcome(outctx ocr3types.OutcomeContext, query types.Query, aos
 	// same stream/aggregator pair.
 	for cid, cd := range outcome.ChannelDefinitions {
 		if cd.Tombstone {
+			continue
+		}
+		if cd.ReportFormat == llotypes.ReportFormatHistoryBackfill {
 			continue
 		}
 
@@ -439,6 +461,14 @@ func (out *Outcome) IsReportable(channelID llotypes.ChannelID, protocolVersion u
 		return &UnreportableChannelError{nil, "IsReportable=false; tombstone channel", channelID}
 	}
 
+	if cd.ReportFormat == llotypes.ReportFormatHistoryBackfill {
+		_, _, _, uerr := SelectBackfillCandidate(out, channelID)
+		if uerr != nil {
+			return uerr
+		}
+		return nil
+	}
+
 	// If DisableNilStreamValues is true, check if all stream values are present
 	if cd.DisableNilStreamValues {
 		for _, strm := range cd.Streams {
@@ -506,8 +536,7 @@ func IsSecondsResolution(cd ChannelDefinitionWithID, optsCache *OptsCache) bool 
 	}
 }
 
-// List of reportable channels (according to IsReportable), sorted according
-// to a canonical ordering.
+// ReportableChannels returns a sorted list of reportable channel IDs and errors for unreportable ones.
 func (out *Outcome) ReportableChannels(protocolVersion uint32, defaultMinReportInterval uint64, optsCache *OptsCache) (reportable []llotypes.ChannelID, unreportable []*UnreportableChannelError) {
 	for channelID := range out.ChannelDefinitions {
 		// In theory in future, minReportInterval could be overridden on a

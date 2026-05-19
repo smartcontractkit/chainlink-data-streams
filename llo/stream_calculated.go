@@ -490,8 +490,15 @@ func toDecimal(x any) (decimal.Decimal, error) {
 	case int64:
 		return decimal.NewFromInt(v), nil
 	case float32:
+		f := float64(v)
+		if math.IsNaN(f) || math.IsInf(f, 0) {
+			return decimal.Decimal{}, fmt.Errorf("invalid float: NaN or Inf")
+		}
 		return decimal.NewFromFloat32(v), nil
 	case float64:
+		if math.IsNaN(v) || math.IsInf(v, 0) {
+			return decimal.Decimal{}, fmt.Errorf("invalid float: NaN or Inf")
+		}
 		return decimal.NewFromFloat(v), nil
 	case uint:
 		return decimal.NewFromUint64(uint64(v)), nil
