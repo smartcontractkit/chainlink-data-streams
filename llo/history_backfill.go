@@ -149,9 +149,6 @@ func targetChannelTimeResolution(target llotypes.ChannelDefinition) (TimeResolut
 // ValidateHistoryBackfillAgainstDefinitions checks a single history_backfill definition against the full map.
 // If nowNanos > 0, observation timestamps (converted to nanoseconds) must be < nowNanos.
 func ValidateHistoryBackfillAgainstDefinitions(cd llotypes.ChannelDefinition, defs llotypes.ChannelDefinitions, nowNanos uint64) error {
-	if cd.Tombstone {
-		return nil
-	}
 	opts, err := ParseHistoryBackfillOpts(cd.Opts)
 	if err != nil {
 		return err
@@ -159,9 +156,6 @@ func ValidateHistoryBackfillAgainstDefinitions(cd llotypes.ChannelDefinition, de
 	target, ok := defs[opts.TargetChannelID]
 	if !ok {
 		return fmt.Errorf("target channel %d not found", opts.TargetChannelID)
-	}
-	if target.Tombstone {
-		return fmt.Errorf("target channel %d is tombstoned", opts.TargetChannelID)
 	}
 	if len(cd.Streams) != len(target.Streams) {
 		return fmt.Errorf("backfill streams must match target: got %d want %d", len(cd.Streams), len(target.Streams))
@@ -208,7 +202,7 @@ func DropInvalidHistoryBackfillChannels(lggr logger.Logger, defs llotypes.Channe
 		out[k] = v
 	}
 	for cid, cd := range out {
-		if cd.ReportFormat != llotypes.ReportFormatHistoryBackfill || cd.Tombstone {
+		if cd.ReportFormat != llotypes.ReportFormatHistoryBackfill {
 			continue
 		}
 		if err := ValidateHistoryBackfillAgainstDefinitions(cd, out, nowNanos); err != nil {
