@@ -16,10 +16,10 @@ import (
 	"github.com/smartcontractkit/chainlink-common/pkg/services"
 	coretypes "github.com/smartcontractkit/chainlink-common/pkg/types/core"
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
+	mercurytransmitter "github.com/smartcontractkit/chainlink-data-streams/llo/transmitter/de"
 
 	"github.com/smartcontractkit/chainlink-data-streams/llo/config"
 	"github.com/smartcontractkit/chainlink-data-streams/llo/cre"
-	mercurytransmitter "github.com/smartcontractkit/chainlink-data-streams/mercury/transmitter"
 )
 
 // LLO Transmitter implementation, based on

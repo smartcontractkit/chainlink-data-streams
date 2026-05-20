@@ -1,4 +1,4 @@
-package transmitter
+package de
 
 import (
 	"sync"
