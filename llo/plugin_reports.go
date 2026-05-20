@@ -77,6 +77,7 @@ func (p *Plugin) reports(ctx context.Context, seqNr uint64, rawOutcome ocr3types
 				continue
 			}
 			validAfter := uint64(0)
+			// Guard against poorly formatted timestamps being passed from the backfill channel.
 			if tsNanos >= resNanos {
 				validAfter = tsNanos - resNanos
 			}
