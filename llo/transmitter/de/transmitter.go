@@ -58,29 +58,6 @@ var (
 	)
 )
 
-type MercuryTransmitterProtocol string
-
-const (
-	MercuryTransmitterProtocolWSRPC MercuryTransmitterProtocol = "wsrpc"
-	MercuryTransmitterProtocolGRPC  MercuryTransmitterProtocol = "grpc"
-)
-
-func (m MercuryTransmitterProtocol) String() string {
-	return string(m)
-}
-
-func (m *MercuryTransmitterProtocol) UnmarshalText(text []byte) error {
-	switch string(text) {
-	case "wsrpc":
-		*m = MercuryTransmitterProtocolWSRPC
-	case "grpc":
-		*m = MercuryTransmitterProtocolGRPC
-	default:
-		return fmt.Errorf("unknown mercury transmitter protocol: %s", text)
-	}
-	return nil
-}
-
 type Transmission struct {
 	ServerURL    string
 	ConfigDigest types.ConfigDigest
