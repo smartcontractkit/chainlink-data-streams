@@ -51,11 +51,19 @@ func (pr *pluginScopedRetirementReportCache) CheckAttestedRetirementReport(prede
 	}
 
 	validSigs := 0
+	seenSigners := make(map[uint32]struct{}, len(config.Signers))
 	for _, sig := range arr.Sigs {
 		// #nosec G115
 		if sig.Signer >= uint32(len(config.Signers)) {
 			return llo.RetirementReport{}, fmt.Errorf("Verify failed; attested report signer index out of bounds (got: %d, max: %d)", sig.Signer, len(config.Signers)-1)
 		}
+
+		// ensure we have unique signatures
+		if _, seen := seenSigners[sig.Signer]; seen {
+			return llo.RetirementReport{}, fmt.Errorf("Verify failed; duplicate signature from signer index %d", sig.Signer)
+		}
+
+		seenSigners[sig.Signer] = struct{}{}
 		signer := config.Signers[sig.Signer]
 		valid := pr.verifier.Verify(types.OnchainPublicKey(signer), predecessorConfigDigest, arr.SeqNr, ocr3types.ReportWithInfo[llotypes.ReportInfo]{
 			Report: arr.RetirementReport,

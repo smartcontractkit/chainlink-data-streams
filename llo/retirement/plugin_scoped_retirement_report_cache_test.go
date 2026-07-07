@@ -166,6 +166,31 @@ func Test_PluginScopedRetirementReportCache(t *testing.T) {
 			require.NoError(t, err)
 			assert.Equal(t, exampleRetirementReport, decoded)
 		})
+
+		t.Run("rejects duplicate signatures from the same signer", func(t *testing.T) {
+			rrc.cfg = Config{Digest: exampleDigest, Signers: [][]byte{{0}, {1}, {2}, {3}}, F: 1}
+			rrc.exists = true
+			v.verify = func(key types.OnchainPublicKey, digest types.ConfigDigest, seqNr uint64, r ocr3types.ReportWithInfo[llotypes.ReportInfo], signature []byte) bool {
+				return true
+			}
+			c.decode = func(b []byte) (datastreamsllo.RetirementReport, error) {
+				return datastreamsllo.RetirementReport{}, nil
+			}
+
+			dupArr := retirement.AttestedRetirementReport{
+				RetirementReport: exampleUnattestedSerializedRetirementReport,
+				SeqNr:            42,
+				Sigs: []*retirement.AttributedOnchainSignature{
+					{Signer: 0, Signature: []byte("bar0")},
+					{Signer: 0, Signature: []byte("bar0")},
+				},
+			}
+			serializedDupArr, err := proto.Marshal(&dupArr)
+			require.NoError(t, err)
+
+			_, err = psrrc.CheckAttestedRetirementReport(exampleDigest, serializedDupArr)
+			require.EqualError(t, err, "Verify failed; duplicate signature from signer index 0")
+		})
 	})
 	t.Run("AttestedRetirementReport", func(t *testing.T) {
 		rrc.arr = []byte("foo")
