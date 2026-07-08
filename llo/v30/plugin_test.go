@@ -1,12 +1,11 @@
 package llo
 
 import (
-	. "github.com/smartcontractkit/chainlink-data-streams/llo"
-
 	"context"
 	"testing"
 
 	"github.com/shopspring/decimal"
+	llocommon "github.com/smartcontractkit/chainlink-data-streams/llo/common"
 	"github.com/smartcontractkit/libocr/offchainreporting2/types"
 	"github.com/smartcontractkit/libocr/offchainreporting2plus/ocr3types"
 
@@ -58,11 +57,11 @@ func (m *mockChannelDefinitionCache) Start(ctx context.Context) error {
 var _ llotypes.ChannelDefinitionCache = &mockChannelDefinitionCache{}
 
 type mockDataSource struct {
-	s   StreamValues
+	s   llocommon.StreamValues
 	err error
 }
 
-func (m *mockDataSource) Observe(ctx context.Context, streamValues StreamValues, opts DSOpts) error {
+func (m *mockDataSource) Observe(ctx context.Context, streamValues llocommon.StreamValues, opts DSOpts) error {
 	for k, v := range m.s {
 		streamValues[k] = v
 	}
@@ -91,10 +90,10 @@ func Test_ValidateObservation(t *testing.T) {
 	t.Run("nested stream value on TimestampedStreamValue must be a Decimal", func(t *testing.T) {
 		ctx := tests.Context(t)
 		obs := Observation{
-			StreamValues: map[uint32]StreamValue{
-				1: &TimestampedStreamValue{
-					StreamValue: &TimestampedStreamValue{
-						StreamValue: ToDecimal(decimal.NewFromInt(1)),
+			StreamValues: map[uint32]llocommon.StreamValue{
+				1: &llocommon.TimestampedStreamValue{
+					StreamValue: &llocommon.TimestampedStreamValue{
+						StreamValue: llocommon.ToDecimal(decimal.NewFromInt(1)),
 					},
 				},
 			},
@@ -110,11 +109,11 @@ func Test_ValidateObservation(t *testing.T) {
 
 type mockOnchainConfigCodec struct{}
 
-func (m *mockOnchainConfigCodec) Decode(b []byte) (OnchainConfig, error) {
-	return OnchainConfig{}, nil
+func (m *mockOnchainConfigCodec) Decode(b []byte) (llocommon.OnchainConfig, error) {
+	return llocommon.OnchainConfig{}, nil
 }
 
-func (m *mockOnchainConfigCodec) Encode(OnchainConfig) ([]byte, error) {
+func (m *mockOnchainConfigCodec) Encode(llocommon.OnchainConfig) ([]byte, error) {
 	return nil, nil
 }
 
@@ -141,7 +140,7 @@ func Test_NewReportingPlugin_setsValues(t *testing.T) {
 	})
 
 	t.Run("with version 1 offchain config", func(t *testing.T) {
-		encodedOffchainConfig, err := OffchainConfig{
+		encodedOffchainConfig, err := llocommon.OffchainConfig{
 			ProtocolVersion:                     1,
 			DefaultMinReportIntervalNanoseconds: 12345,
 		}.Encode()

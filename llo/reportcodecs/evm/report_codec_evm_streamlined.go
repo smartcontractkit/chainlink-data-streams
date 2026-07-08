@@ -9,6 +9,7 @@ import (
 	"github.com/goccy/go-json"
 
 	"github.com/ethereum/go-ethereum/common"
+	llocommon "github.com/smartcontractkit/chainlink-data-streams/llo/common"
 	"github.com/smartcontractkit/libocr/offchainreporting2/types"
 	"google.golang.org/protobuf/proto"
 
@@ -16,11 +17,10 @@ import (
 
 	"github.com/smartcontractkit/chainlink-common/pkg/logger"
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
-	"github.com/smartcontractkit/chainlink-data-streams/llo"
 )
 
 var (
-	_ llo.ReportCodec = ReportCodecEVMStreamlined{}
+	_ llocommon.ReportCodec = ReportCodecEVMStreamlined{}
 )
 
 func NewReportCodecStreamlined(lggr logger.Logger) ReportCodecEVMStreamlined {
@@ -31,8 +31,8 @@ type ReportCodecEVMStreamlined struct {
 	logger.Logger
 }
 
-func (rc ReportCodecEVMStreamlined) Encode(r llo.Report, cd llotypes.ChannelDefinition, optsCache *llo.OptsCache) (payload []byte, err error) {
-	opts, getErr := llo.GetOpts[ReportFormatEVMStreamlinedOpts](optsCache, r.ChannelID)
+func (rc ReportCodecEVMStreamlined) Encode(r llocommon.Report, cd llotypes.ChannelDefinition, optsCache *llocommon.OptsCache) (payload []byte, err error) {
+	opts, getErr := llocommon.GetOpts[ReportFormatEVMStreamlinedOpts](optsCache, r.ChannelID)
 	if getErr != nil {
 		return nil, fmt.Errorf("opts not in cache for channel %d: %w", r.ChannelID, getErr)
 	}
@@ -175,7 +175,7 @@ type ReportFormatEVMStreamlinedOpts struct {
 	// MaxReportRange is the maximum range of the report.
 	// The range will be limited to ObservationTimestamp + MaxReportRange if the report is longer than the max range.
 	// Defaults to 5 minutes if not specified.
-	MaxReportRange llo.Duration `json:"maxReportRange,omitempty"`
+	MaxReportRange llocommon.Duration `json:"maxReportRange,omitempty"`
 }
 
 func (r *ReportFormatEVMStreamlinedOpts) Decode(opts []byte) error {

@@ -2,11 +2,10 @@
 package llo
 
 import (
-	. "github.com/smartcontractkit/chainlink-data-streams/llo"
-
 	"github.com/shopspring/decimal"
 
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
+	llocommon "github.com/smartcontractkit/chainlink-data-streams/llo/common"
 )
 
 // GoldenOutcomeCase defines a single outcome serialization golden test case.
@@ -20,17 +19,17 @@ type GoldenOutcomeCase struct {
 // fullChannelDefinitions is shared between the "full" and "from_full" golden cases.
 var fullChannelDefinitions = map[llotypes.ChannelID]llotypes.ChannelDefinition{
 	1: {
-		ReportFormat:          llotypes.ReportFormatJSON,
+		ReportFormat:           llotypes.ReportFormatJSON,
 		Streams:                []llotypes.Stream{{StreamID: 1, Aggregator: llotypes.AggregatorMedian}, {StreamID: 2, Aggregator: llotypes.AggregatorQuote}},
-		Opts:                  []byte(`{"foo":"bar"}`),
+		Opts:                   []byte(`{"foo":"bar"}`),
 		Tombstone:              true,
 		Source:                 0,
 		DisableNilStreamValues: true,
 	},
 	2: {
-		ReportFormat:          llotypes.ReportFormatJSON,
+		ReportFormat:           llotypes.ReportFormatJSON,
 		Streams:                []llotypes.Stream{{StreamID: 3, Aggregator: llotypes.AggregatorMedian}},
-		Opts:                  []byte(`{"baz":"qux"}`),
+		Opts:                   []byte(`{"baz":"qux"}`),
 		Source:                 1001,
 		Tombstone:              false,
 		DisableNilStreamValues: true,
@@ -44,7 +43,7 @@ func GoldenOutcomeCases() []GoldenOutcomeCase {
 		{
 			Name: "initial",
 			Outcome: Outcome{
-				LifeCycleStage:                  LifeCycleStageProduction,
+				LifeCycleStage:                  llocommon.LifeCycleStageProduction,
 				ObservationTimestampNanoseconds: 0,
 				ChannelDefinitions:              nil,
 				ValidAfterNanoseconds:           nil,
@@ -62,19 +61,19 @@ func GoldenOutcomeCases() []GoldenOutcomeCase {
 					1: 5000000000,
 					2: 6000000000,
 				},
-				StreamAggregates: map[llotypes.StreamID]map[llotypes.Aggregator]StreamValue{
+				StreamAggregates: map[llotypes.StreamID]map[llotypes.Aggregator]llocommon.StreamValue{
 					1: {
-						llotypes.AggregatorMedian: ToDecimal(decimal.NewFromInt(12345)),
+						llotypes.AggregatorMedian: llocommon.ToDecimal(decimal.NewFromInt(12345)),
 					},
 					2: {
-						llotypes.AggregatorQuote: &Quote{
+						llotypes.AggregatorQuote: &llocommon.Quote{
 							Bid:       decimal.NewFromInt(1010),
 							Benchmark: decimal.NewFromInt(1011),
 							Ask:       decimal.NewFromInt(1012),
 						},
 					},
 					3: {
-						llotypes.AggregatorMedian: ToDecimal(decimal.NewFromFloat(123.456)),
+						llotypes.AggregatorMedian: llocommon.ToDecimal(decimal.NewFromFloat(123.456)),
 					},
 				},
 			},
@@ -85,12 +84,12 @@ func GoldenOutcomeCases() []GoldenOutcomeCase {
 			Outcome: Outcome{
 				LifeCycleStage:                  "production",
 				ObservationTimestampNanoseconds: 9876543210 + uint64(1e9), // median of 4 obs with this timestamp
-				ChannelDefinitions:             fullChannelDefinitions,
+				ChannelDefinitions:              fullChannelDefinitions,
 				ValidAfterNanoseconds: map[llotypes.ChannelID]uint64{
-					1: 5000000000,  // tombstone channel, kept from previous
-					2: 9876543210,  // reportable channel, set to previous ObservationTimestampNanoseconds
+					1: 5000000000, // tombstone channel, kept from previous
+					2: 9876543210, // reportable channel, set to previous ObservationTimestampNanoseconds
 				},
-				StreamAggregates: map[llotypes.StreamID]map[llotypes.Aggregator]StreamValue{
+				StreamAggregates: map[llotypes.StreamID]map[llotypes.Aggregator]llocommon.StreamValue{
 					3: {}, // no observations for stream 3, aggregation failed → empty map
 				},
 			},

@@ -12,8 +12,7 @@ import (
 	"github.com/smartcontractkit/chainlink-common/pkg/capabilities"
 	"github.com/smartcontractkit/chainlink-common/pkg/logger"
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
-	"github.com/smartcontractkit/chainlink-data-streams/llo"
-	datastreamsllo "github.com/smartcontractkit/chainlink-data-streams/llo"
+	llocommon "github.com/smartcontractkit/chainlink-data-streams/llo/common"
 	"github.com/smartcontractkit/chainlink-protos/cre/go/values"
 )
 
@@ -79,13 +78,13 @@ func buildRegistrationRequest(t *testing.T, triggerID string, streamIDs []LLOStr
 
 func encodeReport(t *testing.T, timestamp uint64) ocr3types.ReportWithInfo[llotypes.ReportInfo] {
 	codec := NewReportCodecCapabilityTrigger(logger.Test(t), donID)
-	rep := llo.Report{
+	rep := llocommon.Report{
 		ConfigDigest:                    types.ConfigDigest{1, 2, 3},
 		SeqNr:                           32,
 		ChannelID:                       llotypes.ChannelID(31),
 		ValidAfterNanoseconds:           28,
 		ObservationTimestampNanoseconds: timestamp,
-		Values:                          []llo.StreamValue{llo.ToDecimal(decimal.NewFromInt(35)), llo.ToDecimal(decimal.NewFromInt(36))},
+		Values:                          []llocommon.StreamValue{llocommon.ToDecimal(decimal.NewFromInt(35)), llocommon.ToDecimal(decimal.NewFromInt(36))},
 		Specimen:                        false,
 	}
 	cd := llotypes.ChannelDefinition{
@@ -95,7 +94,7 @@ func encodeReport(t *testing.T, timestamp uint64) ocr3types.ReportWithInfo[lloty
 			{StreamID: 2},
 		},
 	}
-	cache := datastreamsllo.NewOptsCache()
+	cache := llocommon.NewOptsCache()
 	cache.Set(rep.ChannelID, []byte{})
 	rawReport, err := codec.Encode(rep, cd, cache)
 	require.NoError(t, err)
@@ -103,7 +102,7 @@ func encodeReport(t *testing.T, timestamp uint64) ocr3types.ReportWithInfo[lloty
 	return ocr3types.ReportWithInfo[llotypes.ReportInfo]{
 		Report: rawReport,
 		Info: llotypes.ReportInfo{
-			LifeCycleStage: datastreamsllo.LifeCycleStageProduction,
+			LifeCycleStage: llocommon.LifeCycleStageProduction,
 			ReportFormat:   llotypes.ReportFormatCapabilityTrigger,
 		},
 	}

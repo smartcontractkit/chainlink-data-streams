@@ -1,4 +1,4 @@
-package llo
+package common
 
 import (
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"

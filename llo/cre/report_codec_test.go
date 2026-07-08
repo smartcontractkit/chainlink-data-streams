@@ -12,8 +12,7 @@ import (
 
 	capabilitiespb "github.com/smartcontractkit/chainlink-common/pkg/capabilities/pb"
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
-	"github.com/smartcontractkit/chainlink-data-streams/llo"
-	datastreamsllo "github.com/smartcontractkit/chainlink-data-streams/llo"
+	llocommon "github.com/smartcontractkit/chainlink-data-streams/llo/common"
 	"github.com/smartcontractkit/chainlink-protos/cre/go/values/pb"
 )
 
@@ -22,14 +21,14 @@ func Test_ReportCodec(t *testing.T) {
 		donID := uint32(1)
 		c := NewReportCodecCapabilityTrigger(logger.Test(t), donID)
 
-		optsCache := datastreamsllo.NewOptsCache()
-		r := datastreamsllo.Report{
+		optsCache := llocommon.NewOptsCache()
+		r := llocommon.Report{
 			ConfigDigest:                    types.ConfigDigest{1, 2, 3},
 			SeqNr:                           32,
 			ChannelID:                       llotypes.ChannelID(31),
 			ValidAfterNanoseconds:           28,
 			ObservationTimestampNanoseconds: 34,
-			Values:                          []llo.StreamValue{llo.ToDecimal(decimal.NewFromInt(35)), llo.ToDecimal(decimal.NewFromInt(36))},
+			Values:                          []llocommon.StreamValue{llocommon.ToDecimal(decimal.NewFromInt(35)), llocommon.ToDecimal(decimal.NewFromInt(36))},
 			Specimen:                        false,
 		}
 		optsCache.Set(r.ChannelID, []byte{})
@@ -69,13 +68,13 @@ func Test_ReportCodec(t *testing.T) {
 		donID := uint32(1)
 		c := NewReportCodecCapabilityTrigger(logger.Test(t), donID)
 
-		r := datastreamsllo.Report{
+		r := llocommon.Report{
 			ConfigDigest:                    types.ConfigDigest{1, 2, 3},
 			SeqNr:                           32,
 			ChannelID:                       llotypes.ChannelID(31),
 			ValidAfterNanoseconds:           28,
 			ObservationTimestampNanoseconds: 34,
-			Values:                          []llo.StreamValue{llo.ToDecimal(decimal.NewFromInt(35)), llo.ToDecimal(decimal.NewFromInt(36)), llo.ToDecimal(decimal.NewFromInt(37))},
+			Values:                          []llocommon.StreamValue{llocommon.ToDecimal(decimal.NewFromInt(35)), llocommon.ToDecimal(decimal.NewFromInt(36)), llocommon.ToDecimal(decimal.NewFromInt(37))},
 			Specimen:                        false,
 		}
 
@@ -86,7 +85,7 @@ func Test_ReportCodec(t *testing.T) {
 		multiplier3, err := decimal.NewFromString("1000000") // 10^6
 		require.NoError(t, err)
 
-		cache := datastreamsllo.NewOptsCache()
+		cache := llocommon.NewOptsCache()
 
 		opts, err := (&ReportCodecCapabilityTriggerOpts{
 			Multipliers: []ReportCodecCapabilityTriggerMultiplier{

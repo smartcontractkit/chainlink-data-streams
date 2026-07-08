@@ -1,8 +1,6 @@
 package llo
 
 import (
-	. "github.com/smartcontractkit/chainlink-data-streams/llo"
-
 	"os"
 	reflect "reflect"
 	"testing"
@@ -15,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
+	llocommon "github.com/smartcontractkit/chainlink-data-streams/llo/common"
 )
 
 func Test_protoOutcomeCodecV1(t *testing.T) {
@@ -43,24 +42,24 @@ func Test_protoOutcomeCodecV1(t *testing.T) {
 			ValidAfterNanoseconds: map[llotypes.ChannelID]uint64{
 				3: 123,
 			},
-			StreamAggregates: map[llotypes.StreamID]map[llotypes.Aggregator]StreamValue{
-				1: map[llotypes.Aggregator]StreamValue{
-					llotypes.AggregatorMedian: ToDecimal(decimal.NewFromInt(123)),
+			StreamAggregates: map[llotypes.StreamID]map[llotypes.Aggregator]llocommon.StreamValue{
+				1: map[llotypes.Aggregator]llocommon.StreamValue{
+					llotypes.AggregatorMedian: llocommon.ToDecimal(decimal.NewFromInt(123)),
 				},
-				2: map[llotypes.Aggregator]StreamValue{
-					llotypes.AggregatorMedian: ToDecimal(decimal.NewFromInt(456)),
+				2: map[llotypes.Aggregator]llocommon.StreamValue{
+					llotypes.AggregatorMedian: llocommon.ToDecimal(decimal.NewFromInt(456)),
 				},
-				3: map[llotypes.Aggregator]StreamValue{},
-				4: map[llotypes.Aggregator]StreamValue{
-					llotypes.AggregatorQuote: &Quote{
+				3: map[llotypes.Aggregator]llocommon.StreamValue{},
+				4: map[llotypes.Aggregator]llocommon.StreamValue{
+					llotypes.AggregatorQuote: &llocommon.Quote{
 						Bid:       decimal.NewFromInt(1010),
 						Benchmark: decimal.NewFromInt(1011),
 						Ask:       decimal.NewFromInt(1012),
 					},
-					llotypes.AggregatorMedian: ToDecimal(decimal.NewFromInt(457)),
+					llotypes.AggregatorMedian: llocommon.ToDecimal(decimal.NewFromInt(457)),
 				},
-				5: map[llotypes.Aggregator]StreamValue{
-					llotypes.AggregatorQuote: &Quote{
+				5: map[llotypes.Aggregator]llocommon.StreamValue{
+					llotypes.AggregatorQuote: &llocommon.Quote{
 						Bid:       decimal.NewFromInt(1013),
 						Benchmark: decimal.NewFromInt(1014),
 						Ask:       decimal.NewFromInt(1015),
@@ -83,23 +82,23 @@ func Test_protoOutcomeCodecV1(t *testing.T) {
 	t.Run("encode and decode preserves attributes in channel definitions", func(t *testing.T) {
 		outcome := Outcome{
 			LifeCycleStage:                  llotypes.LifeCycleStage("staging"),
-			ObservationTimestampNanoseconds:  1,
+			ObservationTimestampNanoseconds: 1,
 			ChannelDefinitions: map[llotypes.ChannelID]llotypes.ChannelDefinition{
 				1: {
-					ReportFormat:          llotypes.ReportFormatJSON,
-					Streams:               []llotypes.Stream{{StreamID: 1, Aggregator: llotypes.AggregatorMedian}},
+					ReportFormat:           llotypes.ReportFormatJSON,
+					Streams:                []llotypes.Stream{{StreamID: 1, Aggregator: llotypes.AggregatorMedian}},
 					DisableNilStreamValues: true,
-					Opts:                  []byte(`{}`),
-					Tombstone:             false,
-					Source:                1,
+					Opts:                   []byte(`{}`),
+					Tombstone:              false,
+					Source:                 1,
 				},
 				2: {
-					ReportFormat:          llotypes.ReportFormatJSON,
-					Streams:               []llotypes.Stream{{StreamID: 2, Aggregator: llotypes.AggregatorQuote}},
+					ReportFormat:           llotypes.ReportFormatJSON,
+					Streams:                []llotypes.Stream{{StreamID: 2, Aggregator: llotypes.AggregatorQuote}},
 					DisableNilStreamValues: false,
-					Opts:                  []byte(`{}`),
-					Tombstone:             true,
-					Source:                2,
+					Opts:                   []byte(`{}`),
+					Tombstone:              true,
+					Source:                 2,
 				},
 			},
 		}
@@ -116,7 +115,7 @@ func Test_protoOutcomeCodecV1(t *testing.T) {
 // Test_protoOutcomeCodecV1_GoldenFiles asserts outcome serialization against committed golden files.
 // Expected outcomes come from GoldenOutcomeCases() (see outcome_golden_cases.go).
 func Test_protoOutcomeCodecV1_GoldenFiles(t *testing.T) {
-	codec := GetOutcomeCodec(OffchainConfig{
+	codec := GetOutcomeCodec(llocommon.OffchainConfig{
 		ProtocolVersion:                     1,
 		DefaultMinReportIntervalNanoseconds: 1,
 	})
@@ -163,24 +162,24 @@ func Fuzz_protoOutcomeCodecV1_Decode(f *testing.F) {
 		ValidAfterNanoseconds: map[llotypes.ChannelID]uint64{
 			3: 123,
 		},
-		StreamAggregates: map[llotypes.StreamID]map[llotypes.Aggregator]StreamValue{
-			1: map[llotypes.Aggregator]StreamValue{
-				llotypes.AggregatorMedian: ToDecimal(decimal.NewFromInt(123)),
+		StreamAggregates: map[llotypes.StreamID]map[llotypes.Aggregator]llocommon.StreamValue{
+			1: map[llotypes.Aggregator]llocommon.StreamValue{
+				llotypes.AggregatorMedian: llocommon.ToDecimal(decimal.NewFromInt(123)),
 			},
-			2: map[llotypes.Aggregator]StreamValue{
-				llotypes.AggregatorMedian: ToDecimal(decimal.NewFromInt(456)),
+			2: map[llotypes.Aggregator]llocommon.StreamValue{
+				llotypes.AggregatorMedian: llocommon.ToDecimal(decimal.NewFromInt(456)),
 			},
-			3: map[llotypes.Aggregator]StreamValue{},
-			4: map[llotypes.Aggregator]StreamValue{
-				llotypes.AggregatorQuote: &Quote{
+			3: map[llotypes.Aggregator]llocommon.StreamValue{},
+			4: map[llotypes.Aggregator]llocommon.StreamValue{
+				llotypes.AggregatorQuote: &llocommon.Quote{
 					Bid:       decimal.NewFromInt(1010),
 					Benchmark: decimal.NewFromInt(1011),
 					Ask:       decimal.NewFromInt(1012),
 				},
-				llotypes.AggregatorMedian: ToDecimal(decimal.NewFromInt(457)),
+				llotypes.AggregatorMedian: llocommon.ToDecimal(decimal.NewFromInt(457)),
 			},
-			5: map[llotypes.Aggregator]StreamValue{
-				llotypes.AggregatorQuote: &Quote{
+			5: map[llotypes.Aggregator]llocommon.StreamValue{
+				llotypes.AggregatorQuote: &llocommon.Quote{
 					Bid:       decimal.NewFromInt(1013),
 					Benchmark: decimal.NewFromInt(1014),
 					Ask:       decimal.NewFromInt(1015),

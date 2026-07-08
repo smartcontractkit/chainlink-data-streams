@@ -1,4 +1,4 @@
-package llo
+package common
 
 import (
 	"github.com/smartcontractkit/libocr/offchainreporting2/types"

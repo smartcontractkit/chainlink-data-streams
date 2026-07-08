@@ -1,11 +1,10 @@
 package llo
 
 import (
-	. "github.com/smartcontractkit/chainlink-data-streams/llo"
-
 	"context"
 	"fmt"
 
+	llocommon "github.com/smartcontractkit/chainlink-data-streams/llo/common"
 	"github.com/smartcontractkit/libocr/offchainreporting2/types"
 	"github.com/smartcontractkit/libocr/offchainreporting2plus/ocr3types"
 
@@ -25,7 +24,7 @@ func (p *Plugin) reports(ctx context.Context, seqNr uint64, rawOutcome ocr3types
 
 	rwis := []ocr3types.ReportPlus[llotypes.ReportInfo]{}
 
-	if outcome.LifeCycleStage == LifeCycleStageRetired {
+	if outcome.LifeCycleStage == llocommon.LifeCycleStageRetired {
 		// if we're retired, emit special retirement report to transfer
 		// ValidAfterNanoseconds part of state to the new protocol instance for a
 		// "gapless" handover
@@ -41,7 +40,7 @@ func (p *Plugin) reports(ctx context.Context, seqNr uint64, rawOutcome ocr3types
 			ReportWithInfo: ocr3types.ReportWithInfo[llotypes.ReportInfo]{
 				Report: encoded,
 				Info: llotypes.ReportInfo{
-					LifeCycleStage: LifeCycleStageRetired,
+					LifeCycleStage: llocommon.LifeCycleStageRetired,
 					ReportFormat:   llotypes.ReportFormatRetirement,
 				},
 			},
@@ -68,12 +67,12 @@ func (p *Plugin) reports(ctx context.Context, seqNr uint64, rawOutcome ocr3types
 				continue
 			}
 			row := opts.Observations[rawTS]
-			values, err := BuildBackfillStreamValues(targetCD, row)
+			values, err := llocommon.BuildBackfillStreamValues(targetCD, row)
 			if err != nil {
 				p.Logger.Warnw("Error building backfill stream values", "err", err, "channelID", cid, "stage", "Report", "seqNr", seqNr)
 				continue
 			}
-			resNanos, err := ReportTimestampResolutionNanos(targetCD)
+			resNanos, err := llocommon.ReportTimestampResolutionNanos(targetCD)
 			if err != nil {
 				p.Logger.Warnw("Error resolving history_backfill report timestamp resolution", "err", err, "channelID", cid, "stage", "Report", "seqNr", seqNr)
 				continue
@@ -83,14 +82,14 @@ func (p *Plugin) reports(ctx context.Context, seqNr uint64, rawOutcome ocr3types
 			if tsNanos >= resNanos {
 				validAfter = tsNanos - resNanos
 			}
-			report := Report{
+			report := llocommon.Report{
 				ConfigDigest:                    p.ConfigDigest,
 				SeqNr:                           seqNr,
 				ChannelID:                       cid,
 				ValidAfterNanoseconds:           validAfter,
 				ObservationTimestampNanoseconds: tsNanos,
 				Values:                          values,
-				Specimen:                        outcome.LifeCycleStage != LifeCycleStageProduction,
+				Specimen:                        outcome.LifeCycleStage != llocommon.LifeCycleStageProduction,
 			}
 			reportForEncode := report
 			reportForEncode.ChannelID = opts.TargetChannelID
@@ -122,19 +121,19 @@ func (p *Plugin) reports(ctx context.Context, seqNr uint64, rawOutcome ocr3types
 			continue
 		}
 
-		values := make([]StreamValue, 0, len(cd.Streams))
+		values := make([]llocommon.StreamValue, 0, len(cd.Streams))
 		for _, strm := range cd.Streams {
 			values = append(values, outcome.StreamAggregates[strm.StreamID][strm.Aggregator])
 		}
 
-		report := Report{
+		report := llocommon.Report{
 			ConfigDigest:                    p.ConfigDigest,
 			SeqNr:                           seqNr,
 			ChannelID:                       cid,
 			ValidAfterNanoseconds:           outcome.ValidAfterNanoseconds[cid],
 			ObservationTimestampNanoseconds: outcome.ObservationTimestampNanoseconds,
 			Values:                          values,
-			Specimen:                        outcome.LifeCycleStage != LifeCycleStageProduction,
+			Specimen:                        outcome.LifeCycleStage != llocommon.LifeCycleStageProduction,
 		}
 
 		if p.Config.VerboseLogging {
@@ -164,7 +163,7 @@ func (p *Plugin) reports(ctx context.Context, seqNr uint64, rawOutcome ocr3types
 	return rwis, nil
 }
 
-func (p *Plugin) encodeReport(r Report, cd llotypes.ChannelDefinition) (types.Report, error) {
+func (p *Plugin) encodeReport(r llocommon.Report, cd llotypes.ChannelDefinition) (types.Report, error) {
 	codec, exists := p.ReportCodecs[cd.ReportFormat]
 	if !exists {
 		return nil, fmt.Errorf("codec missing for ReportFormat=%q", cd.ReportFormat)
@@ -173,7 +172,7 @@ func (p *Plugin) encodeReport(r Report, cd llotypes.ChannelDefinition) (types.Re
 	return codec.Encode(r, cd, p.OptsCache)
 }
 
-func (p *Plugin) captureReportTelemetry(r Report, cd llotypes.ChannelDefinition) {
+func (p *Plugin) captureReportTelemetry(r llocommon.Report, cd llotypes.ChannelDefinition) {
 	if p.ReportTelemetryCh != nil {
 		rt, err := makeReportTelemetry(r, cd, p.DonID)
 		if err != nil {
@@ -188,26 +187,26 @@ func (p *Plugin) captureReportTelemetry(r Report, cd llotypes.ChannelDefinition)
 	}
 }
 
-func makeReportTelemetry(r Report, cd llotypes.ChannelDefinition, donID uint32) (*LLOReportTelemetry, error) {
-	streams := make([]*LLOStreamDefinition, len(cd.Streams))
+func makeReportTelemetry(r llocommon.Report, cd llotypes.ChannelDefinition, donID uint32) (*llocommon.LLOReportTelemetry, error) {
+	streams := make([]*llocommon.LLOStreamDefinition, len(cd.Streams))
 	for i, s := range cd.Streams {
-		streams[i] = &LLOStreamDefinition{
+		streams[i] = &llocommon.LLOStreamDefinition{
 			StreamID:   s.StreamID,
 			Aggregator: uint32(s.Aggregator),
 		}
 	}
-	svs := make([]*LLOStreamValue, len(r.Values))
+	svs := make([]*llocommon.LLOStreamValue, len(r.Values))
 	for i, v := range r.Values {
 		b, err := v.MarshalBinary()
 		if err != nil {
 			return nil, fmt.Errorf("error marshalling stream value: %w", err)
 		}
-		svs[i] = &LLOStreamValue{
+		svs[i] = &llocommon.LLOStreamValue{
 			Type:  v.Type(),
 			Value: b,
 		}
 	}
-	rt := &LLOReportTelemetry{
+	rt := &llocommon.LLOReportTelemetry{
 		ChannelId:                       r.ChannelID,
 		ValidAfterNanoseconds:           r.ValidAfterNanoseconds,
 		ObservationTimestampNanoseconds: r.ObservationTimestampNanoseconds,

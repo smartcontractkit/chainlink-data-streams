@@ -1,11 +1,10 @@
 package llo
 
 import (
-	. "github.com/smartcontractkit/chainlink-data-streams/llo"
-
 	"fmt"
 	"sort"
 
+	llocommon "github.com/smartcontractkit/chainlink-data-streams/llo/common"
 	"github.com/smartcontractkit/libocr/offchainreporting2plus/ocr3types"
 	"google.golang.org/protobuf/proto"
 
@@ -30,7 +29,7 @@ func (protoOutcomeCodecV1) Encode(outcome Outcome) (ocr3types.Outcome, error) {
 
 	validAfterNanoseconds := validAfterNanosecondsToProtoOutcomeNanoseconds(outcome.ValidAfterNanoseconds)
 
-	pbuf := &LLOOutcomeProtoV1{
+	pbuf := &llocommon.LLOOutcomeProtoV1{
 		LifeCycleStage:                  string(outcome.LifeCycleStage),
 		ObservationTimestampNanoseconds: outcome.ObservationTimestampNanoseconds,
 		ChannelDefinitions:              dfns,
@@ -43,11 +42,11 @@ func (protoOutcomeCodecV1) Encode(outcome Outcome) (ocr3types.Outcome, error) {
 	return proto.MarshalOptions{Deterministic: true}.Marshal(pbuf)
 }
 
-func validAfterNanosecondsToProtoOutcomeNanoseconds(in map[llotypes.ChannelID]uint64) (out []*LLOChannelIDAndValidAfterNanosecondsProto) {
+func validAfterNanosecondsToProtoOutcomeNanoseconds(in map[llotypes.ChannelID]uint64) (out []*llocommon.LLOChannelIDAndValidAfterNanosecondsProto) {
 	if len(in) > 0 {
-		out = make([]*LLOChannelIDAndValidAfterNanosecondsProto, 0, len(in))
+		out = make([]*llocommon.LLOChannelIDAndValidAfterNanosecondsProto, 0, len(in))
 		for id, v := range in {
-			out = append(out, &LLOChannelIDAndValidAfterNanosecondsProto{
+			out = append(out, &llocommon.LLOChannelIDAndValidAfterNanosecondsProto{
 				ChannelID:             id,
 				ValidAfterNanoseconds: v,
 			})
@@ -60,7 +59,7 @@ func validAfterNanosecondsToProtoOutcomeNanoseconds(in map[llotypes.ChannelID]ui
 }
 
 func (protoOutcomeCodecV1) Decode(b ocr3types.Outcome) (outcome Outcome, err error) {
-	pbuf := &LLOOutcomeProtoV1{}
+	pbuf := &llocommon.LLOOutcomeProtoV1{}
 	err = proto.Unmarshal(b, pbuf)
 	if err != nil {
 		return Outcome{}, fmt.Errorf("failed to decode outcome: expected protobuf (got: 0x%x); %w", b, err)
@@ -84,7 +83,7 @@ func (protoOutcomeCodecV1) Decode(b ocr3types.Outcome) (outcome Outcome, err err
 	return outcome, nil
 }
 
-func validAfterNanosecondsFromProtoOutcomeNanoseconds(in []*LLOChannelIDAndValidAfterNanosecondsProto) (out map[llotypes.ChannelID]uint64) {
+func validAfterNanosecondsFromProtoOutcomeNanoseconds(in []*llocommon.LLOChannelIDAndValidAfterNanosecondsProto) (out map[llotypes.ChannelID]uint64) {
 	if len(in) > 0 {
 		out = make(map[llotypes.ChannelID]uint64, len(in))
 		for _, v := range in {

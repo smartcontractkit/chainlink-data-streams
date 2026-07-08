@@ -4,7 +4,7 @@
 // 	protoc        v7.34.0
 // source: plugin_codecs.proto
 
-package llo
+package common
 
 import (
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"

@@ -6,12 +6,12 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/smartcontractkit/chainlink-data-streams/llo"
+	llocommon "github.com/smartcontractkit/chainlink-data-streams/llo/common"
 	llov30 "github.com/smartcontractkit/chainlink-data-streams/llo/v30"
 )
 
 func main() {
-	config := llo.OffchainConfig{
+	config := llocommon.OffchainConfig{
 		ProtocolVersion:                     1,
 		DefaultMinReportIntervalNanoseconds: 1,
 	}

@@ -1,11 +1,10 @@
 package llo
 
 import (
-	. "github.com/smartcontractkit/chainlink-data-streams/llo"
-
 	"errors"
 	"fmt"
 
+	llocommon "github.com/smartcontractkit/chainlink-data-streams/llo/common"
 	"github.com/smartcontractkit/libocr/offchainreporting2/types"
 	"golang.org/x/exp/maps"
 	"google.golang.org/protobuf/proto"
@@ -45,24 +44,24 @@ func NewProtoObservationCodec(lggr logger.Logger, enableCompression bool) (Obser
 func (c protoObservationCodec) Encode(obs Observation) (types.Observation, error) {
 	dfns := channelDefinitionsToProtoObservation(obs.UpdateChannelDefinitions)
 
-	streamValues := make(map[uint32]*LLOStreamValue, len(obs.StreamValues))
+	streamValues := make(map[uint32]*llocommon.LLOStreamValue, len(obs.StreamValues))
 	for id, sv := range obs.StreamValues {
 		if sv != nil {
 			enc, err := sv.MarshalBinary()
-			if errors.Is(err, ErrNilStreamValue) {
+			if errors.Is(err, llocommon.ErrNilStreamValue) {
 				// Ignore nil values
 				continue
 			} else if err != nil {
 				return nil, fmt.Errorf("failed to encode observation: %w", err)
 			}
-			streamValues[id] = &LLOStreamValue{
+			streamValues[id] = &llocommon.LLOStreamValue{
 				Type:  sv.Type(),
 				Value: enc,
 			}
 		}
 	}
 
-	pbuf := &LLOObservationProto{
+	pbuf := &llocommon.LLOObservationProto{
 		AttestedPredecessorRetirement:  obs.AttestedPredecessorRetirement,
 		ShouldRetire:                   obs.ShouldRetire,
 		UnixTimestampNanoseconds:       obs.UnixTimestampNanoseconds,
@@ -98,7 +97,7 @@ func (c protoObservationCodec) Decode(b types.Observation) (Observation, error) 
 		}
 	}
 
-	pbuf := &LLOObservationProto{}
+	pbuf := &llocommon.LLOObservationProto{}
 	err = proto.Unmarshal(b, pbuf)
 	if err != nil {
 		return Observation{}, fmt.Errorf("failed to decode observation: expected protobuf (got: 0x%x); %w", b, err)
@@ -116,11 +115,11 @@ func (c protoObservationCodec) Decode(b types.Observation) (Observation, error) 
 		}
 	}
 	dfns := channelDefinitionsFromProtoObservation(pbuf.UpdateChannelDefinitions)
-	var streamValues StreamValues
+	var streamValues llocommon.StreamValues
 	if len(pbuf.StreamValues) > 0 {
-		streamValues = make(StreamValues, len(pbuf.StreamValues))
+		streamValues = make(llocommon.StreamValues, len(pbuf.StreamValues))
 		for id, enc := range pbuf.StreamValues {
-			sv, err := UnmarshalProtoStreamValue(enc)
+			sv, err := llocommon.UnmarshalProtoStreamValue(enc)
 			if err != nil {
 				// Byzantine behavior makes this observation invalid; a
 				// well-behaved node should never encode invalid or nil values
@@ -152,7 +151,7 @@ func (c protoObservationCodec) Decode(b types.Observation) (Observation, error) 
 	return obs, nil
 }
 
-func channelDefinitionsFromProtoObservation(channelDefinitions map[uint32]*LLOChannelDefinitionProto) llotypes.ChannelDefinitions {
+func channelDefinitionsFromProtoObservation(channelDefinitions map[uint32]*llocommon.LLOChannelDefinitionProto) llotypes.ChannelDefinitions {
 	if len(channelDefinitions) == 0 {
 		return nil
 	}
@@ -166,34 +165,34 @@ func channelDefinitionsFromProtoObservation(channelDefinitions map[uint32]*LLOCh
 			}
 		}
 		dfns[id] = llotypes.ChannelDefinition{
-			ReportFormat:          llotypes.ReportFormat(d.ReportFormat),
-			Streams:               streams,
-			Opts:                  d.Opts,
-			Tombstone:             d.Tombstone,
-			Source:                d.Source,
+			ReportFormat:           llotypes.ReportFormat(d.ReportFormat),
+			Streams:                streams,
+			Opts:                   d.Opts,
+			Tombstone:              d.Tombstone,
+			Source:                 d.Source,
 			DisableNilStreamValues: d.DisableNilStreamValues,
 		}
 	}
 	return dfns
 }
 
-func channelDefinitionsToProtoObservation(in llotypes.ChannelDefinitions) (out map[uint32]*LLOChannelDefinitionProto) {
+func channelDefinitionsToProtoObservation(in llotypes.ChannelDefinitions) (out map[uint32]*llocommon.LLOChannelDefinitionProto) {
 	if len(in) > 0 {
-		out = make(map[uint32]*LLOChannelDefinitionProto, len(in))
+		out = make(map[uint32]*llocommon.LLOChannelDefinitionProto, len(in))
 		for id, d := range in {
-			streams := make([]*LLOStreamDefinition, len(d.Streams))
+			streams := make([]*llocommon.LLOStreamDefinition, len(d.Streams))
 			for i, strm := range d.Streams {
-				streams[i] = &LLOStreamDefinition{
+				streams[i] = &llocommon.LLOStreamDefinition{
 					StreamID:   strm.StreamID,
 					Aggregator: uint32(strm.Aggregator),
 				}
 			}
-			out[id] = &LLOChannelDefinitionProto{
-				ReportFormat:          uint32(d.ReportFormat),
-				Streams:               streams,
-				Opts:                  d.Opts,
-				Tombstone:             d.Tombstone,
-				Source:                d.Source,
+			out[id] = &llocommon.LLOChannelDefinitionProto{
+				ReportFormat:           uint32(d.ReportFormat),
+				Streams:                streams,
+				Opts:                   d.Opts,
+				Tombstone:              d.Tombstone,
+				Source:                 d.Source,
 				DisableNilStreamValues: d.DisableNilStreamValues,
 			}
 		}

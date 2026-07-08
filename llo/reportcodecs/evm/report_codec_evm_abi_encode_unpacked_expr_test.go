@@ -16,33 +16,33 @@ import (
 
 	"github.com/smartcontractkit/libocr/offchainreporting2/types"
 
+	llocommon "github.com/smartcontractkit/chainlink-data-streams/llo/common"
 	ubig "github.com/smartcontractkit/chainlink-data-streams/llo/reportcodecs/evm/utils"
 
 	"github.com/smartcontractkit/chainlink-common/pkg/logger"
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
-	"github.com/smartcontractkit/chainlink-data-streams/llo"
 )
 
 func TestReportCodecEVMABIEncodeUnpackedExpr_Encode(t *testing.T) {
 	t.Run("ABI and values length mismatch error", func(t *testing.T) {
-		report := llo.Report{
+		report := llocommon.Report{
 			ConfigDigest:                    types.ConfigDigest{0x01},
 			SeqNr:                           0x02,
 			ChannelID:                       llotypes.ChannelID(0x03),
 			ValidAfterNanoseconds:           0x04,
 			ObservationTimestampNanoseconds: 0x05,
-			Values: []llo.StreamValue{
-				&llo.Quote{Bid: decimal.NewFromFloat(6.1), Benchmark: decimal.NewFromFloat(7.4), Ask: decimal.NewFromFloat(8.2332)},
-				&llo.Quote{Bid: decimal.NewFromFloat(9.4), Benchmark: decimal.NewFromFloat(10.0), Ask: decimal.NewFromFloat(11.33)},
-				llo.ToDecimal(decimal.NewFromFloat(100)),
-				llo.ToDecimal(decimal.NewFromFloat(101)),
-				llo.ToDecimal(decimal.NewFromFloat(102)),
+			Values: []llocommon.StreamValue{
+				&llocommon.Quote{Bid: decimal.NewFromFloat(6.1), Benchmark: decimal.NewFromFloat(7.4), Ask: decimal.NewFromFloat(8.2332)},
+				&llocommon.Quote{Bid: decimal.NewFromFloat(9.4), Benchmark: decimal.NewFromFloat(10.0), Ask: decimal.NewFromFloat(11.33)},
+				llocommon.ToDecimal(decimal.NewFromFloat(100)),
+				llocommon.ToDecimal(decimal.NewFromFloat(101)),
+				llocommon.ToDecimal(decimal.NewFromFloat(102)),
 			},
 			Specimen: false,
 		}
 
 		opts := ReportFormatEVMABIEncodeOpts{
-			TimeResolution: llo.ResolutionSeconds,
+			TimeResolution: llocommon.ResolutionSeconds,
 			ABI:            []ABIEncoder{},
 		}
 		serializedOpts, err := opts.Encode()
@@ -72,7 +72,7 @@ func TestReportCodecEVMABIEncodeUnpackedExpr_Encode(t *testing.T) {
 			Opts: serializedOpts,
 		}
 
-		cache := llo.NewOptsCache()
+		cache := llocommon.NewOptsCache()
 		cache.Set(report.ChannelID, cd.Opts)
 		codec := ReportCodecEVMABIEncodeUnpackedExpr{}
 		_, err = codec.Encode(report, cd, cache)
@@ -96,18 +96,18 @@ func TestReportCodecEVMABIEncodeUnpackedExpr_Encode(t *testing.T) {
 		properties := gopter.NewProperties(nil)
 
 		runTest := func(sampleFeedID common.Hash, sampleObservationTimestampNanoseconds, sampleValidAfterNanoseconds uint64, sampleExpirationWindow uint32, priceMultiplier, marketDepthMultiplier *ubig.Big, sampleBaseUSDFee, sampleLinkBenchmarkPrice, sampleNativeBenchmarkPrice, sampleDexBasedAssetPrice, sampleBaseMarketDepth, sampleQuoteMarketDepth decimal.Decimal) bool {
-			report := llo.Report{
+			report := llocommon.Report{
 				ConfigDigest:                    types.ConfigDigest{0x01},
 				SeqNr:                           0x02,
 				ChannelID:                       llotypes.ChannelID(0x03),
 				ValidAfterNanoseconds:           sampleValidAfterNanoseconds,
 				ObservationTimestampNanoseconds: sampleObservationTimestampNanoseconds,
-				Values: []llo.StreamValue{
-					&llo.Quote{Bid: decimal.NewFromFloat(6.1), Benchmark: sampleLinkBenchmarkPrice, Ask: decimal.NewFromFloat(8.2332)},  // Link price
-					&llo.Quote{Bid: decimal.NewFromFloat(9.4), Benchmark: sampleNativeBenchmarkPrice, Ask: decimal.NewFromFloat(11.33)}, // Native price
-					llo.ToDecimal(sampleDexBasedAssetPrice), // DEX-based asset price
-					llo.ToDecimal(sampleBaseMarketDepth),    // Base market depth
-					llo.ToDecimal(sampleQuoteMarketDepth),   // Quote market depth
+				Values: []llocommon.StreamValue{
+					&llocommon.Quote{Bid: decimal.NewFromFloat(6.1), Benchmark: sampleLinkBenchmarkPrice, Ask: decimal.NewFromFloat(8.2332)},  // Link price
+					&llocommon.Quote{Bid: decimal.NewFromFloat(9.4), Benchmark: sampleNativeBenchmarkPrice, Ask: decimal.NewFromFloat(11.33)}, // Native price
+					llocommon.ToDecimal(sampleDexBasedAssetPrice), // DEX-based asset price
+					llocommon.ToDecimal(sampleBaseMarketDepth),    // Base market depth
+					llocommon.ToDecimal(sampleQuoteMarketDepth),   // Quote market depth
 				},
 				Specimen: false,
 			}
@@ -116,7 +116,7 @@ func TestReportCodecEVMABIEncodeUnpackedExpr_Encode(t *testing.T) {
 				BaseUSDFee:       sampleBaseUSDFee,
 				ExpirationWindow: sampleExpirationWindow,
 				FeedID:           sampleFeedID,
-				TimeResolution:   llo.ResolutionSeconds,
+				TimeResolution:   llocommon.ResolutionSeconds,
 				ABI: []ABIEncoder{
 					// benchmark price
 					newSingleABIEncoder("int192", priceMultiplier),
@@ -154,7 +154,7 @@ func TestReportCodecEVMABIEncodeUnpackedExpr_Encode(t *testing.T) {
 			codec := ReportCodecEVMABIEncodeUnpackedExpr{Logger: logger.Nop()}
 			clampedValidAfterNanos := ClampReportRange(logger.Nop(), report, 0)
 
-			cache := llo.NewOptsCache()
+			cache := llocommon.NewOptsCache()
 			cache.Set(report.ChannelID, cd.Opts)
 			encoded, err := codec.Encode(report, cd, cache)
 			require.NoError(t, err)
@@ -175,12 +175,12 @@ func TestReportCodecEVMABIEncodeUnpackedExpr_Encode(t *testing.T) {
 			require.Error(t, err)
 
 			return AllTrue([]bool{
-				assert.Equal(t, sampleFeedID, (common.Hash)(values[0].([32]byte))),                                                                  //nolint:testifylint // false positive // feedId
-				assert.Equal(t, uint32(clampedValidAfterNanos/1e9)+1, values[1].(uint32)),                                                           //nolint:gosec // G115 // validFromTimestamp
-				assert.Equal(t, uint32(sampleObservationTimestampNanoseconds/1e9), values[2].(uint32)),                                              //nolint:gosec // G115 // observationsTimestamp
-				assert.Equal(t, expectedLinkFee.String(), values[3].(*big.Int).String()),                                                            // nativeFee (Values[0] is link benchmark in test data)
-				assert.Equal(t, expectedNativeFee.String(), values[4].(*big.Int).String()),                                                          // linkFee (Values[1] is native benchmark in test data)
-				assert.Equal(t, uint32(sampleObservationTimestampNanoseconds/1e9)+sampleExpirationWindow, values[5].(uint32)),                       //nolint:gosec // G115 // expiresAt (seconds resolution, no scaling needed)
+				assert.Equal(t, sampleFeedID, (common.Hash)(values[0].([32]byte))),                                            //nolint:testifylint // false positive // feedId
+				assert.Equal(t, uint32(clampedValidAfterNanos/1e9)+1, values[1].(uint32)),                                     //nolint:gosec // G115 // validFromTimestamp
+				assert.Equal(t, uint32(sampleObservationTimestampNanoseconds/1e9), values[2].(uint32)),                        //nolint:gosec // G115 // observationsTimestamp
+				assert.Equal(t, expectedLinkFee.String(), values[3].(*big.Int).String()),                                      // nativeFee (Values[0] is link benchmark in test data)
+				assert.Equal(t, expectedNativeFee.String(), values[4].(*big.Int).String()),                                    // linkFee (Values[1] is native benchmark in test data)
+				assert.Equal(t, uint32(sampleObservationTimestampNanoseconds/1e9)+sampleExpirationWindow, values[5].(uint32)), //nolint:gosec // G115 // expiresAt (seconds resolution, no scaling needed)
 			})
 		}
 
@@ -204,10 +204,10 @@ func TestReportCodecEVMABIEncodeUnpackedExpr_Encode(t *testing.T) {
 	})
 
 	t.Run("varying timestamp resolution schemas", func(t *testing.T) {
-		runTest := func(sampleFeedID common.Hash, sampleObservationTimestampNanoseconds, sampleValidAfterNanoseconds uint64, sampleExpirationWindow uint32, priceMultiplier, marketDepthMultiplier *ubig.Big, sampleBaseUSDFee, sampleLinkBenchmarkPrice, sampleNativeBenchmarkPrice, sampleDexBasedAssetPrice, sampleBaseMarketDepth, sampleQuoteMarketDepth decimal.Decimal, sampleTimeResolution llo.TimeResolution) bool {
+		runTest := func(sampleFeedID common.Hash, sampleObservationTimestampNanoseconds, sampleValidAfterNanoseconds uint64, sampleExpirationWindow uint32, priceMultiplier, marketDepthMultiplier *ubig.Big, sampleBaseUSDFee, sampleLinkBenchmarkPrice, sampleNativeBenchmarkPrice, sampleDexBasedAssetPrice, sampleBaseMarketDepth, sampleQuoteMarketDepth decimal.Decimal, sampleTimeResolution llocommon.TimeResolution) bool {
 			// Determine timestamp type based on resolution
 			timestampType := "uint64"
-			if sampleTimeResolution == llo.ResolutionSeconds {
+			if sampleTimeResolution == llocommon.ResolutionSeconds {
 				timestampType = "uint32"
 			}
 
@@ -223,18 +223,18 @@ func TestReportCodecEVMABIEncodeUnpackedExpr_Encode(t *testing.T) {
 				{Name: "quoteMarketDepth", Type: mustNewABIType("int192")},
 			})
 
-			report := llo.Report{
+			report := llocommon.Report{
 				ConfigDigest:                    types.ConfigDigest{0x01},
 				SeqNr:                           0x02,
 				ChannelID:                       llotypes.ChannelID(0x03),
 				ValidAfterNanoseconds:           sampleValidAfterNanoseconds,
 				ObservationTimestampNanoseconds: sampleObservationTimestampNanoseconds,
-				Values: []llo.StreamValue{
-					&llo.Quote{Bid: decimal.NewFromFloat(9.4), Benchmark: sampleNativeBenchmarkPrice, Ask: decimal.NewFromFloat(11.33)}, // Native price
-					&llo.Quote{Bid: decimal.NewFromFloat(6.1), Benchmark: sampleLinkBenchmarkPrice, Ask: decimal.NewFromFloat(8.2332)},  // Link price
-					llo.ToDecimal(sampleDexBasedAssetPrice), // DEX-based asset price
-					llo.ToDecimal(sampleBaseMarketDepth),    // Base market depth
-					llo.ToDecimal(sampleQuoteMarketDepth),   // Quote market depth
+				Values: []llocommon.StreamValue{
+					&llocommon.Quote{Bid: decimal.NewFromFloat(9.4), Benchmark: sampleNativeBenchmarkPrice, Ask: decimal.NewFromFloat(11.33)}, // Native price
+					&llocommon.Quote{Bid: decimal.NewFromFloat(6.1), Benchmark: sampleLinkBenchmarkPrice, Ask: decimal.NewFromFloat(8.2332)},  // Link price
+					llocommon.ToDecimal(sampleDexBasedAssetPrice), // DEX-based asset price
+					llocommon.ToDecimal(sampleBaseMarketDepth),    // Base market depth
+					llocommon.ToDecimal(sampleQuoteMarketDepth),   // Quote market depth
 				},
 				Specimen: false,
 			}
@@ -281,7 +281,7 @@ func TestReportCodecEVMABIEncodeUnpackedExpr_Encode(t *testing.T) {
 			codec := ReportCodecEVMABIEncodeUnpackedExpr{Logger: logger.Nop()}
 			clampedValidAfterNanos := ClampReportRange(logger.Nop(), report, 0)
 
-			cache := llo.NewOptsCache()
+			cache := llocommon.NewOptsCache()
 			cache.Set(report.ChannelID, cd.Opts)
 			encoded, err := codec.Encode(report, cd, cache)
 			require.NoError(t, err)
@@ -303,9 +303,9 @@ func TestReportCodecEVMABIEncodeUnpackedExpr_Encode(t *testing.T) {
 			}
 
 			// Verify timestamps per resolution type
-			expectedValidFrom := llo.ConvertTimestamp(clampedValidAfterNanos, sampleTimeResolution) + 1
-			expectedObservationTimestamp := llo.ConvertTimestamp(sampleObservationTimestampNanoseconds, sampleTimeResolution)
-			expectedExpiresAt := expectedObservationTimestamp + llo.ScaleSeconds(sampleExpirationWindow, sampleTimeResolution)
+			expectedValidFrom := llocommon.ConvertTimestamp(clampedValidAfterNanos, sampleTimeResolution) + 1
+			expectedObservationTimestamp := llocommon.ConvertTimestamp(sampleObservationTimestampNanoseconds, sampleTimeResolution)
+			expectedExpiresAt := expectedObservationTimestamp + llocommon.ScaleSeconds(sampleExpirationWindow, sampleTimeResolution)
 			if timestampType == "uint32" {
 				checks = append(checks,
 					assert.Equal(t, uint32(expectedValidFrom), values[1].(uint32)),
@@ -457,9 +457,9 @@ func genMarketDepth() gopter.Gen {
 // TestReportCodecEVMABIEncodeUnpackedExpr_EncodeOpts
 func TestReportCodecEVMABIEncodeUnpackedExpr_EncodeOpts(t *testing.T) {
 	t.Run("zero value is ResolutionSeconds", func(t *testing.T) {
-		var defaultPrecision llo.TimeResolution
-		assert.Equal(t, llo.ResolutionSeconds, defaultPrecision, "zero value must be ResolutionSeconds for backward compatibility")
-		assert.Equal(t, llo.TimeResolution(0), llo.ResolutionSeconds, "ResolutionSeconds must be 0")
+		var defaultPrecision llocommon.TimeResolution
+		assert.Equal(t, llocommon.ResolutionSeconds, defaultPrecision, "zero value must be ResolutionSeconds for backward compatibility")
+		assert.Equal(t, llocommon.TimeResolution(0), llocommon.ResolutionSeconds, "ResolutionSeconds must be 0")
 	})
 
 	t.Run("JSON opts without TimeResolution defaults to seconds", func(t *testing.T) {
@@ -474,34 +474,34 @@ func TestReportCodecEVMABIEncodeUnpackedExpr_EncodeOpts(t *testing.T) {
 		err := opts.Decode([]byte(jsonConfig))
 		require.NoError(t, err)
 
-		assert.Equal(t, llo.ResolutionSeconds, opts.TimeResolution)
+		assert.Equal(t, llocommon.ResolutionSeconds, opts.TimeResolution)
 	})
 
 	t.Run("JSON opts with TimeResolution uses correct value", func(t *testing.T) {
 		testCases := []struct {
 			name              string
 			jsonPrecision     string
-			expectedPrecision llo.TimeResolution
+			expectedPrecision llocommon.TimeResolution
 		}{
 			{
 				name:              "seconds",
 				jsonPrecision:     "s",
-				expectedPrecision: llo.ResolutionSeconds,
+				expectedPrecision: llocommon.ResolutionSeconds,
 			},
 			{
 				name:              "milliseconds",
 				jsonPrecision:     "ms",
-				expectedPrecision: llo.ResolutionMilliseconds,
+				expectedPrecision: llocommon.ResolutionMilliseconds,
 			},
 			{
 				name:              "microseconds",
 				jsonPrecision:     "us",
-				expectedPrecision: llo.ResolutionMicroseconds,
+				expectedPrecision: llocommon.ResolutionMicroseconds,
 			},
 			{
 				name:              "nanoseconds",
 				jsonPrecision:     "ns",
-				expectedPrecision: llo.ResolutionNanoseconds,
+				expectedPrecision: llocommon.ResolutionNanoseconds,
 			},
 		}
 

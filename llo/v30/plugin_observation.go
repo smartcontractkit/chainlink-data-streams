@@ -1,13 +1,12 @@
 package llo
 
 import (
-	. "github.com/smartcontractkit/chainlink-data-streams/llo"
-
 	"context"
 	"fmt"
 	"sort"
 	"time"
 
+	llocommon "github.com/smartcontractkit/chainlink-data-streams/llo/common"
 	"github.com/smartcontractkit/libocr/offchainreporting2/types"
 	"github.com/smartcontractkit/libocr/offchainreporting2plus/ocr3types"
 	"golang.org/x/exp/maps"
@@ -36,10 +35,10 @@ func (p *Plugin) observation(ctx context.Context, outctx ocr3types.OutcomeContex
 
 	var obs Observation
 
-	if previousOutcome.LifeCycleStage == LifeCycleStageRetired {
+	if previousOutcome.LifeCycleStage == llocommon.LifeCycleStageRetired {
 		p.Logger.Debugw("Node is retired, will generate empty observation", "stage", "Observation", "seqNr", outctx.SeqNr)
 	} else {
-		if err = VerifyChannelDefinitions(p.ReportCodecs, previousOutcome.ChannelDefinitions); err != nil {
+		if err = llocommon.VerifyChannelDefinitions(p.ReportCodecs, previousOutcome.ChannelDefinitions); err != nil {
 			// This is not expected, unless the majority of nodes are using a
 			// different verification method than this one.
 			//
@@ -50,7 +49,7 @@ func (p *Plugin) observation(ctx context.Context, outctx ocr3types.OutcomeContex
 
 		// Only try to fetch this from the cache if this instance if configured
 		// with a predecessor and we're still in the staging stage.
-		if p.PredecessorConfigDigest != nil && previousOutcome.LifeCycleStage == LifeCycleStageStaging {
+		if p.PredecessorConfigDigest != nil && previousOutcome.LifeCycleStage == llocommon.LifeCycleStageStaging {
 			var err2 error
 			obs.AttestedPredecessorRetirement, err2 = p.PredecessorRetirementReportCache.AttestedRetirementReport(*p.PredecessorConfigDigest)
 			if err2 != nil {
@@ -78,7 +77,7 @@ func (p *Plugin) observation(ctx context.Context, outctx ocr3types.OutcomeContex
 			//
 			// ChannelIDs should always be sorted the same way (channel ID ascending).
 			expectedChannelDefs := p.ChannelDefinitionCache.Definitions(previousOutcome.ChannelDefinitions)
-			if err = VerifyChannelDefinitions(p.ReportCodecs, expectedChannelDefs); err != nil {
+			if err = llocommon.VerifyChannelDefinitions(p.ReportCodecs, expectedChannelDefs); err != nil {
 				// If channel definitions is invalid, do not error out but instead
 				// don't vote on any new channels.
 				//
@@ -86,7 +85,7 @@ func (p *Plugin) observation(ctx context.Context, outctx ocr3types.OutcomeContex
 				// definitions file.
 				p.Logger.Errorw("ChannelDefinitionCache.Definitions is invalid", "err", err)
 			} else {
-				removeChannelDefinitions := SubtractChannelDefinitions(previousOutcome.ChannelDefinitions, expectedChannelDefs, MaxObservationRemoveChannelIDsLength)
+				removeChannelDefinitions := llocommon.SubtractChannelDefinitions(previousOutcome.ChannelDefinitions, expectedChannelDefs, llocommon.MaxObservationRemoveChannelIDsLength)
 				for channelID := range removeChannelDefinitions {
 					obs.RemoveChannelIDs[channelID] = struct{}{}
 				}
@@ -108,7 +107,7 @@ func (p *Plugin) observation(ctx context.Context, outctx ocr3types.OutcomeContex
 					}
 					// Add or replace channel
 					obs.UpdateChannelDefinitions[channelID] = channelDefinition
-					if len(obs.UpdateChannelDefinitions) >= MaxObservationUpdateChannelDefinitionsLength {
+					if len(obs.UpdateChannelDefinitions) >= llocommon.MaxObservationUpdateChannelDefinitionsLength {
 						// Never add more than MaxObservationUpdateChannelDefinitionsLength
 						break
 					}
@@ -133,7 +132,7 @@ func (p *Plugin) observation(ctx context.Context, outctx ocr3types.OutcomeContex
 		if len(previousOutcome.ChannelDefinitions) == 0 {
 			p.Logger.Debugw("ChannelDefinitions is empty, will not generate any observations", "stage", "Observation", "seqNr", outctx.SeqNr)
 		} else {
-			obs.StreamValues = make(StreamValues)
+			obs.StreamValues = make(llocommon.StreamValues)
 			for _, channelDefinition := range previousOutcome.ChannelDefinitions {
 				if channelDefinition.Tombstone {
 					continue
@@ -192,7 +191,7 @@ type Observation struct {
 	UpdateChannelDefinitions llotypes.ChannelDefinitions
 	// Observed (numeric) stream values. Subject to
 	// MaxObservationStreamValuesLength limit
-	StreamValues StreamValues
+	StreamValues llocommon.StreamValues
 }
 
 // deterministic sort of channel IDs

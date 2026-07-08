@@ -1,8 +1,6 @@
 package llo
 
 import (
-	. "github.com/smartcontractkit/chainlink-data-streams/llo"
-
 	"fmt"
 	"os"
 	"testing"
@@ -12,6 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	llocommon "github.com/smartcontractkit/chainlink-data-streams/llo/common"
 	"github.com/smartcontractkit/libocr/commontypes"
 	"github.com/smartcontractkit/libocr/offchainreporting2/types"
 	"github.com/smartcontractkit/libocr/offchainreporting2plus/ocr3types"
@@ -35,7 +34,7 @@ func Test_Outcome_GoldenFiles(t *testing.T) {
 	ctx := tests.Context(t)
 	obsCodec, err := NewProtoObservationCodec(logger.Nop(), true)
 	require.NoError(t, err)
-	codec := GetOutcomeCodec(OffchainConfig{
+	codec := GetOutcomeCodec(llocommon.OffchainConfig{
 		ProtocolVersion:                     1,
 		DefaultMinReportIntervalNanoseconds: 1,
 	})
@@ -48,7 +47,7 @@ func Test_Outcome_GoldenFiles(t *testing.T) {
 		ConfigDigest:                        types.ConfigDigest{1, 2, 3, 4},
 		ProtocolVersion:                     1,
 		DefaultMinReportIntervalNanoseconds: 1,
-		OptsCache:                           NewOptsCache(),
+		OptsCache:                           llocommon.NewOptsCache(),
 	}
 	// Minimal observations (timestamp only) so the plugin advances from previous outcome without new channel defs or stream values.
 	obs, err := p.ObservationCodec.Encode(Observation{UnixTimestampNanoseconds: 9876543210 + uint64(time.Second)})
@@ -89,7 +88,7 @@ func Test_Outcome_EncodedMatchesGolden(t *testing.T) {
 	ctx := tests.Context(t)
 	obsCodec, err := NewProtoObservationCodec(logger.Nop(), true)
 	require.NoError(t, err)
-	codec := GetOutcomeCodec(OffchainConfig{
+	codec := GetOutcomeCodec(llocommon.OffchainConfig{
 		ProtocolVersion:                     1,
 		DefaultMinReportIntervalNanoseconds: 1,
 	})
@@ -102,7 +101,7 @@ func Test_Outcome_EncodedMatchesGolden(t *testing.T) {
 		ConfigDigest:                        types.ConfigDigest{1, 2, 3, 4},
 		ProtocolVersion:                     1,
 		DefaultMinReportIntervalNanoseconds: 1,
-		OptsCache:                           NewOptsCache(),
+		OptsCache:                           llocommon.NewOptsCache(),
 	}
 
 	// Golden cases that the plugin produces; "full" is only used as previous outcome, not produced here.
@@ -170,7 +169,7 @@ func testOutcome(t *testing.T, outcomeCodec OutcomeCodec) {
 		DonID:            10000043,
 		ConfigDigest:     types.ConfigDigest{1, 2, 3, 4},
 		F:                1,
-		OptsCache:        NewOptsCache(),
+		OptsCache:        llocommon.NewOptsCache(),
 	}
 	testStartTS := time.Now()
 	testStartNanos := uint64(testStartTS.UnixNano()) //nolint:gosec // safe cast in tests
@@ -295,7 +294,7 @@ func testOutcome(t *testing.T, outcomeCodec OutcomeCodec) {
 			// Create previous outcome with a non-tombstoned, reportable channel
 			previousObsTS := testStartNanos + uint64(2*time.Second)
 			previousOutcome := Outcome{
-				LifeCycleStage:                  LifeCycleStageProduction,
+				LifeCycleStage:                  llocommon.LifeCycleStageProduction,
 				ObservationTimestampNanoseconds: previousObsTS,
 				ChannelDefinitions: map[llotypes.ChannelID]llotypes.ChannelDefinition{
 					channelID: originalCd,
@@ -303,9 +302,9 @@ func testOutcome(t *testing.T, outcomeCodec OutcomeCodec) {
 				ValidAfterNanoseconds: map[llotypes.ChannelID]uint64{
 					channelID: testStartNanos, // Channel is reportable
 				},
-				StreamAggregates: map[llotypes.StreamID]map[llotypes.Aggregator]StreamValue{
-					1: {llotypes.AggregatorMedian: ToDecimal(decimal.NewFromInt(100))},
-					2: {llotypes.AggregatorMedian: ToDecimal(decimal.NewFromInt(200))},
+				StreamAggregates: map[llotypes.StreamID]map[llotypes.Aggregator]llocommon.StreamValue{
+					1: {llotypes.AggregatorMedian: llocommon.ToDecimal(decimal.NewFromInt(100))},
+					2: {llotypes.AggregatorMedian: llocommon.ToDecimal(decimal.NewFromInt(200))},
 				},
 			}
 
@@ -369,7 +368,7 @@ func testOutcome(t *testing.T, outcomeCodec OutcomeCodec) {
 				Streams:      []llotypes.Stream{{StreamID: 1, Aggregator: llotypes.AggregatorMedian}, {StreamID: 2, Aggregator: llotypes.AggregatorMedian}, {StreamID: 3, Aggregator: llotypes.AggregatorMedian}},
 			}
 			obs := Observation{UpdateChannelDefinitions: map[llotypes.ChannelID]llotypes.ChannelDefinition{}}
-			for i := uint32(0); i < MaxOutcomeChannelDefinitionsLength+10; i++ {
+			for i := uint32(0); i < llocommon.MaxOutcomeChannelDefinitionsLength+10; i++ {
 				obs.UpdateChannelDefinitions[i] = newCd
 			}
 			encoded, err := p.ObservationCodec.Encode(obs)
@@ -388,17 +387,17 @@ func testOutcome(t *testing.T, outcomeCodec OutcomeCodec) {
 			decoded, err := p.OutcomeCodec.Decode(outcome)
 			require.NoError(t, err)
 
-			assert.Len(t, decoded.ChannelDefinitions, MaxOutcomeChannelDefinitionsLength)
+			assert.Len(t, decoded.ChannelDefinitions, llocommon.MaxOutcomeChannelDefinitionsLength)
 
 			// should contain channels 0 thru 999
 			assert.Contains(t, decoded.ChannelDefinitions, llotypes.ChannelID(0))
-			assert.Contains(t, decoded.ChannelDefinitions, llotypes.ChannelID(MaxOutcomeChannelDefinitionsLength-1))
-			assert.NotContains(t, decoded.ChannelDefinitions, llotypes.ChannelID(MaxOutcomeChannelDefinitionsLength))
-			assert.NotContains(t, decoded.ChannelDefinitions, llotypes.ChannelID(MaxOutcomeChannelDefinitionsLength+1))
+			assert.Contains(t, decoded.ChannelDefinitions, llotypes.ChannelID(llocommon.MaxOutcomeChannelDefinitionsLength-1))
+			assert.NotContains(t, decoded.ChannelDefinitions, llotypes.ChannelID(llocommon.MaxOutcomeChannelDefinitionsLength))
+			assert.NotContains(t, decoded.ChannelDefinitions, llotypes.ChannelID(llocommon.MaxOutcomeChannelDefinitionsLength+1))
 		})
 
 		t.Run("resets OptsCache when length differs from ChannelDefinitions (e.g. after restart)", func(t *testing.T) {
-			optsCache := NewOptsCache()
+			optsCache := llocommon.NewOptsCache()
 			optsCache.Set(1, []byte(`{}`))
 			optsCache.Set(2, []byte(`{}`))
 			require.Equal(t, 2, optsCache.Len(), "cache should have 2 channels before Outcome")
@@ -415,7 +414,7 @@ func testOutcome(t *testing.T, outcomeCodec OutcomeCodec) {
 			}
 
 			previousOutcome := Outcome{
-				LifeCycleStage:                  LifeCycleStageProduction,
+				LifeCycleStage:                  llocommon.LifeCycleStageProduction,
 				ObservationTimestampNanoseconds: testStartNanos,
 				ChannelDefinitions: llotypes.ChannelDefinitions{
 					42: {
@@ -442,9 +441,13 @@ func testOutcome(t *testing.T, outcomeCodec OutcomeCodec) {
 			require.NoError(t, err)
 
 			assert.Equal(t, 1, pluginWithCache.OptsCache.Len(), "OptsCache should be reset to match ChannelDefinitions length")
-			_, err = GetOpts[struct{ FeedID string `json:"feedID"` }](pluginWithCache.OptsCache, 42)
+			_, err = llocommon.GetOpts[struct {
+				FeedID string `json:"feedID"`
+			}](pluginWithCache.OptsCache, 42)
 			require.NoError(t, err, "channel 42 should be in cache after reset")
-			_, err = GetOpts[struct{ FeedID string `json:"feedID"` }](pluginWithCache.OptsCache, 1)
+			_, err = llocommon.GetOpts[struct {
+				FeedID string `json:"feedID"`
+			}](pluginWithCache.OptsCache, 1)
 			require.Error(t, err, "channel 1 should no longer be in cache after reset")
 		})
 	})
@@ -476,10 +479,10 @@ func testOutcome(t *testing.T, outcomeCodec OutcomeCodec) {
 			for i := 0; i < 4; i++ {
 				obs := Observation{
 					UnixTimestampNanoseconds: testStartNanos + uint64(time.Second) + uint64(i*100)*uint64(time.Millisecond), //nolint:gosec // safe cast in tests
-					StreamValues: map[llotypes.StreamID]StreamValue{
-						1: ToDecimal(decimal.NewFromInt(int64(100 + i*10))),
-						2: &TimestampedStreamValue{ObservedAtNanoseconds: 123456789, StreamValue: ToDecimal(decimal.NewFromInt(int64(200 + i*10)))},
-						3: &Quote{Bid: decimal.NewFromInt(int64(300 + i*10)), Benchmark: decimal.NewFromInt(int64(310 + i*10)), Ask: decimal.NewFromInt(int64(320 + i*10))},
+					StreamValues: map[llotypes.StreamID]llocommon.StreamValue{
+						1: llocommon.ToDecimal(decimal.NewFromInt(int64(100 + i*10))),
+						2: &llocommon.TimestampedStreamValue{ObservedAtNanoseconds: 123456789, StreamValue: llocommon.ToDecimal(decimal.NewFromInt(int64(200 + i*10)))},
+						3: &llocommon.Quote{Bid: decimal.NewFromInt(int64(300 + i*10)), Benchmark: decimal.NewFromInt(int64(310 + i*10)), Ask: decimal.NewFromInt(int64(320 + i*10))},
 					}}
 				encoded, err2 := p.ObservationCodec.Encode(obs)
 				require.NoError(t, err2)
@@ -514,15 +517,15 @@ func testOutcome(t *testing.T, outcomeCodec OutcomeCodec) {
 					1: expectedValidAfterSeconds, // set to median observation timestamp
 					2: expectedValidAfterSeconds,
 				},
-				StreamAggregates: map[llotypes.StreamID]map[llotypes.Aggregator]StreamValue{
-					1: map[llotypes.Aggregator]StreamValue{
-						llotypes.AggregatorMedian: ToDecimal(decimal.NewFromInt(120)),
+				StreamAggregates: map[llotypes.StreamID]map[llotypes.Aggregator]llocommon.StreamValue{
+					1: map[llotypes.Aggregator]llocommon.StreamValue{
+						llotypes.AggregatorMedian: llocommon.ToDecimal(decimal.NewFromInt(120)),
 					},
-					2: map[llotypes.Aggregator]StreamValue{
-						llotypes.AggregatorMedian: &TimestampedStreamValue{ObservedAtNanoseconds: 123456789, StreamValue: ToDecimal(decimal.NewFromInt(220))},
+					2: map[llotypes.Aggregator]llocommon.StreamValue{
+						llotypes.AggregatorMedian: &llocommon.TimestampedStreamValue{ObservedAtNanoseconds: 123456789, StreamValue: llocommon.ToDecimal(decimal.NewFromInt(220))},
 					},
-					3: map[llotypes.Aggregator]StreamValue{
-						llotypes.AggregatorQuote: &Quote{Bid: decimal.NewFromInt(320), Benchmark: decimal.NewFromInt(330), Ask: decimal.NewFromInt(340)},
+					3: map[llotypes.Aggregator]llocommon.StreamValue{
+						llotypes.AggregatorQuote: &llocommon.Quote{Bid: decimal.NewFromInt(320), Benchmark: decimal.NewFromInt(330), Ask: decimal.NewFromInt(340)},
 					},
 				},
 			}, decoded)
@@ -536,15 +539,15 @@ func testOutcome(t *testing.T, outcomeCodec OutcomeCodec) {
 					1: uint64(102030405 * time.Second),
 					2: uint64(102030400 * time.Second),
 				},
-				StreamAggregates: map[llotypes.StreamID]map[llotypes.Aggregator]StreamValue{
-					1: map[llotypes.Aggregator]StreamValue{
-						llotypes.AggregatorMedian: ToDecimal(decimal.NewFromInt(120)),
+				StreamAggregates: map[llotypes.StreamID]map[llotypes.Aggregator]llocommon.StreamValue{
+					1: map[llotypes.Aggregator]llocommon.StreamValue{
+						llotypes.AggregatorMedian: llocommon.ToDecimal(decimal.NewFromInt(120)),
 					},
-					2: map[llotypes.Aggregator]StreamValue{
-						llotypes.AggregatorMedian: ToDecimal(decimal.NewFromInt(220)),
+					2: map[llotypes.Aggregator]llocommon.StreamValue{
+						llotypes.AggregatorMedian: llocommon.ToDecimal(decimal.NewFromInt(220)),
 					},
-					3: map[llotypes.Aggregator]StreamValue{
-						llotypes.AggregatorQuote: &Quote{Bid: decimal.NewFromInt(320), Benchmark: decimal.NewFromInt(330), Ask: decimal.NewFromInt(340)},
+					3: map[llotypes.Aggregator]llocommon.StreamValue{
+						llotypes.AggregatorQuote: &llocommon.Quote{Bid: decimal.NewFromInt(320), Benchmark: decimal.NewFromInt(330), Ask: decimal.NewFromInt(340)},
 					},
 				},
 			}
@@ -555,10 +558,10 @@ func testOutcome(t *testing.T, outcomeCodec OutcomeCodec) {
 			for i := 0; i < 4; i++ {
 				obs := Observation{
 					UnixTimestampNanoseconds: uint64(102030415 * time.Second),
-					StreamValues: map[llotypes.StreamID]StreamValue{
-						1: ToDecimal(decimal.NewFromInt(int64(120))),
-						2: &TimestampedStreamValue{ObservedAtNanoseconds: 123456789, StreamValue: ToDecimal(decimal.NewFromInt(int64(220)))},
-						3: &Quote{Bid: decimal.NewFromInt(int64(320)), Benchmark: decimal.NewFromInt(int64(330)), Ask: decimal.NewFromInt(int64(340))},
+					StreamValues: map[llotypes.StreamID]llocommon.StreamValue{
+						1: llocommon.ToDecimal(decimal.NewFromInt(int64(120))),
+						2: &llocommon.TimestampedStreamValue{ObservedAtNanoseconds: 123456789, StreamValue: llocommon.ToDecimal(decimal.NewFromInt(int64(220)))},
+						3: &llocommon.Quote{Bid: decimal.NewFromInt(int64(320)), Benchmark: decimal.NewFromInt(int64(330)), Ask: decimal.NewFromInt(int64(340))},
 					},
 				}
 				encoded, err2 := p.ObservationCodec.Encode(obs)
@@ -589,15 +592,15 @@ func testOutcome(t *testing.T, outcomeCodec OutcomeCodec) {
 					1: uint64(102030405 * time.Second),
 					2: uint64(102030400 * time.Second),
 				},
-				StreamAggregates: map[llotypes.StreamID]map[llotypes.Aggregator]StreamValue{
-					1: map[llotypes.Aggregator]StreamValue{
-						llotypes.AggregatorMedian: ToDecimal(decimal.NewFromInt(120)),
+				StreamAggregates: map[llotypes.StreamID]map[llotypes.Aggregator]llocommon.StreamValue{
+					1: map[llotypes.Aggregator]llocommon.StreamValue{
+						llotypes.AggregatorMedian: llocommon.ToDecimal(decimal.NewFromInt(120)),
 					},
-					2: map[llotypes.Aggregator]StreamValue{
-						llotypes.AggregatorMedian: ToDecimal(decimal.NewFromInt(220)),
+					2: map[llotypes.Aggregator]llocommon.StreamValue{
+						llotypes.AggregatorMedian: llocommon.ToDecimal(decimal.NewFromInt(220)),
 					},
-					3: map[llotypes.Aggregator]StreamValue{
-						llotypes.AggregatorQuote: &Quote{Bid: decimal.NewFromInt(320), Benchmark: decimal.NewFromInt(330), Ask: decimal.NewFromInt(340)},
+					3: map[llotypes.Aggregator]llocommon.StreamValue{
+						llotypes.AggregatorQuote: &llocommon.Quote{Bid: decimal.NewFromInt(320), Benchmark: decimal.NewFromInt(330), Ask: decimal.NewFromInt(340)},
 					},
 				},
 			}
@@ -608,10 +611,10 @@ func testOutcome(t *testing.T, outcomeCodec OutcomeCodec) {
 			for i := 0; i < 4; i++ {
 				obs := Observation{
 					UnixTimestampNanoseconds: uint64(102030415 * time.Second),
-					StreamValues: map[llotypes.StreamID]StreamValue{
-						1: ToDecimal(decimal.NewFromInt(int64(120))),
-						2: &TimestampedStreamValue{ObservedAtNanoseconds: 123456789, StreamValue: ToDecimal(decimal.NewFromInt(int64(220)))},
-						3: &Quote{Bid: decimal.NewFromInt(int64(320)), Benchmark: decimal.NewFromInt(int64(330)), Ask: decimal.NewFromInt(int64(340))},
+					StreamValues: map[llotypes.StreamID]llocommon.StreamValue{
+						1: llocommon.ToDecimal(decimal.NewFromInt(int64(120))),
+						2: &llocommon.TimestampedStreamValue{ObservedAtNanoseconds: 123456789, StreamValue: llocommon.ToDecimal(decimal.NewFromInt(int64(220)))},
+						3: &llocommon.Quote{Bid: decimal.NewFromInt(int64(320)), Benchmark: decimal.NewFromInt(int64(330)), Ask: decimal.NewFromInt(int64(340))},
 					},
 				}
 				encoded, err2 := p.ObservationCodec.Encode(obs)
@@ -642,15 +645,15 @@ func testOutcome(t *testing.T, outcomeCodec OutcomeCodec) {
 					1: uint64(102030409 * time.Second),
 					2: uint64(102030409 * time.Second),
 				},
-				StreamAggregates: map[llotypes.StreamID]map[llotypes.Aggregator]StreamValue{
-					1: map[llotypes.Aggregator]StreamValue{
-						llotypes.AggregatorMedian: ToDecimal(decimal.NewFromInt(120)),
+				StreamAggregates: map[llotypes.StreamID]map[llotypes.Aggregator]llocommon.StreamValue{
+					1: map[llotypes.Aggregator]llocommon.StreamValue{
+						llotypes.AggregatorMedian: llocommon.ToDecimal(decimal.NewFromInt(120)),
 					},
-					2: map[llotypes.Aggregator]StreamValue{
-						llotypes.AggregatorMedian: ToDecimal(decimal.NewFromInt(220)),
+					2: map[llotypes.Aggregator]llocommon.StreamValue{
+						llotypes.AggregatorMedian: llocommon.ToDecimal(decimal.NewFromInt(220)),
 					},
-					3: map[llotypes.Aggregator]StreamValue{
-						llotypes.AggregatorQuote: &Quote{Bid: decimal.NewFromInt(320), Benchmark: decimal.NewFromInt(330), Ask: decimal.NewFromInt(340)},
+					3: map[llotypes.Aggregator]llocommon.StreamValue{
+						llotypes.AggregatorQuote: &llocommon.Quote{Bid: decimal.NewFromInt(320), Benchmark: decimal.NewFromInt(330), Ask: decimal.NewFromInt(340)},
 					},
 				},
 			}
@@ -661,10 +664,10 @@ func testOutcome(t *testing.T, outcomeCodec OutcomeCodec) {
 			for i := 0; i < 4; i++ {
 				obs := Observation{
 					UnixTimestampNanoseconds: uint64((102030410 * time.Second) + 100*time.Millisecond), // 100ms after previous outcome
-					StreamValues: map[llotypes.StreamID]StreamValue{
-						1: ToDecimal(decimal.NewFromInt(int64(120))),
-						2: &TimestampedStreamValue{ObservedAtNanoseconds: 123456789, StreamValue: ToDecimal(decimal.NewFromInt(int64(220)))},
-						3: &Quote{Bid: decimal.NewFromInt(int64(320)), Benchmark: decimal.NewFromInt(int64(330)), Ask: decimal.NewFromInt(int64(340))},
+					StreamValues: map[llotypes.StreamID]llocommon.StreamValue{
+						1: llocommon.ToDecimal(decimal.NewFromInt(int64(120))),
+						2: &llocommon.TimestampedStreamValue{ObservedAtNanoseconds: 123456789, StreamValue: llocommon.ToDecimal(decimal.NewFromInt(int64(220)))},
+						3: &llocommon.Quote{Bid: decimal.NewFromInt(int64(320)), Benchmark: decimal.NewFromInt(int64(330)), Ask: decimal.NewFromInt(int64(340))},
 					},
 				}
 				encoded, err2 := p.ObservationCodec.Encode(obs)
@@ -697,18 +700,18 @@ func testOutcome(t *testing.T, outcomeCodec OutcomeCodec) {
 			outctx := ocr3types.OutcomeContext{SeqNr: 2, PreviousOutcome: encodedPreviousOutcome}
 			aos := []types.AttributedObservation{}
 			for i := 0; i < 4; i++ {
-				var sv StreamValue
+				var sv llocommon.StreamValue
 				// only one reported a value; not enough
 				if i == 0 {
-					sv = ToDecimal(decimal.NewFromInt(100))
+					sv = llocommon.ToDecimal(decimal.NewFromInt(100))
 				}
 				obs := Observation{
 					UnixTimestampNanoseconds: testStartNanos + uint64(time.Second) + uint64(i*100)*uint64(time.Millisecond), //nolint:gosec // safe cast in tests
-					StreamValues: map[llotypes.StreamID]StreamValue{
+					StreamValues: map[llotypes.StreamID]llocommon.StreamValue{
 						1: sv,
 						// 2 and 3 ok
-						2: &TimestampedStreamValue{ObservedAtNanoseconds: 123456789, StreamValue: ToDecimal(decimal.NewFromInt(int64(220)))},
-						3: &Quote{Bid: decimal.NewFromInt(int64(320)), Benchmark: decimal.NewFromInt(int64(330)), Ask: decimal.NewFromInt(int64(340))},
+						2: &llocommon.TimestampedStreamValue{ObservedAtNanoseconds: 123456789, StreamValue: llocommon.ToDecimal(decimal.NewFromInt(int64(220)))},
+						3: &llocommon.Quote{Bid: decimal.NewFromInt(int64(320)), Benchmark: decimal.NewFromInt(int64(330)), Ask: decimal.NewFromInt(int64(340))},
 					}}
 				encoded, err2 := p.ObservationCodec.Encode(obs)
 				require.NoError(t, err2)
@@ -728,31 +731,31 @@ func testOutcome(t *testing.T, outcomeCodec OutcomeCodec) {
 			assert.Len(t, decoded.StreamAggregates, 2)
 			assert.Contains(t, decoded.StreamAggregates, llotypes.StreamID(2))
 			assert.Contains(t, decoded.StreamAggregates, llotypes.StreamID(3))
-			assert.Equal(t, map[llotypes.Aggregator]StreamValue{
-				llotypes.AggregatorMedian: &TimestampedStreamValue{ObservedAtNanoseconds: 123456789, StreamValue: ToDecimal(decimal.NewFromInt(220))},
+			assert.Equal(t, map[llotypes.Aggregator]llocommon.StreamValue{
+				llotypes.AggregatorMedian: &llocommon.TimestampedStreamValue{ObservedAtNanoseconds: 123456789, StreamValue: llocommon.ToDecimal(decimal.NewFromInt(220))},
 			}, decoded.StreamAggregates[2])
-			assert.Equal(t, map[llotypes.Aggregator]StreamValue{
-				llotypes.AggregatorQuote: &Quote{Bid: decimal.NewFromInt(320), Benchmark: decimal.NewFromInt(330), Ask: decimal.NewFromInt(340)},
+			assert.Equal(t, map[llotypes.Aggregator]llocommon.StreamValue{
+				llotypes.AggregatorQuote: &llocommon.Quote{Bid: decimal.NewFromInt(320), Benchmark: decimal.NewFromInt(330), Ask: decimal.NewFromInt(340)},
 			}, decoded.StreamAggregates[3])
 		})
 		t.Run("ValidAfterNanoseconds update behaviour when previous outcome has missing stream values", func(t *testing.T) {
 			// channel 1 always has all stream values; channel 2 is missing stream 3 in the previous outcome.
-		// The test verifies the gap-prevention behaviour of DisableNilStreamValues for channel 2.
-		tests := []struct {
-			name                  string
-			disableNilStreamValues bool
-			wantValidAfter2       uint64
-		}{
-			{
-				name:                   "DisableNilStreamValues=false: ValidAfterNanoseconds still advances despite missing stream values",
-				disableNilStreamValues: false,
-				wantValidAfter2:        uint64(101 * time.Second), // validAfterNanoseconds still updated; gap behaviour preserved
-			},
-			{
-				name:                   "default (DisableNilStreamValues true): ValidAfterNanoseconds does not advance when previous outcome has missing stream values",
-				disableNilStreamValues: true,
-				wantValidAfter2:        uint64(100 * time.Second), // validAfterNanoseconds not updated; report gap prevented
-			},
+			// The test verifies the gap-prevention behaviour of DisableNilStreamValues for channel 2.
+			tests := []struct {
+				name                   string
+				disableNilStreamValues bool
+				wantValidAfter2        uint64
+			}{
+				{
+					name:                   "DisableNilStreamValues=false: ValidAfterNanoseconds still advances despite missing stream values",
+					disableNilStreamValues: false,
+					wantValidAfter2:        uint64(101 * time.Second), // validAfterNanoseconds still updated; gap behaviour preserved
+				},
+				{
+					name:                   "default (DisableNilStreamValues true): ValidAfterNanoseconds does not advance when previous outcome has missing stream values",
+					disableNilStreamValues: true,
+					wantValidAfter2:        uint64(100 * time.Second), // validAfterNanoseconds not updated; report gap prevented
+				},
 			}
 			for _, tc := range tests {
 				t.Run(tc.name, func(t *testing.T) {
@@ -762,8 +765,8 @@ func testOutcome(t *testing.T, outcomeCodec OutcomeCodec) {
 							Streams:      []llotypes.Stream{{StreamID: 1, Aggregator: llotypes.AggregatorMedian}, {StreamID: 2, Aggregator: llotypes.AggregatorMedian}},
 						},
 						2: { // requires streams 2 and 3; stream 3 is missing in the previous outcome
-							ReportFormat:          llotypes.ReportFormatEVMPremiumLegacy,
-							Streams:               []llotypes.Stream{{StreamID: 2, Aggregator: llotypes.AggregatorMedian}, {StreamID: 3, Aggregator: llotypes.AggregatorQuote}},
+							ReportFormat:           llotypes.ReportFormatEVMPremiumLegacy,
+							Streams:                []llotypes.Stream{{StreamID: 2, Aggregator: llotypes.AggregatorMedian}, {StreamID: 3, Aggregator: llotypes.AggregatorQuote}},
 							DisableNilStreamValues: tc.disableNilStreamValues,
 						},
 					}
@@ -777,9 +780,9 @@ func testOutcome(t *testing.T, outcomeCodec OutcomeCodec) {
 							1: uint64(100 * time.Second),
 							2: uint64(100 * time.Second),
 						},
-						StreamAggregates: map[llotypes.StreamID]map[llotypes.Aggregator]StreamValue{
-							1: {llotypes.AggregatorMedian: ToDecimal(decimal.NewFromInt(120))},
-							2: {llotypes.AggregatorMedian: ToDecimal(decimal.NewFromInt(220))},
+						StreamAggregates: map[llotypes.StreamID]map[llotypes.Aggregator]llocommon.StreamValue{
+							1: {llotypes.AggregatorMedian: llocommon.ToDecimal(decimal.NewFromInt(120))},
+							2: {llotypes.AggregatorMedian: llocommon.ToDecimal(decimal.NewFromInt(220))},
 							// stream 3 is missing
 						},
 					}
@@ -791,10 +794,10 @@ func testOutcome(t *testing.T, outcomeCodec OutcomeCodec) {
 					for i := 0; i < 4; i++ {
 						obs := Observation{
 							UnixTimestampNanoseconds: uint64(102 * time.Second),
-							StreamValues: map[llotypes.StreamID]StreamValue{
-								1: ToDecimal(decimal.NewFromInt(122)),
-								2: ToDecimal(decimal.NewFromInt(222)),
-								3: &Quote{Bid: decimal.NewFromInt(int64(322)), Benchmark: decimal.NewFromInt(int64(332)), Ask: decimal.NewFromInt(int64(342))},
+							StreamValues: map[llotypes.StreamID]llocommon.StreamValue{
+								1: llocommon.ToDecimal(decimal.NewFromInt(122)),
+								2: llocommon.ToDecimal(decimal.NewFromInt(222)),
+								3: &llocommon.Quote{Bid: decimal.NewFromInt(int64(322)), Benchmark: decimal.NewFromInt(int64(332)), Ask: decimal.NewFromInt(int64(342))},
 							},
 						}
 						encoded, err2 := p.ObservationCodec.Encode(obs)
@@ -818,7 +821,7 @@ func testOutcome(t *testing.T, outcomeCodec OutcomeCodec) {
 			}
 		})
 		t.Run("sends outcome telemetry if channel is specified", func(t *testing.T) {
-			ch := make(chan *LLOOutcomeTelemetry, 10000)
+			ch := make(chan *llocommon.LLOOutcomeTelemetry, 10000)
 			p.OutcomeTelemetryCh = ch
 			previousOutcome := Outcome{
 				LifeCycleStage:                  llotypes.LifeCycleStage("test"),
@@ -834,10 +837,10 @@ func testOutcome(t *testing.T, outcomeCodec OutcomeCodec) {
 			for i := 0; i < 4; i++ {
 				obs := Observation{
 					UnixTimestampNanoseconds: testStartNanos + uint64(time.Second) + uint64(i*100)*uint64(time.Millisecond), //nolint:gosec // safe cast in tests
-					StreamValues: map[llotypes.StreamID]StreamValue{
-						1: ToDecimal(decimal.NewFromInt(int64(100 + i*10))),
-						2: &TimestampedStreamValue{ObservedAtNanoseconds: 123456789, StreamValue: ToDecimal(decimal.NewFromInt(int64(200 + i*10)))},
-						3: &Quote{Bid: decimal.NewFromInt(int64(300 + i*10)), Benchmark: decimal.NewFromInt(int64(310 + i*10)), Ask: decimal.NewFromInt(int64(320 + i*10))},
+					StreamValues: map[llotypes.StreamID]llocommon.StreamValue{
+						1: llocommon.ToDecimal(decimal.NewFromInt(int64(100 + i*10))),
+						2: &llocommon.TimestampedStreamValue{ObservedAtNanoseconds: 123456789, StreamValue: llocommon.ToDecimal(decimal.NewFromInt(int64(200 + i*10)))},
+						3: &llocommon.Quote{Bid: decimal.NewFromInt(int64(300 + i*10)), Benchmark: decimal.NewFromInt(int64(310 + i*10)), Ask: decimal.NewFromInt(int64(320 + i*10))},
 					}}
 				encoded, err2 := p.ObservationCodec.Encode(obs)
 				require.NoError(t, err2)
@@ -888,10 +891,10 @@ func testOutcome(t *testing.T, outcomeCodec OutcomeCodec) {
 				for i := 0; i < 4; i++ {
 					obs := Observation{
 						UnixTimestampNanoseconds: testStartNanos + uint64(time.Second) + uint64(i*100)*uint64(time.Millisecond), //nolint:gosec // safe cast in tests
-						StreamValues: map[llotypes.StreamID]StreamValue{
-							1: &TimestampedStreamValue{ObservedAtNanoseconds: 100000000 + uint64(i), StreamValue: ToDecimal(decimal.NewFromInt(int64(100 + i)))}, //nolint:gosec // will never be > 4
-							2: &TimestampedStreamValue{ObservedAtNanoseconds: 200000000 + uint64(i), StreamValue: ToDecimal(decimal.NewFromInt(int64(200 + i)))}, //nolint:gosec // will never be > 4
-							3: &TimestampedStreamValue{ObservedAtNanoseconds: 300000000 + uint64(i), StreamValue: ToDecimal(decimal.NewFromInt(int64(300 + i)))}, //nolint:gosec // will never be > 4
+						StreamValues: map[llotypes.StreamID]llocommon.StreamValue{
+							1: &llocommon.TimestampedStreamValue{ObservedAtNanoseconds: 100000000 + uint64(i), StreamValue: llocommon.ToDecimal(decimal.NewFromInt(int64(100 + i)))}, //nolint:gosec // will never be > 4
+							2: &llocommon.TimestampedStreamValue{ObservedAtNanoseconds: 200000000 + uint64(i), StreamValue: llocommon.ToDecimal(decimal.NewFromInt(int64(200 + i)))}, //nolint:gosec // will never be > 4
+							3: &llocommon.TimestampedStreamValue{ObservedAtNanoseconds: 300000000 + uint64(i), StreamValue: llocommon.ToDecimal(decimal.NewFromInt(int64(300 + i)))}, //nolint:gosec // will never be > 4
 						}}
 					encoded, err2 := p.ObservationCodec.Encode(obs)
 					require.NoError(t, err2)
@@ -908,9 +911,9 @@ func testOutcome(t *testing.T, outcomeCodec OutcomeCodec) {
 				require.NoError(t, err)
 
 				require.Len(t, decoded.StreamAggregates, 3)
-				assert.Equal(t, &TimestampedStreamValue{ObservedAtNanoseconds: 100000002, StreamValue: ToDecimal(decimal.NewFromInt(int64(102)))}, decoded.StreamAggregates[1][llotypes.AggregatorMedian])
-				assert.Equal(t, &TimestampedStreamValue{ObservedAtNanoseconds: 200000002, StreamValue: ToDecimal(decimal.NewFromInt(int64(202)))}, decoded.StreamAggregates[2][llotypes.AggregatorMedian])
-				assert.Equal(t, &TimestampedStreamValue{ObservedAtNanoseconds: 300000002, StreamValue: ToDecimal(decimal.NewFromInt(int64(302)))}, decoded.StreamAggregates[3][llotypes.AggregatorMedian])
+				assert.Equal(t, &llocommon.TimestampedStreamValue{ObservedAtNanoseconds: 100000002, StreamValue: llocommon.ToDecimal(decimal.NewFromInt(int64(102)))}, decoded.StreamAggregates[1][llotypes.AggregatorMedian])
+				assert.Equal(t, &llocommon.TimestampedStreamValue{ObservedAtNanoseconds: 200000002, StreamValue: llocommon.ToDecimal(decimal.NewFromInt(int64(202)))}, decoded.StreamAggregates[2][llotypes.AggregatorMedian])
+				assert.Equal(t, &llocommon.TimestampedStreamValue{ObservedAtNanoseconds: 300000002, StreamValue: llocommon.ToDecimal(decimal.NewFromInt(int64(302)))}, decoded.StreamAggregates[3][llotypes.AggregatorMedian])
 			})
 			t.Run("copies forwards values from the last outcome if aggregation fails", func(t *testing.T) {
 			})
@@ -963,7 +966,7 @@ func testOutcome(t *testing.T, outcomeCodec OutcomeCodec) {
 
 func Test_MakeChannelHash(t *testing.T) {
 	t.Run("hashes channel definitions", func(t *testing.T) {
-		defs := ChannelDefinitionWithID{
+		defs := llocommon.ChannelDefinitionWithID{
 			ChannelID: 1,
 			ChannelDefinition: llotypes.ChannelDefinition{
 				ReportFormat: llotypes.ReportFormat(1),
@@ -977,19 +980,19 @@ func Test_MakeChannelHash(t *testing.T) {
 	})
 
 	t.Run("different channelID makes different hash", func(t *testing.T) {
-		def1 := ChannelDefinitionWithID{ChannelID: 1}
-		def2 := ChannelDefinitionWithID{ChannelID: 2}
+		def1 := llocommon.ChannelDefinitionWithID{ChannelID: 1}
+		def2 := llocommon.ChannelDefinitionWithID{ChannelID: 2}
 
 		assert.NotEqual(t, MakeChannelHash(def1), MakeChannelHash(def2))
 	})
 
 	t.Run("different report format makes different hash", func(t *testing.T) {
-		def1 := ChannelDefinitionWithID{
+		def1 := llocommon.ChannelDefinitionWithID{
 			ChannelDefinition: llotypes.ChannelDefinition{
 				ReportFormat: llotypes.ReportFormatJSON,
 			},
 		}
-		def2 := ChannelDefinitionWithID{
+		def2 := llocommon.ChannelDefinitionWithID{
 			ChannelDefinition: llotypes.ChannelDefinition{
 				ReportFormat: llotypes.ReportFormatEVMPremiumLegacy,
 			},
@@ -999,12 +1002,12 @@ func Test_MakeChannelHash(t *testing.T) {
 	})
 
 	t.Run("different streamIDs makes different hash", func(t *testing.T) {
-		def1 := ChannelDefinitionWithID{
+		def1 := llocommon.ChannelDefinitionWithID{
 			ChannelDefinition: llotypes.ChannelDefinition{
 				Streams: []llotypes.Stream{{StreamID: 1, Aggregator: llotypes.AggregatorMedian}},
 			},
 		}
-		def2 := ChannelDefinitionWithID{
+		def2 := llocommon.ChannelDefinitionWithID{
 			ChannelDefinition: llotypes.ChannelDefinition{
 				Streams: []llotypes.Stream{{StreamID: 2, Aggregator: llotypes.AggregatorMedian}},
 			},
@@ -1014,12 +1017,12 @@ func Test_MakeChannelHash(t *testing.T) {
 	})
 
 	t.Run("different aggregators makes different hash", func(t *testing.T) {
-		def1 := ChannelDefinitionWithID{
+		def1 := llocommon.ChannelDefinitionWithID{
 			ChannelDefinition: llotypes.ChannelDefinition{
 				Streams: []llotypes.Stream{{StreamID: 1, Aggregator: llotypes.AggregatorMedian}},
 			},
 		}
-		def2 := ChannelDefinitionWithID{
+		def2 := llocommon.ChannelDefinitionWithID{
 			ChannelDefinition: llotypes.ChannelDefinition{
 				Streams: []llotypes.Stream{{StreamID: 1, Aggregator: llotypes.AggregatorQuote}},
 			},
@@ -1029,12 +1032,12 @@ func Test_MakeChannelHash(t *testing.T) {
 	})
 
 	t.Run("different opts makes different hash", func(t *testing.T) {
-		def1 := ChannelDefinitionWithID{
+		def1 := llocommon.ChannelDefinitionWithID{
 			ChannelDefinition: llotypes.ChannelDefinition{
 				Opts: []byte(`{"foo":"bar"}`),
 			},
 		}
-		def2 := ChannelDefinitionWithID{
+		def2 := llocommon.ChannelDefinitionWithID{
 			ChannelDefinition: llotypes.ChannelDefinition{
 				Opts: []byte(`{"foo":"baz"}`),
 			},
@@ -1051,11 +1054,11 @@ func Test_Outcome_Methods(t *testing.T) {
 			cid := llotypes.ChannelID(1)
 
 			// Not reportable if retired
-			outcome.LifeCycleStage = LifeCycleStageRetired
+			outcome.LifeCycleStage = llocommon.LifeCycleStageRetired
 			require.EqualError(t, outcome.IsReportable(cid, 0, 0, nil), "ChannelID: 1; Reason: IsReportable=false; retired channel")
 
 			// No channel definition with ID
-			outcome.LifeCycleStage = LifeCycleStageProduction
+			outcome.LifeCycleStage = llocommon.LifeCycleStageProduction
 			outcome.ObservationTimestampNanoseconds = uint64(time.Unix(1726670490, 0).UnixNano()) //nolint:gosec // time won't be negative
 			outcome.ChannelDefinitions = map[llotypes.ChannelID]llotypes.ChannelDefinition{}
 			require.EqualError(t, outcome.IsReportable(cid, 0, 0, nil), "ChannelID: 1; Reason: IsReportable=false; no channel definition with this ID")
@@ -1129,18 +1132,18 @@ func Test_Outcome_Methods(t *testing.T) {
 
 		for _, tc := range testCases {
 			t.Run(tc.name, func(t *testing.T) {
-				cd := ChannelDefinitionWithID{
+				cd := llocommon.ChannelDefinitionWithID{
 					ChannelDefinition: llotypes.ChannelDefinition{ReportFormat: tc.reportFormat, Opts: tc.opts},
 					ChannelID:         testChannelID,
 				}
-				var optsCache *OptsCache
+				var optsCache *llocommon.OptsCache
 				switch {
 				case tc.nilCache:
 					optsCache = nil
 				case tc.emptyCache:
-					optsCache = NewOptsCache()
+					optsCache = llocommon.NewOptsCache()
 				case tc.reportFormat == llotypes.ReportFormatEVMABIEncodeUnpacked:
-					optsCache = NewOptsCache()
+					optsCache = llocommon.NewOptsCache()
 					optsCache.Set(testChannelID, tc.opts)
 				}
 				assert.Equal(t, tc.expected, IsSecondsResolution(cd, optsCache))
@@ -1155,50 +1158,50 @@ func Test_Outcome_Methods(t *testing.T) {
 			cid := llotypes.ChannelID(1)
 
 			// Not reportable if retired
-			outcome.LifeCycleStage = LifeCycleStageRetired
+			outcome.LifeCycleStage = llocommon.LifeCycleStageRetired
 			require.EqualError(t, outcome.IsReportable(cid, 1, defaultMinReportInterval, nil), "ChannelID: 1; Reason: IsReportable=false; retired channel")
 
 			obsTSNanos := uint64(time.Unix(1726670490, 1000).UnixNano()) //nolint:gosec // time won't be negative
 
 			// No channel definition with ID
-			outcome.LifeCycleStage = LifeCycleStageProduction
+			outcome.LifeCycleStage = llocommon.LifeCycleStageProduction
 			outcome.ObservationTimestampNanoseconds = obsTSNanos
 			outcome.ChannelDefinitions = map[llotypes.ChannelID]llotypes.ChannelDefinition{}
 			require.EqualError(t, outcome.IsReportable(cid, 1, defaultMinReportInterval, nil), "ChannelID: 1; Reason: IsReportable=false; no channel definition with this ID")
 
-		// DisableNilStreamValues absent (default=false): nil stream values allowed, so next failure is ValidAfterNanoseconds
-		outcome.ChannelDefinitions[cid] = llotypes.ChannelDefinition{
-			Streams: []llotypes.Stream{
-				{StreamID: 1, Aggregator: llotypes.AggregatorMedian},
-				{StreamID: 2, Aggregator: llotypes.AggregatorQuote},
-			},
-		}
-		outcome.StreamAggregates = map[llotypes.StreamID]map[llotypes.Aggregator]StreamValue{
-			1: {llotypes.AggregatorMedian: ToDecimal(decimal.NewFromInt(100))},
-			// stream 2 quote is missing
-		}
-		require.EqualError(t, outcome.IsReportable(cid, 1, defaultMinReportInterval, nil), "ChannelID: 1; Reason: IsReportable=false; no ValidAfterNanoseconds entry yet, this must be a new channel")
+			// DisableNilStreamValues absent (default=false): nil stream values allowed, so next failure is ValidAfterNanoseconds
+			outcome.ChannelDefinitions[cid] = llotypes.ChannelDefinition{
+				Streams: []llotypes.Stream{
+					{StreamID: 1, Aggregator: llotypes.AggregatorMedian},
+					{StreamID: 2, Aggregator: llotypes.AggregatorQuote},
+				},
+			}
+			outcome.StreamAggregates = map[llotypes.StreamID]map[llotypes.Aggregator]llocommon.StreamValue{
+				1: {llotypes.AggregatorMedian: llocommon.ToDecimal(decimal.NewFromInt(100))},
+				// stream 2 quote is missing
+			}
+			require.EqualError(t, outcome.IsReportable(cid, 1, defaultMinReportInterval, nil), "ChannelID: 1; Reason: IsReportable=false; no ValidAfterNanoseconds entry yet, this must be a new channel")
 
-		// Missing stream aggregate value; IsReportable=false when DisableNilStreamValues=true
-		outcome.ChannelDefinitions[cid] = llotypes.ChannelDefinition{
-			Streams: []llotypes.Stream{
-				{StreamID: 1, Aggregator: llotypes.AggregatorMedian},
-				{StreamID: 2, Aggregator: llotypes.AggregatorQuote},
-			},
-			DisableNilStreamValues: true,
-		}
-		require.EqualError(t, outcome.IsReportable(cid, 1, defaultMinReportInterval, nil), `ChannelID: 1; Reason: IsReportable=false; nil stream value for streamID=2 aggregator="quote"`)
+			// Missing stream aggregate value; IsReportable=false when DisableNilStreamValues=true
+			outcome.ChannelDefinitions[cid] = llotypes.ChannelDefinition{
+				Streams: []llotypes.Stream{
+					{StreamID: 1, Aggregator: llotypes.AggregatorMedian},
+					{StreamID: 2, Aggregator: llotypes.AggregatorQuote},
+				},
+				DisableNilStreamValues: true,
+			}
+			require.EqualError(t, outcome.IsReportable(cid, 1, defaultMinReportInterval, nil), `ChannelID: 1; Reason: IsReportable=false; nil stream value for streamID=2 aggregator="quote"`)
 
-		// Missing stream aggregate value; IsReportable=true when DisableNilStreamValues=false
-		outcome.ChannelDefinitions[cid] = llotypes.ChannelDefinition{
-			Streams: []llotypes.Stream{
-				{StreamID: 1, Aggregator: llotypes.AggregatorMedian},
-				{StreamID: 2, Aggregator: llotypes.AggregatorQuote},
-			},
-			DisableNilStreamValues: false,
-		}
-		outcome.ValidAfterNanoseconds = map[llotypes.ChannelID]uint64{cid: obsTSNanos - uint64(100*time.Millisecond)}
-		require.Nil(t, outcome.IsReportable(cid, 1, defaultMinReportInterval, nil))
+			// Missing stream aggregate value; IsReportable=true when DisableNilStreamValues=false
+			outcome.ChannelDefinitions[cid] = llotypes.ChannelDefinition{
+				Streams: []llotypes.Stream{
+					{StreamID: 1, Aggregator: llotypes.AggregatorMedian},
+					{StreamID: 2, Aggregator: llotypes.AggregatorQuote},
+				},
+				DisableNilStreamValues: false,
+			}
+			outcome.ValidAfterNanoseconds = map[llotypes.ChannelID]uint64{cid: obsTSNanos - uint64(100*time.Millisecond)}
+			require.Nil(t, outcome.IsReportable(cid, 1, defaultMinReportInterval, nil))
 
 			// Reset for remaining tests
 			outcome.ValidAfterNanoseconds = nil
@@ -1237,7 +1240,7 @@ func Test_Outcome_Methods(t *testing.T) {
 
 			obsTSNanos := uint64(time.Unix(1726670490, 1e9-1).UnixNano()) //nolint:gosec // time won't be negative
 
-			outcome.LifeCycleStage = LifeCycleStageProduction
+			outcome.LifeCycleStage = llocommon.LifeCycleStageProduction
 			outcome.ObservationTimestampNanoseconds = obsTSNanos
 			outcome.ChannelDefinitions = map[llotypes.ChannelID]llotypes.ChannelDefinition{
 				cid: {ReportFormat: llotypes.ReportFormatEVMPremiumLegacy},

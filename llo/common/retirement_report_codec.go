@@ -1,4 +1,4 @@
-package llo
+package common
 
 import (
 	"github.com/goccy/go-json"

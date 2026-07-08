@@ -9,11 +9,11 @@ import (
 
 	"github.com/smartcontractkit/chainlink-common/pkg/logger"
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
-	"github.com/smartcontractkit/chainlink-data-streams/llo"
+	llocommon "github.com/smartcontractkit/chainlink-data-streams/llo/common"
 )
 
 var (
-	_ llo.ReportCodec = ReportCodecEVMABIEncodeUnpackedExpr{}
+	_ llocommon.ReportCodec = ReportCodecEVMABIEncodeUnpackedExpr{}
 )
 
 type ReportCodecEVMABIEncodeUnpackedExpr struct {
@@ -25,7 +25,7 @@ func NewReportCodecEVMABIEncodeUnpackedExpr(lggr logger.Logger, donID uint32) Re
 	return ReportCodecEVMABIEncodeUnpackedExpr{logger.Sugared(lggr).Named("ReportCodecEVMABIEncodeUnpackedExpr"), donID}
 }
 
-func (r ReportCodecEVMABIEncodeUnpackedExpr) Encode(report llo.Report, cd llotypes.ChannelDefinition, optsCache *llo.OptsCache) ([]byte, error) {
+func (r ReportCodecEVMABIEncodeUnpackedExpr) Encode(report llocommon.Report, cd llotypes.ChannelDefinition, optsCache *llocommon.OptsCache) ([]byte, error) {
 	if report.Specimen {
 		return nil, errors.New("ReportCodecEVMABIEncodeUnpackedExpr does not support encoding specimen reports")
 	}
@@ -41,7 +41,7 @@ func (r ReportCodecEVMABIEncodeUnpackedExpr) Encode(report llo.Report, cd llotyp
 		return nil, fmt.Errorf("ReportCodecEVMABIEncodeUnpackedExpr failed to extract link price: %w", err)
 	}
 
-	opts, getErr := llo.GetOpts[ReportFormatEVMABIEncodeOpts](optsCache, report.ChannelID)
+	opts, getErr := llocommon.GetOpts[ReportFormatEVMABIEncodeOpts](optsCache, report.ChannelID)
 	if getErr != nil {
 		return nil, fmt.Errorf("opts not in cache for channel %d: %w", report.ChannelID, getErr)
 	}
@@ -56,9 +56,9 @@ func (r ReportCodecEVMABIEncodeUnpackedExpr) Encode(report llo.Report, cd llotyp
 	}
 
 	report.ValidAfterNanoseconds = ClampReportRange(r, report, opts.MaxReportRange)
-	validAfter := llo.ConvertTimestamp(report.ValidAfterNanoseconds, opts.TimeResolution)
-	observationTimestamp := llo.ConvertTimestamp(report.ObservationTimestampNanoseconds, opts.TimeResolution)
-	expiresAt := observationTimestamp + llo.ScaleSeconds(opts.ExpirationWindow, opts.TimeResolution)
+	validAfter := llocommon.ConvertTimestamp(report.ValidAfterNanoseconds, opts.TimeResolution)
+	observationTimestamp := llocommon.ConvertTimestamp(report.ObservationTimestampNanoseconds, opts.TimeResolution)
+	expiresAt := observationTimestamp + llocommon.ScaleSeconds(opts.ExpirationWindow, opts.TimeResolution)
 
 	rf := BaseReportFields{
 		FeedID:             opts.FeedID,
@@ -99,7 +99,7 @@ func (r ReportCodecEVMABIEncodeUnpackedExpr) Verify(cd llotypes.ChannelDefinitio
 	return nil
 }
 
-func (r ReportCodecEVMABIEncodeUnpackedExpr) buildHeader(rf BaseReportFields, resolution llo.TimeResolution) ([]byte, error) {
+func (r ReportCodecEVMABIEncodeUnpackedExpr) buildHeader(rf BaseReportFields, resolution llocommon.TimeResolution) ([]byte, error) {
 	var merr error
 	if rf.LinkFee == nil {
 		merr = errors.Join(merr, errors.New("linkFee may not be nil"))
@@ -117,7 +117,7 @@ func (r ReportCodecEVMABIEncodeUnpackedExpr) buildHeader(rf BaseReportFields, re
 
 	var b []byte
 	var err error
-	if resolution == llo.ResolutionSeconds {
+	if resolution == llocommon.ResolutionSeconds {
 		if rf.ValidFromTimestamp > math.MaxUint32 {
 			return nil, fmt.Errorf("validFromTimestamp %d exceeds uint32 range", rf.ValidFromTimestamp)
 		}

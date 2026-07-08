@@ -4,7 +4,7 @@
 // 	protoc        v5.29.3
 // source: llo_plugin_telemetry.proto
 
-package llo
+package common
 
 import (
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"

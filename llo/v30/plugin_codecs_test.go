@@ -1,8 +1,6 @@
 package llo
 
 import (
-	. "github.com/smartcontractkit/chainlink-data-streams/llo"
-
 	"bytes"
 	reflect "reflect"
 	"testing"
@@ -12,6 +10,7 @@ import (
 	"golang.org/x/exp/maps"
 
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
+	llocommon "github.com/smartcontractkit/chainlink-data-streams/llo/common"
 )
 
 func genLifecycleStage() gopter.Gen {
@@ -33,10 +32,10 @@ func genChannelDefinitions() gopter.Gen {
 }
 
 func genStreamAggregates() gopter.Gen {
-	return gen.MapOf(gen.UInt32(), genMapOfAggregatorStreamValue()).Map(func(m map[uint32]map[uint32]StreamValue) map[llotypes.StreamID]map[llotypes.Aggregator]StreamValue {
-		m2 := make(map[llotypes.StreamID]map[llotypes.Aggregator]StreamValue)
+	return gen.MapOf(gen.UInt32(), genMapOfAggregatorStreamValue()).Map(func(m map[uint32]map[uint32]llocommon.StreamValue) map[llotypes.StreamID]map[llotypes.Aggregator]llocommon.StreamValue {
+		m2 := make(map[llotypes.StreamID]map[llotypes.Aggregator]llocommon.StreamValue)
 		for k, v := range m {
-			m3 := make(map[llotypes.Aggregator]StreamValue)
+			m3 := make(map[llotypes.Aggregator]llocommon.StreamValue)
 			for k2, v2 := range v {
 				m3[llotypes.Aggregator(k2)] = v2
 			}
@@ -51,8 +50,8 @@ func genMapOfAggregatorStreamValue() gopter.Gen {
 }
 
 func genStreamValuesMap() gopter.Gen {
-	return genStreamValues(true).Map(func(values []StreamValue) map[llotypes.StreamID]StreamValue {
-		m := make(map[llotypes.StreamID]StreamValue)
+	return genStreamValues(true).Map(func(values []llocommon.StreamValue) map[llotypes.StreamID]llocommon.StreamValue {
+		m := make(map[llotypes.StreamID]llocommon.StreamValue)
 		for i, v := range values {
 			m[llotypes.StreamID(i)] = v //nolint:gosec // don't care if it overflows
 		}
@@ -245,7 +244,7 @@ func equalOutcomes(t *testing.T, outcome, outcome2 Outcome) bool {
 	return true
 }
 
-func equalStreamAggregates(m1, m2 map[llotypes.Aggregator]StreamValue) bool {
+func equalStreamAggregates(m1, m2 map[llotypes.Aggregator]llocommon.StreamValue) bool {
 	if len(m1) != len(m2) {
 		return false
 	}

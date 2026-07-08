@@ -1,13 +1,12 @@
 package llo
 
 import (
-	. "github.com/smartcontractkit/chainlink-data-streams/llo"
-
 	"fmt"
 	"testing"
 	"time"
 
 	"github.com/shopspring/decimal"
+	llocommon "github.com/smartcontractkit/chainlink-data-streams/llo/common"
 	"github.com/smartcontractkit/libocr/offchainreporting2/types"
 	"github.com/smartcontractkit/libocr/offchainreporting2plus/ocr3types"
 
@@ -39,13 +38,13 @@ func testReports(t *testing.T, outcomeCodec OutcomeCodec) {
 		Config:       Config{true},
 		OutcomeCodec: outcomeCodec,
 		Logger:       logger.Test(t),
-		ReportCodecs: map[llotypes.ReportFormat]ReportCodec{
-			llotypes.ReportFormatJSON: JSONReportCodec{},
+		ReportCodecs: map[llotypes.ReportFormat]llocommon.ReportCodec{
+			llotypes.ReportFormatJSON: llocommon.JSONReportCodec{},
 		},
-		RetirementReportCodec:               StandardRetirementReportCodec{},
+		RetirementReportCodec:               llocommon.StandardRetirementReportCodec{},
 		DefaultMinReportIntervalNanoseconds: uint64(minReportInterval), //nolint:gosec // time won't be negative
 		ProtocolVersion:                     protocolVersion,
-		OptsCache:                           NewOptsCache(),
+		OptsCache:                           llocommon.NewOptsCache(),
 	}
 
 	t.Run("ignores seqnr=0", func(t *testing.T) {
@@ -70,19 +69,19 @@ func testReports(t *testing.T, outcomeCodec OutcomeCodec) {
 	t.Run("emits 'retirement report' if lifecycle state is retired", func(t *testing.T) {
 		t.Run("with null ValidAfterNanoseconds", func(t *testing.T) {
 			outcome := Outcome{
-				LifeCycleStage: LifeCycleStageRetired,
+				LifeCycleStage: llocommon.LifeCycleStageRetired,
 			}
 			encoded, err := p.OutcomeCodec.Encode(outcome)
 			require.NoError(t, err)
 			rwis, err := p.Reports(ctx, 2, encoded)
 			require.NoError(t, err)
 			require.Len(t, rwis, 1)
-			assert.Equal(t, llotypes.ReportInfo{LifeCycleStage: LifeCycleStageRetired, ReportFormat: llotypes.ReportFormatRetirement}, rwis[0].ReportWithInfo.Info)
+			assert.Equal(t, llotypes.ReportInfo{LifeCycleStage: llocommon.LifeCycleStageRetired, ReportFormat: llotypes.ReportFormatRetirement}, rwis[0].ReportWithInfo.Info)
 			assert.Equal(t, fmt.Sprintf(`{"ProtocolVersion":%d,"ValidAfterNanoseconds":null}`, p.ProtocolVersion), string(rwis[0].ReportWithInfo.Report))
 		})
 		t.Run("with ValidAfterNanoseconds", func(t *testing.T) {
 			outcome := Outcome{
-				LifeCycleStage: LifeCycleStageRetired,
+				LifeCycleStage: llocommon.LifeCycleStageRetired,
 				ValidAfterNanoseconds: map[llotypes.ChannelID]uint64{
 					1: uint64(2 * time.Second),
 					2: uint64(3 * time.Second),
@@ -94,7 +93,7 @@ func testReports(t *testing.T, outcomeCodec OutcomeCodec) {
 			rwis, err := p.Reports(ctx, 2, encoded)
 			require.NoError(t, err)
 			require.Len(t, rwis, 1)
-			assert.Equal(t, llotypes.ReportInfo{LifeCycleStage: LifeCycleStageRetired, ReportFormat: llotypes.ReportFormatRetirement}, rwis[0].ReportWithInfo.Info)
+			assert.Equal(t, llotypes.ReportInfo{LifeCycleStage: llocommon.LifeCycleStageRetired, ReportFormat: llotypes.ReportFormatRetirement}, rwis[0].ReportWithInfo.Info)
 
 			subSecond := "100000000"
 			if p.ProtocolVersion == 0 {
@@ -123,15 +122,15 @@ func testReports(t *testing.T, outcomeCodec OutcomeCodec) {
 				1: 0,
 			},
 			ChannelDefinitions: smallDefinitions,
-			StreamAggregates: map[llotypes.StreamID]map[llotypes.Aggregator]StreamValue{
+			StreamAggregates: map[llotypes.StreamID]map[llotypes.Aggregator]llocommon.StreamValue{
 				1: {
-					llotypes.AggregatorMedian: ToDecimal(decimal.NewFromFloat(1.1)),
+					llotypes.AggregatorMedian: llocommon.ToDecimal(decimal.NewFromFloat(1.1)),
 				},
 				2: {
-					llotypes.AggregatorMedian: ToDecimal(decimal.NewFromFloat(2.2)),
+					llotypes.AggregatorMedian: llocommon.ToDecimal(decimal.NewFromFloat(2.2)),
 				},
 				3: {
-					llotypes.AggregatorQuote: &Quote{Ask: decimal.NewFromFloat(3.3), Benchmark: decimal.NewFromFloat(4.4), Bid: decimal.NewFromFloat(5.5)},
+					llotypes.AggregatorQuote: &llocommon.Quote{Ask: decimal.NewFromFloat(3.3), Benchmark: decimal.NewFromFloat(4.4), Bid: decimal.NewFromFloat(5.5)},
 				},
 			},
 		}
@@ -149,15 +148,15 @@ func testReports(t *testing.T, outcomeCodec OutcomeCodec) {
 				2: uint64(100 * time.Second),
 			},
 			ChannelDefinitions: smallDefinitions,
-			StreamAggregates: map[llotypes.StreamID]map[llotypes.Aggregator]StreamValue{
+			StreamAggregates: map[llotypes.StreamID]map[llotypes.Aggregator]llocommon.StreamValue{
 				1: {
-					llotypes.AggregatorMedian: ToDecimal(decimal.NewFromFloat(1.1)),
+					llotypes.AggregatorMedian: llocommon.ToDecimal(decimal.NewFromFloat(1.1)),
 				},
 				2: {
-					llotypes.AggregatorMedian: ToDecimal(decimal.NewFromFloat(2.2)),
+					llotypes.AggregatorMedian: llocommon.ToDecimal(decimal.NewFromFloat(2.2)),
 				},
 				3: {
-					llotypes.AggregatorQuote: &Quote{Ask: decimal.NewFromFloat(3.3), Benchmark: decimal.NewFromFloat(4.4), Bid: decimal.NewFromFloat(5.5)},
+					llotypes.AggregatorQuote: &llocommon.Quote{Ask: decimal.NewFromFloat(3.3), Benchmark: decimal.NewFromFloat(4.4), Bid: decimal.NewFromFloat(5.5)},
 				},
 			},
 		}
@@ -181,15 +180,15 @@ func testReports(t *testing.T, outcomeCodec OutcomeCodec) {
 			},
 		}
 		outcome := Outcome{
-			LifeCycleStage:                  LifeCycleStageStaging,
+			LifeCycleStage:                  llocommon.LifeCycleStageStaging,
 			ObservationTimestampNanoseconds: uint64(300 * time.Second),
 			ChannelDefinitions:              chDefs,
 			ValidAfterNanoseconds: map[llotypes.ChannelID]uint64{
 				targetID:   uint64(300 * time.Second),
 				backfillID: 0,
 			},
-			StreamAggregates: map[llotypes.StreamID]map[llotypes.Aggregator]StreamValue{
-				1: {llotypes.AggregatorMedian: ToDecimal(decimal.NewFromFloat(9.9))},
+			StreamAggregates: map[llotypes.StreamID]map[llotypes.Aggregator]llocommon.StreamValue{
+				1: {llotypes.AggregatorMedian: llocommon.ToDecimal(decimal.NewFromFloat(9.9))},
 			},
 		}
 		encoded, err := p.OutcomeCodec.Encode(outcome)
@@ -213,18 +212,18 @@ func testReports(t *testing.T, outcomeCodec OutcomeCodec) {
 				2: uint64(100 * time.Second),
 			},
 			ChannelDefinitions: smallDefinitions,
-			StreamAggregates: map[llotypes.StreamID]map[llotypes.Aggregator]StreamValue{
+			StreamAggregates: map[llotypes.StreamID]map[llotypes.Aggregator]llocommon.StreamValue{
 				1: {
-					llotypes.AggregatorMedian: ToDecimal(decimal.NewFromFloat(1.1)),
+					llotypes.AggregatorMedian: llocommon.ToDecimal(decimal.NewFromFloat(1.1)),
 				},
 				2: {
-					llotypes.AggregatorMedian: ToDecimal(decimal.NewFromFloat(2.2)),
+					llotypes.AggregatorMedian: llocommon.ToDecimal(decimal.NewFromFloat(2.2)),
 				},
 				3: {
-					llotypes.AggregatorQuote: &Quote{Ask: decimal.NewFromFloat(3.3), Benchmark: decimal.NewFromFloat(4.4), Bid: decimal.NewFromFloat(5.5)},
+					llotypes.AggregatorQuote: &llocommon.Quote{Ask: decimal.NewFromFloat(3.3), Benchmark: decimal.NewFromFloat(4.4), Bid: decimal.NewFromFloat(5.5)},
 				},
 				4: {
-					llotypes.AggregatorQuote: &Quote{Ask: decimal.NewFromFloat(6.6), Benchmark: decimal.NewFromFloat(7.7), Bid: decimal.NewFromFloat(8.8)},
+					llotypes.AggregatorQuote: &llocommon.Quote{Ask: decimal.NewFromFloat(6.6), Benchmark: decimal.NewFromFloat(7.7), Bid: decimal.NewFromFloat(8.8)},
 				},
 			},
 		}
@@ -246,15 +245,15 @@ func testReports(t *testing.T, outcomeCodec OutcomeCodec) {
 				2: uint64(200 * time.Second),
 			},
 			ChannelDefinitions: smallDefinitions,
-			StreamAggregates: map[llotypes.StreamID]map[llotypes.Aggregator]StreamValue{
+			StreamAggregates: map[llotypes.StreamID]map[llotypes.Aggregator]llocommon.StreamValue{
 				1: {
-					llotypes.AggregatorMedian: ToDecimal(decimal.NewFromFloat(1.1)),
+					llotypes.AggregatorMedian: llocommon.ToDecimal(decimal.NewFromFloat(1.1)),
 				},
 				2: {
-					llotypes.AggregatorMedian: ToDecimal(decimal.NewFromFloat(2.2)),
+					llotypes.AggregatorMedian: llocommon.ToDecimal(decimal.NewFromFloat(2.2)),
 				},
 				3: {
-					llotypes.AggregatorQuote: &Quote{Ask: decimal.NewFromFloat(3.3), Benchmark: decimal.NewFromFloat(4.4), Bid: decimal.NewFromFloat(5.5)},
+					llotypes.AggregatorQuote: &llocommon.Quote{Ask: decimal.NewFromFloat(3.3), Benchmark: decimal.NewFromFloat(4.4), Bid: decimal.NewFromFloat(5.5)},
 				},
 			},
 		}
@@ -275,18 +274,18 @@ func testReports(t *testing.T, outcomeCodec OutcomeCodec) {
 				2: uint64(300 * time.Second), // <-- this is incorrectly updated to previous ObservationTimestampNanoseconds, should be 200s
 			},
 			ChannelDefinitions: smallDefinitions,
-			StreamAggregates: map[llotypes.StreamID]map[llotypes.Aggregator]StreamValue{
+			StreamAggregates: map[llotypes.StreamID]map[llotypes.Aggregator]llocommon.StreamValue{
 				1: {
-					llotypes.AggregatorMedian: ToDecimal(decimal.NewFromFloat(1.1)),
+					llotypes.AggregatorMedian: llocommon.ToDecimal(decimal.NewFromFloat(1.1)),
 				},
 				2: {
-					llotypes.AggregatorMedian: ToDecimal(decimal.NewFromFloat(2.2)),
+					llotypes.AggregatorMedian: llocommon.ToDecimal(decimal.NewFromFloat(2.2)),
 				},
 				3: {
-					llotypes.AggregatorQuote: &Quote{Ask: decimal.NewFromFloat(3.3), Benchmark: decimal.NewFromFloat(4.4), Bid: decimal.NewFromFloat(5.5)},
+					llotypes.AggregatorQuote: &llocommon.Quote{Ask: decimal.NewFromFloat(3.3), Benchmark: decimal.NewFromFloat(4.4), Bid: decimal.NewFromFloat(5.5)},
 				},
 				4: {
-					llotypes.AggregatorQuote: &Quote{Ask: decimal.NewFromFloat(6.6), Benchmark: decimal.NewFromFloat(7.7), Bid: decimal.NewFromFloat(8.8)},
+					llotypes.AggregatorQuote: &llocommon.Quote{Ask: decimal.NewFromFloat(6.6), Benchmark: decimal.NewFromFloat(7.7), Bid: decimal.NewFromFloat(8.8)},
 				},
 			},
 		}
@@ -315,17 +314,17 @@ func testReports(t *testing.T, outcomeCodec OutcomeCodec) {
 				1: uint64(100 * time.Second),
 			},
 			ChannelDefinitions: map[llotypes.ChannelID]llotypes.ChannelDefinition{
-			1: {
-				ReportFormat: llotypes.ReportFormatJSON,
-				Streams: []llotypes.Stream{
-					{StreamID: 1, Aggregator: llotypes.AggregatorMedian},
-					{StreamID: 2, Aggregator: llotypes.AggregatorMedian},
+				1: {
+					ReportFormat: llotypes.ReportFormatJSON,
+					Streams: []llotypes.Stream{
+						{StreamID: 1, Aggregator: llotypes.AggregatorMedian},
+						{StreamID: 2, Aggregator: llotypes.AggregatorMedian},
+					},
+					DisableNilStreamValues: false, // channel passes IsReportable despite nil stream 2
 				},
-				DisableNilStreamValues: false, // channel passes IsReportable despite nil stream 2
 			},
-			},
-			StreamAggregates: map[llotypes.StreamID]map[llotypes.Aggregator]StreamValue{
-				1: {llotypes.AggregatorMedian: ToDecimal(decimal.NewFromFloat(1.1))},
+			StreamAggregates: map[llotypes.StreamID]map[llotypes.Aggregator]llocommon.StreamValue{
+				1: {llotypes.AggregatorMedian: llocommon.ToDecimal(decimal.NewFromFloat(1.1))},
 				// stream 2 is missing (nil)
 			},
 		}
@@ -358,19 +357,19 @@ func testReports(t *testing.T, outcomeCodec OutcomeCodec) {
 		}
 
 		outcome := Outcome{
-			LifeCycleStage:                  LifeCycleStageProduction,
+			LifeCycleStage:                  llocommon.LifeCycleStageProduction,
 			ObservationTimestampNanoseconds: uint64(200 * time.Second),
 			ValidAfterNanoseconds: map[llotypes.ChannelID]uint64{
 				1: uint64(100 * time.Second), // Tombstoned channel would be reportable if not tombstoned
 				2: uint64(100 * time.Second), // Non-tombstoned channel is reportable
 			},
 			ChannelDefinitions: tombstonedDefinitions,
-			StreamAggregates: map[llotypes.StreamID]map[llotypes.Aggregator]StreamValue{
+			StreamAggregates: map[llotypes.StreamID]map[llotypes.Aggregator]llocommon.StreamValue{
 				1: {
-					llotypes.AggregatorMedian: ToDecimal(decimal.NewFromFloat(1.1)),
+					llotypes.AggregatorMedian: llocommon.ToDecimal(decimal.NewFromFloat(1.1)),
 				},
 				2: {
-					llotypes.AggregatorMedian: ToDecimal(decimal.NewFromFloat(2.2)),
+					llotypes.AggregatorMedian: llocommon.ToDecimal(decimal.NewFromFloat(2.2)),
 				},
 			},
 		}
@@ -393,7 +392,7 @@ func testReports(t *testing.T, outcomeCodec OutcomeCodec) {
 		require.Len(t, rwis, 1)
 		assert.Contains(t, string(rwis[0].ReportWithInfo.Report), `"ChannelID":2`)
 		assert.NotContains(t, string(rwis[0].ReportWithInfo.Report), `"ChannelID":1`)
-		assert.Equal(t, llotypes.ReportInfo{LifeCycleStage: LifeCycleStageProduction, ReportFormat: llotypes.ReportFormatJSON}, rwis[0].ReportWithInfo.Info)
+		assert.Equal(t, llotypes.ReportInfo{LifeCycleStage: llocommon.LifeCycleStageProduction, ReportFormat: llotypes.ReportFormatJSON}, rwis[0].ReportWithInfo.Info)
 	})
 
 	t.Run("skips reports if codec is missing", func(t *testing.T) {
@@ -410,15 +409,15 @@ func testReports(t *testing.T, outcomeCodec OutcomeCodec) {
 				2: uint64(100 * time.Second),
 			},
 			ChannelDefinitions: dfns,
-			StreamAggregates: map[llotypes.StreamID]map[llotypes.Aggregator]StreamValue{
+			StreamAggregates: map[llotypes.StreamID]map[llotypes.Aggregator]llocommon.StreamValue{
 				1: {
-					llotypes.AggregatorMedian: ToDecimal(decimal.NewFromFloat(1.1)),
+					llotypes.AggregatorMedian: llocommon.ToDecimal(decimal.NewFromFloat(1.1)),
 				},
 				2: {
-					llotypes.AggregatorMedian: ToDecimal(decimal.NewFromFloat(2.2)),
+					llotypes.AggregatorMedian: llocommon.ToDecimal(decimal.NewFromFloat(2.2)),
 				},
 				3: {
-					llotypes.AggregatorQuote: &Quote{Ask: decimal.NewFromFloat(3.3), Benchmark: decimal.NewFromFloat(4.4), Bid: decimal.NewFromFloat(5.5)},
+					llotypes.AggregatorQuote: &llocommon.Quote{Ask: decimal.NewFromFloat(3.3), Benchmark: decimal.NewFromFloat(4.4), Bid: decimal.NewFromFloat(5.5)},
 				},
 			},
 		}
@@ -431,25 +430,25 @@ func testReports(t *testing.T, outcomeCodec OutcomeCodec) {
 
 	t.Run("generates specimen report for non-production LifeCycleStage", func(t *testing.T) {
 		outcome := Outcome{
-			LifeCycleStage:                  LifeCycleStageStaging,
+			LifeCycleStage:                  llocommon.LifeCycleStageStaging,
 			ObservationTimestampNanoseconds: uint64(200 * time.Second),
 			ValidAfterNanoseconds: map[llotypes.ChannelID]uint64{
 				1: uint64(100 * time.Second),
 				2: uint64(100 * time.Second),
 			},
 			ChannelDefinitions: smallDefinitions,
-			StreamAggregates: map[llotypes.StreamID]map[llotypes.Aggregator]StreamValue{
+			StreamAggregates: map[llotypes.StreamID]map[llotypes.Aggregator]llocommon.StreamValue{
 				1: {
-					llotypes.AggregatorMedian: ToDecimal(decimal.NewFromFloat(1.1)),
+					llotypes.AggregatorMedian: llocommon.ToDecimal(decimal.NewFromFloat(1.1)),
 				},
 				2: {
-					llotypes.AggregatorMedian: ToDecimal(decimal.NewFromFloat(2.2)),
+					llotypes.AggregatorMedian: llocommon.ToDecimal(decimal.NewFromFloat(2.2)),
 				},
 				3: {
-					llotypes.AggregatorQuote: &Quote{Ask: decimal.NewFromFloat(3.3), Benchmark: decimal.NewFromFloat(4.4), Bid: decimal.NewFromFloat(5.5)},
+					llotypes.AggregatorQuote: &llocommon.Quote{Ask: decimal.NewFromFloat(3.3), Benchmark: decimal.NewFromFloat(4.4), Bid: decimal.NewFromFloat(5.5)},
 				},
 				4: {
-					llotypes.AggregatorQuote: &Quote{Ask: decimal.NewFromFloat(6.6), Benchmark: decimal.NewFromFloat(7.7), Bid: decimal.NewFromFloat(8.8)},
+					llotypes.AggregatorQuote: &llocommon.Quote{Ask: decimal.NewFromFloat(6.6), Benchmark: decimal.NewFromFloat(7.7), Bid: decimal.NewFromFloat(8.8)},
 				},
 			},
 		}
@@ -466,25 +465,25 @@ func testReports(t *testing.T, outcomeCodec OutcomeCodec) {
 
 	t.Run("generates non-specimen reports for production", func(t *testing.T) {
 		outcome := Outcome{
-			LifeCycleStage:                  LifeCycleStageProduction,
+			LifeCycleStage:                  llocommon.LifeCycleStageProduction,
 			ObservationTimestampNanoseconds: uint64(200 * time.Second),
 			ValidAfterNanoseconds: map[llotypes.ChannelID]uint64{
 				1: uint64(100 * time.Second),
 				2: uint64(100 * time.Second),
 			},
 			ChannelDefinitions: smallDefinitions,
-			StreamAggregates: map[llotypes.StreamID]map[llotypes.Aggregator]StreamValue{
+			StreamAggregates: map[llotypes.StreamID]map[llotypes.Aggregator]llocommon.StreamValue{
 				1: {
-					llotypes.AggregatorMedian: ToDecimal(decimal.NewFromFloat(1.1)),
+					llotypes.AggregatorMedian: llocommon.ToDecimal(decimal.NewFromFloat(1.1)),
 				},
 				2: {
-					llotypes.AggregatorMedian: ToDecimal(decimal.NewFromFloat(2.2)),
+					llotypes.AggregatorMedian: llocommon.ToDecimal(decimal.NewFromFloat(2.2)),
 				},
 				3: {
-					llotypes.AggregatorQuote: &Quote{Ask: decimal.NewFromFloat(3.3), Benchmark: decimal.NewFromFloat(4.4), Bid: decimal.NewFromFloat(5.5)},
+					llotypes.AggregatorQuote: &llocommon.Quote{Ask: decimal.NewFromFloat(3.3), Benchmark: decimal.NewFromFloat(4.4), Bid: decimal.NewFromFloat(5.5)},
 				},
 				4: {
-					llotypes.AggregatorQuote: &Quote{Ask: decimal.NewFromFloat(6.6), Benchmark: decimal.NewFromFloat(7.7), Bid: decimal.NewFromFloat(8.8)},
+					llotypes.AggregatorQuote: &llocommon.Quote{Ask: decimal.NewFromFloat(6.6), Benchmark: decimal.NewFromFloat(7.7), Bid: decimal.NewFromFloat(8.8)},
 				},
 			},
 		}
@@ -500,25 +499,25 @@ func testReports(t *testing.T, outcomeCodec OutcomeCodec) {
 	})
 	t.Run("does not produce reports with overlapping timestamps (where IsReportable returns false)", func(t *testing.T) {
 		outcome := Outcome{
-			LifeCycleStage:                  LifeCycleStageProduction,
+			LifeCycleStage:                  llocommon.LifeCycleStageProduction,
 			ObservationTimestampNanoseconds: uint64(200 * time.Second),
 			ValidAfterNanoseconds: map[llotypes.ChannelID]uint64{
 				1: uint64(200 * time.Second),
 				2: uint64(100 * time.Second),
 			},
 			ChannelDefinitions: smallDefinitions,
-			StreamAggregates: map[llotypes.StreamID]map[llotypes.Aggregator]StreamValue{
+			StreamAggregates: map[llotypes.StreamID]map[llotypes.Aggregator]llocommon.StreamValue{
 				1: {
-					llotypes.AggregatorMedian: ToDecimal(decimal.NewFromFloat(1.1)),
+					llotypes.AggregatorMedian: llocommon.ToDecimal(decimal.NewFromFloat(1.1)),
 				},
 				2: {
-					llotypes.AggregatorMedian: ToDecimal(decimal.NewFromFloat(2.2)),
+					llotypes.AggregatorMedian: llocommon.ToDecimal(decimal.NewFromFloat(2.2)),
 				},
 				3: {
-					llotypes.AggregatorQuote: &Quote{Ask: decimal.NewFromFloat(3.3), Benchmark: decimal.NewFromFloat(4.4), Bid: decimal.NewFromFloat(5.5)},
+					llotypes.AggregatorQuote: &llocommon.Quote{Ask: decimal.NewFromFloat(3.3), Benchmark: decimal.NewFromFloat(4.4), Bid: decimal.NewFromFloat(5.5)},
 				},
 				4: {
-					llotypes.AggregatorQuote: &Quote{Ask: decimal.NewFromFloat(6.6), Benchmark: decimal.NewFromFloat(7.7), Bid: decimal.NewFromFloat(8.8)},
+					llotypes.AggregatorQuote: &llocommon.Quote{Ask: decimal.NewFromFloat(6.6), Benchmark: decimal.NewFromFloat(7.7), Bid: decimal.NewFromFloat(8.8)},
 				},
 			},
 		}
@@ -533,14 +532,14 @@ func testReports(t *testing.T, outcomeCodec OutcomeCodec) {
 		assert.Equal(t, llotypes.ReportInfo{LifeCycleStage: "production", ReportFormat: llotypes.ReportFormatJSON}, rwis[0].ReportWithInfo.Info)
 	})
 	t.Run("sends telemetry on telemetry channel if set, and does not block on full channel", func(t *testing.T) {
-		ch := make(chan *LLOReportTelemetry, 2)
+		ch := make(chan *llocommon.LLOReportTelemetry, 2)
 		p.DonID = 1001
 		p.ReportTelemetryCh = ch
 		p.ConfigDigest = types.ConfigDigest{1, 2, 3}
 		seqNr := uint64(42)
 
 		outcome := Outcome{
-			LifeCycleStage:                  LifeCycleStageProduction,
+			LifeCycleStage:                  llocommon.LifeCycleStageProduction,
 			ObservationTimestampNanoseconds: uint64(200 * time.Second),
 			ValidAfterNanoseconds: map[llotypes.ChannelID]uint64{
 				1: uint64(100 * time.Second),
@@ -549,18 +548,18 @@ func testReports(t *testing.T, outcomeCodec OutcomeCodec) {
 				4: uint64(103 * time.Second),
 			},
 			ChannelDefinitions: smallDefinitions,
-			StreamAggregates: map[llotypes.StreamID]map[llotypes.Aggregator]StreamValue{
+			StreamAggregates: map[llotypes.StreamID]map[llotypes.Aggregator]llocommon.StreamValue{
 				1: {
-					llotypes.AggregatorMedian: ToDecimal(decimal.NewFromFloat(1.1)),
+					llotypes.AggregatorMedian: llocommon.ToDecimal(decimal.NewFromFloat(1.1)),
 				},
 				2: {
-					llotypes.AggregatorMedian: ToDecimal(decimal.NewFromFloat(2.2)),
+					llotypes.AggregatorMedian: llocommon.ToDecimal(decimal.NewFromFloat(2.2)),
 				},
 				3: {
-					llotypes.AggregatorQuote: &Quote{Ask: decimal.NewFromFloat(3.3), Benchmark: decimal.NewFromFloat(4.4), Bid: decimal.NewFromFloat(5.5)},
+					llotypes.AggregatorQuote: &llocommon.Quote{Ask: decimal.NewFromFloat(3.3), Benchmark: decimal.NewFromFloat(4.4), Bid: decimal.NewFromFloat(5.5)},
 				},
 				4: {
-					llotypes.AggregatorQuote: &Quote{Ask: decimal.NewFromFloat(6.6), Benchmark: decimal.NewFromFloat(7.7), Bid: decimal.NewFromFloat(8.8)},
+					llotypes.AggregatorQuote: &llocommon.Quote{Ask: decimal.NewFromFloat(6.6), Benchmark: decimal.NewFromFloat(7.7), Bid: decimal.NewFromFloat(8.8)},
 				},
 			},
 		}
@@ -570,7 +569,7 @@ func testReports(t *testing.T, outcomeCodec OutcomeCodec) {
 		require.NoError(t, err)
 		close(ch)
 
-		var telemetries []*LLOReportTelemetry
+		var telemetries []*llocommon.LLOReportTelemetry
 		for telemetry := range ch {
 			telemetries = append(telemetries, telemetry)
 		}
@@ -622,9 +621,9 @@ func testReports(t *testing.T, outcomeCodec OutcomeCodec) {
 	})
 }
 
-func mustToString(t *testing.T, p *LLOStreamValue) string {
+func mustToString(t *testing.T, p *llocommon.LLOStreamValue) string {
 	t.Helper()
-	sv, err := UnmarshalProtoStreamValue(p)
+	sv, err := llocommon.UnmarshalProtoStreamValue(p)
 	require.NoError(t, err)
 	b, err := sv.MarshalText()
 	require.NoError(t, err)

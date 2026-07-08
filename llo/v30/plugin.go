@@ -1,8 +1,6 @@
 package llo
 
 import (
-	. "github.com/smartcontractkit/chainlink-data-streams/llo"
-
 	"context"
 	"errors"
 	"fmt"
@@ -10,6 +8,7 @@ import (
 	sync "sync"
 	"time"
 
+	llocommon "github.com/smartcontractkit/chainlink-data-streams/llo/common"
 	"github.com/smartcontractkit/libocr/quorumhelper"
 
 	"github.com/smartcontractkit/chainlink-common/pkg/logger"
@@ -89,7 +88,7 @@ type DataSource interface {
 	// passed streamValues.
 	// If an observation fails, or the stream is unknown, no value should be
 	// set.
-	Observe(ctx context.Context, streamValues StreamValues, opts DSOpts) error
+	Observe(ctx context.Context, streamValues llocommon.StreamValues, opts DSOpts) error
 }
 
 type ShouldRetireCache interface { // reads asynchronously from onchain ConfigurationStore
@@ -156,20 +155,20 @@ var _ ocr3types.ReportingPluginFactory[llotypes.ReportInfo] = &PluginFactory{}
 
 type PluginFactoryParams struct {
 	Config
-	PredecessorRetirementReportCache
+	llocommon.PredecessorRetirementReportCache
 	ShouldRetireCache
-	RetirementReportCodec
+	llocommon.RetirementReportCodec
 	llotypes.ChannelDefinitionCache
 	DataSource
 	logger.Logger
-	OnchainConfigCodec
-	ReportCodecs map[llotypes.ReportFormat]ReportCodec
+	llocommon.OnchainConfigCodec
+	ReportCodecs map[llotypes.ReportFormat]llocommon.ReportCodec
 	// LLOOutcomeTelemetryCh if set will be used to send one telemetry struct per
 	// round in the Outcome stage
-	OutcomeTelemetryCh chan<- *LLOOutcomeTelemetry
+	OutcomeTelemetryCh chan<- *llocommon.LLOOutcomeTelemetry
 	// ReportTelemetryCh if set will be used to send one telemetry struct per
 	// transmissible report in the Report stage
-	ReportTelemetryCh chan<- *LLOReportTelemetry
+	ReportTelemetryCh chan<- *llocommon.LLOReportTelemetry
 	// DonID is optional and used only for telemetry and logging
 	DonID uint32
 }
@@ -193,7 +192,7 @@ func (f *PluginFactory) NewReportingPlugin(ctx context.Context, cfg ocr3types.Re
 	if err != nil {
 		return nil, ocr3types.ReportingPluginInfo{}, fmt.Errorf("NewReportingPlugin failed to decode onchain config; got: 0x%x (len: %d); %w", cfg.OnchainConfig, len(cfg.OnchainConfig), err)
 	}
-	offchainConfig, err := DecodeOffchainConfig(cfg.OffchainConfig)
+	offchainConfig, err := llocommon.DecodeOffchainConfig(cfg.OffchainConfig)
 	if err != nil {
 		return nil, ocr3types.ReportingPluginInfo{}, fmt.Errorf("NewReportingPlugin failed to decode offchain config; got: 0x%x (len: %d); %w", cfg.OffchainConfig, len(cfg.OffchainConfig), err)
 	}
@@ -230,7 +229,7 @@ func (f *PluginFactory) NewReportingPlugin(ctx context.Context, cfg ocr3types.Re
 			f.OutcomeTelemetryCh,
 			f.ReportTelemetryCh,
 			f.DonID,
-			NewOptsCache(),
+			llocommon.NewOptsCache(),
 			cfg.MaxDurationObservation,
 			offchainConfig.ProtocolVersion,
 			offchainConfig.DefaultMinReportIntervalNanoseconds,
@@ -241,7 +240,7 @@ func (f *PluginFactory) NewReportingPlugin(ctx context.Context, cfg ocr3types.Re
 				MaxObservationLength: MaxObservationLength,
 				MaxOutcomeLength:     MaxOutcomeLength,
 				MaxReportLength:      MaxReportLength,
-				MaxReportCount:       MaxReportCount,
+				MaxReportCount:       llocommon.MaxReportCount,
 			},
 		}, nil
 }
@@ -252,7 +251,7 @@ type Plugin struct {
 	Config                           Config
 	PredecessorConfigDigest          *types.ConfigDigest
 	ConfigDigest                     types.ConfigDigest
-	PredecessorRetirementReportCache PredecessorRetirementReportCache
+	PredecessorRetirementReportCache llocommon.PredecessorRetirementReportCache
 	ShouldRetireCache                ShouldRetireCache
 	ChannelDefinitionCache           llotypes.ChannelDefinitionCache
 	DataSource                       DataSource
@@ -261,12 +260,12 @@ type Plugin struct {
 	F                                int
 	ObservationCodec                 ObservationCodec
 	OutcomeCodec                     OutcomeCodec
-	RetirementReportCodec            RetirementReportCodec
-	ReportCodecs                     map[llotypes.ReportFormat]ReportCodec
-	OutcomeTelemetryCh               chan<- *LLOOutcomeTelemetry
-	ReportTelemetryCh                chan<- *LLOReportTelemetry
-	DonID     uint32
-	OptsCache *OptsCache // must be non-nil; set by NewReportingPlugin or by tests that exercise Outcome/Reports
+	RetirementReportCodec            llocommon.RetirementReportCodec
+	ReportCodecs                     map[llotypes.ReportFormat]llocommon.ReportCodec
+	OutcomeTelemetryCh               chan<- *llocommon.LLOOutcomeTelemetry
+	ReportTelemetryCh                chan<- *llocommon.LLOReportTelemetry
+	DonID                            uint32
+	OptsCache                        *llocommon.OptsCache // must be non-nil; set by NewReportingPlugin or by tests that exercise Outcome/Reports
 
 	// From ReportingPluginConfig
 	MaxDurationObservation time.Duration
@@ -332,12 +331,12 @@ func (p *Plugin) ValidateObservation(ctx context.Context, outctx ocr3types.Outco
 		return errors.New("AttestedPredecessorRetirement is not empty even though this instance has no predecessor")
 	}
 
-	if len(observation.UpdateChannelDefinitions) > MaxObservationUpdateChannelDefinitionsLength {
-		return fmt.Errorf("UpdateChannelDefinitions is too long: %v vs %v", len(observation.UpdateChannelDefinitions), MaxObservationUpdateChannelDefinitionsLength)
+	if len(observation.UpdateChannelDefinitions) > llocommon.MaxObservationUpdateChannelDefinitionsLength {
+		return fmt.Errorf("UpdateChannelDefinitions is too long: %v vs %v", len(observation.UpdateChannelDefinitions), llocommon.MaxObservationUpdateChannelDefinitionsLength)
 	}
 
-	if len(observation.RemoveChannelIDs) > MaxObservationRemoveChannelIDsLength {
-		return fmt.Errorf("RemoveChannelIDs is too long: %v vs %v", len(observation.RemoveChannelIDs), MaxObservationRemoveChannelIDsLength)
+	if len(observation.RemoveChannelIDs) > llocommon.MaxObservationRemoveChannelIDsLength {
+		return fmt.Errorf("RemoveChannelIDs is too long: %v vs %v", len(observation.RemoveChannelIDs), llocommon.MaxObservationRemoveChannelIDsLength)
 	}
 
 	defsForVerify := observation.UpdateChannelDefinitions
@@ -356,19 +355,19 @@ func (p *Plugin) ValidateObservation(ctx context.Context, outctx ocr3types.Outco
 		defsForVerify = merged
 	}
 
-	if err := VerifyChannelDefinitions(p.ReportCodecs, defsForVerify); err != nil {
+	if err := llocommon.VerifyChannelDefinitions(p.ReportCodecs, defsForVerify); err != nil {
 		return fmt.Errorf("UpdateChannelDefinitions is invalid: %w", err)
 	}
 
-	if len(observation.StreamValues) > MaxObservationStreamValuesLength {
-		return fmt.Errorf("StreamValues is too long: %v vs %v", len(observation.StreamValues), MaxObservationStreamValuesLength)
+	if len(observation.StreamValues) > llocommon.MaxObservationStreamValuesLength {
+		return fmt.Errorf("StreamValues is too long: %v vs %v", len(observation.StreamValues), llocommon.MaxObservationStreamValuesLength)
 	}
 
 	for _, streamValue := range observation.StreamValues {
 		switch v := streamValue.(type) {
-		case *TimestampedStreamValue:
+		case *llocommon.TimestampedStreamValue:
 			switch v.StreamValue.Type() {
-			case LLOStreamValue_Decimal:
+			case llocommon.LLOStreamValue_Decimal:
 			default:
 				return fmt.Errorf("nested stream value on TimestampedStreamValue must be a Decimal, got: %v", v.StreamValue.Type())
 			}

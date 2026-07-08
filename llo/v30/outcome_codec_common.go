@@ -1,20 +1,19 @@
 package llo
 
 import (
-	. "github.com/smartcontractkit/chainlink-data-streams/llo"
-
 	"errors"
 	"fmt"
 	"sort"
 
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
+	llocommon "github.com/smartcontractkit/chainlink-data-streams/llo/common"
 )
 
 // Common functions shared between outcome codecs
 
-func StreamAggregatesToProtoOutcome(in StreamAggregates) (out []*LLOStreamAggregate, err error) {
+func StreamAggregatesToProtoOutcome(in llocommon.StreamAggregates) (out []*llocommon.LLOStreamAggregate, err error) {
 	if len(in) > 0 {
-		out = make([]*LLOStreamAggregate, 0, len(in))
+		out = make([]*llocommon.LLOStreamAggregate, 0, len(in))
 		for sid, aggregates := range in {
 			if aggregates == nil {
 				return nil, fmt.Errorf("cannot marshal protobuf; nil aggregates for stream ID: %d", sid)
@@ -24,7 +23,7 @@ func StreamAggregatesToProtoOutcome(in StreamAggregates) (out []*LLOStreamAggreg
 				if err != nil {
 					return nil, fmt.Errorf("cannot marshal protobuf; stream ID: %d; aggregator: %v; %w", sid, agg, err)
 				}
-				out = append(out, &LLOStreamAggregate{
+				out = append(out, &llocommon.LLOStreamAggregate{
 					StreamID:    sid,
 					StreamValue: pbSv,
 					Aggregator:  uint32(agg),
@@ -41,7 +40,7 @@ func StreamAggregatesToProtoOutcome(in StreamAggregates) (out []*LLOStreamAggreg
 	return
 }
 
-func makeLLOStreamValue(v StreamValue) (*LLOStreamValue, error) {
+func makeLLOStreamValue(v llocommon.StreamValue) (*llocommon.LLOStreamValue, error) {
 	if v == nil {
 		return nil, errors.New("nil value for stream")
 	}
@@ -49,32 +48,32 @@ func makeLLOStreamValue(v StreamValue) (*LLOStreamValue, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &LLOStreamValue{Type: v.Type(), Value: value}, nil
+	return &llocommon.LLOStreamValue{Type: v.Type(), Value: value}, nil
 }
 
-func makeChannelDefinitionProto(d llotypes.ChannelDefinition) *LLOChannelDefinitionProto {
-	streams := make([]*LLOStreamDefinition, len(d.Streams))
+func makeChannelDefinitionProto(d llotypes.ChannelDefinition) *llocommon.LLOChannelDefinitionProto {
+	streams := make([]*llocommon.LLOStreamDefinition, len(d.Streams))
 	for i, strm := range d.Streams {
-		streams[i] = &LLOStreamDefinition{
+		streams[i] = &llocommon.LLOStreamDefinition{
 			StreamID:   strm.StreamID,
 			Aggregator: uint32(strm.Aggregator),
 		}
 	}
-	return &LLOChannelDefinitionProto{
-		ReportFormat:          uint32(d.ReportFormat),
-		Streams:               streams,
-		Opts:                  d.Opts,
-		Tombstone:             d.Tombstone,
-		Source:                d.Source,
+	return &llocommon.LLOChannelDefinitionProto{
+		ReportFormat:           uint32(d.ReportFormat),
+		Streams:                streams,
+		Opts:                   d.Opts,
+		Tombstone:              d.Tombstone,
+		Source:                 d.Source,
 		DisableNilStreamValues: d.DisableNilStreamValues,
 	}
 }
 
-func channelDefinitionsToProtoOutcome(in llotypes.ChannelDefinitions) (out []*LLOChannelIDAndDefinitionProto) {
+func channelDefinitionsToProtoOutcome(in llotypes.ChannelDefinitions) (out []*llocommon.LLOChannelIDAndDefinitionProto) {
 	if len(in) > 0 {
-		out = make([]*LLOChannelIDAndDefinitionProto, 0, len(in))
+		out = make([]*llocommon.LLOChannelIDAndDefinitionProto, 0, len(in))
 		for id, d := range in {
-			out = append(out, &LLOChannelIDAndDefinitionProto{
+			out = append(out, &llocommon.LLOChannelIDAndDefinitionProto{
 				ChannelID:         id,
 				ChannelDefinition: makeChannelDefinitionProto(d),
 			})
@@ -86,7 +85,7 @@ func channelDefinitionsToProtoOutcome(in llotypes.ChannelDefinitions) (out []*LL
 	return
 }
 
-func channelDefinitionsFromProtoOutcome(in []*LLOChannelIDAndDefinitionProto) (out llotypes.ChannelDefinitions, err error) {
+func channelDefinitionsFromProtoOutcome(in []*llocommon.LLOChannelIDAndDefinitionProto) (out llotypes.ChannelDefinitions, err error) {
 	if len(in) > 0 {
 		out = make(map[llotypes.ChannelID]llotypes.ChannelDefinition, len(in))
 		for _, d := range in {
@@ -103,11 +102,11 @@ func channelDefinitionsFromProtoOutcome(in []*LLOChannelIDAndDefinitionProto) (o
 				}
 			}
 			out[d.ChannelID] = llotypes.ChannelDefinition{
-				ReportFormat:          llotypes.ReportFormat(d.ChannelDefinition.ReportFormat),
-				Streams:              streams,
-				Opts:                 d.ChannelDefinition.Opts,
-				Tombstone:             d.ChannelDefinition.Tombstone,
-				Source:                d.ChannelDefinition.Source,
+				ReportFormat:           llotypes.ReportFormat(d.ChannelDefinition.ReportFormat),
+				Streams:                streams,
+				Opts:                   d.ChannelDefinition.Opts,
+				Tombstone:              d.ChannelDefinition.Tombstone,
+				Source:                 d.ChannelDefinition.Source,
 				DisableNilStreamValues: d.ChannelDefinition.DisableNilStreamValues,
 			}
 		}
@@ -115,18 +114,18 @@ func channelDefinitionsFromProtoOutcome(in []*LLOChannelIDAndDefinitionProto) (o
 	return out, nil
 }
 
-func streamAggregatesFromProtoOutcome(in []*LLOStreamAggregate) (out StreamAggregates, err error) {
+func streamAggregatesFromProtoOutcome(in []*llocommon.LLOStreamAggregate) (out llocommon.StreamAggregates, err error) {
 	if len(in) > 0 {
-		out = make(StreamAggregates, len(in))
+		out = make(llocommon.StreamAggregates, len(in))
 		for _, enc := range in {
-			var sv StreamValue
-			sv, err = UnmarshalProtoStreamValue(enc.StreamValue)
+			var sv llocommon.StreamValue
+			sv, err = llocommon.UnmarshalProtoStreamValue(enc.StreamValue)
 			if err != nil {
 				return
 			}
 			m, exists := out[enc.StreamID]
 			if !exists {
-				m = make(map[llotypes.Aggregator]StreamValue)
+				m = make(map[llotypes.Aggregator]llocommon.StreamValue)
 				out[enc.StreamID] = m
 			}
 			m[llotypes.Aggregator(enc.Aggregator)] = sv

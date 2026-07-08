@@ -13,8 +13,8 @@ import (
 	ocr2types "github.com/smartcontractkit/libocr/offchainreporting2plus/types"
 
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
-	datastreamsllo "github.com/smartcontractkit/chainlink-data-streams/llo"
 
+	llocommon "github.com/smartcontractkit/chainlink-data-streams/llo/common"
 	"github.com/smartcontractkit/chainlink-data-streams/llo/reportcodecs/retirement"
 )
 
@@ -59,13 +59,13 @@ func (m *mockVerifier) Verify(key types.OnchainPublicKey, digest types.ConfigDig
 }
 
 type mockCodec struct {
-	decode func([]byte) (datastreamsllo.RetirementReport, error)
+	decode func([]byte) (llocommon.RetirementReport, error)
 }
 
-func (m *mockCodec) Encode(datastreamsllo.RetirementReport) ([]byte, error) {
+func (m *mockCodec) Encode(llocommon.RetirementReport) ([]byte, error) {
 	panic("not implemented")
 }
-func (m *mockCodec) Decode(b []byte) (datastreamsllo.RetirementReport, error) {
+func (m *mockCodec) Decode(b []byte) (llocommon.RetirementReport, error) {
 	return m.decode(b)
 }
 
@@ -145,20 +145,20 @@ func Test_PluginScopedRetirementReportCache(t *testing.T) {
 				}
 				return false
 			}
-			c.decode = func([]byte) (datastreamsllo.RetirementReport, error) {
-				return datastreamsllo.RetirementReport{}, errors.New("codec decode failed")
+			c.decode = func([]byte) (llocommon.RetirementReport, error) {
+				return llocommon.RetirementReport{}, errors.New("codec decode failed")
 			}
 			_, err = psrrc.CheckAttestedRetirementReport(exampleDigest, serializedValidArr)
 			require.EqualError(t, err, "Verify failed; failed to decode retirement report: codec decode failed")
 
-			exampleRetirementReport := datastreamsllo.RetirementReport{
+			exampleRetirementReport := llocommon.RetirementReport{
 				ValidAfterNanoseconds: map[llotypes.ChannelID]uint64{
 					0: 1,
 				},
 			}
 
 			// enough valid sigs and codec decode succeeds
-			c.decode = func(b []byte) (datastreamsllo.RetirementReport, error) {
+			c.decode = func(b []byte) (llocommon.RetirementReport, error) {
 				assert.Equal(t, exampleUnattestedSerializedRetirementReport, b)
 				return exampleRetirementReport, nil
 			}
@@ -173,8 +173,8 @@ func Test_PluginScopedRetirementReportCache(t *testing.T) {
 			v.verify = func(key types.OnchainPublicKey, digest types.ConfigDigest, seqNr uint64, r ocr3types.ReportWithInfo[llotypes.ReportInfo], signature []byte) bool {
 				return true
 			}
-			c.decode = func(b []byte) (datastreamsllo.RetirementReport, error) {
-				return datastreamsllo.RetirementReport{}, nil
+			c.decode = func(b []byte) (llocommon.RetirementReport, error) {
+				return llocommon.RetirementReport{}, nil
 			}
 
 			dupArr := retirement.AttestedRetirementReport{
