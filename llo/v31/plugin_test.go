@@ -275,6 +275,153 @@ func Test_Observation_BlobOffloadFallback(t *testing.T) {
 	require.Len(t, got.StreamValues, len(sv))
 }
 
+func Test_SecondsResolutionOverlap(t *testing.T) {
+	mkPrec := func(format llotypes.ReportFormat, opts []byte, validAfterNs, obsTsNs uint64) precursor {
+		return precursor{
+			LifeCycleStage:                  llocommon.LifeCycleStageProduction,
+			ObservationTimestampNanoseconds: obsTsNs,
+			ChannelDefinitions:              llotypes.ChannelDefinitions{1: {ReportFormat: format, Opts: opts}},
+			ValidAfterNanoseconds:           map[llotypes.ChannelID]uint64{1: validAfterNs},
+		}
+	}
+
+	const (
+		sec1a = 1_500_000_000 // second 1
+		sec1b = 1_900_000_000 // second 1 (later ns, same second)
+		sec2  = 2_100_000_000 // second 2
+	)
+
+	tests := []struct {
+		name       string
+		format     llotypes.ReportFormat
+		opts       []byte
+		validAfter uint64
+		obsTs      uint64
+		reportable bool
+	}{
+		{"legacy same second -> not reportable", llotypes.ReportFormatEVMPremiumLegacy, nil, sec1a, sec1b, false},
+		{"legacy next second -> reportable", llotypes.ReportFormatEVMPremiumLegacy, nil, sec1a, sec2, true},
+		{"json same second -> reportable (nanosecond)", llotypes.ReportFormatJSON, nil, sec1a, sec1b, true},
+		{"unpacked default opts same second -> not reportable (defaults to seconds)", llotypes.ReportFormatEVMABIEncodeUnpacked, nil, sec1a, sec1b, false},
+		{"unpacked explicit ns same second -> reportable", llotypes.ReportFormatEVMABIEncodeUnpacked, []byte(`{"TimeResolution":"ns"}`), sec1a, sec1b, true},
+		{"unpacked explicit seconds next second -> reportable", llotypes.ReportFormatEVMABIEncodeUnpacked, []byte(`{"TimeResolution":"s"}`), sec1a, sec2, true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			p := mkPrec(tc.format, tc.opts, tc.validAfter, tc.obsTs)
+			got := p.reportableChannels(0)
+			if tc.reportable {
+				require.Equal(t, []llotypes.ChannelID{1}, got)
+			} else {
+				require.Empty(t, got)
+			}
+		})
+	}
+}
+
+func Test_DisableNilStreamValues(t *testing.T) {
+	cd := llotypes.ChannelDefinition{
+		ReportFormat:           llotypes.ReportFormatJSON,
+		DisableNilStreamValues: true,
+		Streams:                []llotypes.Stream{{StreamID: 100, Aggregator: llotypes.AggregatorMedian}, {StreamID: 200, Aggregator: llotypes.AggregatorMedian}},
+	}
+	base := func(aggs llocommon.StreamAggregates) precursor {
+		return precursor{
+			LifeCycleStage:                  llocommon.LifeCycleStageProduction,
+			ObservationTimestampNanoseconds: 2000,
+			ChannelDefinitions:              llotypes.ChannelDefinitions{1: cd},
+			ValidAfterNanoseconds:           map[llotypes.ChannelID]uint64{1: 1000},
+			StreamAggregates:                aggs,
+		}
+	}
+
+	// Missing stream 200 -> not reportable.
+	missing := base(llocommon.StreamAggregates{100: {llotypes.AggregatorMedian: llocommon.ToDecimal(decimal.NewFromInt(1))}})
+	require.Empty(t, missing.reportableChannels(0))
+
+	// Both streams present -> reportable.
+	full := base(llocommon.StreamAggregates{
+		100: {llotypes.AggregatorMedian: llocommon.ToDecimal(decimal.NewFromInt(1))},
+		200: {llotypes.AggregatorMedian: llocommon.ToDecimal(decimal.NewFromInt(2))},
+	})
+	require.Equal(t, []llotypes.ChannelID{1}, full.reportableChannels(0))
+}
+
+func Test_TimestampedAggregate_CarryForward(t *testing.T) {
+	p := testPlugin(t) // F=1
+	kv := newMemKV()
+	defs := llotypes.ChannelDefinitions{1: {ReportFormat: llotypes.ReportFormatJSON, Streams: []llotypes.Stream{{StreamID: 100, Aggregator: llotypes.AggregatorMedian}}}}
+
+	tsv := func(ts uint64, v int64) llocommon.StreamValue {
+		return &llocommon.TimestampedStreamValue{ObservedAtNanoseconds: ts, StreamValue: llocommon.ToDecimal(decimal.NewFromInt(v))}
+	}
+	roundAgg := func(ts uint64, v int64) *llocommon.TimestampedStreamValue {
+		out := llocommon.StreamAggregates{}
+		obs := map[llotypes.StreamID][]llocommon.StreamValue{100: {tsv(ts, v), tsv(ts, v), tsv(ts, v)}}
+		require.NoError(t, p.aggregate(kv, defs, obs, out))
+		res, ok := out[100][llotypes.AggregatorMedian].(*llocommon.TimestampedStreamValue)
+		require.True(t, ok, "expected a TimestampedStreamValue aggregate")
+		return res
+	}
+
+	// Round 1: establish ts=100.
+	require.Equal(t, uint64(100), roundAgg(100, 5).ObservedAtNanoseconds)
+	// Round 2: an older aggregation must NOT overwrite the carried-forward value.
+	require.Equal(t, uint64(100), roundAgg(50, 7).ObservedAtNanoseconds)
+	// Round 3: a strictly newer aggregation is adopted.
+	require.Equal(t, uint64(200), roundAgg(200, 9).ObservedAtNanoseconds)
+	// And the newer value is persisted to the t/ carry-forward key.
+	persisted, err := readTimestampedAggregate(kv, 100, llotypes.AggregatorMedian)
+	require.NoError(t, err)
+	require.NotNil(t, persisted)
+	require.Equal(t, uint64(200), persisted.ObservedAtNanoseconds)
+}
+
+func Test_Telemetry(t *testing.T) {
+	ctx := tests.Context(t)
+	otCh := make(chan *llocommon.LLOOutcomeTelemetry, 8)
+	rtCh := make(chan *llocommon.LLOReportTelemetry, 8)
+	p := testPlugin(t)
+	p.DonID = 7
+	p.OutcomeTelemetryCh = otCh
+	p.ReportTelemetryCh = rtCh
+	kv := newMemKV()
+
+	channelDef := llotypes.ChannelDefinition{ReportFormat: llotypes.ReportFormatJSON, Streams: []llotypes.Stream{{StreamID: 100, Aggregator: llotypes.AggregatorMedian}}}
+	obs := func(ts uint64, withVal bool) []ocrtypes.AttributedObservation {
+		o := Observation{UnixTimestampNanoseconds: ts, UpdateChannelDefinitions: llotypes.ChannelDefinitions{1: channelDef}}
+		if withVal {
+			o.StreamValues = llocommon.StreamValues{100: llocommon.ToDecimal(decimal.NewFromInt(42))}
+		}
+		aos := make([]ocrtypes.AttributedObservation, 0, 4)
+		for i := 0; i < 4; i++ {
+			aos = append(aos, ao(i, mustEncodeObs(t, o)))
+		}
+		return aos
+	}
+
+	_, err := p.StateTransition(ctx, 1, ocrtypes.AttributedQuery{}, []ocrtypes.AttributedObservation{ao(0, nil), ao(1, nil), ao(2, nil)}, kv, nil)
+	require.NoError(t, err)
+	require.Empty(t, otCh, "no outcome telemetry on the bootstrap round")
+
+	_, err = p.StateTransition(ctx, 2, ocrtypes.AttributedQuery{}, obs(1000, false), kv, nil)
+	require.NoError(t, err)
+	prec3, err := p.StateTransition(ctx, 3, ocrtypes.AttributedQuery{}, obs(2000, true), kv, nil)
+	require.NoError(t, err)
+
+	require.Len(t, otCh, 2, "one outcome telemetry per non-bootstrap StateTransition")
+	ot := <-otCh
+	require.Equal(t, uint32(7), ot.DonId)
+
+	reports, err := p.Reports(ctx, 3, prec3)
+	require.NoError(t, err)
+	require.Len(t, reports, 1)
+	require.Len(t, rtCh, 1, "one report telemetry per emitted report")
+	rt := <-rtCh
+	require.Equal(t, uint32(7), rt.DonId)
+	require.Equal(t, uint32(1), rt.ChannelId)
+}
+
 // equalStreamValue compares two stream values by their binary encoding.
 func equalStreamValue(a, b llocommon.StreamValue) bool {
 	ba, err := a.MarshalBinary()

@@ -43,6 +43,10 @@ type Plugin struct {
 	DonID                            uint32
 	OptsCache                        *llocommon.OptsCache
 
+	// Optional telemetry sinks; best-effort, non-blocking.
+	OutcomeTelemetryCh chan<- *llocommon.LLOOutcomeTelemetry
+	ReportTelemetryCh  chan<- *llocommon.LLOReportTelemetry
+
 	MaxDurationObservation time.Duration
 
 	// From offchain config

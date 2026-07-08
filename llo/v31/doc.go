@@ -32,10 +32,21 @@
 // via the shared aggregators), min-report-interval validAfter, precursor
 // construction, report generation, blob-backed observations.
 //
+// Seconds-resolution overlap prevention (for report formats that encode
+// timestamps at second granularity) is implemented in resolution.go and applied
+// in both the current-round (isReportable) and previous-round (prevReportable)
+// reportability checks.
+//
+// DisableNilStreamValues (a channel with any nil stream aggregate is
+// unreportable), cross-round timestamped-aggregate carry-forward (t/ KV keys,
+// newer-wins monotonicity), and best-effort outcome/report telemetry are also
+// implemented. Reportability is persisted per channel each round (the r/ KV key)
+// so the next round can advance validAfter faithfully without re-deriving it
+// from aggregates that are not otherwise persisted.
+//
 // Deferred to follow-ups (marked with TODO(v31-parity) in code): calculated
-// streams, history-backfill channel selection, seconds-resolution overlap
-// prevention, and outcome/report telemetry emission. These are advanced
-// features that require careful, separately-reviewed ports of the v30 logic.
+// streams and history-backfill channel selection. These are advanced features
+// that require careful, separately-reviewed ports of the v30 logic.
 //
 // Missing: Blob success path isn't unit-tested: ocr3_1types.BlobHandle has no exported constructor,
 // it's in an internal package, so a test can't fabricate a handle.
