@@ -1,6 +1,8 @@
 package llo
 
 import (
+	. "github.com/smartcontractkit/chainlink-data-streams/llo"
+
 	"context"
 	"fmt"
 	"sort"
@@ -84,7 +86,7 @@ func (p *Plugin) observation(ctx context.Context, outctx ocr3types.OutcomeContex
 				// definitions file.
 				p.Logger.Errorw("ChannelDefinitionCache.Definitions is invalid", "err", err)
 			} else {
-				removeChannelDefinitions := subtractChannelDefinitions(previousOutcome.ChannelDefinitions, expectedChannelDefs, MaxObservationRemoveChannelIDsLength)
+				removeChannelDefinitions := SubtractChannelDefinitions(previousOutcome.ChannelDefinitions, expectedChannelDefs, MaxObservationRemoveChannelIDsLength)
 				for channelID := range removeChannelDefinitions {
 					obs.RemoveChannelIDs[channelID] = struct{}{}
 				}

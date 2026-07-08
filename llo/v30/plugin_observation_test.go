@@ -1,6 +1,8 @@
 package llo
 
 import (
+	. "github.com/smartcontractkit/chainlink-data-streams/llo"
+
 	"context"
 	"errors"
 	"fmt"

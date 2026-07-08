@@ -1,6 +1,8 @@
 package llo
 
 import (
+	. "github.com/smartcontractkit/chainlink-data-streams/llo"
+
 	"os"
 	reflect "reflect"
 	"testing"
@@ -114,10 +116,10 @@ func Test_protoOutcomeCodecV1(t *testing.T) {
 // Test_protoOutcomeCodecV1_GoldenFiles asserts outcome serialization against committed golden files.
 // Expected outcomes come from GoldenOutcomeCases() (see outcome_golden_cases.go).
 func Test_protoOutcomeCodecV1_GoldenFiles(t *testing.T) {
-	codec := OffchainConfig{
+	codec := GetOutcomeCodec(OffchainConfig{
 		ProtocolVersion:                     1,
 		DefaultMinReportIntervalNanoseconds: 1,
-	}.GetOutcomeCodec()
+	})
 
 	for _, tc := range GoldenOutcomeCases() {
 		t.Run(tc.Name, func(t *testing.T) {

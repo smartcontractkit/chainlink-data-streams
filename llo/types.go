@@ -7,7 +7,6 @@ import (
 
 	"github.com/goccy/go-json"
 
-	"github.com/smartcontractkit/libocr/offchainreporting2/types"
 	"github.com/smartcontractkit/libocr/offchainreporting2plus/ocr3types"
 
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
@@ -17,16 +16,6 @@ const (
 	// DefaultMaxReportRange is the default maximum range of the report if unset in the opts.
 	DefaultMaxReportRange = Duration(5 * time.Minute)
 )
-
-type ObservationCodec interface {
-	Encode(obs Observation) (types.Observation, error)
-	Decode(encoded types.Observation) (obs Observation, err error)
-}
-
-type OutcomeCodec interface {
-	Encode(outcome Outcome) (ocr3types.Outcome, error)
-	Decode(encoded ocr3types.Outcome) (outcome Outcome, err error)
-}
 
 type ReportCodec interface {
 	// Encode may be lossy, so no Decode function is expected

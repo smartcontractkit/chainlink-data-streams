@@ -1,6 +1,8 @@
 package llo
 
 import (
+	. "github.com/smartcontractkit/chainlink-data-streams/llo"
+
 	"crypto/sha256"
 	"encoding/binary"
 	"errors"
@@ -382,7 +384,7 @@ func (p *Plugin) decodeObservations(aos []types.AttributedObservation, outctx oc
 
 		// for each channelId count number of votes that mention it and count number of votes that include it.
 		for channelID, channelDefinition := range observation.UpdateChannelDefinitions {
-			defWithID := ChannelDefinitionWithID{channelDefinition, channelID}
+			defWithID := ChannelDefinitionWithID{ChannelDefinition: channelDefinition, ChannelID: channelID}
 			channelHash := MakeChannelHash(defWithID)
 			updateChannelVotesByHash[channelHash]++
 			updateChannelDefinitionsByHash[channelHash] = defWithID
@@ -504,7 +506,7 @@ func (out *Outcome) IsReportable(channelID llotypes.ChannelID, protocolVersion u
 	// This keeps compatibility with old nodes that may not have nanosecond resolution
 	//
 	// Also use seconds resolution for report formats that require it to prevent overlap
-	if protocolVersion == 0 || IsSecondsResolution(ChannelDefinitionWithID{cd, channelID}, optsCache) {
+	if protocolVersion == 0 || IsSecondsResolution(ChannelDefinitionWithID{ChannelDefinition: cd, ChannelID: channelID}, optsCache) {
 		validAfterSeconds := validAfterNanos / 1e9
 		obsTsSeconds := obsTsNanos / 1e9
 		if validAfterSeconds >= obsTsSeconds {

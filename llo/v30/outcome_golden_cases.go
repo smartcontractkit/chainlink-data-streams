@@ -2,6 +2,8 @@
 package llo
 
 import (
+	. "github.com/smartcontractkit/chainlink-data-streams/llo"
+
 	"github.com/shopspring/decimal"
 
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"

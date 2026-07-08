@@ -71,11 +71,3 @@ func (c OffchainConfig) Validate() error {
 	return nil
 }
 
-func (c OffchainConfig) GetOutcomeCodec() OutcomeCodec {
-	switch c.ProtocolVersion {
-	case 0:
-		return protoOutcomeCodecV0{}
-	default:
-		return protoOutcomeCodecV1{}
-	}
-}

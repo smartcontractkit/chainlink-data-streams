@@ -1,6 +1,8 @@
 package llo
 
 import (
+	. "github.com/smartcontractkit/chainlink-data-streams/llo"
+
 	"fmt"
 	"os"
 	"testing"
@@ -33,10 +35,10 @@ func Test_Outcome_GoldenFiles(t *testing.T) {
 	ctx := tests.Context(t)
 	obsCodec, err := NewProtoObservationCodec(logger.Nop(), true)
 	require.NoError(t, err)
-	codec := OffchainConfig{
+	codec := GetOutcomeCodec(OffchainConfig{
 		ProtocolVersion:                     1,
 		DefaultMinReportIntervalNanoseconds: 1,
-	}.GetOutcomeCodec()
+	})
 	p := &Plugin{
 		Config:                              Config{true},
 		OutcomeCodec:                        codec,
@@ -87,10 +89,10 @@ func Test_Outcome_EncodedMatchesGolden(t *testing.T) {
 	ctx := tests.Context(t)
 	obsCodec, err := NewProtoObservationCodec(logger.Nop(), true)
 	require.NoError(t, err)
-	codec := OffchainConfig{
+	codec := GetOutcomeCodec(OffchainConfig{
 		ProtocolVersion:                     1,
 		DefaultMinReportIntervalNanoseconds: 1,
-	}.GetOutcomeCodec()
+	})
 	p := &Plugin{
 		Config:                              Config{true},
 		OutcomeCodec:                        codec,

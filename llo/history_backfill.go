@@ -93,7 +93,7 @@ func ReportTimestampResolutionNanos(target llotypes.ChannelDefinition) (uint64, 
 	case llotypes.ReportFormatEVMPremiumLegacy:
 		return 1e9, nil
 	case llotypes.ReportFormatEVMABIEncodeUnpacked, llotypes.ReportFormatEVMABIEncodeUnpackedExpr:
-		res, err := targetChannelTimeResolution(target)
+		res, err := TargetChannelTimeResolution(target)
 		if err != nil {
 			return 0, err
 		}
@@ -128,7 +128,7 @@ func ObservationTimestampKeyToNanoseconds(rawKey uint64, res TimeResolution) uin
 	}
 }
 
-func targetChannelTimeResolution(target llotypes.ChannelDefinition) (TimeResolution, error) {
+func TargetChannelTimeResolution(target llotypes.ChannelDefinition) (TimeResolution, error) {
 	switch target.ReportFormat {
 	case llotypes.ReportFormatEVMABIEncodeUnpacked, llotypes.ReportFormatEVMABIEncodeUnpackedExpr:
 		if len(target.Opts) == 0 {
@@ -170,7 +170,7 @@ func ValidateHistoryBackfillAgainstDefinitions(cd llotypes.ChannelDefinition, de
 			return errors.New("history backfill target channel must not use calculated streams (phase 1 limitation)")
 		}
 	}
-	res, err := targetChannelTimeResolution(target)
+	res, err := TargetChannelTimeResolution(target)
 	if err != nil {
 		return err
 	}
@@ -248,59 +248,3 @@ func BuildBackfillStreamValues(target llotypes.ChannelDefinition, row map[llotyp
 	return values, nil
 }
 
-// SelectBackfillCandidate returns the next observation timestamp in nanoseconds, its raw key, and parsed opts, or an UnreportableChannelError.
-// outcome.ValidAfterNanoseconds[backfillCID] is the progress watermark (last emitted backfill observation time, in nanoseconds).
-// Min report interval and second-resolution overlap rules used for live channels do not apply to history_backfill.
-func SelectBackfillCandidate(out *Outcome, backfillCID llotypes.ChannelID) (tsNanos uint64, rawTS uint64, opts HistoryBackfillOpts, uerr *UnreportableChannelError) {
-	cd, exists := out.ChannelDefinitions[backfillCID]
-	if !exists {
-		return 0, 0, HistoryBackfillOpts{}, &UnreportableChannelError{nil, "IsReportable=false; no channel definition with this ID", backfillCID}
-	}
-	if cd.ReportFormat != llotypes.ReportFormatHistoryBackfill {
-		return 0, 0, HistoryBackfillOpts{}, &UnreportableChannelError{fmt.Errorf("internal error: not a history_backfill channel"), "not history_backfill", backfillCID}
-	}
-
-	var err error
-	opts, err = ParseHistoryBackfillOpts(cd.Opts)
-	if err != nil {
-		return 0, 0, HistoryBackfillOpts{}, &UnreportableChannelError{fmt.Errorf("failed to backfill: %w", err), "failed to parse history_backfill opts", backfillCID}
-	}
-	target, ok := out.ChannelDefinitions[opts.TargetChannelID]
-	if !ok {
-		return 0, 0, HistoryBackfillOpts{}, &UnreportableChannelError{fmt.Errorf("failed to backfill: target channel %d not in outcome", opts.TargetChannelID), "missing target channel", backfillCID}
-	}
-	res, err := targetChannelTimeResolution(target)
-	if err != nil {
-		return 0, 0, HistoryBackfillOpts{}, &UnreportableChannelError{fmt.Errorf("failed to backfill: %w", err), "invalid target channel time resolution opts", backfillCID}
-	}
-	watermark, ok := out.ValidAfterNanoseconds[backfillCID]
-	if !ok {
-		return 0, 0, HistoryBackfillOpts{}, &UnreportableChannelError{nil, "IsReportable=false; no ValidAfterNanoseconds entry yet, this must be a new channel", backfillCID}
-	}
-
-	obsTSNanos := out.ObservationTimestampNanoseconds
-
-	var bestRaw uint64
-	var bestNanos uint64
-	found := false
-	for rawKey := range opts.Observations {
-		tsN := ObservationTimestampKeyToNanoseconds(rawKey, res)
-		if tsN >= obsTSNanos {
-			continue
-		}
-		if tsN <= watermark {
-			continue
-		}
-		if !found || tsN < bestNanos || (tsN == bestNanos && rawKey < bestRaw) {
-			found = true
-			bestNanos = tsN
-			bestRaw = rawKey
-		}
-	}
-
-	if !found {
-		return 0, 0, HistoryBackfillOpts{}, &UnreportableChannelError{nil, "backfill complete, no remaining timestamps", backfillCID}
-	}
-
-	return bestNanos, bestRaw, opts, nil
-}

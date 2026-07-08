@@ -1,6 +1,8 @@
 package llo
 
 import (
+	. "github.com/smartcontractkit/chainlink-data-streams/llo"
+
 	"context"
 	"errors"
 	"fmt"
@@ -29,41 +31,16 @@ var (
 	ballastSz    int = 1e9 // 1GB
 )
 
-// Additional limits so we can more effectively bound the size of observations
-// NOTE: These are hardcoded because these exact values are relied upon as a
-// property of coming to consensus, it's too dangerous to make these
-// configurable on a per-node basis. It may be possible to add them to the
-// OffchainConfig if they need to be changed dynamically and in a
-// backwards-compatible way.
+// OCR3.0 transport limits, reported in the v3.0 ReportingPluginInfo. The
+// LLO-protocol limits (MaxReportCount, MaxObservation*Length, MaxStreamsPerChannel,
+// MaxOutcomeChannelDefinitionsLength) are shared across plugin versions and live
+// in the root llo package (limits.go).
 const (
-	// OCR protocol limits
 	// NOTE: CAREFUL! If we ever accidentally exceed these e.g.
 	// through too many channels/streams, the protocol will halt.
-	//
-	// TODO: How many channels/streams can we support given these constraints?
-	// https://smartcontract-it.atlassian.net/browse/MERC-6468
-	MaxReportCount       = ocr3types.MaxMaxReportCount
 	MaxObservationLength = ocr3types.MaxMaxObservationLength
 	MaxOutcomeLength     = ocr3types.MaxMaxOutcomeLength
 	MaxReportLength      = ocr3types.MaxMaxReportLength
-
-	// LLO-specific limits
-	//
-	// Maximum amount of channels that can be removed per round (if more than
-	// this need to be removed, they will be removed in batches until
-	// everything is up-to-date)
-	MaxObservationRemoveChannelIDsLength = 5
-	// Maximum amount of channels that can be added/updated per round (if more
-	// than this need to be added, they will be added in batches until
-	// everything is up-to-date)
-	MaxObservationUpdateChannelDefinitionsLength = 5
-	// Maximum number of streams that can be observed per round
-	MaxObservationStreamValuesLength = 10_000
-	// Maximum allowed number of streams per channel
-	MaxStreamsPerChannel = 10_000
-	// MaxOutcomeChannelDefinitionsLength is the maximum number of channels that
-	// can be supported
-	MaxOutcomeChannelDefinitionsLength = MaxReportCount
 )
 
 type DSOpts interface {
@@ -115,51 +92,11 @@ type DataSource interface {
 	Observe(ctx context.Context, streamValues StreamValues, opts DSOpts) error
 }
 
-// Protocol instances start in either the staging or production stage. They
-// may later be retired and "hand over" their work to another protocol instance
-// that will move from the staging to the production stage.
-const (
-	LifeCycleStageStaging    llotypes.LifeCycleStage = "staging"
-	LifeCycleStageProduction llotypes.LifeCycleStage = "production"
-	LifeCycleStageRetired    llotypes.LifeCycleStage = "retired"
-)
-
-type RetirementReport struct {
-	// Retirement reports are not guaranteed to be compatible across different
-	// protocol versions
-	ProtocolVersion uint32
-	// Carries validity time stamps between protocol instances to ensure there
-	// are no gaps
-	ValidAfterNanoseconds map[llotypes.ChannelID]uint64
-}
-
 type ShouldRetireCache interface { // reads asynchronously from onchain ConfigurationStore
 	// Should the protocol instance retire according to the configuration
 	// contract?
 	// See: https://github.com/smartcontractkit/mercury-v1-sketch/blob/main/onchain/src/ConfigurationStore.sol#L18
 	ShouldRetire(digest ocr2types.ConfigDigest) (bool, error)
-}
-
-// The predecessor protocol instance stores its attested retirement report in
-// this cache (locally, offchain), so it can be fetched by the successor
-// protocol instance.
-//
-// PredecessorRetirementReportCache is populated by the old protocol instance
-// writing to it and the new protocol instance reading from it.
-//
-// The sketch envisions it being implemented as a single object that is shared
-// between different protocol instances.
-type PredecessorRetirementReportCache interface {
-	// AttestedRetirementReport returns the attested retirement report for the
-	// given config digest from the local cache.
-	//
-	// This should return nil and not error in the case of a missing attested
-	// retirement report.
-	AttestedRetirementReport(predecessorConfigDigest ocr2types.ConfigDigest) ([]byte, error)
-	// CheckAttestedRetirementReport verifies that an attested retirement
-	// report, which may have come from another node, is valid (signed) with
-	// signers corresponding to the given config digest
-	CheckAttestedRetirementReport(predecessorConfigDigest ocr2types.ConfigDigest, attestedRetirementReport []byte) (RetirementReport, error)
 }
 
 // A ReportingPlugin allows plugging custom logic into the OCR3 protocol. The OCR
@@ -287,7 +224,7 @@ func (f *PluginFactory) NewReportingPlugin(ctx context.Context, cfg ocr3types.Re
 			cfg.N,
 			cfg.F,
 			obsCodec,
-			offchainConfig.GetOutcomeCodec(),
+			GetOutcomeCodec(offchainConfig),
 			f.RetirementReportCodec,
 			f.ReportCodecs,
 			f.OutcomeTelemetryCh,

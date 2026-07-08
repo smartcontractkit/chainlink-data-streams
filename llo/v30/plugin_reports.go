@@ -1,6 +1,8 @@
 package llo
 
 import (
+	. "github.com/smartcontractkit/chainlink-data-streams/llo"
+
 	"context"
 	"fmt"
 
@@ -82,13 +84,13 @@ func (p *Plugin) reports(ctx context.Context, seqNr uint64, rawOutcome ocr3types
 				validAfter = tsNanos - resNanos
 			}
 			report := Report{
-				p.ConfigDigest,
-				seqNr,
-				cid,
-				validAfter,
-				tsNanos,
-				values,
-				outcome.LifeCycleStage != LifeCycleStageProduction,
+				ConfigDigest:                    p.ConfigDigest,
+				SeqNr:                           seqNr,
+				ChannelID:                       cid,
+				ValidAfterNanoseconds:           validAfter,
+				ObservationTimestampNanoseconds: tsNanos,
+				Values:                          values,
+				Specimen:                        outcome.LifeCycleStage != LifeCycleStageProduction,
 			}
 			reportForEncode := report
 			reportForEncode.ChannelID = opts.TargetChannelID
@@ -126,13 +128,13 @@ func (p *Plugin) reports(ctx context.Context, seqNr uint64, rawOutcome ocr3types
 		}
 
 		report := Report{
-			p.ConfigDigest,
-			seqNr,
-			cid,
-			outcome.ValidAfterNanoseconds[cid],
-			outcome.ObservationTimestampNanoseconds,
-			values,
-			outcome.LifeCycleStage != LifeCycleStageProduction,
+			ConfigDigest:                    p.ConfigDigest,
+			SeqNr:                           seqNr,
+			ChannelID:                       cid,
+			ValidAfterNanoseconds:           outcome.ValidAfterNanoseconds[cid],
+			ObservationTimestampNanoseconds: outcome.ObservationTimestampNanoseconds,
+			Values:                          values,
+			Specimen:                        outcome.LifeCycleStage != LifeCycleStageProduction,
 		}
 
 		if p.Config.VerboseLogging {
