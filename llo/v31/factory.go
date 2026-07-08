@@ -31,6 +31,10 @@ type PluginFactoryParams struct {
 	logger.Logger
 	llocommon.OnchainConfigCodec
 	ReportCodecs map[llotypes.ReportFormat]llocommon.ReportCodec
+	// OutcomeTelemetryCh, if set, receives one telemetry struct per StateTransition.
+	OutcomeTelemetryCh chan<- *llocommon.LLOOutcomeTelemetry
+	// ReportTelemetryCh, if set, receives one telemetry struct per emitted report.
+	ReportTelemetryCh chan<- *llocommon.LLOReportTelemetry
 	// DonID is optional and used only for telemetry and logging.
 	DonID uint32
 	// BlobThreshold overrides DefaultBlobThreshold if non-zero. A negative value
@@ -81,6 +85,8 @@ func (f *PluginFactory) NewReportingPlugin(ctx context.Context, cfg ocr3types.Re
 		RetirementReportCodec:               f.RetirementReportCodec,
 		ReportCodecs:                        f.ReportCodecs,
 		DonID:                               f.DonID,
+		OutcomeTelemetryCh:                  f.OutcomeTelemetryCh,
+		ReportTelemetryCh:                   f.ReportTelemetryCh,
 		OptsCache:                           llocommon.NewOptsCache(),
 		MaxDurationObservation:              cfg.MaxDurationObservation,
 		ProtocolVersion:                     offchainConfig.ProtocolVersion,

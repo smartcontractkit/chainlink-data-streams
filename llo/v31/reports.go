@@ -71,6 +71,8 @@ func (p *Plugin) Reports(ctx context.Context, seqNr uint64, rawPrecursor ocr3_1t
 			Specimen:                        out.LifeCycleStage != llocommon.LifeCycleStageProduction,
 		}
 
+		p.captureReportTelemetry(report, cd)
+
 		codec, exists := p.ReportCodecs[cd.ReportFormat]
 		if !exists {
 			p.Logger.Warnw("Error encoding report; codec missing for ReportFormat", "reportFormat", cd.ReportFormat, "channelID", cid, "stage", "Report", "seqNr", seqNr)
@@ -120,9 +122,26 @@ func (o precursor) isReportable(channelID llotypes.ChannelID, minReportInterval 
 	if cd.ReportFormat == llotypes.ReportFormatHistoryBackfill {
 		return false // TODO(v31-parity)
 	}
+	// When DisableNilStreamValues is set, every stream must have a (non-nil)
+	// aggregate value for the channel to be reportable.
+	if cd.DisableNilStreamValues {
+		for _, strm := range cd.Streams {
+			if o.StreamAggregates[strm.StreamID][strm.Aggregator] == nil {
+				return false
+			}
+		}
+	}
 	validAfter, ok := o.ValidAfterNanoseconds[channelID]
 	if !ok {
 		return false
 	}
-	return o.ObservationTimestampNanoseconds >= validAfter+minReportInterval && o.ObservationTimestampNanoseconds > validAfter
+	if o.ObservationTimestampNanoseconds < validAfter+minReportInterval || o.ObservationTimestampNanoseconds <= validAfter {
+		return false
+	}
+	// For seconds-resolution report formats, also require a full second between
+	// validAfter and the observation timestamp to prevent overlapping reports.
+	if isSecondsResolution(cd) && secondsOverlap(validAfter, o.ObservationTimestampNanoseconds) {
+		return false
+	}
+	return true
 }
