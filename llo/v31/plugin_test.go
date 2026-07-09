@@ -2,6 +2,7 @@ package llo
 
 import (
 	"context"
+	"encoding/binary"
 	"errors"
 	"testing"
 
@@ -273,6 +274,18 @@ func Test_Observation_BlobOffloadFallback(t *testing.T) {
 	got, err := decodeObservation(ctx, enc, nil)
 	require.NoError(t, err)
 	require.Len(t, got.StreamValues, len(sv))
+}
+
+func Test_decodeObservation_RejectsHugeHandleCount(t *testing.T) {
+	ctx := tests.Context(t)
+	// version byte + a uvarint encoding a huge handle count.
+	buf := []byte{observationWireVersion}
+	var tmp [binary.MaxVarintLen64]byte
+	n := binary.PutUvarint(tmp[:], ^uint64(0)) // max uint64
+	buf = append(buf, tmp[:n]...)
+	_, err := decodeObservation(ctx, buf, nil)
+	require.Error(t, err, "must reject an oversized handle count instead of allocating")
+	require.Contains(t, err.Error(), "too many blobs")
 }
 
 func Test_SecondsResolutionOverlap(t *testing.T) {

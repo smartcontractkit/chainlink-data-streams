@@ -74,6 +74,17 @@ func (p *Plugin) StateTransition(ctx context.Context, seqNr uint64, _ ocrtypes.A
 		out.LifeCycleStage = llocommon.LifeCycleStageRetired
 	}
 
+	// Keep the node-local OptsCache in sync with the channel set. It is decode
+	// memoization, not replicated state, but it is READ at consensus time by
+	// calculated-stream evaluation and by opts-dependent report codecs, so it
+	// must be populated identically on every oracle. After a mismatch (e.g. a
+	// restart leaves it empty) repopulate it wholesale from the current channel
+	// definitions; applyChannelVotes then keeps it current incrementally. This
+	// mirrors the v30 Outcome() safeguard.
+	if p.OptsCache.Len() != len(out.ChannelDefinitions) {
+		p.OptsCache.ResetTo(out.ChannelDefinitions)
+	}
+
 	// Channel definition changes (skipped once retired).
 	var removedChannelIDs []llotypes.ChannelID
 	if out.LifeCycleStage != llocommon.LifeCycleStageRetired {
