@@ -28,6 +28,12 @@ type Observation struct {
 // observationWireVersion is the leading byte of the v31 observation framing.
 const observationWireVersion byte = 1
 
+// maxObservationBlobHandles bounds the number of blob handles a single
+// observation may reference. The encoder emits at most one; this is a generous
+// ceiling that prevents a malicious peer from forcing a huge allocation via a
+// crafted handle count in decodeObservation.
+const maxObservationBlobHandles = 64
+
 // encodeObservation serializes an Observation. When the serialized stream-value
 // payload exceeds blobThreshold, the stream values are broadcast as a blob and
 // referenced by handle instead of being sent inline. A threshold of 0 disables
@@ -113,6 +119,9 @@ func decodeObservation(ctx context.Context, raw ocrtypes.Observation, bf ocr3_1t
 	nHandles, k := binary.Uvarint(rest)
 	if k <= 0 {
 		return Observation{}, fmt.Errorf("malformed observation: bad handle count")
+	}
+	if nHandles > maxObservationBlobHandles {
+		return Observation{}, fmt.Errorf("observation references too many blobs: %d (max %d)", nHandles, maxObservationBlobHandles)
 	}
 	rest = rest[k:]
 
