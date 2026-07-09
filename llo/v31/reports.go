@@ -51,8 +51,64 @@ func (p *Plugin) Reports(ctx context.Context, seqNr uint64, rawPrecursor ocr3_1t
 		cd := out.ChannelDefinitions[cid]
 
 		if cd.ReportFormat == llotypes.ReportFormatHistoryBackfill {
-			// TODO(v31-parity): history-backfill report emission.
-			p.Logger.Warnw("history_backfill channels are not yet supported in v31; skipping", "channelID", cid, "stage", "Report", "seqNr", seqNr)
+			tsNanos, rawTS, opts, ok := selectBackfillCandidate(out.ChannelDefinitions, out.ValidAfterNanoseconds, out.ObservationTimestampNanoseconds, cid)
+			if !ok {
+				p.Logger.Warnw("backfill channel was reportable but selection failed", "channelID", cid, "stage", "Report", "seqNr", seqNr)
+				continue
+			}
+			targetCD, exists := out.ChannelDefinitions[opts.TargetChannelID]
+			if !exists {
+				p.Logger.Warnw("missing target channel for history_backfill", "channelID", cid, "targetChannelID", opts.TargetChannelID, "stage", "Report", "seqNr", seqNr)
+				continue
+			}
+			values, err := llocommon.BuildBackfillStreamValues(targetCD, opts.Observations[rawTS])
+			if err != nil {
+				p.Logger.Warnw("Error building backfill stream values", "err", err, "channelID", cid, "stage", "Report", "seqNr", seqNr)
+				continue
+			}
+			resNanos, err := llocommon.ReportTimestampResolutionNanos(targetCD)
+			if err != nil {
+				p.Logger.Warnw("Error resolving history_backfill report timestamp resolution", "err", err, "channelID", cid, "stage", "Report", "seqNr", seqNr)
+				continue
+			}
+			// The backfill report spans one resolution tick ending at the selected observation time.
+			validAfter := uint64(0)
+			if tsNanos >= resNanos {
+				validAfter = tsNanos - resNanos
+			}
+			report := llocommon.Report{
+				ConfigDigest:                    p.ConfigDigest,
+				SeqNr:                           seqNr,
+				ChannelID:                       cid,
+				ValidAfterNanoseconds:           validAfter,
+				ObservationTimestampNanoseconds: tsNanos,
+				Values:                          values,
+				Specimen:                        out.LifeCycleStage != llocommon.LifeCycleStageProduction,
+			}
+			// The report is encoded with, and attributed to, the target channel.
+			reportForEncode := report
+			reportForEncode.ChannelID = opts.TargetChannelID
+
+			p.captureReportTelemetry(reportForEncode, targetCD)
+			codec, exists := p.ReportCodecs[targetCD.ReportFormat]
+			if !exists {
+				p.Logger.Warnw("Error encoding backfill report; codec missing for target ReportFormat", "reportFormat", targetCD.ReportFormat, "channelID", cid, "targetChannelID", opts.TargetChannelID, "stage", "Report", "seqNr", seqNr)
+				continue
+			}
+			encoded, err := codec.Encode(reportForEncode, targetCD, p.OptsCache)
+			if err != nil {
+				p.Logger.Warnw("Error encoding backfill report", "reportFormat", targetCD.ReportFormat, "err", err, "channelID", cid, "stage", "Report", "seqNr", seqNr)
+				continue
+			}
+			rwis = append(rwis, ocr3types.ReportPlus[llotypes.ReportInfo]{
+				ReportWithInfo: ocr3types.ReportWithInfo[llotypes.ReportInfo]{
+					Report: encoded,
+					Info: llotypes.ReportInfo{
+						LifeCycleStage: out.LifeCycleStage,
+						ReportFormat:   targetCD.ReportFormat,
+					},
+				},
+			})
 			continue
 		}
 
@@ -98,8 +154,7 @@ func (p *Plugin) Reports(ctx context.Context, seqNr uint64, rawPrecursor ocr3_1t
 }
 
 // reportableChannels returns the sorted set of channels reportable in this
-// (current) round. Deferred: backfill, seconds-resolution overlap,
-// DisableNilStreamValues (see doc.go).
+// (current) round (see isReportable).
 func (o precursor) reportableChannels(minReportInterval uint64) []llotypes.ChannelID {
 	reportable := make([]llotypes.ChannelID, 0, len(o.ChannelDefinitions))
 	for channelID := range o.ChannelDefinitions {
@@ -120,7 +175,8 @@ func (o precursor) isReportable(channelID llotypes.ChannelID, minReportInterval 
 		return false
 	}
 	if cd.ReportFormat == llotypes.ReportFormatHistoryBackfill {
-		return false // TODO(v31-parity)
+		_, _, _, ok := selectBackfillCandidate(o.ChannelDefinitions, o.ValidAfterNanoseconds, o.ObservationTimestampNanoseconds, channelID)
+		return ok
 	}
 	// When DisableNilStreamValues is set, every stream must have a (non-nil)
 	// aggregate value for the channel to be reportable.

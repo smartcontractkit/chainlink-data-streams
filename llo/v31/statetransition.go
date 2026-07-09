@@ -20,8 +20,6 @@ import (
 // to read/write per-channel keys in the KeyValueState instead of decoding and
 // re-encoding a monolithic previous outcome.
 //
-// TODO(v31-parity): history-backfill channel selection and calculated streams
-// are not yet ported. See doc.go.
 func (p *Plugin) StateTransition(ctx context.Context, seqNr uint64, _ ocrtypes.AttributedQuery, aos []ocrtypes.AttributedObservation, kvRW ocr3_1types.KeyValueStateReadWriter, bf ocr3_1types.BlobFetcher) (ocr3_1types.ReportsPlusPrecursor, error) {
 	if len(aos) < 2*p.F+1 {
 		return nil, fmt.Errorf("invariant violation: expected at least 2f+1 attributed observations, got %d (f: %d)", len(aos), p.F)
@@ -92,6 +90,16 @@ func (p *Plugin) StateTransition(ctx context.Context, seqNr uint64, _ ocrtypes.A
 		if _, done := out.ValidAfterNanoseconds[channelID]; done {
 			continue
 		}
+		if cd, ok := prev.channelDefinitions[channelID]; ok && cd.ReportFormat == llotypes.ReportFormatHistoryBackfill {
+			// Backfill: the watermark advances to whatever observation the
+			// previous round would have selected (and emitted), or stays put.
+			if tsNanos, _, _, found := selectBackfillCandidate(prev.channelDefinitions, prev.validAfterNanoseconds, prev.observationTimestampNs, channelID); found {
+				out.ValidAfterNanoseconds[channelID] = tsNanos
+			} else {
+				out.ValidAfterNanoseconds[channelID] = prevValidAfter
+			}
+			continue
+		}
 		if prevReportable(prev, channelID) {
 			// Previous round reported; advance to the previous observation timestamp.
 			out.ValidAfterNanoseconds[channelID] = prev.observationTimestampNs
@@ -101,8 +109,13 @@ func (p *Plugin) StateTransition(ctx context.Context, seqNr uint64, _ ocrtypes.A
 	}
 	for channelID := range out.ChannelDefinitions {
 		if _, ok := out.ValidAfterNanoseconds[channelID]; !ok {
-			// New channel; becomes reportable in later rounds.
-			out.ValidAfterNanoseconds[channelID] = out.ObservationTimestampNanoseconds
+			if out.ChannelDefinitions[channelID].ReportFormat == llotypes.ReportFormatHistoryBackfill {
+				// New backfill channel: watermark starts at 0 (before any observation).
+				out.ValidAfterNanoseconds[channelID] = 0
+			} else {
+				// New channel; becomes reportable in later rounds.
+				out.ValidAfterNanoseconds[channelID] = out.ObservationTimestampNanoseconds
+			}
 		}
 	}
 	for _, channelID := range removedChannelIDs {
@@ -113,6 +126,11 @@ func (p *Plugin) StateTransition(ctx context.Context, seqNr uint64, _ ocrtypes.A
 	if err := p.aggregate(kvRW, out.ChannelDefinitions, streamObservations, out.StreamAggregates); err != nil {
 		return nil, err
 	}
+
+	// Evaluate calculated streams (EVMABIEncodeUnpackedExpr channels): appends
+	// the calculated streams to their channel definitions and writes the
+	// evaluated values into StreamAggregates. The engine is shared via llo/common.
+	llocommon.ProcessCalculatedStreams(p.Logger, out.ChannelDefinitions, out.StreamAggregates, out.ObservationTimestampNanoseconds, p.OptsCache)
 
 	// Flush KV mutations.
 	if err := p.flushKV(kvRW, prev, out, removedChannelIDs); err != nil {
@@ -249,7 +267,7 @@ func (p *Plugin) aggregate(kvRW ocr3_1types.KeyValueStateReadWriter, defs llotyp
 		for _, strm := range cd.Streams {
 			sid, agg := strm.StreamID, strm.Aggregator
 			if agg == llotypes.AggregatorCalculated {
-				continue // TODO(v31-parity): calculated streams
+				continue // handled after aggregation by ProcessCalculatedStreams
 			}
 			if _, exists := out[sid][agg]; exists {
 				continue

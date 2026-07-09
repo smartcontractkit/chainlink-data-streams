@@ -1,0 +1,264 @@
+package llo
+
+import (
+	"context"
+	"encoding/binary"
+	"testing"
+
+	"github.com/shopspring/decimal"
+	"github.com/stretchr/testify/require"
+
+	"github.com/smartcontractkit/chainlink-common/pkg/logger"
+	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
+	"github.com/smartcontractkit/chainlink-common/pkg/utils/tests"
+	llocommon "github.com/smartcontractkit/chainlink-data-streams/llo/common"
+
+	"github.com/smartcontractkit/libocr/offchainreporting2plus/ocr3types"
+	ocrtypes "github.com/smartcontractkit/libocr/offchainreporting2plus/types"
+)
+
+// --- mocks for the plugin dependencies ---
+
+type mockChannelDefinitionCache struct{ defs llotypes.ChannelDefinitions }
+
+func (m *mockChannelDefinitionCache) Definitions(previous llotypes.ChannelDefinitions) llotypes.ChannelDefinitions {
+	return m.defs
+}
+func (m *mockChannelDefinitionCache) Start(context.Context) error  { return nil }
+func (m *mockChannelDefinitionCache) Close() error                 { return nil }
+func (m *mockChannelDefinitionCache) Ready() error                 { return nil }
+func (m *mockChannelDefinitionCache) HealthReport() map[string]error { return nil }
+func (m *mockChannelDefinitionCache) Name() string                 { return "mockChannelDefinitionCache" }
+
+type mockDataSource struct {
+	vals       llocommon.StreamValues
+	optsProbed bool
+}
+
+func (m *mockDataSource) Observe(ctx context.Context, sv llocommon.StreamValues, opts DSOpts) error {
+	// Exercise the DSOpts accessors.
+	_ = opts.VerboseLogging()
+	_ = opts.SeqNr()
+	_ = opts.ConfigDigest()
+	_ = opts.ObservationTimestamp()
+	m.optsProbed = true
+	for k, v := range m.vals {
+		sv[k] = v
+	}
+	return nil
+}
+
+type mockShouldRetireCache struct{ retire bool }
+
+func (m *mockShouldRetireCache) ShouldRetire(ocrtypes.ConfigDigest) (bool, error) {
+	return m.retire, nil
+}
+
+type mockOnchainConfigCodec struct{}
+
+func (mockOnchainConfigCodec) Decode([]byte) (llocommon.OnchainConfig, error) {
+	return llocommon.OnchainConfig{}, nil
+}
+func (mockOnchainConfigCodec) Encode(llocommon.OnchainConfig) ([]byte, error) { return nil, nil }
+
+type mockPredecessorRetirementReportCache struct{ report llocommon.RetirementReport }
+
+func (m *mockPredecessorRetirementReportCache) AttestedRetirementReport(ocrtypes.ConfigDigest) ([]byte, error) {
+	return []byte("attested"), nil
+}
+func (m *mockPredecessorRetirementReportCache) CheckAttestedRetirementReport(ocrtypes.ConfigDigest, []byte) (llocommon.RetirementReport, error) {
+	return m.report, nil
+}
+
+func jsonChannel() llotypes.ChannelDefinition {
+	return llotypes.ChannelDefinition{ReportFormat: llotypes.ReportFormatJSON, Streams: []llotypes.Stream{{StreamID: 100, Aggregator: llotypes.AggregatorMedian}}}
+}
+
+// addChannelRound feeds 4 identical observations voting to add the given channel.
+func addChannelRound(t *testing.T, ts uint64, cid llotypes.ChannelID, cd llotypes.ChannelDefinition) []ocrtypes.AttributedObservation {
+	obs := Observation{UnixTimestampNanoseconds: ts, UpdateChannelDefinitions: llotypes.ChannelDefinitions{cid: cd}}
+	aos := make([]ocrtypes.AttributedObservation, 0, 4)
+	for i := 0; i < 4; i++ {
+		aos = append(aos, ao(i, mustEncodeObs(t, obs)))
+	}
+	return aos
+}
+
+// --- tests ---
+
+func Test_Factory_NewReportingPlugin(t *testing.T) {
+	ctx := tests.Context(t)
+	f := NewPluginFactory(PluginFactoryParams{
+		OnchainConfigCodec: mockOnchainConfigCodec{},
+		Logger:             logger.Test(t),
+	})
+	p, info, err := f.NewReportingPlugin(ctx, ocr3types.ReportingPluginConfig{N: 4, F: 1, ConfigDigest: ocrtypes.ConfigDigest{9}}, nil)
+	require.NoError(t, err)
+
+	info1, ok := info.(interface{ Validate() error })
+	require.True(t, ok)
+	require.NoError(t, info1.Validate())
+
+	pl, ok := p.(*Plugin)
+	require.True(t, ok)
+	require.Equal(t, 4, pl.N)
+	require.Equal(t, 1, pl.F)
+	require.Equal(t, DefaultBlobThreshold, pl.BlobThreshold)
+	require.NotNil(t, pl.OptsCache)
+	require.NoError(t, pl.Close())
+}
+
+func Test_Observation_And_Validate_Flow(t *testing.T) {
+	ctx := tests.Context(t)
+	ds := &mockDataSource{vals: llocommon.StreamValues{100: llocommon.ToDecimal(decimal.NewFromInt(5))}}
+	p := testPlugin(t)
+	p.ChannelDefinitionCache = &mockChannelDefinitionCache{defs: llotypes.ChannelDefinitions{1: jsonChannel()}}
+	p.DataSource = ds
+	p.ShouldRetireCache = &mockShouldRetireCache{}
+	kv := newMemKV()
+
+	// Query is empty; misc callbacks return their fixed values.
+	q, err := p.Query(ctx, 2, kv, nil)
+	require.NoError(t, err)
+	require.Nil(t, q)
+	require.NoError(t, p.Committed(ctx, 2, kv))
+	require.NoError(t, p.Close())
+	acc, err := p.ShouldAcceptAttestedReport(ctx, 2, ocr3types.ReportWithInfo[llotypes.ReportInfo]{})
+	require.NoError(t, err)
+	require.True(t, acc)
+	tr, err := p.ShouldTransmitAcceptedReport(ctx, 2, ocr3types.ReportWithInfo[llotypes.ReportInfo]{})
+	require.NoError(t, err)
+	require.True(t, tr)
+
+	// Bootstrap, then add channel 1 via a voting round.
+	_, err = p.StateTransition(ctx, 1, ocrtypes.AttributedQuery{}, []ocrtypes.AttributedObservation{ao(0, nil), ao(1, nil), ao(2, nil)}, kv, nil)
+	require.NoError(t, err)
+	_, err = p.StateTransition(ctx, 2, ocrtypes.AttributedQuery{}, addChannelRound(t, 1000, 1, jsonChannel()), kv, nil)
+	require.NoError(t, err)
+
+	// Observation at seqNr=3: channel 1 is now in KV, so DataSource is consulted.
+	obsBytes, err := p.Observation(ctx, 3, ocrtypes.AttributedQuery{}, kv, nil)
+	require.NoError(t, err)
+	require.NotEmpty(t, obsBytes)
+	require.True(t, ds.optsProbed, "DataSource.Observe should have been called")
+
+	// Quorum + validation of the produced observation.
+	aos := []ocrtypes.AttributedObservation{ao(0, obsBytes), ao(1, obsBytes), ao(2, obsBytes)}
+	reached, err := p.ObservationQuorum(ctx, 3, ocrtypes.AttributedQuery{}, aos, kv, nil)
+	require.NoError(t, err)
+	require.True(t, reached)
+	require.NoError(t, p.ValidateObservation(ctx, 3, ocrtypes.AttributedQuery{}, ao(0, obsBytes), kv, nil))
+
+	// seqNr==1 observation must be empty.
+	require.Error(t, p.ValidateObservation(ctx, 1, ocrtypes.AttributedQuery{}, ao(0, []byte{1}), kv, nil))
+}
+
+func Test_StateTransition_ChannelRemoval(t *testing.T) {
+	ctx := tests.Context(t)
+	p := testPlugin(t)
+	kv := newMemKV()
+
+	_, err := p.StateTransition(ctx, 1, ocrtypes.AttributedQuery{}, []ocrtypes.AttributedObservation{ao(0, nil), ao(1, nil), ao(2, nil)}, kv, nil)
+	require.NoError(t, err)
+	_, err = p.StateTransition(ctx, 2, ocrtypes.AttributedQuery{}, addChannelRound(t, 1000, 1, jsonChannel()), kv, nil)
+	require.NoError(t, err)
+	require.NotEmpty(t, kv.m[string(channelKey(1))])
+
+	// Round 3: four oracles vote to remove channel 1.
+	removeObs := Observation{UnixTimestampNanoseconds: 2000, RemoveChannelIDs: map[llotypes.ChannelID]struct{}{1: {}}}
+	removeAOs := make([]ocrtypes.AttributedObservation, 0, 4)
+	for i := 0; i < 4; i++ {
+		removeAOs = append(removeAOs, ao(i, mustEncodeObs(t, removeObs)))
+	}
+	_, err = p.StateTransition(ctx, 3, ocrtypes.AttributedQuery{}, removeAOs, kv, nil)
+	require.NoError(t, err)
+
+	// Channel and all its per-channel keys should be gone.
+	require.Empty(t, kv.m[string(channelKey(1))])
+	require.Empty(t, kv.m[string(validAfterKey(1))])
+	require.Empty(t, kv.m[string(reportedKey(1))])
+	require.Empty(t, decodeChannelIndex(kv.m[string(keyIndex)]))
+}
+
+func Test_StateTransition_Promotion(t *testing.T) {
+	ctx := tests.Context(t)
+	p := testPlugin(t)
+	predecessor := ocrtypes.ConfigDigest{0xAB}
+	p.PredecessorConfigDigest = &predecessor
+	p.PredecessorRetirementReportCache = &mockPredecessorRetirementReportCache{
+		report: llocommon.RetirementReport{ValidAfterNanoseconds: map[llotypes.ChannelID]uint64{1: 500}},
+	}
+	kv := newMemKV()
+	boot := []ocrtypes.AttributedObservation{ao(0, nil), ao(1, nil), ao(2, nil)}
+
+	// Bootstrap: staging, because a predecessor is configured.
+	_, err := p.StateTransition(ctx, 1, ocrtypes.AttributedQuery{}, boot, kv, nil)
+	require.NoError(t, err)
+	require.Equal(t, string(llocommon.LifeCycleStageStaging), string(kv.m[string(keyLifecycle)]))
+
+	// A round carrying a valid attested predecessor retirement report promotes to production.
+	promoObs := Observation{UnixTimestampNanoseconds: 1000, AttestedPredecessorRetirement: []byte("attested")}
+	aos := make([]ocrtypes.AttributedObservation, 0, 4)
+	for i := 0; i < 4; i++ {
+		aos = append(aos, ao(i, mustEncodeObs(t, promoObs)))
+	}
+	_, err = p.StateTransition(ctx, 2, ocrtypes.AttributedQuery{}, aos, kv, nil)
+	require.NoError(t, err)
+
+	require.Equal(t, string(llocommon.LifeCycleStageProduction), string(kv.m[string(keyLifecycle)]))
+	// validAfter is seeded from the predecessor's retirement report (gapless handover).
+	require.Equal(t, uint64(500), binary.BigEndian.Uint64(kv.m[string(validAfterKey(1))]))
+}
+
+func Test_ValidateObservation_Errors(t *testing.T) {
+	ctx := tests.Context(t)
+	p := testPlugin(t) // no predecessor configured
+	kv := newMemKV()
+
+	// AttestedPredecessorRetirement present but no predecessor -> error.
+	o1 := Observation{UnixTimestampNanoseconds: 1, AttestedPredecessorRetirement: []byte("x")}
+	require.Error(t, p.ValidateObservation(ctx, 2, ocrtypes.AttributedQuery{}, ao(0, mustEncodeObs(t, o1)), kv, nil))
+
+	// Too many channel-definition updates -> error.
+	defs := llotypes.ChannelDefinitions{}
+	for i := uint32(1); i <= 6; i++ {
+		defs[llotypes.ChannelID(i)] = jsonChannel()
+	}
+	o2 := Observation{UnixTimestampNanoseconds: 1, UpdateChannelDefinitions: defs}
+	require.Error(t, p.ValidateObservation(ctx, 2, ocrtypes.AttributedQuery{}, ao(0, mustEncodeObs(t, o2)), kv, nil))
+
+	// A TimestampedStreamValue whose nested value is not a Decimal -> error.
+	o3 := Observation{UnixTimestampNanoseconds: 1, StreamValues: llocommon.StreamValues{
+		1: &llocommon.TimestampedStreamValue{StreamValue: &llocommon.TimestampedStreamValue{StreamValue: llocommon.ToDecimal(decimal.NewFromInt(1))}},
+	}}
+	require.Error(t, p.ValidateObservation(ctx, 2, ocrtypes.AttributedQuery{}, ao(0, mustEncodeObs(t, o3)), kv, nil))
+}
+
+func Test_StateTransition_Retirement(t *testing.T) {
+	ctx := tests.Context(t)
+	p := testPlugin(t)
+	p.RetirementReportCodec = llocommon.StandardRetirementReportCodec{}
+	kv := newMemKV()
+
+	_, err := p.StateTransition(ctx, 1, ocrtypes.AttributedQuery{}, []ocrtypes.AttributedObservation{ao(0, nil), ao(1, nil), ao(2, nil)}, kv, nil)
+	require.NoError(t, err)
+	_, err = p.StateTransition(ctx, 2, ocrtypes.AttributedQuery{}, addChannelRound(t, 1000, 1, jsonChannel()), kv, nil)
+	require.NoError(t, err)
+
+	// Round 3: four oracles vote to retire.
+	retireObs := Observation{UnixTimestampNanoseconds: 2000, ShouldRetire: true}
+	retireAOs := make([]ocrtypes.AttributedObservation, 0, 4)
+	for i := 0; i < 4; i++ {
+		retireAOs = append(retireAOs, ao(i, mustEncodeObs(t, retireObs)))
+	}
+	prec, err := p.StateTransition(ctx, 3, ocrtypes.AttributedQuery{}, retireAOs, kv, nil)
+	require.NoError(t, err)
+	require.Equal(t, string(llocommon.LifeCycleStageRetired), string(kv.m[string(keyLifecycle)]))
+
+	// Reports emits a retirement report (and nothing else, since we're retired).
+	reports, err := p.Reports(ctx, 3, prec)
+	require.NoError(t, err)
+	require.Len(t, reports, 1)
+	require.Equal(t, llotypes.ReportFormatRetirement, reports[0].ReportWithInfo.Info.ReportFormat)
+	require.Equal(t, llocommon.LifeCycleStageRetired, reports[0].ReportWithInfo.Info.LifeCycleStage)
+}

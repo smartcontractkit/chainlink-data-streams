@@ -422,6 +422,95 @@ func Test_Telemetry(t *testing.T) {
 	require.Equal(t, uint32(1), rt.ChannelId)
 }
 
+func Test_CalculatedStreams(t *testing.T) {
+	p := testPlugin(t)
+	cid := llotypes.ChannelID(5)
+	opts := []byte(`{"abi":[{"type":"int256","expression":"Add(s1, s2)","expressionStreamID":999}]}`)
+	p.OptsCache.Set(cid, opts)
+
+	prec := precursor{
+		ObservationTimestampNanoseconds: 1000,
+		ChannelDefinitions: llotypes.ChannelDefinitions{cid: {
+			ReportFormat: llotypes.ReportFormatEVMABIEncodeUnpackedExpr,
+			Opts:         opts,
+			Streams: []llotypes.Stream{
+				{StreamID: 1, Aggregator: llotypes.AggregatorMedian},
+				{StreamID: 2, Aggregator: llotypes.AggregatorMedian},
+			},
+		}},
+		StreamAggregates: llocommon.StreamAggregates{
+			1: {llotypes.AggregatorMedian: llocommon.ToDecimal(decimal.NewFromInt(3))},
+			2: {llotypes.AggregatorMedian: llocommon.ToDecimal(decimal.NewFromInt(4))},
+		},
+	}
+
+	llocommon.ProcessCalculatedStreams(p.Logger, prec.ChannelDefinitions, prec.StreamAggregates, prec.ObservationTimestampNanoseconds, p.OptsCache)
+
+	// The calculated stream (999) should hold Add(s1, s2) = 7.
+	got := prec.StreamAggregates[999][llotypes.AggregatorCalculated]
+	require.NotNil(t, got)
+	d, ok := got.(*llocommon.Decimal)
+	require.True(t, ok)
+	require.True(t, d.Decimal().Equal(decimal.NewFromInt(7)), "expected 7, got %s", d.Decimal())
+
+	// The calculated stream should have been appended to the channel definition.
+	require.Len(t, prec.ChannelDefinitions[cid].Streams, 3)
+	require.Equal(t, llotypes.StreamID(999), prec.ChannelDefinitions[cid].Streams[2].StreamID)
+	require.EqualValues(t, llotypes.AggregatorCalculated, prec.ChannelDefinitions[cid].Streams[2].Aggregator)
+
+	// Dry-run helper should accept a valid expression.
+	require.NoError(t, llocommon.ProcessCalculatedStreamsDryRun("Add(s1, s2)"))
+}
+
+func Test_HistoryBackfill(t *testing.T) {
+	ctx := tests.Context(t)
+	p := testPlugin(t)
+
+	const (
+		targetCID   = llotypes.ChannelID(10)
+		backfillCID = llotypes.ChannelID(20)
+		fiveSec     = uint64(5_000_000_000)
+		eightSec    = uint64(8_000_000_000)
+		tenSec      = uint64(10_000_000_000)
+	)
+	targetCD := llotypes.ChannelDefinition{ReportFormat: llotypes.ReportFormatJSON, Streams: []llotypes.Stream{{StreamID: 100, Aggregator: llotypes.AggregatorMedian}}}
+	backfillCD := llotypes.ChannelDefinition{
+		ReportFormat: llotypes.ReportFormatHistoryBackfill,
+		Opts:         []byte(`{"targetChannelId":10,"observations":{"5":{"100":"1.5"},"8":{"100":"2.5"}}}`),
+		Streams:      []llotypes.Stream{{StreamID: 100, Aggregator: llotypes.AggregatorMedian}},
+	}
+	defs := llotypes.ChannelDefinitions{targetCID: targetCD, backfillCID: backfillCD}
+
+	// Candidate selection advances with the watermark, then completes.
+	ts, raw, opts, ok := selectBackfillCandidate(defs, map[llotypes.ChannelID]uint64{backfillCID: 0}, tenSec, backfillCID)
+	require.True(t, ok)
+	require.Equal(t, fiveSec, ts)
+	require.Equal(t, uint64(5), raw)
+	require.Equal(t, targetCID, opts.TargetChannelID)
+
+	ts2, _, _, ok2 := selectBackfillCandidate(defs, map[llotypes.ChannelID]uint64{backfillCID: fiveSec}, tenSec, backfillCID)
+	require.True(t, ok2)
+	require.Equal(t, eightSec, ts2)
+
+	_, _, _, ok3 := selectBackfillCandidate(defs, map[llotypes.ChannelID]uint64{backfillCID: eightSec}, tenSec, backfillCID)
+	require.False(t, ok3, "backfill should be complete once watermark passes the last observation")
+
+	// Reports emits the backfill report, encoded with the target channel's format.
+	prec := precursor{
+		LifeCycleStage:                  llocommon.LifeCycleStageProduction,
+		ObservationTimestampNanoseconds: tenSec,
+		ChannelDefinitions:              defs,
+		ValidAfterNanoseconds:           map[llotypes.ChannelID]uint64{targetCID: tenSec /* target not reportable */, backfillCID: 0},
+		StreamAggregates:                llocommon.StreamAggregates{},
+	}
+	b, err := encodePrecursor(prec)
+	require.NoError(t, err)
+	reports, err := p.Reports(ctx, 2, b)
+	require.NoError(t, err)
+	require.Len(t, reports, 1)
+	require.Equal(t, llotypes.ReportFormatJSON, reports[0].ReportWithInfo.Info.ReportFormat)
+}
+
 // equalStreamValue compares two stream values by their binary encoding.
 func equalStreamValue(a, b llocommon.StreamValue) bool {
 	ba, err := a.MarshalBinary()

@@ -44,9 +44,17 @@
 // so the next round can advance validAfter faithfully without re-deriving it
 // from aggregates that are not otherwise persisted.
 //
-// Deferred to follow-ups (marked with TODO(v31-parity) in code): calculated
-// streams and history-backfill channel selection. These are advanced features
-// that require careful, separately-reviewed ports of the v30 logic.
+// Calculated streams (EVMABIEncodeUnpackedExpr channels) are supported via the
+// expression engine in calculated.go, run at the end of StateTransition.
+//
+// History-backfill channels are supported: backfill.go selects the next
+// observation to emit (advancing a per-channel watermark stored in validAfter),
+// reportability and validAfter advancement account for it, and Reports emits the
+// backfill report encoded with the target channel's codec.
+//
+// v31 now covers the full v30 reporting-plugin feature set. Consensus-affecting
+// logic (state transition, aggregation, reportability, backfill, calculated
+// streams) is ported from v30; the transport differs (KV state + blobs).
 //
 // Missing: Blob success path isn't unit-tested: ocr3_1types.BlobHandle has no exported constructor,
 // it's in an internal package, so a test can't fabricate a handle.

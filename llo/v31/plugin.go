@@ -233,8 +233,8 @@ func (p *Plugin) ObservationQuorum(ctx context.Context, seqNr uint64, _ ocrtypes
 }
 
 // Committed is a no-op: LLO has no on-commit side effects, and Committed is not
-// guaranteed to be called for every seqNr.
-// TODO(v31-parity): optionally emit outcome telemetry from the committed snapshot.
+// guaranteed to be called for every seqNr. Outcome telemetry is emitted from
+// StateTransition, so there is nothing to do here.
 func (p *Plugin) Committed(ctx context.Context, seqNr uint64, _ ocr3_1types.KeyValueStateReader) error {
 	return nil
 }
