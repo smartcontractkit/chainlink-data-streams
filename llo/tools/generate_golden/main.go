@@ -6,22 +6,24 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/smartcontractkit/chainlink-data-streams/llo"
+	llocommon "github.com/smartcontractkit/chainlink-data-streams/llo/common"
+	llov30 "github.com/smartcontractkit/chainlink-data-streams/llo/v30"
 )
 
 func main() {
-	config := llo.OffchainConfig{
+	config := llocommon.OffchainConfig{
 		ProtocolVersion:                     1,
 		DefaultMinReportIntervalNanoseconds: 1,
 	}
-	codec := config.GetOutcomeCodec()
+	codec := llov30.GetOutcomeCodec(config)
 
-	baseDir := filepath.Join("..", "..")
+	// Golden files (and their consuming test) live in the v30 package.
+	baseDir := filepath.Join("..", "..", "v30")
 	if len(os.Args) > 1 {
 		baseDir = os.Args[1]
 	}
 
-	for _, tc := range llo.GoldenOutcomeCases() {
+	for _, tc := range llov30.GoldenOutcomeCases() {
 		serialized, err := codec.Encode(tc.Outcome)
 		if err != nil {
 			panic(err)

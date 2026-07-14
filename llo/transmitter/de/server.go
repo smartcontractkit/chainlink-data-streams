@@ -21,7 +21,7 @@ import (
 	"github.com/smartcontractkit/chainlink-common/pkg/services"
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
 	"github.com/smartcontractkit/chainlink-common/pkg/utils"
-	"github.com/smartcontractkit/chainlink-data-streams/llo"
+	llocommon "github.com/smartcontractkit/chainlink-data-streams/llo/common"
 	"github.com/smartcontractkit/chainlink-data-streams/llo/reportcodecs/evm"
 	"github.com/smartcontractkit/chainlink-data-streams/rpc"
 )
@@ -122,7 +122,7 @@ func newServer(lggr logger.Logger, verboseLogging bool, cfg QueueConfig, client 
 		serverURL,
 		evm.NewReportCodecPremiumLegacy(codecLggr, pm.DonID()),
 		evm.NewReportCodecStreamlined(codecLggr),
-		llo.JSONReportCodec{},
+		llocommon.JSONReportCodec{},
 		promTransmitSuccessCount.WithLabelValues(donIDStr, serverURL),
 		promTransmitDuplicateCount.WithLabelValues(donIDStr, serverURL),
 		promTransmitConnectionErrorCount.WithLabelValues(donIDStr, serverURL),

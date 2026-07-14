@@ -13,7 +13,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/smartcontractkit/chainlink-data-streams/llo"
+	llocommon "github.com/smartcontractkit/chainlink-data-streams/llo/common"
 	ubig "github.com/smartcontractkit/chainlink-data-streams/llo/reportcodecs/evm/utils"
 )
 
@@ -74,7 +74,7 @@ func Test_ABIEncoder_UnmarshalJSON(t *testing.T) {
 		assert.Equal(t, "uint192", enc.encoders[0].Type)
 		assert.Equal(t, "10000", enc.encoders[0].Multiplier.String())
 
-		res, err := enc.EncodePadded(llo.ToDecimal(decimal.NewFromFloat32(123456.789123)))
+		res, err := enc.EncodePadded(llocommon.ToDecimal(decimal.NewFromFloat32(123456.789123)))
 		require.NoError(t, err)
 		assert.Len(t, res, 32)
 		assert.Equal(t, "00000000000000000000000000000000000000000000000000000000499602dc", hex.EncodeToString(res))
@@ -86,9 +86,9 @@ func Test_ABIEncoder_UnmarshalJSON(t *testing.T) {
 		assert.Equal(t, "int192", enc.encoders[1].Type)
 		assert.Equal(t, "100", enc.encoders[1].Multiplier.String())
 
-		res, err = enc.EncodePadded(&llo.TimestampedStreamValue{
+		res, err = enc.EncodePadded(&llocommon.TimestampedStreamValue{
 			ObservedAtNanoseconds: 0x123456789,
-			StreamValue:           llo.ToDecimal(decimal.NewFromFloat32(123456.789123)),
+			StreamValue:           llocommon.ToDecimal(decimal.NewFromFloat32(123456.789123)),
 		})
 		require.NoError(t, err)
 		assert.Len(t, res, 64)
@@ -100,7 +100,7 @@ func Test_ABIEncoder_UnmarshalJSON(t *testing.T) {
 		assert.Equal(t, "uint192", enc.encoders[0].Type)
 		assert.Equal(t, "10000", enc.encoders[0].Multiplier.String())
 
-		res, err := enc.EncodePacked(llo.ToDecimal(decimal.NewFromFloat32(123456.789123)))
+		res, err := enc.EncodePacked(llocommon.ToDecimal(decimal.NewFromFloat32(123456.789123)))
 		require.NoError(t, err)
 		assert.Len(t, res, 24)
 		assert.Equal(t, "0000000000000000000000000000000000000000499602dc", hex.EncodeToString(res))
@@ -112,9 +112,9 @@ func Test_ABIEncoder_UnmarshalJSON(t *testing.T) {
 		assert.Equal(t, "int192", enc.encoders[1].Type)
 		assert.Equal(t, "100", enc.encoders[1].Multiplier.String())
 
-		res, err = enc.EncodePacked(&llo.TimestampedStreamValue{
+		res, err = enc.EncodePacked(&llocommon.TimestampedStreamValue{
 			ObservedAtNanoseconds: 0x123456789,
-			StreamValue:           llo.ToDecimal(decimal.NewFromFloat32(123456.789123)),
+			StreamValue:           llocommon.ToDecimal(decimal.NewFromFloat32(123456.789123)),
 		})
 		require.NoError(t, err)
 		assert.Len(t, res, 32)
@@ -130,7 +130,7 @@ func Test_ABIEncoder_EncodePacked(t *testing.T) {
 				Multiplier: ubig.NewI(10000),
 			}},
 		}
-		encoded, err := enc.EncodePadded(llo.ToDecimal(decimal.NewFromFloat32(123456.789123)))
+		encoded, err := enc.EncodePadded(llocommon.ToDecimal(decimal.NewFromFloat32(123456.789123)))
 		require.NoError(t, err)
 		assert.Equal(t, "00000000000000000000000000000000000000000000000000000000499602dc", hex.EncodeToString(encoded))
 	})
@@ -140,9 +140,9 @@ func Test_ABIEncoder_EncodePacked(t *testing.T) {
 				Type: "Quote",
 			}},
 		}
-		_, err := enc.EncodePacked(&llo.Quote{})
+		_, err := enc.EncodePacked(&llocommon.Quote{})
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "unhandled type; supported types are: *llo.Decimal or *llo.TimestampedStreamValue; got: *llo.Quote")
+		assert.Contains(t, err.Error(), "unhandled type; supported types are: *common.Decimal or *common.TimestampedStreamValue; got: *common.Quote")
 	})
 }
 
@@ -150,7 +150,7 @@ func Test_ABIEncoder_EncodePadded_EncodePacked(t *testing.T) {
 	t.Run("encodes decimals", func(t *testing.T) {
 		tcs := []struct {
 			name           string
-			sv             llo.StreamValue
+			sv             llocommon.StreamValue
 			abiType        string
 			multiplier     *big.Int
 			errStr         string
@@ -159,20 +159,20 @@ func Test_ABIEncoder_EncodePadded_EncodePacked(t *testing.T) {
 		}{
 			{
 				name:    "overflow int8",
-				sv:      llo.ToDecimal(decimal.NewFromFloat32(123456789.123456789)),
+				sv:      llocommon.ToDecimal(decimal.NewFromFloat32(123456789.123456789)),
 				abiType: "int8",
 				errStr:  "value 123456790 out of range for type int8",
 			},
 			{
 				name:           "successful int8",
-				sv:             llo.ToDecimal(decimal.NewFromFloat32(123.456)),
+				sv:             llocommon.ToDecimal(decimal.NewFromFloat32(123.456)),
 				abiType:        "int8",
 				expectedPadded: padLeft32Byte(fmt.Sprintf("%x", 123)),
 				expectedPacked: fmt.Sprintf("%x", 123),
 			},
 			{
 				name:           "negative multiplied int8",
-				sv:             llo.ToDecimal(decimal.NewFromFloat32(1.11)),
+				sv:             llocommon.ToDecimal(decimal.NewFromFloat32(1.11)),
 				multiplier:     big.NewInt(-100),
 				abiType:        "int8",
 				expectedPadded: "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff91",
@@ -180,7 +180,7 @@ func Test_ABIEncoder_EncodePadded_EncodePacked(t *testing.T) {
 			},
 			{
 				name:           "negative int192",
-				sv:             llo.ToDecimal(decimal.NewFromFloat32(1.11)),
+				sv:             llocommon.ToDecimal(decimal.NewFromFloat32(1.11)),
 				multiplier:     big.NewInt(-100),
 				abiType:        "int192",
 				expectedPadded: "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff91",
@@ -188,20 +188,20 @@ func Test_ABIEncoder_EncodePadded_EncodePacked(t *testing.T) {
 			},
 			{
 				name:    "negative uint32",
-				sv:      llo.ToDecimal(decimal.NewFromFloat32(-123.456)),
+				sv:      llocommon.ToDecimal(decimal.NewFromFloat32(-123.456)),
 				abiType: "uint32",
 				errStr:  "negative value provided for unsigned type uint32",
 			},
 			{
 				name:           "successful uint32",
-				sv:             llo.ToDecimal(decimal.NewFromFloat32(123456.456)),
+				sv:             llocommon.ToDecimal(decimal.NewFromFloat32(123456.456)),
 				abiType:        "uint32",
 				expectedPadded: padLeft32Byte(fmt.Sprintf("%x", 123456)),
 				expectedPacked: "0001e240",
 			},
 			{
 				name:           "multiplied uint32",
-				sv:             llo.ToDecimal(decimal.NewFromFloat32(123.456)),
+				sv:             llocommon.ToDecimal(decimal.NewFromFloat32(123.456)),
 				multiplier:     big.NewInt(100),
 				abiType:        "uint32",
 				expectedPadded: padLeft32Byte(fmt.Sprintf("%x", 12345)),
@@ -209,7 +209,7 @@ func Test_ABIEncoder_EncodePadded_EncodePacked(t *testing.T) {
 			},
 			{
 				name:           "negative multiplied int32",
-				sv:             llo.ToDecimal(decimal.NewFromFloat32(123.456)),
+				sv:             llocommon.ToDecimal(decimal.NewFromFloat32(123.456)),
 				multiplier:     big.NewInt(-100),
 				abiType:        "int32",
 				expectedPadded: "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffcfc7",
@@ -217,14 +217,14 @@ func Test_ABIEncoder_EncodePadded_EncodePacked(t *testing.T) {
 			},
 			{
 				name:       "overflowing multiplied int32",
-				sv:         llo.ToDecimal(decimal.NewFromInt(math.MaxInt32)),
+				sv:         llocommon.ToDecimal(decimal.NewFromInt(math.MaxInt32)),
 				multiplier: big.NewInt(2),
 				abiType:    "int32",
 				errStr:     "value 4294967294 out of range for type int32",
 			},
 			{
 				name:           "successful int192",
-				sv:             llo.ToDecimal(decimal.NewFromFloat32(123456.789123)),
+				sv:             llocommon.ToDecimal(decimal.NewFromFloat32(123456.789123)),
 				abiType:        "int192",
 				multiplier:     big.NewInt(1e18),
 				expectedPadded: "000000000000000000000000000000000000000000001a249b2292e49d8f0000",
@@ -232,13 +232,13 @@ func Test_ABIEncoder_EncodePadded_EncodePacked(t *testing.T) {
 			},
 			{
 				name:    "invalid type",
-				sv:      llo.ToDecimal(decimal.NewFromFloat32(123.456)),
+				sv:      llocommon.ToDecimal(decimal.NewFromFloat32(123.456)),
 				abiType: "blah",
 				errStr:  "invalid Solidity type: blah",
 			},
 			{
 				name:    "invalid type",
-				sv:      llo.ToDecimal(decimal.NewFromFloat32(123.456)),
+				sv:      llocommon.ToDecimal(decimal.NewFromFloat32(123.456)),
 				abiType: "int",
 				errStr:  "invalid Solidity type: int",
 			},
@@ -274,7 +274,7 @@ func Test_ABIEncoder_EncodePadded_EncodePacked(t *testing.T) {
 	t.Run("encodes TimestampedStreamValue", func(t *testing.T) {
 		tcs := []struct {
 			name           string
-			sv             llo.StreamValue
+			sv             llocommon.StreamValue
 			encoder        ABIEncoder
 			paddedErrStr   string
 			expectedPadded string
@@ -283,9 +283,9 @@ func Test_ABIEncoder_EncodePadded_EncodePacked(t *testing.T) {
 		}{
 			{
 				name: "with valid ABI types",
-				sv: &llo.TimestampedStreamValue{
+				sv: &llocommon.TimestampedStreamValue{
 					ObservedAtNanoseconds: 0x123456789,
-					StreamValue:           llo.ToDecimal(decimal.NewFromFloat32(123456.789123)),
+					StreamValue:           llocommon.ToDecimal(decimal.NewFromFloat32(123456.789123)),
 				},
 				encoder: ABIEncoder{
 					[]singleABIEncoder{{
@@ -301,9 +301,9 @@ func Test_ABIEncoder_EncodePadded_EncodePacked(t *testing.T) {
 			},
 			{
 				name: "passing bytes0 as the first type serializes only the nested value",
-				sv: &llo.TimestampedStreamValue{
+				sv: &llocommon.TimestampedStreamValue{
 					ObservedAtNanoseconds: 0x123456789,
-					StreamValue:           llo.ToDecimal(decimal.NewFromFloat32(123456.789123)),
+					StreamValue:           llocommon.ToDecimal(decimal.NewFromFloat32(123456.789123)),
 				},
 				encoder: ABIEncoder{
 					[]singleABIEncoder{{
@@ -319,9 +319,9 @@ func Test_ABIEncoder_EncodePadded_EncodePacked(t *testing.T) {
 			},
 			{
 				name: "passing bytes0 as the second type serializes only the timestamp",
-				sv: &llo.TimestampedStreamValue{
+				sv: &llocommon.TimestampedStreamValue{
 					ObservedAtNanoseconds: 0x123456789,
-					StreamValue:           llo.ToDecimal(decimal.NewFromFloat32(123456.789123)),
+					StreamValue:           llocommon.ToDecimal(decimal.NewFromFloat32(123456.789123)),
 				},
 				encoder: ABIEncoder{
 					[]singleABIEncoder{{
@@ -335,9 +335,9 @@ func Test_ABIEncoder_EncodePadded_EncodePacked(t *testing.T) {
 			},
 			{
 				name: "multiplier applied to both types",
-				sv: &llo.TimestampedStreamValue{
+				sv: &llocommon.TimestampedStreamValue{
 					ObservedAtNanoseconds: 0x123456789,
-					StreamValue:           llo.ToDecimal(decimal.NewFromFloat32(123456.789123)),
+					StreamValue:           llocommon.ToDecimal(decimal.NewFromFloat32(123456.789123)),
 				},
 				encoder: ABIEncoder{
 					[]singleABIEncoder{{
@@ -353,9 +353,9 @@ func Test_ABIEncoder_EncodePadded_EncodePacked(t *testing.T) {
 			},
 			{
 				name: "errors if timestamp would overflow",
-				sv: &llo.TimestampedStreamValue{
+				sv: &llocommon.TimestampedStreamValue{
 					ObservedAtNanoseconds: 0x123456789,
-					StreamValue:           llo.ToDecimal(decimal.NewFromFloat(float64(200))),
+					StreamValue:           llocommon.ToDecimal(decimal.NewFromFloat(float64(200))),
 				},
 				encoder: ABIEncoder{
 					[]singleABIEncoder{{
@@ -369,9 +369,9 @@ func Test_ABIEncoder_EncodePadded_EncodePacked(t *testing.T) {
 			},
 			{
 				name: "errors if stream value would overflow",
-				sv: &llo.TimestampedStreamValue{
+				sv: &llocommon.TimestampedStreamValue{
 					ObservedAtNanoseconds: 0x123456789,
-					StreamValue:           llo.ToDecimal(decimal.NewFromFloat(float64(200))),
+					StreamValue:           llocommon.ToDecimal(decimal.NewFromFloat(float64(200))),
 				},
 				encoder: ABIEncoder{
 					[]singleABIEncoder{{
@@ -386,9 +386,9 @@ func Test_ABIEncoder_EncodePadded_EncodePacked(t *testing.T) {
 			},
 			{
 				name: "unsupported nested type",
-				sv: &llo.TimestampedStreamValue{
+				sv: &llocommon.TimestampedStreamValue{
 					ObservedAtNanoseconds: 0x123456789,
-					StreamValue:           &llo.Quote{},
+					StreamValue:           &llocommon.Quote{},
 				},
 				encoder: ABIEncoder{
 					[]singleABIEncoder{{
@@ -397,14 +397,14 @@ func Test_ABIEncoder_EncodePadded_EncodePacked(t *testing.T) {
 						Type: "int192",
 					}},
 				},
-				paddedErrStr: "unhandled type; supported nested types for *llo.TimestampedStreamValue are: *llo.Decimal; got: *llo.Quote",
-				packedErrStr: "failed to encode nested stream value; EncodePacked only currently supports StreamValue type of *llo.Decimal, got: *llo.Quote",
+				paddedErrStr: "unhandled type; supported nested types for *common.TimestampedStreamValue are: *common.Decimal; got: *common.Quote",
+				packedErrStr: "failed to encode nested stream value; EncodePacked only currently supports StreamValue type of *common.Decimal, got: *common.Quote",
 			},
 			{
 				name: "successfully encodes timestamped stream value",
-				sv: &llo.TimestampedStreamValue{
+				sv: &llocommon.TimestampedStreamValue{
 					ObservedAtNanoseconds: 0x123456789,
-					StreamValue:           llo.ToDecimal(decimal.NewFromFloat32(123456.789123)),
+					StreamValue:           llocommon.ToDecimal(decimal.NewFromFloat32(123456.789123)),
 				},
 				encoder: ABIEncoder{
 					[]singleABIEncoder{{
@@ -419,17 +419,17 @@ func Test_ABIEncoder_EncodePadded_EncodePacked(t *testing.T) {
 			},
 			{
 				name: "wrong abi encoder",
-				sv: &llo.TimestampedStreamValue{
+				sv: &llocommon.TimestampedStreamValue{
 					ObservedAtNanoseconds: 0x123456789,
-					StreamValue:           llo.ToDecimal(decimal.NewFromFloat32(123456.789123)),
+					StreamValue:           llocommon.ToDecimal(decimal.NewFromFloat32(123456.789123)),
 				},
 				encoder: ABIEncoder{
 					[]singleABIEncoder{{
 						Type: "uint64",
 					}},
 				},
-				paddedErrStr: "expected exactly two encoders for *llo.TimestampedStreamValue; got: 1",
-				packedErrStr: "expected exactly two encoders for *llo.TimestampedStreamValue; got: 1",
+				paddedErrStr: "expected exactly two encoders for *common.TimestampedStreamValue; got: 1",
+				packedErrStr: "expected exactly two encoders for *common.TimestampedStreamValue; got: 1",
 			},
 		}
 

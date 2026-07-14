@@ -15,11 +15,11 @@ import (
 
 	"github.com/smartcontractkit/chainlink-common/pkg/logger"
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
-	"github.com/smartcontractkit/chainlink-data-streams/llo"
+	llocommon "github.com/smartcontractkit/chainlink-data-streams/llo/common"
 )
 
 var (
-	_ llo.ReportCodec = ReportCodecEVMABIEncodeUnpacked{}
+	_ llocommon.ReportCodec = ReportCodecEVMABIEncodeUnpacked{}
 
 	zero = big.NewInt(0)
 )
@@ -59,11 +59,11 @@ type ReportFormatEVMABIEncodeOpts struct {
 	// TimeResolution is the resolution of the timestamps in the report.
 	// Seconds use uint32 ABI encoding, while milliseconds/microseconds/nanoseconds use uint64.
 	// Defaults to "s" (seconds) if not specified.
-	TimeResolution llo.TimeResolution `json:"TimeResolution,omitempty"`
+	TimeResolution llocommon.TimeResolution `json:"TimeResolution,omitempty"`
 	// MaxReportRange is the maximum range of the report.
 	// The range will be limited to ObservationTimestamp + MaxReportRange if the report is longer than the max range.
 	// Defaults to 5 minutes if not specified.
-	MaxReportRange llo.Duration `json:"maxReportRange,omitempty"`
+	MaxReportRange llocommon.Duration `json:"maxReportRange,omitempty"`
 }
 
 func (r *ReportFormatEVMABIEncodeOpts) Decode(opts []byte) error {
@@ -85,7 +85,7 @@ type BaseReportFields struct {
 	ExpiresAt          uint64
 }
 
-func (r ReportCodecEVMABIEncodeUnpacked) Encode(report llo.Report, cd llotypes.ChannelDefinition, optsCache *llo.OptsCache) ([]byte, error) {
+func (r ReportCodecEVMABIEncodeUnpacked) Encode(report llocommon.Report, cd llotypes.ChannelDefinition, optsCache *llocommon.OptsCache) ([]byte, error) {
 	if report.Specimen {
 		return nil, errors.New("ReportCodecEVMABIEncodeUnpacked does not support encoding specimen reports")
 	}
@@ -101,15 +101,15 @@ func (r ReportCodecEVMABIEncodeUnpacked) Encode(report llo.Report, cd llotypes.C
 		return nil, fmt.Errorf("ReportCodecEVMABIEncodeUnpacked failed to extract link price: %w", err)
 	}
 
-	opts, getErr := llo.GetOpts[ReportFormatEVMABIEncodeOpts](optsCache, report.ChannelID)
+	opts, getErr := llocommon.GetOpts[ReportFormatEVMABIEncodeOpts](optsCache, report.ChannelID)
 	if getErr != nil {
 		return nil, fmt.Errorf("opts not in cache for channel %d: %w", report.ChannelID, getErr)
 	}
 
 	report.ValidAfterNanoseconds = ClampReportRange(r, report, opts.MaxReportRange)
-	validAfter := llo.ConvertTimestamp(report.ValidAfterNanoseconds, opts.TimeResolution)
-	observationTimestamp := llo.ConvertTimestamp(report.ObservationTimestampNanoseconds, opts.TimeResolution)
-	expiresAt := observationTimestamp + llo.ScaleSeconds(opts.ExpirationWindow, opts.TimeResolution)
+	validAfter := llocommon.ConvertTimestamp(report.ValidAfterNanoseconds, opts.TimeResolution)
+	observationTimestamp := llocommon.ConvertTimestamp(report.ObservationTimestampNanoseconds, opts.TimeResolution)
+	expiresAt := observationTimestamp + llocommon.ScaleSeconds(opts.ExpirationWindow, opts.TimeResolution)
 
 	rf := BaseReportFields{
 		FeedID:             opts.FeedID,
@@ -133,7 +133,7 @@ func (r ReportCodecEVMABIEncodeUnpacked) Encode(report llo.Report, cd llotypes.C
 	return append(header, payload...), nil
 }
 
-func buildPayload(encoders []ABIEncoder, values []llo.StreamValue) (payload []byte, merr error) {
+func buildPayload(encoders []ABIEncoder, values []llocommon.StreamValue) (payload []byte, merr error) {
 	if len(encoders) != len(values) || len(encoders) == 0 {
 		return nil, fmt.Errorf("ABI and values length mismatch; ABI: %d, Values: %d", len(encoders), len(values))
 	}
@@ -208,7 +208,7 @@ func getBaseSchema(timestampType string) abi.Arguments {
 	})
 }
 
-func (r ReportCodecEVMABIEncodeUnpacked) buildHeader(rf BaseReportFields, resolution llo.TimeResolution) ([]byte, error) {
+func (r ReportCodecEVMABIEncodeUnpacked) buildHeader(rf BaseReportFields, resolution llocommon.TimeResolution) ([]byte, error) {
 	var merr error
 	if rf.LinkFee == nil {
 		merr = errors.Join(merr, errors.New("linkFee may not be nil"))
@@ -226,7 +226,7 @@ func (r ReportCodecEVMABIEncodeUnpacked) buildHeader(rf BaseReportFields, resolu
 
 	var b []byte
 	var err error
-	if resolution == llo.ResolutionSeconds {
+	if resolution == llocommon.ResolutionSeconds {
 		if rf.ValidFromTimestamp > math.MaxUint32 {
 			return nil, fmt.Errorf("validFromTimestamp %d exceeds uint32 range", rf.ValidFromTimestamp)
 		}

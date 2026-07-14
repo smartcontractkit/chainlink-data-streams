@@ -13,7 +13,7 @@ import (
 	"github.com/smartcontractkit/chainlink-common/pkg/logger"
 	"github.com/smartcontractkit/chainlink-common/pkg/services"
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
-	"github.com/smartcontractkit/chainlink-data-streams/llo"
+	llocommon "github.com/smartcontractkit/chainlink-data-streams/llo/common"
 	"github.com/smartcontractkit/chainlink-data-streams/llo/reportcodecs/evm"
 )
 
@@ -64,7 +64,7 @@ func (t *transmitter) Transmit(
 	{
 		switch report.Info.ReportFormat {
 		case llotypes.ReportFormatJSON:
-			r, err := (llo.JSONReportCodec{}).Decode(report.Report)
+			r, err := (llocommon.JSONReportCodec{}).Decode(report.Report)
 			if err != nil {
 				lggr.Debugw(fmt.Sprintf("Failed to decode report with type %s", report.Info.ReportFormat), "err", err)
 			} else if r.SeqNr > 0 {

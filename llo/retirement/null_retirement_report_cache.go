@@ -3,10 +3,9 @@ package retirement
 import (
 	"context"
 
+	llocommon "github.com/smartcontractkit/chainlink-data-streams/llo/common"
 	"github.com/smartcontractkit/libocr/offchainreporting2plus/types"
 	ocr2types "github.com/smartcontractkit/libocr/offchainreporting2plus/types"
-
-	datastreamsllo "github.com/smartcontractkit/chainlink-data-streams/llo"
 )
 
 type NullRetirementReportCache struct{}
@@ -20,6 +19,6 @@ func (n *NullRetirementReportCache) StoreConfig(ctx context.Context, cd ocr2type
 func (n *NullRetirementReportCache) AttestedRetirementReport(predecessorConfigDigest ocr2types.ConfigDigest) ([]byte, error) {
 	return nil, nil
 }
-func (n *NullRetirementReportCache) CheckAttestedRetirementReport(predecessorConfigDigest ocr2types.ConfigDigest, attestedRetirementReport []byte) (datastreamsllo.RetirementReport, error) {
-	return datastreamsllo.RetirementReport{}, nil
+func (n *NullRetirementReportCache) CheckAttestedRetirementReport(predecessorConfigDigest ocr2types.ConfigDigest, attestedRetirementReport []byte) (llocommon.RetirementReport, error) {
+	return llocommon.RetirementReport{}, nil
 }

@@ -13,11 +13,11 @@ import (
 	capabilitiespb "github.com/smartcontractkit/chainlink-common/pkg/capabilities/pb"
 	"github.com/smartcontractkit/chainlink-common/pkg/logger"
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
-	datastreamsllo "github.com/smartcontractkit/chainlink-data-streams/llo"
+	llocommon "github.com/smartcontractkit/chainlink-data-streams/llo/common"
 	"github.com/smartcontractkit/chainlink-protos/cre/go/values"
 )
 
-var _ datastreamsllo.ReportCodec = ReportCodecCapabilityTrigger{}
+var _ llocommon.ReportCodec = ReportCodecCapabilityTrigger{}
 
 type ReportCodecCapabilityTrigger struct {
 	lggr  logger.Logger
@@ -59,7 +59,7 @@ func (r *ReportCodecCapabilityTriggerOpts) Encode() ([]byte, error) {
 
 // Encode a report into a capability trigger report
 // the returned byte slice is the marshaled protobuf of [capabilitiespb.OCRTriggerReport]
-func (r ReportCodecCapabilityTrigger) Encode(report datastreamsllo.Report, cd llotypes.ChannelDefinition, optsCache *datastreamsllo.OptsCache) ([]byte, error) {
+func (r ReportCodecCapabilityTrigger) Encode(report llocommon.Report, cd llotypes.ChannelDefinition, optsCache *llocommon.OptsCache) ([]byte, error) {
 	if len(cd.Streams) != len(report.Values) {
 		// Invariant violation
 		return nil, fmt.Errorf("capability trigger expected %d streams, got %d", len(cd.Streams), len(report.Values))
@@ -71,7 +71,7 @@ func (r ReportCodecCapabilityTrigger) Encode(report datastreamsllo.Report, cd ll
 
 	var opts ReportCodecCapabilityTriggerOpts
 	var err error
-	opts, err = datastreamsllo.GetOpts[ReportCodecCapabilityTriggerOpts](optsCache, report.ChannelID)
+	opts, err = llocommon.GetOpts[ReportCodecCapabilityTriggerOpts](optsCache, report.ChannelID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get opts: %w", err)
 	}
@@ -82,7 +82,7 @@ func (r ReportCodecCapabilityTrigger) Encode(report datastreamsllo.Report, cd ll
 		switch v := stream.(type) {
 		case nil:
 			// Missing observations are nil
-		case *datastreamsllo.Decimal:
+		case *llocommon.Decimal:
 			multipliedStreamValue := v.Decimal()
 
 			if len(opts.Multipliers) != 0 {
@@ -153,7 +153,7 @@ func (r ReportCodecCapabilityTrigger) Verify(cd llotypes.ChannelDefinition) erro
 }
 
 // EventID is expected to uniquely identify a (don, round)
-func (r ReportCodecCapabilityTrigger) EventID(report datastreamsllo.Report) string {
+func (r ReportCodecCapabilityTrigger) EventID(report llocommon.Report) string {
 	return fmt.Sprintf("streams_%d_%d", r.donID, report.ObservationTimestampNanoseconds)
 }
 

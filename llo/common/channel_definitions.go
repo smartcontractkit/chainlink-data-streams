@@ -1,0 +1,84 @@
+package common
+
+import (
+	"errors"
+	"fmt"
+	"sort"
+
+	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
+)
+
+func VerifyChannelDefinitions(codecs map[llotypes.ReportFormat]ReportCodec, channelDefs llotypes.ChannelDefinitions) (merr error) {
+	if len(channelDefs) > MaxOutcomeChannelDefinitionsLength {
+		return fmt.Errorf("too many channels, got: %d/%d", len(channelDefs), MaxOutcomeChannelDefinitionsLength)
+	}
+	uniqueStreamIDs := make(map[llotypes.StreamID]struct{}, len(channelDefs))
+	for channelID, cd := range channelDefs {
+		if cd.Tombstone {
+			continue
+		}
+
+		if len(cd.Streams) == 0 {
+			merr = errors.Join(merr, fmt.Errorf("ChannelDefinition with ID %d has no streams", channelID))
+			continue
+		}
+		if len(cd.Streams) > MaxStreamsPerChannel {
+			merr = errors.Join(merr, fmt.Errorf("ChannelDefinition with ID %d has too many streams, got: %d/%d", channelID, len(cd.Streams), MaxStreamsPerChannel))
+			continue
+		}
+		for _, strm := range cd.Streams {
+			if strm.Aggregator == 0 {
+				merr = errors.Join(merr, fmt.Errorf("ChannelDefinition with ID %d has stream %d with zero aggregator (this may indicate an uninitialized struct)", channelID, strm.StreamID))
+				continue
+			}
+			uniqueStreamIDs[strm.StreamID] = struct{}{}
+		}
+		var verifyErr error
+		if codec, ok := codecs[cd.ReportFormat]; ok {
+			verifyErr = codec.Verify(cd)
+			if verifyErr != nil {
+				merr = errors.Join(merr, fmt.Errorf("invalid ChannelDefinition with ID %d: %w", channelID, verifyErr))
+			}
+		}
+		if cd.ReportFormat == llotypes.ReportFormatHistoryBackfill {
+			if err := ValidateHistoryBackfillAgainstDefinitions(cd, channelDefs, 0); err != nil {
+				merr = errors.Join(merr, fmt.Errorf("invalid history backfill channel %d: %w", channelID, err))
+			}
+		}
+		if verifyErr != nil {
+			continue
+		}
+	}
+	if merr != nil {
+		return merr
+	}
+	if len(uniqueStreamIDs) > MaxObservationStreamValuesLength {
+		return fmt.Errorf("too many unique stream IDs, got: %d/%d", len(uniqueStreamIDs), MaxObservationStreamValuesLength)
+	}
+	return nil
+}
+
+func SubtractChannelDefinitions(minuend llotypes.ChannelDefinitions, subtrahend llotypes.ChannelDefinitions, limit int) llotypes.ChannelDefinitions {
+	differenceList := []ChannelDefinitionWithID{}
+	for channelID, channelDefinition := range minuend {
+		if _, ok := subtrahend[channelID]; !ok {
+			differenceList = append(differenceList, ChannelDefinitionWithID{channelDefinition, channelID})
+		}
+	}
+
+	// Sort so we return deterministic result
+	sort.Slice(differenceList, func(i, j int) bool {
+		return differenceList[i].ChannelID < differenceList[j].ChannelID
+	})
+
+	if len(differenceList) > limit {
+		differenceList = differenceList[:limit]
+	}
+
+	difference := llotypes.ChannelDefinitions{}
+	for _, defWithID := range differenceList {
+		difference[defWithID.ChannelID] = defWithID.ChannelDefinition
+	}
+
+	return difference
+}

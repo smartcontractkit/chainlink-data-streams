@@ -1,0 +1,201 @@
+package llo
+
+import (
+	"errors"
+	"fmt"
+
+	llocommon "github.com/smartcontractkit/chainlink-data-streams/llo/common"
+	"github.com/smartcontractkit/libocr/offchainreporting2/types"
+	"golang.org/x/exp/maps"
+	"google.golang.org/protobuf/proto"
+
+	"github.com/smartcontractkit/chainlink-common/pkg/logger"
+	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
+)
+
+// OBSERVATION CODEC
+// NOTE: These codecs make a lot of allocations which will be hard on the
+// garbage collector, this can probably be made more efficient
+
+var (
+	_ ObservationCodec = (*protoObservationCodec)(nil)
+)
+
+type protoObservationCodec struct {
+	logger            logger.Logger
+	enableCompression bool
+	compressor        *compressor
+}
+
+func NewProtoObservationCodec(lggr logger.Logger, enableCompression bool) (ObservationCodec, error) {
+	lggr = logger.Sugared(lggr).Named("ObservationCodec")
+
+	if !enableCompression {
+		return &protoObservationCodec{lggr, false, nil}, nil
+	}
+
+	compressor, err := newCompressor()
+	if err != nil {
+		return nil, err
+	}
+	return &protoObservationCodec{lggr, enableCompression, compressor}, nil
+}
+
+func (c protoObservationCodec) Encode(obs Observation) (types.Observation, error) {
+	dfns := channelDefinitionsToProtoObservation(obs.UpdateChannelDefinitions)
+
+	streamValues := make(map[uint32]*llocommon.LLOStreamValue, len(obs.StreamValues))
+	for id, sv := range obs.StreamValues {
+		if sv != nil {
+			enc, err := sv.MarshalBinary()
+			if errors.Is(err, llocommon.ErrNilStreamValue) {
+				// Ignore nil values
+				continue
+			} else if err != nil {
+				return nil, fmt.Errorf("failed to encode observation: %w", err)
+			}
+			streamValues[id] = &llocommon.LLOStreamValue{
+				Type:  sv.Type(),
+				Value: enc,
+			}
+		}
+	}
+
+	pbuf := &llocommon.LLOObservationProto{
+		AttestedPredecessorRetirement:  obs.AttestedPredecessorRetirement,
+		ShouldRetire:                   obs.ShouldRetire,
+		UnixTimestampNanoseconds:       obs.UnixTimestampNanoseconds,
+		UnixTimestampNanosecondsLegacy: int64(obs.UnixTimestampNanoseconds), //nolint:gosec // this won't overflow
+		RemoveChannelIDs:               maps.Keys(obs.RemoveChannelIDs),
+		UpdateChannelDefinitions:       dfns,
+		StreamValues:                   streamValues,
+	}
+
+	b, err := proto.Marshal(pbuf)
+	if err != nil {
+		return nil, fmt.Errorf("failed to encode observation: %w", err)
+	}
+
+	if c.enableCompression {
+		compressed, err := c.compressor.CompressObservation(b)
+		if err != nil {
+			return nil, fmt.Errorf("failed to compress observation: %w", err)
+		}
+		c.logger.Debugw("compressed observation", "compressed_bytes", len(compressed), "uncompressed_bytes", len(b))
+		return compressed, nil
+	}
+
+	return b, nil
+}
+
+func (c protoObservationCodec) Decode(b types.Observation) (Observation, error) {
+	var err error
+	if c.enableCompression {
+		b, err = c.compressor.DecompressObservation(b)
+		if err != nil {
+			return Observation{}, fmt.Errorf("failed to decompress observation: %w", err)
+		}
+	}
+
+	pbuf := &llocommon.LLOObservationProto{}
+	err = proto.Unmarshal(b, pbuf)
+	if err != nil {
+		return Observation{}, fmt.Errorf("failed to decode observation: expected protobuf (got: 0x%x); %w", b, err)
+	}
+	var removeChannelIDs map[llotypes.ChannelID]struct{}
+	if len(pbuf.RemoveChannelIDs) > 0 {
+		removeChannelIDs = make(map[llotypes.ChannelID]struct{}, len(pbuf.RemoveChannelIDs))
+		for _, id := range pbuf.RemoveChannelIDs {
+			if _, exists := removeChannelIDs[id]; exists {
+				// Byzantine behavior makes this observation invalid; a
+				// well-behaved node should never encode duplicates here
+				return Observation{}, fmt.Errorf("failed to decode observation; duplicate channel ID in RemoveChannelIDs: %d", id)
+			}
+			removeChannelIDs[id] = struct{}{}
+		}
+	}
+	dfns := channelDefinitionsFromProtoObservation(pbuf.UpdateChannelDefinitions)
+	var streamValues llocommon.StreamValues
+	if len(pbuf.StreamValues) > 0 {
+		streamValues = make(llocommon.StreamValues, len(pbuf.StreamValues))
+		for id, enc := range pbuf.StreamValues {
+			sv, err := llocommon.UnmarshalProtoStreamValue(enc)
+			if err != nil {
+				// Byzantine behavior makes this observation invalid; a
+				// well-behaved node should never encode invalid or nil values
+				// here
+				return Observation{}, fmt.Errorf("failed to decode observation; invalid stream value for stream ID: %d; %w", id, err)
+			}
+			streamValues[id] = sv
+		}
+	}
+	var unixTSNanoseconds uint64
+	switch {
+	case pbuf.UnixTimestampNanoseconds > 0:
+		unixTSNanoseconds = pbuf.UnixTimestampNanoseconds
+	case pbuf.UnixTimestampNanosecondsLegacy >= 0:
+		unixTSNanoseconds = uint64(pbuf.UnixTimestampNanosecondsLegacy)
+	default:
+		// Byzantine behavior makes this observation invalid; a well-behaved
+		// node should never encode negative timestamps here
+		return Observation{}, fmt.Errorf("failed to decode observation; cannot accept negative unix timestamp: %d", pbuf.UnixTimestampNanosecondsLegacy)
+	}
+	obs := Observation{
+		AttestedPredecessorRetirement: pbuf.AttestedPredecessorRetirement,
+		ShouldRetire:                  pbuf.ShouldRetire,
+		UnixTimestampNanoseconds:      unixTSNanoseconds,
+		RemoveChannelIDs:              removeChannelIDs,
+		UpdateChannelDefinitions:      dfns,
+		StreamValues:                  streamValues,
+	}
+	return obs, nil
+}
+
+func channelDefinitionsFromProtoObservation(channelDefinitions map[uint32]*llocommon.LLOChannelDefinitionProto) llotypes.ChannelDefinitions {
+	if len(channelDefinitions) == 0 {
+		return nil
+	}
+	dfns := make(map[llotypes.ChannelID]llotypes.ChannelDefinition, len(channelDefinitions))
+	for id, d := range channelDefinitions {
+		streams := make([]llotypes.Stream, len(d.Streams))
+		for i, strm := range d.Streams {
+			streams[i] = llotypes.Stream{
+				StreamID:   strm.StreamID,
+				Aggregator: llotypes.Aggregator(strm.Aggregator),
+			}
+		}
+		dfns[id] = llotypes.ChannelDefinition{
+			ReportFormat:           llotypes.ReportFormat(d.ReportFormat),
+			Streams:                streams,
+			Opts:                   d.Opts,
+			Tombstone:              d.Tombstone,
+			Source:                 d.Source,
+			DisableNilStreamValues: d.DisableNilStreamValues,
+		}
+	}
+	return dfns
+}
+
+func channelDefinitionsToProtoObservation(in llotypes.ChannelDefinitions) (out map[uint32]*llocommon.LLOChannelDefinitionProto) {
+	if len(in) > 0 {
+		out = make(map[uint32]*llocommon.LLOChannelDefinitionProto, len(in))
+		for id, d := range in {
+			streams := make([]*llocommon.LLOStreamDefinition, len(d.Streams))
+			for i, strm := range d.Streams {
+				streams[i] = &llocommon.LLOStreamDefinition{
+					StreamID:   strm.StreamID,
+					Aggregator: uint32(strm.Aggregator),
+				}
+			}
+			out[id] = &llocommon.LLOChannelDefinitionProto{
+				ReportFormat:           uint32(d.ReportFormat),
+				Streams:                streams,
+				Opts:                   d.Opts,
+				Tombstone:              d.Tombstone,
+				Source:                 d.Source,
+				DisableNilStreamValues: d.DisableNilStreamValues,
+			}
+		}
+	}
+	return
+}

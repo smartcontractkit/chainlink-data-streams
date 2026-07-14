@@ -20,11 +20,11 @@ import (
 
 	"github.com/smartcontractkit/libocr/offchainreporting2/types"
 
+	llocommon "github.com/smartcontractkit/chainlink-data-streams/llo/common"
 	ubig "github.com/smartcontractkit/chainlink-data-streams/llo/reportcodecs/evm/utils"
 
 	"github.com/smartcontractkit/chainlink-common/pkg/logger"
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
-	"github.com/smartcontractkit/chainlink-data-streams/llo"
 )
 
 // AllTrue returns false if any element in the array is false.
@@ -84,7 +84,7 @@ func genSingleABIEncoder() gopter.Gen {
 }
 
 func genMaxReportRange() gopter.Gen {
-	return gen.OneConstOf(llo.Duration(0), llo.Duration(60*time.Minute))
+	return gen.OneConstOf(llocommon.Duration(0), llocommon.Duration(60*time.Minute))
 }
 
 func TestReportCodecEVMABIEncodeUnpacked_Encode_properties(t *testing.T) {
@@ -105,18 +105,18 @@ func TestReportCodecEVMABIEncodeUnpacked_Encode_properties(t *testing.T) {
 			{Name: "quoteMarketDepth", Type: mustNewABIType("int192")},
 		})
 		runTest := func(sampleFeedID common.Hash, sampleObservationTimestampNanoseconds, sampleValidAfterNanoseconds uint64, sampleExpirationWindow uint32, priceMultiplier, marketDepthMultiplier *ubig.Big, sampleBaseUSDFee, sampleLinkBenchmarkPrice, sampleNativeBenchmarkPrice, sampleDexBasedAssetPrice, sampleBaseMarketDepth, sampleQuoteMarketDepth decimal.Decimal) bool {
-			report := llo.Report{
+			report := llocommon.Report{
 				ConfigDigest:                    types.ConfigDigest{0x01},
 				SeqNr:                           0x02,
 				ChannelID:                       llotypes.ChannelID(0x03),
 				ValidAfterNanoseconds:           sampleValidAfterNanoseconds,
 				ObservationTimestampNanoseconds: sampleObservationTimestampNanoseconds,
-				Values: []llo.StreamValue{
-					&llo.Quote{Bid: decimal.NewFromFloat(6.1), Benchmark: sampleLinkBenchmarkPrice, Ask: decimal.NewFromFloat(8.2332)},  // Link price
-					&llo.Quote{Bid: decimal.NewFromFloat(9.4), Benchmark: sampleNativeBenchmarkPrice, Ask: decimal.NewFromFloat(11.33)}, // Native price
-					llo.ToDecimal(sampleDexBasedAssetPrice), // DEX-based asset price
-					llo.ToDecimal(sampleBaseMarketDepth),    // Base market depth
-					llo.ToDecimal(sampleQuoteMarketDepth),   // Quote market depth
+				Values: []llocommon.StreamValue{
+					&llocommon.Quote{Bid: decimal.NewFromFloat(6.1), Benchmark: sampleLinkBenchmarkPrice, Ask: decimal.NewFromFloat(8.2332)},  // Link price
+					&llocommon.Quote{Bid: decimal.NewFromFloat(9.4), Benchmark: sampleNativeBenchmarkPrice, Ask: decimal.NewFromFloat(11.33)}, // Native price
+					llocommon.ToDecimal(sampleDexBasedAssetPrice), // DEX-based asset price
+					llocommon.ToDecimal(sampleBaseMarketDepth),    // Base market depth
+					llocommon.ToDecimal(sampleQuoteMarketDepth),   // Quote market depth
 				},
 				Specimen: false,
 			}
@@ -125,7 +125,7 @@ func TestReportCodecEVMABIEncodeUnpacked_Encode_properties(t *testing.T) {
 				BaseUSDFee:       sampleBaseUSDFee,
 				ExpirationWindow: sampleExpirationWindow,
 				FeedID:           sampleFeedID,
-				TimeResolution:   llo.ResolutionSeconds,
+				TimeResolution:   llocommon.ResolutionSeconds,
 				ABI: []ABIEncoder{
 					// benchmark price
 					newSingleABIEncoder("int192", priceMultiplier),
@@ -162,7 +162,7 @@ func TestReportCodecEVMABIEncodeUnpacked_Encode_properties(t *testing.T) {
 
 			clampedValidAfterNanos := ClampReportRange(logger.Nop(), report, 0)
 
-			cache := llo.NewOptsCache()
+			cache := llocommon.NewOptsCache()
 			cache.Set(report.ChannelID, cd.Opts)
 			encoded, err := codec.Encode(report, cd, cache)
 			require.NoError(t, err)
@@ -226,16 +226,16 @@ func TestReportCodecEVMABIEncodeUnpacked_Encode_properties(t *testing.T) {
 		})
 
 		runTest := func(sampleFeedID common.Hash, sampleObservationTimestampNanoseconds, sampleValidAfterNanoseconds uint64, sampleExpirationWindow uint32, sampleBaseUSDFee, sampleLinkBenchmarkPrice, sampleNativeBenchmarkPrice, sampleMarketStatus decimal.Decimal) bool {
-			report := llo.Report{
+			report := llocommon.Report{
 				ConfigDigest:                    types.ConfigDigest{0x01},
 				SeqNr:                           0x02,
 				ChannelID:                       llotypes.ChannelID(0x03),
 				ValidAfterNanoseconds:           sampleValidAfterNanoseconds,
 				ObservationTimestampNanoseconds: sampleObservationTimestampNanoseconds,
-				Values: []llo.StreamValue{
-					&llo.Quote{Bid: decimal.NewFromFloat(6.1), Benchmark: sampleLinkBenchmarkPrice, Ask: decimal.NewFromFloat(8.2332)},  // Link price
-					&llo.Quote{Bid: decimal.NewFromFloat(9.4), Benchmark: sampleNativeBenchmarkPrice, Ask: decimal.NewFromFloat(11.33)}, // Native price
-					llo.ToDecimal(sampleMarketStatus), // DEX-based asset price
+				Values: []llocommon.StreamValue{
+					&llocommon.Quote{Bid: decimal.NewFromFloat(6.1), Benchmark: sampleLinkBenchmarkPrice, Ask: decimal.NewFromFloat(8.2332)},  // Link price
+					&llocommon.Quote{Bid: decimal.NewFromFloat(9.4), Benchmark: sampleNativeBenchmarkPrice, Ask: decimal.NewFromFloat(11.33)}, // Native price
+					llocommon.ToDecimal(sampleMarketStatus), // DEX-based asset price
 				},
 				Specimen: false,
 			}
@@ -244,7 +244,7 @@ func TestReportCodecEVMABIEncodeUnpacked_Encode_properties(t *testing.T) {
 				BaseUSDFee:       sampleBaseUSDFee,
 				ExpirationWindow: sampleExpirationWindow,
 				FeedID:           sampleFeedID,
-				TimeResolution:   llo.ResolutionSeconds,
+				TimeResolution:   llocommon.ResolutionSeconds,
 				ABI: []ABIEncoder{
 					// market status
 					newSingleABIEncoder("uint32", nil),
@@ -277,7 +277,7 @@ func TestReportCodecEVMABIEncodeUnpacked_Encode_properties(t *testing.T) {
 
 			clampedValidAfterNanos := ClampReportRange(logger.Nop(), report, 0)
 
-			cache := llo.NewOptsCache()
+			cache := llocommon.NewOptsCache()
 			cache.Set(report.ChannelID, cd.Opts)
 			encoded, err := codec.Encode(report, cd, cache)
 			require.NoError(t, err)
@@ -334,16 +334,16 @@ func TestReportCodecEVMABIEncodeUnpacked_Encode_properties(t *testing.T) {
 			{Name: "price", Type: mustNewABIType("int192")},
 		})
 		runTest := func(sampleFeedID common.Hash, sampleObservationTimestampNanoseconds, sampleValidAfterNanoseconds uint64, sampleExpirationWindow uint32, priceMultiplier, marketDepthMultiplier *ubig.Big, sampleBaseUSDFee, sampleLinkBenchmarkPrice, sampleNativeBenchmarkPrice, sampleBenchmarkPrice decimal.Decimal) bool {
-			report := llo.Report{
+			report := llocommon.Report{
 				ConfigDigest:                    types.ConfigDigest{0x01},
 				SeqNr:                           0x02,
 				ChannelID:                       llotypes.ChannelID(0x03),
 				ValidAfterNanoseconds:           sampleValidAfterNanoseconds,
 				ObservationTimestampNanoseconds: sampleObservationTimestampNanoseconds,
-				Values: []llo.StreamValue{
-					&llo.Quote{Bid: decimal.NewFromFloat(6.1), Benchmark: sampleLinkBenchmarkPrice, Ask: decimal.NewFromFloat(8.2332)},  // Link price
-					&llo.Quote{Bid: decimal.NewFromFloat(9.4), Benchmark: sampleNativeBenchmarkPrice, Ask: decimal.NewFromFloat(11.33)}, // Native price
-					llo.ToDecimal(sampleBenchmarkPrice), // price
+				Values: []llocommon.StreamValue{
+					&llocommon.Quote{Bid: decimal.NewFromFloat(6.1), Benchmark: sampleLinkBenchmarkPrice, Ask: decimal.NewFromFloat(8.2332)},  // Link price
+					&llocommon.Quote{Bid: decimal.NewFromFloat(9.4), Benchmark: sampleNativeBenchmarkPrice, Ask: decimal.NewFromFloat(11.33)}, // Native price
+					llocommon.ToDecimal(sampleBenchmarkPrice), // price
 				},
 				Specimen: false,
 			}
@@ -352,7 +352,7 @@ func TestReportCodecEVMABIEncodeUnpacked_Encode_properties(t *testing.T) {
 				BaseUSDFee:       sampleBaseUSDFee,
 				ExpirationWindow: sampleExpirationWindow,
 				FeedID:           sampleFeedID,
-				TimeResolution:   llo.ResolutionSeconds,
+				TimeResolution:   llocommon.ResolutionSeconds,
 				ABI: []ABIEncoder{
 					// benchmark price
 					newSingleABIEncoder("int192", priceMultiplier),
@@ -379,7 +379,7 @@ func TestReportCodecEVMABIEncodeUnpacked_Encode_properties(t *testing.T) {
 
 			clampedValidAfterNanos := ClampReportRange(logger.Nop(), report, 0)
 
-			cache := llo.NewOptsCache()
+			cache := llocommon.NewOptsCache()
 			cache.Set(report.ChannelID, cd.Opts)
 			encoded, err := codec.Encode(report, cd, cache)
 			require.NoError(t, err)
@@ -428,10 +428,10 @@ func TestReportCodecEVMABIEncodeUnpacked_Encode_properties(t *testing.T) {
 	})
 
 	t.Run("varying timestamp resolution schemas", func(t *testing.T) {
-		runTest := func(sampleFeedID common.Hash, sampleObservationTimestampNanoseconds, sampleValidAfterNanoseconds uint64, sampleExpirationWindow uint32, priceMultiplier *ubig.Big, sampleBaseUSDFee, sampleLinkBenchmarkPrice, sampleNativeBenchmarkPrice, sampleBenchmarkPrice decimal.Decimal, sampleTimeResolution llo.TimeResolution) bool {
+		runTest := func(sampleFeedID common.Hash, sampleObservationTimestampNanoseconds, sampleValidAfterNanoseconds uint64, sampleExpirationWindow uint32, priceMultiplier *ubig.Big, sampleBaseUSDFee, sampleLinkBenchmarkPrice, sampleNativeBenchmarkPrice, sampleBenchmarkPrice decimal.Decimal, sampleTimeResolution llocommon.TimeResolution) bool {
 			// Determine timestamp type based on resolution
 			timestampType := "uint64"
-			if sampleTimeResolution == llo.ResolutionSeconds {
+			if sampleTimeResolution == llocommon.ResolutionSeconds {
 				timestampType = "uint32"
 			}
 
@@ -445,16 +445,16 @@ func TestReportCodecEVMABIEncodeUnpacked_Encode_properties(t *testing.T) {
 				{Name: "price", Type: mustNewABIType("int192")},
 			})
 
-			report := llo.Report{
+			report := llocommon.Report{
 				ConfigDigest:                    types.ConfigDigest{0x01},
 				SeqNr:                           0x02,
 				ChannelID:                       llotypes.ChannelID(0x03),
 				ValidAfterNanoseconds:           sampleValidAfterNanoseconds,
 				ObservationTimestampNanoseconds: sampleObservationTimestampNanoseconds,
-				Values: []llo.StreamValue{
-					&llo.Quote{Bid: decimal.NewFromFloat(6.1), Benchmark: sampleNativeBenchmarkPrice, Ask: decimal.NewFromFloat(8.2332)},
-					&llo.Quote{Bid: decimal.NewFromFloat(9.4), Benchmark: sampleLinkBenchmarkPrice, Ask: decimal.NewFromFloat(11.33)},
-					llo.ToDecimal(sampleBenchmarkPrice),
+				Values: []llocommon.StreamValue{
+					&llocommon.Quote{Bid: decimal.NewFromFloat(6.1), Benchmark: sampleNativeBenchmarkPrice, Ask: decimal.NewFromFloat(8.2332)},
+					&llocommon.Quote{Bid: decimal.NewFromFloat(9.4), Benchmark: sampleLinkBenchmarkPrice, Ask: decimal.NewFromFloat(11.33)},
+					llocommon.ToDecimal(sampleBenchmarkPrice),
 				},
 				Specimen: false,
 			}
@@ -489,7 +489,7 @@ func TestReportCodecEVMABIEncodeUnpacked_Encode_properties(t *testing.T) {
 
 			clampedValidAfterNanos := ClampReportRange(logger.Nop(), report, 0)
 
-			cache := llo.NewOptsCache()
+			cache := llocommon.NewOptsCache()
 			cache.Set(report.ChannelID, cd.Opts)
 			encoded, err := codec.Encode(report, cd, cache)
 			require.NoError(t, err)
@@ -509,9 +509,9 @@ func TestReportCodecEVMABIEncodeUnpacked_Encode_properties(t *testing.T) {
 			}
 
 			// Verify timestamps per resolution type
-			expectedValidFrom := llo.ConvertTimestamp(clampedValidAfterNanos, sampleTimeResolution) + 1
-			expectedObservationTimestamp := llo.ConvertTimestamp(sampleObservationTimestampNanoseconds, sampleTimeResolution)
-			expectedExpiresAt := expectedObservationTimestamp + llo.ScaleSeconds(sampleExpirationWindow, sampleTimeResolution)
+			expectedValidFrom := llocommon.ConvertTimestamp(clampedValidAfterNanos, sampleTimeResolution) + 1
+			expectedObservationTimestamp := llocommon.ConvertTimestamp(sampleObservationTimestampNanoseconds, sampleTimeResolution)
+			expectedExpiresAt := expectedObservationTimestamp + llocommon.ScaleSeconds(sampleExpirationWindow, sampleTimeResolution)
 			if timestampType == "uint32" {
 				checks = append(checks,
 					assert.Equal(t, uint32(expectedValidFrom), values[1].(uint32)),
@@ -563,21 +563,21 @@ func TestReportCodecEVMABIEncodeUnpacked_Encode_properties(t *testing.T) {
 		})
 
 		runTest := func(sampleFeedID common.Hash, sampleObservationTimestampNanoseconds, sampleValidAfterNanoseconds uint64, sampleExpirationWindow uint32, sampleBaseUSDFee, sampleLinkBenchmarkPrice, sampleNativeBenchmarkPrice, sampleBinanceFundingRate, sampleBinanceFundingTime, sampleBinanceFundingIntervalHours, sampleDeribitFundingRate, sampleDeribitFundingTime, sampleDeribitFundingIntervalHours decimal.Decimal) bool {
-			report := llo.Report{
+			report := llocommon.Report{
 				ConfigDigest:                    types.ConfigDigest{0x01},
 				SeqNr:                           0x02,
 				ChannelID:                       llotypes.ChannelID(0x03),
 				ValidAfterNanoseconds:           sampleValidAfterNanoseconds,
 				ObservationTimestampNanoseconds: sampleObservationTimestampNanoseconds,
-				Values: []llo.StreamValue{
-					&llo.Quote{Bid: decimal.NewFromFloat(6.1), Benchmark: sampleLinkBenchmarkPrice, Ask: decimal.NewFromFloat(8.2332)},  // Link price
-					&llo.Quote{Bid: decimal.NewFromFloat(9.4), Benchmark: sampleNativeBenchmarkPrice, Ask: decimal.NewFromFloat(11.33)}, // Native price
-					llo.ToDecimal(sampleBinanceFundingRate),          // Binance funding rate
-					llo.ToDecimal(sampleBinanceFundingTime),          // Binance funding time
-					llo.ToDecimal(sampleBinanceFundingIntervalHours), // Binance funding interval hours
-					llo.ToDecimal(sampleDeribitFundingRate),          // Deribit funding rate
-					llo.ToDecimal(sampleDeribitFundingTime),          // Deribit funding time
-					llo.ToDecimal(sampleDeribitFundingIntervalHours), // Deribit funding interval hours
+				Values: []llocommon.StreamValue{
+					&llocommon.Quote{Bid: decimal.NewFromFloat(6.1), Benchmark: sampleLinkBenchmarkPrice, Ask: decimal.NewFromFloat(8.2332)},  // Link price
+					&llocommon.Quote{Bid: decimal.NewFromFloat(9.4), Benchmark: sampleNativeBenchmarkPrice, Ask: decimal.NewFromFloat(11.33)}, // Native price
+					llocommon.ToDecimal(sampleBinanceFundingRate),          // Binance funding rate
+					llocommon.ToDecimal(sampleBinanceFundingTime),          // Binance funding time
+					llocommon.ToDecimal(sampleBinanceFundingIntervalHours), // Binance funding interval hours
+					llocommon.ToDecimal(sampleDeribitFundingRate),          // Deribit funding rate
+					llocommon.ToDecimal(sampleDeribitFundingTime),          // Deribit funding time
+					llocommon.ToDecimal(sampleDeribitFundingIntervalHours), // Deribit funding interval hours
 				},
 				Specimen: false,
 			}
@@ -586,7 +586,7 @@ func TestReportCodecEVMABIEncodeUnpacked_Encode_properties(t *testing.T) {
 				BaseUSDFee:       sampleBaseUSDFee,
 				ExpirationWindow: sampleExpirationWindow,
 				FeedID:           sampleFeedID,
-				TimeResolution:   llo.ResolutionSeconds,
+				TimeResolution:   llocommon.ResolutionSeconds,
 				ABI: []ABIEncoder{
 					newSingleABIEncoder("int192", nil),
 					newSingleABIEncoder("uint32", nil),
@@ -623,7 +623,7 @@ func TestReportCodecEVMABIEncodeUnpacked_Encode_properties(t *testing.T) {
 
 			clampedValidAfterNanos := ClampReportRange(logger.Nop(), report, 0)
 
-			cache := llo.NewOptsCache()
+			cache := llocommon.NewOptsCache()
 			cache.Set(report.ChannelID, cd.Opts)
 			encoded, err := codec.Encode(report, cd, cache)
 			require.NoError(t, err)
@@ -682,18 +682,18 @@ func TestReportCodecEVMABIEncodeUnpacked_Encode_properties(t *testing.T) {
 
 func TestReportCodecEVMABIEncodeUnpacked_Encode(t *testing.T) {
 	t.Run("ABI and values length mismatch error", func(t *testing.T) {
-		report := llo.Report{
+		report := llocommon.Report{
 			ConfigDigest:                    types.ConfigDigest{0x01},
 			SeqNr:                           0x02,
 			ChannelID:                       llotypes.ChannelID(0x03),
 			ValidAfterNanoseconds:           0x04,
 			ObservationTimestampNanoseconds: 0x05,
-			Values: []llo.StreamValue{
-				&llo.Quote{Bid: decimal.NewFromFloat(6.1), Benchmark: decimal.NewFromFloat(7.4), Ask: decimal.NewFromFloat(8.2332)},
-				&llo.Quote{Bid: decimal.NewFromFloat(9.4), Benchmark: decimal.NewFromFloat(10.0), Ask: decimal.NewFromFloat(11.33)},
-				llo.ToDecimal(decimal.NewFromFloat(100)),
-				llo.ToDecimal(decimal.NewFromFloat(101)),
-				llo.ToDecimal(decimal.NewFromFloat(102)),
+			Values: []llocommon.StreamValue{
+				&llocommon.Quote{Bid: decimal.NewFromFloat(6.1), Benchmark: decimal.NewFromFloat(7.4), Ask: decimal.NewFromFloat(8.2332)},
+				&llocommon.Quote{Bid: decimal.NewFromFloat(9.4), Benchmark: decimal.NewFromFloat(10.0), Ask: decimal.NewFromFloat(11.33)},
+				llocommon.ToDecimal(decimal.NewFromFloat(100)),
+				llocommon.ToDecimal(decimal.NewFromFloat(101)),
+				llocommon.ToDecimal(decimal.NewFromFloat(102)),
 			},
 			Specimen: false,
 		}
@@ -725,13 +725,13 @@ func TestReportCodecEVMABIEncodeUnpacked_Encode(t *testing.T) {
 			Opts: serializedOpts,
 		}
 
-		cache := llo.NewOptsCache()
+		cache := llocommon.NewOptsCache()
 		cache.Set(report.ChannelID, cd.Opts)
 		codec := ReportCodecEVMABIEncodeUnpacked{}
 		_, err = codec.Encode(report, cd, cache)
 		require.EqualError(t, err, "failed to build payload; ABI and values length mismatch; ABI: 0, Values: 3")
 
-		report.Values = []llo.StreamValue{}
+		report.Values = []llocommon.StreamValue{}
 		_, err = codec.Encode(report, cd, cache)
 		require.EqualError(t, err, "ReportCodecEVMABIEncodeUnpacked requires at least 2 values (NativePrice, LinkPrice, ...); got report.Values: []")
 	})
@@ -767,7 +767,7 @@ func genTimestampThatFitsUint32Seconds() gopter.Gen {
 }
 
 func genTimeResolution() gopter.Gen {
-	return gen.OneConstOf(llo.ResolutionSeconds, llo.ResolutionMilliseconds, llo.ResolutionMicroseconds, llo.ResolutionNanoseconds)
+	return gen.OneConstOf(llocommon.ResolutionSeconds, llocommon.ResolutionMilliseconds, llocommon.ResolutionMicroseconds, llocommon.ResolutionNanoseconds)
 }
 
 func genExpirationWindow() gopter.Gen {
@@ -966,9 +966,9 @@ func newSingleABIEncoder(t string, m *ubig.Big) ABIEncoder {
 // TestReportCodecEVMABIEncodeUnpacked_EncodeOpts
 func TestReportCodecEVMABIEncodeUnpacked_EncodeOpts(t *testing.T) {
 	t.Run("zero value is ResolutionSeconds", func(t *testing.T) {
-		var defaultPrecision llo.TimeResolution
-		assert.Equal(t, llo.ResolutionSeconds, defaultPrecision, "zero value must be ResolutionSeconds for backward compatibility")
-		assert.Equal(t, llo.TimeResolution(0), llo.ResolutionSeconds, "ResolutionSeconds must be 0")
+		var defaultPrecision llocommon.TimeResolution
+		assert.Equal(t, llocommon.ResolutionSeconds, defaultPrecision, "zero value must be ResolutionSeconds for backward compatibility")
+		assert.Equal(t, llocommon.TimeResolution(0), llocommon.ResolutionSeconds, "ResolutionSeconds must be 0")
 	})
 
 	t.Run("JSON opts without TimeResolution defaults to seconds", func(t *testing.T) {
@@ -983,34 +983,34 @@ func TestReportCodecEVMABIEncodeUnpacked_EncodeOpts(t *testing.T) {
 		err := opts.Decode([]byte(jsonConfig))
 		require.NoError(t, err)
 
-		assert.Equal(t, llo.ResolutionSeconds, opts.TimeResolution)
+		assert.Equal(t, llocommon.ResolutionSeconds, opts.TimeResolution)
 	})
 
 	t.Run("JSON opts with TimeResolution uses correct value", func(t *testing.T) {
 		testCases := []struct {
 			name              string
 			jsonPrecision     string
-			expectedPrecision llo.TimeResolution
+			expectedPrecision llocommon.TimeResolution
 		}{
 			{
 				name:              "seconds",
 				jsonPrecision:     "s",
-				expectedPrecision: llo.ResolutionSeconds,
+				expectedPrecision: llocommon.ResolutionSeconds,
 			},
 			{
 				name:              "milliseconds",
 				jsonPrecision:     "ms",
-				expectedPrecision: llo.ResolutionMilliseconds,
+				expectedPrecision: llocommon.ResolutionMilliseconds,
 			},
 			{
 				name:              "microseconds",
 				jsonPrecision:     "us",
-				expectedPrecision: llo.ResolutionMicroseconds,
+				expectedPrecision: llocommon.ResolutionMicroseconds,
 			},
 			{
 				name:              "nanoseconds",
 				jsonPrecision:     "ns",
-				expectedPrecision: llo.ResolutionNanoseconds,
+				expectedPrecision: llocommon.ResolutionNanoseconds,
 			},
 		}
 

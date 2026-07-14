@@ -13,12 +13,12 @@ import (
 
 	"github.com/smartcontractkit/chainlink-common/pkg/logger"
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
-	"github.com/smartcontractkit/chainlink-data-streams/llo"
+	llocommon "github.com/smartcontractkit/chainlink-data-streams/llo/common"
 	ubig "github.com/smartcontractkit/chainlink-data-streams/llo/reportcodecs/evm/utils"
 )
 
 // Extracts nanosecond timestamps as uint32 number of seconds
-func ExtractTimestamps(report llo.Report) (validAfterSeconds, observationTimestampSeconds uint32, err error) {
+func ExtractTimestamps(report llocommon.Report) (validAfterSeconds, observationTimestampSeconds uint32, err error) {
 	vas := report.ValidAfterNanoseconds / 1e9
 	ots := report.ObservationTimestampNanoseconds / 1e9
 	if vas > math.MaxUint32 {
@@ -61,9 +61,9 @@ func (a *ABIEncoder) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-func (a ABIEncoder) EncodePacked(sv llo.StreamValue) ([]byte, error) {
+func (a ABIEncoder) EncodePacked(sv llocommon.StreamValue) ([]byte, error) {
 	switch v := sv.(type) {
-	case *llo.Decimal:
+	case *llocommon.Decimal:
 		if len(a.encoders) != 1 {
 			return nil, fmt.Errorf("expected exactly one encoder; got: %d", len(a.encoders))
 		}
@@ -72,9 +72,9 @@ func (a ABIEncoder) EncodePacked(sv llo.StreamValue) ([]byte, error) {
 			return nil, fmt.Errorf("failed to encode stream value; %w", err)
 		}
 		return b, nil
-	case *llo.TimestampedStreamValue:
+	case *llocommon.TimestampedStreamValue:
 		if len(a.encoders) != 2 {
-			return nil, fmt.Errorf("expected exactly two encoders for *llo.TimestampedStreamValue; got: %d", len(a.encoders))
+			return nil, fmt.Errorf("expected exactly two encoders for *common.TimestampedStreamValue; got: %d", len(a.encoders))
 		}
 		// encode as two packed values
 		// <type0> observed_at_nanoseconds
@@ -89,20 +89,20 @@ func (a ABIEncoder) EncodePacked(sv llo.StreamValue) ([]byte, error) {
 		}
 		return append(encodedTimestamp, encodedDecimal...), nil
 	default:
-		return nil, fmt.Errorf("unhandled type; supported types are: *llo.Decimal or *llo.TimestampedStreamValue; got: %T", sv)
+		return nil, fmt.Errorf("unhandled type; supported types are: *common.Decimal or *common.TimestampedStreamValue; got: %T", sv)
 	}
 }
 
-func (a ABIEncoder) EncodePadded(sv llo.StreamValue) ([]byte, error) {
+func (a ABIEncoder) EncodePadded(sv llocommon.StreamValue) ([]byte, error) {
 	switch v := sv.(type) {
-	case *llo.Decimal:
+	case *llocommon.Decimal:
 		if len(a.encoders) != 1 {
 			return nil, fmt.Errorf("expected exactly one encoder; got: %d", len(a.encoders))
 		}
 		return a.encoders[0].encodeDecimalStreamValuePadded(v)
-	case *llo.TimestampedStreamValue:
+	case *llocommon.TimestampedStreamValue:
 		if len(a.encoders) != 2 {
-			return nil, fmt.Errorf("expected exactly two encoders for *llo.TimestampedStreamValue; got: %d", len(a.encoders))
+			return nil, fmt.Errorf("expected exactly two encoders for *common.TimestampedStreamValue; got: %d", len(a.encoders))
 		}
 		// encode as two zero-padded 32 byte evm words:
 		// uint256 observed_at_nanoseconds
@@ -113,18 +113,18 @@ func (a ABIEncoder) EncodePadded(sv llo.StreamValue) ([]byte, error) {
 		}
 		var encodedDecimal []byte
 		switch d := v.StreamValue.(type) {
-		case *llo.Decimal:
+		case *llocommon.Decimal:
 			var err error
 			encodedDecimal, err = a.encoders[1].encodeDecimalStreamValuePadded(d)
 			if err != nil {
 				return nil, fmt.Errorf("failed to encode nested stream value; %w", err)
 			}
 		default:
-			return nil, fmt.Errorf("unhandled type; supported nested types for *llo.TimestampedStreamValue are: *llo.Decimal; got: %T", d)
+			return nil, fmt.Errorf("unhandled type; supported nested types for *common.TimestampedStreamValue are: *common.Decimal; got: %T", d)
 		}
 		return append(encodedTimestamp, encodedDecimal...), nil
 	default:
-		return nil, fmt.Errorf("unhandled type; supported types are: *llo.Decimal, *llo.TimestampedStreamValue, or *llo.Quote; got: %T", sv)
+		return nil, fmt.Errorf("unhandled type; supported types are: *common.Decimal, *common.TimestampedStreamValue, or *common.Quote; got: %T", sv)
 	}
 }
 
@@ -165,12 +165,12 @@ func (a singleABIEncoder) applyMultiplier(d decimal.Decimal) *big.Int {
 
 // EncodePadded uses standard ABI encoding to encode the stream value, padding
 // result to a multiple of 32 bytes
-func (a singleABIEncoder) EncodePadded(sv llo.StreamValue) (b []byte, err error) {
+func (a singleABIEncoder) EncodePadded(sv llocommon.StreamValue) (b []byte, err error) {
 	switch sv := sv.(type) {
-	case *llo.Decimal:
+	case *llocommon.Decimal:
 		b, err = a.encodeDecimalStreamValuePadded(sv)
 	default:
-		return nil, fmt.Errorf("unhandled type; supported types are: *llo.Decimal; got: %T", sv)
+		return nil, fmt.Errorf("unhandled type; supported types are: *common.Decimal; got: %T", sv)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to encode stream value %v (%T) with ABI type %q; %w", sv, sv, a.Type, err)
@@ -182,7 +182,7 @@ func (a singleABIEncoder) encodeUint64Padded(v uint64) (b []byte, err error) {
 	return EncodePaddedBigInt(a.applyMultiplier(decimal.NewFromBigInt(new(big.Int).SetUint64(v), 0)), a.Type)
 }
 
-func (a singleABIEncoder) encodeDecimalStreamValuePadded(sv *llo.Decimal) (b []byte, err error) {
+func (a singleABIEncoder) encodeDecimalStreamValuePadded(sv *llocommon.Decimal) (b []byte, err error) {
 	if sv == nil {
 		return nil, fmt.Errorf("expected non-nil *Decimal; got: %v", sv)
 	}
@@ -228,19 +228,19 @@ func (a singleABIEncoder) encodeUint64Packed(v uint64) ([]byte, error) {
 }
 
 // EncodePacked uses packed ABI encoding to encode the stream value (no padding)
-func (a singleABIEncoder) encodePacked(sv llo.StreamValue) ([]byte, error) {
+func (a singleABIEncoder) encodePacked(sv llocommon.StreamValue) ([]byte, error) {
 	if a.Type == ZeroBytesSentinel {
 		return nil, nil
 	}
 	var v *big.Int
 	switch sv := sv.(type) {
-	case *llo.Decimal:
+	case *llocommon.Decimal:
 		if sv == nil {
 			return nil, fmt.Errorf("expected non-nil *Decimal; got: %v", sv)
 		}
 		v = a.applyMultiplier(sv.Decimal())
 	default:
-		return nil, fmt.Errorf("EncodePacked only currently supports StreamValue type of *llo.Decimal, got: %T", sv)
+		return nil, fmt.Errorf("EncodePacked only currently supports StreamValue type of *common.Decimal, got: %T", sv)
 	}
 	return EncodePackedBigInt(v, a.Type)
 }
@@ -308,9 +308,9 @@ func EncodePackedBigInt(value *big.Int, typeStr string) ([]byte, error) {
 // Returns the clamped valid after nanoseconds.
 // If the report range is within the max range, returns the valid after nanoseconds unchanged.
 // If the max report range is not specified, uses the default max report range.
-func ClampReportRange(r logger.Logger, report llo.Report, maxReportRange llo.Duration) uint64 {
+func ClampReportRange(r logger.Logger, report llocommon.Report, maxReportRange llocommon.Duration) uint64 {
 	if maxReportRange == 0 {
-		maxReportRange = llo.DefaultMaxReportRange
+		maxReportRange = llocommon.DefaultMaxReportRange
 	}
 
 	if report.ObservationTimestampNanoseconds-report.ValidAfterNanoseconds > uint64(maxReportRange) {

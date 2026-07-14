@@ -18,14 +18,14 @@ import (
 
 	"github.com/smartcontractkit/chainlink-common/pkg/logger"
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
-	"github.com/smartcontractkit/chainlink-data-streams/llo"
+	llocommon "github.com/smartcontractkit/chainlink-data-streams/llo/common"
 	ubig "github.com/smartcontractkit/chainlink-data-streams/llo/reportcodecs/evm/utils"
 	v3 "github.com/smartcontractkit/chainlink-data-streams/llo/reportcodecs/evm/v3"
 )
 
 var (
-	_            llo.ReportCodec = ReportCodecPremiumLegacy{}
-	PayloadTypes                 = getPayloadTypes()
+	_            llocommon.ReportCodec = ReportCodecPremiumLegacy{}
+	PayloadTypes                       = getPayloadTypes()
 )
 
 func getPayloadTypes() abi.Arguments {
@@ -68,7 +68,7 @@ type ReportFormatEVMPremiumLegacyOpts struct {
 	// MaxReportRange is the maximum range of the report.
 	// The range will be limited to ObservationTimestamp + MaxReportRange if the report is longer than the max range.
 	// Defaults to 5 minutes if not specified.
-	MaxReportRange llo.Duration `json:"maxReportRange,omitempty"`
+	MaxReportRange llocommon.Duration `json:"maxReportRange,omitempty"`
 }
 
 func (r *ReportFormatEVMPremiumLegacyOpts) Decode(opts []byte) error {
@@ -81,7 +81,7 @@ func (r *ReportFormatEVMPremiumLegacyOpts) Decode(opts []byte) error {
 	return decoder.Decode(r)
 }
 
-func (r ReportCodecPremiumLegacy) Encode(report llo.Report, cd llotypes.ChannelDefinition, optsCache *llo.OptsCache) ([]byte, error) {
+func (r ReportCodecPremiumLegacy) Encode(report llocommon.Report, cd llotypes.ChannelDefinition, optsCache *llocommon.OptsCache) ([]byte, error) {
 	if report.Specimen {
 		return nil, errors.New("ReportCodecPremiumLegacy does not support encoding specimen reports")
 	}
@@ -90,7 +90,7 @@ func (r ReportCodecPremiumLegacy) Encode(report llo.Report, cd llotypes.ChannelD
 		return nil, fmt.Errorf("ReportCodecPremiumLegacy cannot encode; got unusable report; %w", err)
 	}
 
-	opts, getErr := llo.GetOpts[ReportFormatEVMPremiumLegacyOpts](optsCache, report.ChannelID)
+	opts, getErr := llocommon.GetOpts[ReportFormatEVMPremiumLegacyOpts](optsCache, report.ChannelID)
 	if getErr != nil {
 		return nil, fmt.Errorf("opts not in cache for channel %d: %w", report.ChannelID, getErr)
 	}
@@ -178,7 +178,7 @@ func (r ReportCodecPremiumLegacy) Pack(digest types.ConfigDigest, seqNr uint64, 
 
 // ExtractReportValues extracts the native price, link price and quote from the report
 // Can handle either *Decimal or *Quote types for native/link prices
-func ExtractReportValues(report llo.Report) (nativePrice, linkPrice decimal.Decimal, quote *llo.Quote, err error) {
+func ExtractReportValues(report llocommon.Report) (nativePrice, linkPrice decimal.Decimal, quote *llocommon.Quote, err error) {
 	if len(report.Values) != 3 {
 		err = fmt.Errorf("ReportCodecPremiumLegacy requires exactly 3 values (NativePrice, LinkPrice, Quote{Bid, Mid, Ask}); got report.Values: %v", report.Values)
 		return
@@ -194,7 +194,7 @@ func ExtractReportValues(report llo.Report) (nativePrice, linkPrice decimal.Deci
 		return
 	}
 	var is bool
-	quote, is = report.Values[2].(*llo.Quote)
+	quote, is = report.Values[2].(*llocommon.Quote)
 	if !is {
 		err = fmt.Errorf("ReportCodecPremiumLegacy expects third stream value to be of type *Quote; got: %T", report.Values[2])
 		return
@@ -206,15 +206,15 @@ func ExtractReportValues(report llo.Report) (nativePrice, linkPrice decimal.Deci
 	return nativePrice, linkPrice, quote, nil
 }
 
-func extractPrice(price llo.StreamValue) (decimal.Decimal, error) {
+func extractPrice(price llocommon.StreamValue) (decimal.Decimal, error) {
 	switch p := price.(type) {
-	case *llo.Decimal:
+	case *llocommon.Decimal:
 		if p == nil {
 			// Missing price will cause a zero fee
 			return decimal.Zero, nil
 		}
 		return p.Decimal(), nil
-	case *llo.Quote:
+	case *llocommon.Quote:
 		// in case of quote feed, use the benchmark price
 		if p == nil {
 			return decimal.Zero, nil
