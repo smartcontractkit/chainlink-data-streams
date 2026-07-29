@@ -107,6 +107,22 @@ func frameObservation(handles [][]byte, mainBytes []byte) []byte {
 	return append(buf, mainBytes...)
 }
 
+// blobFetchError wraps a failure to fetch (or access) a blob referenced by an
+// observation. It exists to distinguish two very different decode failures:
+//
+//   - A malformed observation (bad framing, bad proto, unmarshalable blob
+//     payload) is deterministic across oracles — every correct oracle sees the
+//     same bytes — so it is safe to drop that single observation.
+//   - A blob-fetch failure is node-local and possibly transient: one oracle may
+//     fail to fetch while others succeed. Dropping the observation on only some
+//     oracles would make StateTransition non-deterministic and could halt the
+//     protocol. Callers inside StateTransition must propagate this (aborting and
+//     uniformly retrying the round) rather than skipping the observation.
+type blobFetchError struct{ err error }
+
+func (e *blobFetchError) Error() string { return e.err.Error() }
+func (e *blobFetchError) Unwrap() error { return e.err }
+
 // decodeObservation reverses encodeObservation, fetching any referenced blobs.
 func decodeObservation(ctx context.Context, raw ocrtypes.Observation, bf ocr3_1types.BlobFetcher) (Observation, error) {
 	if len(raw) == 0 {
@@ -153,11 +169,11 @@ func decodeObservation(ctx context.Context, raw ocrtypes.Observation, bf ocr3_1t
 	// Fetch and merge blob-carried stream values.
 	for _, h := range handles {
 		if bf == nil {
-			return Observation{}, fmt.Errorf("observation references a blob but no fetcher was provided")
+			return Observation{}, &blobFetchError{fmt.Errorf("observation references a blob but no fetcher was provided")}
 		}
 		payload, ferr := bf.FetchBlob(ctx, h)
 		if ferr != nil {
-			return Observation{}, fmt.Errorf("fetch blob: %w", ferr)
+			return Observation{}, &blobFetchError{fmt.Errorf("fetch blob: %w", ferr)}
 		}
 		chunk := &llocommon.LLOObservationProto{}
 		if err := proto.Unmarshal(payload, chunk); err != nil {

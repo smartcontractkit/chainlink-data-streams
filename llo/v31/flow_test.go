@@ -24,11 +24,11 @@ type mockChannelDefinitionCache struct{ defs llotypes.ChannelDefinitions }
 func (m *mockChannelDefinitionCache) Definitions(previous llotypes.ChannelDefinitions) llotypes.ChannelDefinitions {
 	return m.defs
 }
-func (m *mockChannelDefinitionCache) Start(context.Context) error  { return nil }
-func (m *mockChannelDefinitionCache) Close() error                 { return nil }
-func (m *mockChannelDefinitionCache) Ready() error                 { return nil }
+func (m *mockChannelDefinitionCache) Start(context.Context) error    { return nil }
+func (m *mockChannelDefinitionCache) Close() error                   { return nil }
+func (m *mockChannelDefinitionCache) Ready() error                   { return nil }
 func (m *mockChannelDefinitionCache) HealthReport() map[string]error { return nil }
-func (m *mockChannelDefinitionCache) Name() string                 { return "mockChannelDefinitionCache" }
+func (m *mockChannelDefinitionCache) Name() string                   { return "mockChannelDefinitionCache" }
 
 type mockDataSource struct {
 	vals       llocommon.StreamValues
@@ -208,6 +208,50 @@ func Test_StateTransition_Promotion(t *testing.T) {
 	require.Equal(t, string(llocommon.LifeCycleStageProduction), string(kv.m[string(keyLifecycle)]))
 	// validAfter is seeded from the predecessor's retirement report (gapless handover).
 	require.Equal(t, uint64(500), binary.BigEndian.Uint64(kv.m[string(validAfterKey(1))]))
+}
+
+// Test_StateTransition_Promotion_StagingOnlyChannelTreatedAsNew guards the
+// promotion path (Finding 4): a channel the staging instance added itself, that
+// is absent from the predecessor's retirement report, was never covered by the
+// predecessor's production reports. On promotion it must be reseeded to the
+// promotion round's observation timestamp (treated as new), NOT keep its
+// carried-forward staging watermark — matching v30.
+func Test_StateTransition_Promotion_StagingOnlyChannelTreatedAsNew(t *testing.T) {
+	ctx := tests.Context(t)
+	p := testPlugin(t)
+	predecessor := ocrtypes.ConfigDigest{0xAB}
+	p.PredecessorConfigDigest = &predecessor
+	// The predecessor's retirement report covers channel 1 only.
+	p.PredecessorRetirementReportCache = &mockPredecessorRetirementReportCache{
+		report: llocommon.RetirementReport{ValidAfterNanoseconds: map[llotypes.ChannelID]uint64{1: 500}},
+	}
+	kv := newMemKV()
+
+	// Bootstrap -> staging.
+	_, err := p.StateTransition(ctx, 1, ocrtypes.AttributedQuery{}, []ocrtypes.AttributedObservation{ao(0, nil), ao(1, nil), ao(2, nil)}, kv, nil)
+	require.NoError(t, err)
+
+	// Round 2 (ts=1000): staging adds its own channel 2, which is absent from the
+	// predecessor's retirement report. As a new channel its watermark is obsTs.
+	_, err = p.StateTransition(ctx, 2, ocrtypes.AttributedQuery{}, addChannelRound(t, 1000, 2, jsonChannel()), kv, nil)
+	require.NoError(t, err)
+	require.Equal(t, uint64(1000), binary.BigEndian.Uint64(kv.m[string(validAfterKey(2))]))
+
+	// Round 3 (ts=3000): a valid attested predecessor retirement report promotes
+	// this instance to production.
+	promoObs := Observation{UnixTimestampNanoseconds: 3000, AttestedPredecessorRetirement: []byte("attested")}
+	aos := make([]ocrtypes.AttributedObservation, 0, 4)
+	for i := 0; i < 4; i++ {
+		aos = append(aos, ao(i, mustEncodeObs(t, promoObs)))
+	}
+	_, err = p.StateTransition(ctx, 3, ocrtypes.AttributedQuery{}, aos, kv, nil)
+	require.NoError(t, err)
+	require.Equal(t, string(llocommon.LifeCycleStageProduction), string(kv.m[string(keyLifecycle)]))
+
+	// Channel 2 must be reseeded to the promotion round's obs timestamp (3000),
+	// NOT keep its carried-forward staging watermark (1000).
+	require.Equal(t, uint64(3000), binary.BigEndian.Uint64(kv.m[string(validAfterKey(2))]),
+		"staging-only channel must be treated as new on promotion, not carried forward")
 }
 
 func Test_ValidateObservation_Errors(t *testing.T) {

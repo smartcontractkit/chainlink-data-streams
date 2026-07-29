@@ -3,6 +3,7 @@ package llo
 import (
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"sort"
 
@@ -19,7 +20,6 @@ import (
 // This is a faithful port of the core of the v30 Outcome computation, adapted
 // to read/write per-channel keys in the KeyValueState instead of decoding and
 // re-encoding a monolithic previous outcome.
-//
 func (p *Plugin) StateTransition(ctx context.Context, seqNr uint64, _ ocrtypes.AttributedQuery, aos []ocrtypes.AttributedObservation, kvRW ocr3_1types.KeyValueStateReadWriter, bf ocr3_1types.BlobFetcher) (ocr3_1types.ReportsPlusPrecursor, error) {
 	if len(aos) < 2*p.F+1 {
 		return nil, fmt.Errorf("invariant violation: expected at least 2f+1 attributed observations, got %d (f: %d)", len(aos), p.F)
@@ -93,29 +93,37 @@ func (p *Plugin) StateTransition(ctx context.Context, seqNr uint64, _ ocrtypes.A
 
 	// validAfter.
 	if promotedValidAfter != nil {
+		// Promotion round: seed validAfter solely from the predecessor's
+		// retirement report (gapless handover). Do NOT carry forward this
+		// staging instance's own watermarks — staging channels absent from the
+		// report were never covered by the predecessor's production reports, so
+		// they fall through to the new-channel loop below (validAfter = obsTs).
+		// This mirrors v30, which replaces ValidAfterNanoseconds wholesale with
+		// the report's map and skips carry-forward during promotion.
 		for id, va := range promotedValidAfter {
 			out.ValidAfterNanoseconds[id] = va
 		}
-	}
-	for channelID, prevValidAfter := range prev.validAfterNanoseconds {
-		if _, done := out.ValidAfterNanoseconds[channelID]; done {
-			continue
-		}
-		if cd, ok := prev.channelDefinitions[channelID]; ok && cd.ReportFormat == llotypes.ReportFormatHistoryBackfill {
-			// Backfill: the watermark advances to whatever observation the
-			// previous round would have selected (and emitted), or stays put.
-			if tsNanos, _, _, found := selectBackfillCandidate(prev.channelDefinitions, prev.validAfterNanoseconds, prev.observationTimestampNs, channelID); found {
-				out.ValidAfterNanoseconds[channelID] = tsNanos
+	} else {
+		for channelID, prevValidAfter := range prev.validAfterNanoseconds {
+			if _, done := out.ValidAfterNanoseconds[channelID]; done {
+				continue
+			}
+			if cd, ok := prev.channelDefinitions[channelID]; ok && cd.ReportFormat == llotypes.ReportFormatHistoryBackfill {
+				// Backfill: the watermark advances to whatever observation the
+				// previous round would have selected (and emitted), or stays put.
+				if tsNanos, _, _, found := selectBackfillCandidate(prev.channelDefinitions, prev.validAfterNanoseconds, prev.observationTimestampNs, channelID); found {
+					out.ValidAfterNanoseconds[channelID] = tsNanos
+				} else {
+					out.ValidAfterNanoseconds[channelID] = prevValidAfter
+				}
+				continue
+			}
+			if prevReportable(prev, channelID) {
+				// Previous round reported; advance to the previous observation timestamp.
+				out.ValidAfterNanoseconds[channelID] = prev.observationTimestampNs
 			} else {
 				out.ValidAfterNanoseconds[channelID] = prevValidAfter
 			}
-			continue
-		}
-		if prevReportable(prev, channelID) {
-			// Previous round reported; advance to the previous observation timestamp.
-			out.ValidAfterNanoseconds[channelID] = prev.observationTimestampNs
-		} else {
-			out.ValidAfterNanoseconds[channelID] = prevValidAfter
 		}
 	}
 	for channelID := range out.ChannelDefinitions {
@@ -173,6 +181,18 @@ func (p *Plugin) decodeObservations(ctx context.Context, aos []ocrtypes.Attribut
 	for _, ao := range aos {
 		observation, derr := decodeObservation(ctx, ao.Observation, bf)
 		if derr != nil {
+			var bfErr *blobFetchError
+			if errors.As(derr, &bfErr) {
+				// Node-local, possibly transient failure. Dropping this
+				// observation on only some oracles would make StateTransition
+				// non-deterministic; instead abort the round so every oracle
+				// retries uniformly. Determinism is not required when returning
+				// an error (see the ReportingPlugin contract).
+				err = fmt.Errorf("failed to fetch blob for observation from oracle %v: %w", ao.Observer, derr)
+				return
+			}
+			// Deterministic decode failure (same bytes on every oracle): safe to
+			// drop just this observation.
 			p.Logger.Warnw("ignoring invalid observation", "oracleID", ao.Observer, "error", derr)
 			continue
 		}

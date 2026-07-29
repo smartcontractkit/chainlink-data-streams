@@ -18,6 +18,7 @@ import (
 	"github.com/smartcontractkit/libocr/commontypes"
 	"github.com/smartcontractkit/libocr/offchainreporting2plus/ocr3_1types"
 	ocrtypes "github.com/smartcontractkit/libocr/offchainreporting2plus/types"
+	"google.golang.org/protobuf/proto"
 )
 
 // --- test doubles ---
@@ -522,6 +523,89 @@ func Test_HistoryBackfill(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, reports, 1)
 	require.Equal(t, llotypes.ReportFormatJSON, reports[0].ReportWithInfo.Info.ReportFormat)
+}
+
+// validBlobHandleBytes returns the wire encoding of a syntactically-valid (but
+// meaningless) BlobHandle: the sum-type variant byte 0x01 (LightCertifiedBlob)
+// followed by a protobuf carrying only chunk_digests_root (field 1) = 32 bytes,
+// which is the minimum LightCertifiedBlob.UnmarshalBinary accepts. It lets a
+// test build an observation that *references* a blob (so decodeObservation
+// reaches the fetch path); the handle can never be fetched because there is no
+// real blob behind it. A real handle cannot be constructed outside libocr.
+func validBlobHandleBytes() []byte {
+	b := []byte{0x01}         // BlobHandle sum-type variant: LightCertifiedBlob
+	b = append(b, 0x0A, 0x20) // proto field 1 (bytes), length 32 (== sha256.Size)
+	b = append(b, make([]byte, 32)...)
+	return b
+}
+
+// Test_decodeObservation_BlobFetchErrorIsClassified verifies that a failure to
+// fetch a referenced blob surfaces as a *blobFetchError, so StateTransition can
+// propagate it (uniform retry) instead of silently dropping the observation on
+// only some oracles (Finding 2).
+func Test_decodeObservation_BlobFetchErrorIsClassified(t *testing.T) {
+	ctx := tests.Context(t)
+	mainBytes, err := proto.Marshal(&llocommon.LLOObservationProto{UnixTimestampNanoseconds: 42})
+	require.NoError(t, err)
+	frame := frameObservation([][]byte{validBlobHandleBytes()}, mainBytes)
+
+	var bfErr *blobFetchError
+
+	// A failing fetcher -> node-local error, must be a *blobFetchError.
+	_, err = decodeObservation(ctx, frame, &errBroadcaster{})
+	require.Error(t, err)
+	require.True(t, errors.As(err, &bfErr), "fetch failure must be a blobFetchError so StateTransition propagates it")
+
+	// A nil fetcher (blob referenced but unfetchable) -> also a *blobFetchError.
+	_, err = decodeObservation(ctx, frame, nil)
+	require.Error(t, err)
+	require.True(t, errors.As(err, &bfErr))
+}
+
+// Test_decodeObservation_MalformedIsNotBlobFetchError verifies that
+// deterministic decode failures (same bytes on every oracle) are NOT classified
+// as blobFetchError, so StateTransition still drops just that observation rather
+// than aborting the whole round (Finding 2, the other side of the boundary).
+func Test_decodeObservation_MalformedIsNotBlobFetchError(t *testing.T) {
+	ctx := tests.Context(t)
+	var bfErr *blobFetchError
+
+	// Unknown wire version.
+	_, err := decodeObservation(ctx, []byte{0x02, 0x00}, &errBroadcaster{})
+	require.Error(t, err)
+	require.False(t, errors.As(err, &bfErr), "malformed framing must stay droppable, not a blobFetchError")
+
+	// Well-framed but garbage handle bytes: UnmarshalBinary fails deterministically.
+	frame := frameObservation([][]byte{{0xFF}}, nil)
+	_, err = decodeObservation(ctx, frame, &errBroadcaster{})
+	require.Error(t, err)
+	require.False(t, errors.As(err, &bfErr))
+}
+
+// Test_StateTransition_PropagatesBlobFetchFailure is the end-to-end guard for
+// Finding 2: when observations reference an unfetchable blob, StateTransition
+// must return an error rather than silently dropping them.
+func Test_StateTransition_PropagatesBlobFetchFailure(t *testing.T) {
+	ctx := tests.Context(t)
+	p := testPlugin(t)
+	kv := newMemKV()
+
+	// Bootstrap.
+	_, err := p.StateTransition(ctx, 1, ocrtypes.AttributedQuery{}, []ocrtypes.AttributedObservation{ao(0, nil), ao(1, nil), ao(2, nil)}, kv, nil)
+	require.NoError(t, err)
+
+	// All four observations reference a blob that cannot be fetched.
+	mainBytes, err := proto.Marshal(&llocommon.LLOObservationProto{UnixTimestampNanoseconds: 1000})
+	require.NoError(t, err)
+	frame := frameObservation([][]byte{validBlobHandleBytes()}, mainBytes)
+	aos := make([]ocrtypes.AttributedObservation, 0, 4)
+	for i := 0; i < 4; i++ {
+		aos = append(aos, ao(i, frame))
+	}
+
+	_, err = p.StateTransition(ctx, 2, ocrtypes.AttributedQuery{}, aos, kv, &errBroadcaster{})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "fetch blob")
 }
 
 // equalStreamValue compares two stream values by their binary encoding.
