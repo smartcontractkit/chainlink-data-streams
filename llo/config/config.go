@@ -45,6 +45,23 @@ type PluginConfig struct {
 	Servers map[string]hex.PlainHexBytes `json:"servers" toml:"servers"`
 
 	Transmitters []TransmitterConfig `json:"transmitters" toml:"transmitters"`
+
+	// OCRVersion selects the libocr protocol version the plugin runs on:
+	//   "" or "3.0" => OCR3.0 (llo/v30)
+	//   "3.1"       => OCR3.1 (llo/v31)
+	// NOTE: this is the OCR protocol version, distinct from the LLO offchain
+	// ProtocolVersion (0/1) carried in the offchain config.
+	OCRVersion string `json:"ocrVersion" toml:"ocrVersion"`
+}
+
+const (
+	OCRVersionOCR3  = "3.0"
+	OCRVersionOCR31 = "3.1"
+)
+
+// IsOCR31 reports whether the job should run on the OCR3.1 (llo/v31) plugin.
+func (p PluginConfig) IsOCR31() bool {
+	return p.OCRVersion == OCRVersionOCR31
 }
 
 type TransmitterType int
@@ -126,6 +143,12 @@ func (p PluginConfig) Validate() (merr error) {
 	}
 
 	merr = errors.Join(merr, validateKeyBundleIDs(p.KeyBundleIDs))
+
+	switch p.OCRVersion {
+	case "", OCRVersionOCR3, OCRVersionOCR31:
+	default:
+		merr = errors.Join(merr, fmt.Errorf("llo: OCRVersion must be one of %q, %q or empty, got: %q", OCRVersionOCR3, OCRVersionOCR31, p.OCRVersion))
+	}
 
 	return merr
 }
