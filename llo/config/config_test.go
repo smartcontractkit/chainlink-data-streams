@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/pelletier/go-toml/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -140,6 +141,44 @@ func Test_Config(t *testing.T) {
 			assert.Contains(t, err.Error(), `At least one Mercury server or Transmitter must be specified`)
 			assert.Contains(t, err.Error(), `ChannelDefinitionsContractAddress is required if ChannelDefinitions is not specified`)
 		})
+	})
+}
+
+func Test_PluginConfig_OCRVersion(t *testing.T) {
+	base := PluginConfig{
+		DonID:                             12345,
+		Servers:                           map[string]hex.PlainHexBytes{"example.com:80": make(hex.PlainHexBytes, 32)},
+		ChannelDefinitionsContractAddress: common.HexToAddress("0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef"),
+	}
+
+	t.Run("defaults to OCR3.0 when empty", func(t *testing.T) {
+		pc := base
+		require.NoError(t, pc.Validate())
+		assert.False(t, pc.IsOCR31())
+	})
+	t.Run("explicit 3.0 is not OCR3.1", func(t *testing.T) {
+		pc := base
+		pc.OCRVersion = OCRVersionOCR3
+		require.NoError(t, pc.Validate())
+		assert.False(t, pc.IsOCR31())
+	})
+	t.Run("3.1 selects OCR3.1", func(t *testing.T) {
+		pc := base
+		pc.OCRVersion = OCRVersionOCR31
+		require.NoError(t, pc.Validate())
+		assert.True(t, pc.IsOCR31())
+	})
+	t.Run("unmarshals ocrVersion from toml", func(t *testing.T) {
+		var pc PluginConfig
+		require.NoError(t, toml.Unmarshal([]byte(`ocrVersion = "3.1"`), &pc))
+		assert.True(t, pc.IsOCR31())
+	})
+	t.Run("rejects unknown version", func(t *testing.T) {
+		pc := base
+		pc.OCRVersion = "9.9"
+		err := pc.Validate()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "OCRVersion must be one of")
 	})
 }
 
