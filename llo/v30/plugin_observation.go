@@ -153,7 +153,7 @@ func (p *Plugin) observation(ctx context.Context, outctx ocr3types.OutcomeContex
 			observationCtx, cancel := context.WithTimeout(ctx, p.MaxDurationObservation)
 			defer cancel()
 
-			opts := &dsOpts{p.Config.VerboseLogging, outctx, p.ConfigDigest, p.OutcomeCodec, time.Now()}
+			opts := llocommon.NewDSOpts(p.Config.VerboseLogging, outctx.SeqNr, p.ConfigDigest, time.Now(), previousOutcome.LifeCycleStage)
 			if err = p.DataSource.Observe(observationCtx, obs.StreamValues, opts); err != nil {
 				return nil, fmt.Errorf("DataSource.Observe error: %w", err)
 			}

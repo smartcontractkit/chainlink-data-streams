@@ -42,54 +42,13 @@ const (
 	MaxReportLength      = ocr3types.MaxMaxReportLength
 )
 
-type DSOpts interface {
-	VerboseLogging() bool
-	SeqNr() uint64
-	OutCtx() ocr3types.OutcomeContext
-	ConfigDigest() ocr2types.ConfigDigest
-	ObservationTimestamp() time.Time
-	OutcomeCodec() OutcomeCodec
-}
-
-type dsOpts struct {
-	verboseLogging       bool
-	outCtx               ocr3types.OutcomeContext
-	configDigest         ocr2types.ConfigDigest
-	outcomeCodec         OutcomeCodec
-	observationTimestamp time.Time
-}
-
-func (o *dsOpts) VerboseLogging() bool {
-	return o.verboseLogging
-}
-
-func (o *dsOpts) SeqNr() uint64 {
-	return o.outCtx.SeqNr
-}
-
-func (o *dsOpts) OutCtx() ocr3types.OutcomeContext {
-	return o.outCtx
-}
-
-func (o *dsOpts) ConfigDigest() ocr2types.ConfigDigest {
-	return o.configDigest
-}
-
-func (o *dsOpts) ObservationTimestamp() time.Time {
-	return o.observationTimestamp
-}
-
-func (o *dsOpts) OutcomeCodec() OutcomeCodec {
-	return o.outcomeCodec
-}
-
-type DataSource interface {
-	// For each known streamID, Observe should set the observed value in the
-	// passed streamValues.
-	// If an observation fails, or the stream is unknown, no value should be
-	// set.
-	Observe(ctx context.Context, streamValues llocommon.StreamValues, opts DSOpts) error
-}
+// DSOpts and DataSource are the shared, version-agnostic data-source types.
+// Kept as aliases here so existing llov30.DSOpts / llov30.DataSource references
+// keep working. Lifecycle is carried directly via DSOpts.LifeCycleStage()
+// (decoded from the previous outcome at the Observe call site), so the data
+// source no longer needs OutCtx()/OutcomeCodec().
+type DSOpts = llocommon.DSOpts
+type DataSource = llocommon.DataSource
 
 type ShouldRetireCache interface { // reads asynchronously from onchain ConfigurationStore
 	// Should the protocol instance retire according to the configuration
