@@ -12,10 +12,11 @@ import (
 	"github.com/stretchr/testify/require"
 	"golang.org/x/exp/maps"
 
-	llocommon "github.com/smartcontractkit/chainlink-data-streams/llo/common"
 	"github.com/smartcontractkit/libocr/offchainreporting2/types"
 	ocr2types "github.com/smartcontractkit/libocr/offchainreporting2/types"
 	"github.com/smartcontractkit/libocr/offchainreporting2plus/ocr3types"
+
+	protocol "github.com/smartcontractkit/chainlink-data-streams/llo/protocol"
 
 	"github.com/smartcontractkit/chainlink-common/pkg/logger"
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
@@ -26,12 +27,12 @@ type mockPredecessorRetirementReportCache struct {
 	err               error
 }
 
-var _ llocommon.PredecessorRetirementReportCache = &mockPredecessorRetirementReportCache{}
+var _ protocol.PredecessorRetirementReportCache = &mockPredecessorRetirementReportCache{}
 
 func (p *mockPredecessorRetirementReportCache) AttestedRetirementReport(predecessorConfigDigest ocr2types.ConfigDigest) ([]byte, error) {
 	return p.retirementReports[predecessorConfigDigest], p.err
 }
-func (p *mockPredecessorRetirementReportCache) CheckAttestedRetirementReport(predecessorConfigDigest ocr2types.ConfigDigest, attestedRetirementReport []byte) (llocommon.RetirementReport, error) {
+func (p *mockPredecessorRetirementReportCache) CheckAttestedRetirementReport(predecessorConfigDigest ocr2types.ConfigDigest, attestedRetirementReport []byte) (protocol.RetirementReport, error) {
 	panic("not implemented")
 }
 
@@ -60,10 +61,10 @@ func testObservation(t *testing.T, outcomeCodec OutcomeCodec) {
 	cdc := &mockChannelDefinitionCache{definitions: smallDefinitions}
 
 	ds := &mockDataSource{
-		s: map[llotypes.StreamID]llocommon.StreamValue{
-			1: llocommon.ToDecimal(decimal.NewFromInt(1000)),
-			3: llocommon.ToDecimal(decimal.NewFromInt(3000)),
-			4: llocommon.ToDecimal(decimal.NewFromInt(4000)),
+		s: map[llotypes.StreamID]protocol.StreamValue{
+			1: protocol.ToDecimal(decimal.NewFromInt(1000)),
+			3: protocol.ToDecimal(decimal.NewFromInt(3000)),
+			4: protocol.ToDecimal(decimal.NewFromInt(4000)),
 		},
 		err: nil,
 	}
@@ -198,7 +199,7 @@ func testObservation(t *testing.T, outcomeCodec OutcomeCodec) {
 	})
 
 	largeSize := uint32(100)
-	require.Greater(t, int(largeSize), llocommon.MaxObservationUpdateChannelDefinitionsLength)
+	require.Greater(t, int(largeSize), protocol.MaxObservationUpdateChannelDefinitionsLength)
 	largeDefinitions := make(map[llotypes.ChannelID]llotypes.ChannelDefinition, largeSize)
 	for i := uint32(0); i < largeSize; i++ {
 		largeDefinitions[i] = llotypes.ChannelDefinition{
@@ -231,9 +232,9 @@ func testObservation(t *testing.T, outcomeCodec OutcomeCodec) {
 
 			// Even though we have a large amount of channel definitions, we should
 			// only add/replace MaxObservationUpdateChannelDefinitionsLength at a time
-			assert.Len(t, decoded.UpdateChannelDefinitions, llocommon.MaxObservationUpdateChannelDefinitionsLength)
+			assert.Len(t, decoded.UpdateChannelDefinitions, protocol.MaxObservationUpdateChannelDefinitionsLength)
 			expected := make(llotypes.ChannelDefinitions)
-			for i := uint32(0); i < llocommon.MaxObservationUpdateChannelDefinitionsLength; i++ {
+			for i := uint32(0); i < protocol.MaxObservationUpdateChannelDefinitionsLength; i++ {
 				expected[i] = largeDefinitions[i]
 			}
 
@@ -249,7 +250,7 @@ func testObservation(t *testing.T, outcomeCodec OutcomeCodec) {
 		})
 
 		t.Run("second round of additions", func(t *testing.T) {
-			offset := uint32(llocommon.MaxObservationUpdateChannelDefinitionsLength * 2)
+			offset := uint32(protocol.MaxObservationUpdateChannelDefinitionsLength * 2)
 
 			subsetDfns := make(llotypes.ChannelDefinitions)
 			for i := uint32(0); i < offset; i++ {
@@ -277,10 +278,10 @@ func testObservation(t *testing.T, outcomeCodec OutcomeCodec) {
 
 			// Even though we have a large amount of channel definitions, we should
 			// only add/replace MaxObservationUpdateChannelDefinitionsLength at a time
-			assert.Len(t, decoded.UpdateChannelDefinitions, llocommon.MaxObservationUpdateChannelDefinitionsLength)
+			assert.Len(t, decoded.UpdateChannelDefinitions, protocol.MaxObservationUpdateChannelDefinitionsLength)
 			expected := make(llotypes.ChannelDefinitions)
 			expectedChannelIDs := []uint32{}
-			for i := uint32(0); i < llocommon.MaxObservationUpdateChannelDefinitionsLength; i++ {
+			for i := uint32(0); i < protocol.MaxObservationUpdateChannelDefinitionsLength; i++ {
 				expectedChannelIDs = append(expectedChannelIDs, i+offset)
 				expected[i+offset] = largeDefinitions[i+offset]
 			}
@@ -297,7 +298,7 @@ func testObservation(t *testing.T, outcomeCodec OutcomeCodec) {
 
 		t.Run("in case previous outcome channel definitions is invalid, returns error", func(t *testing.T) {
 			dfns := make(llotypes.ChannelDefinitions)
-			for i := uint32(0); i < 2*llocommon.MaxOutcomeChannelDefinitionsLength; i++ {
+			for i := uint32(0); i < 2*protocol.MaxOutcomeChannelDefinitionsLength; i++ {
 				dfns[i] = llotypes.ChannelDefinition{
 					ReportFormat: llotypes.ReportFormatEVMPremiumLegacy,
 					Streams:      []llotypes.Stream{{StreamID: i, Aggregator: llotypes.AggregatorMedian}, {StreamID: (i * 10000), Aggregator: llotypes.AggregatorMedian}, {StreamID: (i * 100000), Aggregator: llotypes.AggregatorMedian}},
@@ -327,7 +328,7 @@ func testObservation(t *testing.T, outcomeCodec OutcomeCodec) {
 			require.NoError(t, err)
 
 			dfns := make(llotypes.ChannelDefinitions)
-			for i := uint32(0); i < 2*llocommon.MaxOutcomeChannelDefinitionsLength; i++ {
+			for i := uint32(0); i < 2*protocol.MaxOutcomeChannelDefinitionsLength; i++ {
 				dfns[i] = llotypes.ChannelDefinition{
 					ReportFormat: llotypes.ReportFormatEVMPremiumLegacy,
 					Streams:      []llotypes.Stream{{StreamID: i, Aggregator: llotypes.AggregatorMedian}, {StreamID: (i * 10000), Aggregator: llotypes.AggregatorMedian}, {StreamID: (i * 100000), Aggregator: llotypes.AggregatorMedian}},
@@ -373,14 +374,14 @@ func testObservation(t *testing.T, outcomeCodec OutcomeCodec) {
 
 			// Even though we have a large amount of channel definitions, we should
 			// only remove MaxObservationRemoveChannelIDsLength at a time
-			assert.Len(t, decoded.RemoveChannelIDs, llocommon.MaxObservationRemoveChannelIDsLength)
+			assert.Len(t, decoded.RemoveChannelIDs, protocol.MaxObservationRemoveChannelIDsLength)
 			assert.ElementsMatch(t, []uint32{0, 3, 4, 5, 6}, maps.Keys(decoded.RemoveChannelIDs))
 
 			assert.GreaterOrEqual(t, decoded.UnixTimestampNanoseconds, testStartTSNanos)
 			assert.Equal(t, ds.s, decoded.StreamValues)
 		})
 		t.Run("second round of removals", func(t *testing.T) {
-			offset := uint32(llocommon.MaxObservationUpdateChannelDefinitionsLength * 2)
+			offset := uint32(protocol.MaxObservationUpdateChannelDefinitionsLength * 2)
 
 			subsetDfns := maps.Clone(largeDefinitions)
 			for i := uint32(0); i < offset; i++ {
@@ -410,7 +411,7 @@ func testObservation(t *testing.T, outcomeCodec OutcomeCodec) {
 
 			// Even though we have a large amount of channel definitions, we should
 			// only remove MaxObservationRemoveChannelIDsLength at a time
-			assert.Len(t, decoded.RemoveChannelIDs, llocommon.MaxObservationRemoveChannelIDsLength)
+			assert.Len(t, decoded.RemoveChannelIDs, protocol.MaxObservationRemoveChannelIDsLength)
 			assert.ElementsMatch(t, []uint32{10, 11, 12, 13, 14}, maps.Keys(decoded.RemoveChannelIDs))
 
 			assert.GreaterOrEqual(t, decoded.UnixTimestampNanoseconds, testStartTSNanos)
@@ -445,7 +446,7 @@ func testObservation(t *testing.T, outcomeCodec OutcomeCodec) {
 			}
 			p.PredecessorRetirementReportCache = prrc
 			previousOutcome := Outcome{
-				LifeCycleStage:                  llocommon.LifeCycleStageStaging,
+				LifeCycleStage:                  protocol.LifeCycleStageStaging,
 				ObservationTimestampNanoseconds: testStartTSNanos,
 				ChannelDefinitions:              cdc.definitions,
 				ValidAfterNanoseconds:           nil,
@@ -468,7 +469,7 @@ func testObservation(t *testing.T, outcomeCodec OutcomeCodec) {
 			}
 			p.PredecessorRetirementReportCache = prrc
 			previousOutcome := Outcome{
-				LifeCycleStage:                  llocommon.LifeCycleStageStaging,
+				LifeCycleStage:                  protocol.LifeCycleStageStaging,
 				ObservationTimestampNanoseconds: testStartTSNanos,
 				ChannelDefinitions:              cdc.definitions,
 				ValidAfterNanoseconds:           nil,
@@ -490,7 +491,7 @@ func testObservation(t *testing.T, outcomeCodec OutcomeCodec) {
 			}
 			p.PredecessorRetirementReportCache = prrc
 			previousOutcome := Outcome{
-				LifeCycleStage:                  llocommon.LifeCycleStageProduction,
+				LifeCycleStage:                  protocol.LifeCycleStageProduction,
 				ObservationTimestampNanoseconds: testStartTSNanos,
 				ChannelDefinitions:              cdc.definitions,
 				ValidAfterNanoseconds:           nil,
@@ -510,7 +511,7 @@ func testObservation(t *testing.T, outcomeCodec OutcomeCodec) {
 	})
 	t.Run("if previous outcome is retired, returns observation with only timestamp", func(t *testing.T) {
 		previousOutcome := Outcome{
-			LifeCycleStage: llocommon.LifeCycleStageRetired,
+			LifeCycleStage: protocol.LifeCycleStageRetired,
 		}
 		encodedPreviousOutcome, err := p.OutcomeCodec.Encode(previousOutcome)
 		require.NoError(t, err)
@@ -538,7 +539,7 @@ func testObservation(t *testing.T, outcomeCodec OutcomeCodec) {
 	}
 	t.Run("if channel definitions file is invalid, does not vote to add or remove any channels and only submits observations", func(t *testing.T) {
 		previousOutcome := Outcome{
-			LifeCycleStage:     llocommon.LifeCycleStageStaging,
+			LifeCycleStage:     protocol.LifeCycleStageStaging,
 			ChannelDefinitions: smallDefinitions,
 		}
 		encodedPreviousOutcome, err := p.OutcomeCodec.Encode(previousOutcome)

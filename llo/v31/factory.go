@@ -6,7 +6,8 @@ import (
 
 	"github.com/smartcontractkit/chainlink-common/pkg/logger"
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
-	llocommon "github.com/smartcontractkit/chainlink-data-streams/llo/common"
+
+	protocol "github.com/smartcontractkit/chainlink-data-streams/llo/protocol"
 
 	"github.com/smartcontractkit/libocr/offchainreporting2plus/ocr3_1types"
 	"github.com/smartcontractkit/libocr/offchainreporting2plus/ocr3types"
@@ -23,18 +24,18 @@ var _ ocr3_1types.ReportingPluginFactory[llotypes.ReportInfo] = &PluginFactory{}
 // lives in the KeyValueState), and adds BlobThreshold.
 type PluginFactoryParams struct {
 	Config
-	llocommon.PredecessorRetirementReportCache
+	protocol.PredecessorRetirementReportCache
 	ShouldRetireCache
-	llocommon.RetirementReportCodec
+	protocol.RetirementReportCodec
 	llotypes.ChannelDefinitionCache
 	DataSource
 	logger.Logger
-	llocommon.OnchainConfigCodec
-	ReportCodecs map[llotypes.ReportFormat]llocommon.ReportCodec
+	protocol.OnchainConfigCodec
+	ReportCodecs map[llotypes.ReportFormat]protocol.ReportCodec
 	// OutcomeTelemetryCh, if set, receives one telemetry struct per StateTransition.
-	OutcomeTelemetryCh chan<- *llocommon.LLOOutcomeTelemetry
+	OutcomeTelemetryCh chan<- *protocol.LLOOutcomeTelemetry
 	// ReportTelemetryCh, if set, receives one telemetry struct per emitted report.
-	ReportTelemetryCh chan<- *llocommon.LLOReportTelemetry
+	ReportTelemetryCh chan<- *protocol.LLOReportTelemetry
 	// DonID is optional and used only for telemetry and logging.
 	DonID uint32
 	// BlobThreshold overrides DefaultBlobThreshold if non-zero. A negative value
@@ -55,7 +56,7 @@ func (f *PluginFactory) NewReportingPlugin(ctx context.Context, cfg ocr3types.Re
 	if err != nil {
 		return nil, nil, fmt.Errorf("NewReportingPlugin failed to decode onchain config; got: 0x%x (len: %d); %w", cfg.OnchainConfig, len(cfg.OnchainConfig), err)
 	}
-	offchainConfig, err := llocommon.DecodeOffchainConfig(cfg.OffchainConfig)
+	offchainConfig, err := protocol.DecodeOffchainConfig(cfg.OffchainConfig)
 	if err != nil {
 		return nil, nil, fmt.Errorf("NewReportingPlugin failed to decode offchain config; got: 0x%x (len: %d); %w", cfg.OffchainConfig, len(cfg.OffchainConfig), err)
 	}
@@ -87,7 +88,7 @@ func (f *PluginFactory) NewReportingPlugin(ctx context.Context, cfg ocr3types.Re
 		DonID:                               f.DonID,
 		OutcomeTelemetryCh:                  f.OutcomeTelemetryCh,
 		ReportTelemetryCh:                   f.ReportTelemetryCh,
-		OptsCache:                           llocommon.NewOptsCache(),
+		OptsCache:                           protocol.NewOptsCache(),
 		MaxDurationObservation:              cfg.MaxDurationObservation,
 		ProtocolVersion:                     offchainConfig.ProtocolVersion,
 		DefaultMinReportIntervalNanoseconds: offchainConfig.DefaultMinReportIntervalNanoseconds,
@@ -101,7 +102,7 @@ func (f *PluginFactory) NewReportingPlugin(ctx context.Context, cfg ocr3types.Re
 			MaxObservationBytes:          ocr3_1types.MaxMaxObservationBytes,
 			MaxReportsPlusPrecursorBytes: ocr3_1types.MaxMaxReportsPlusPrecursorBytes,
 			MaxReportBytes:               ocr3_1types.MaxMaxReportBytes,
-			MaxReportCount:               llocommon.MaxReportCount,
+			MaxReportCount:               protocol.MaxReportCount,
 
 			MaxKeyValueModifiedKeys:                ocr3_1types.MaxMaxKeyValueModifiedKeys,
 			MaxKeyValueModifiedKeysPlusValuesBytes: ocr3_1types.MaxMaxKeyValueModifiedKeysPlusValuesBytes,

@@ -4,9 +4,10 @@ import (
 	"context"
 	"fmt"
 
-	llocommon "github.com/smartcontractkit/chainlink-data-streams/llo/common"
 	"github.com/smartcontractkit/libocr/offchainreporting2/types"
 	"github.com/smartcontractkit/libocr/offchainreporting2plus/ocr3types"
+
+	protocol "github.com/smartcontractkit/chainlink-data-streams/llo/protocol"
 
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
 )
@@ -24,7 +25,7 @@ func (p *Plugin) reports(ctx context.Context, seqNr uint64, rawOutcome ocr3types
 
 	rwis := []ocr3types.ReportPlus[llotypes.ReportInfo]{}
 
-	if outcome.LifeCycleStage == llocommon.LifeCycleStageRetired {
+	if outcome.LifeCycleStage == protocol.LifeCycleStageRetired {
 		// if we're retired, emit special retirement report to transfer
 		// ValidAfterNanoseconds part of state to the new protocol instance for a
 		// "gapless" handover
@@ -40,7 +41,7 @@ func (p *Plugin) reports(ctx context.Context, seqNr uint64, rawOutcome ocr3types
 			ReportWithInfo: ocr3types.ReportWithInfo[llotypes.ReportInfo]{
 				Report: encoded,
 				Info: llotypes.ReportInfo{
-					LifeCycleStage: llocommon.LifeCycleStageRetired,
+					LifeCycleStage: protocol.LifeCycleStageRetired,
 					ReportFormat:   llotypes.ReportFormatRetirement,
 				},
 			},
@@ -67,12 +68,12 @@ func (p *Plugin) reports(ctx context.Context, seqNr uint64, rawOutcome ocr3types
 				continue
 			}
 			row := opts.Observations[rawTS]
-			values, err := llocommon.BuildBackfillStreamValues(targetCD, row)
+			values, err := protocol.BuildBackfillStreamValues(targetCD, row)
 			if err != nil {
 				p.Logger.Warnw("Error building backfill stream values", "err", err, "channelID", cid, "stage", "Report", "seqNr", seqNr)
 				continue
 			}
-			resNanos, err := llocommon.ReportTimestampResolutionNanos(targetCD)
+			resNanos, err := protocol.ReportTimestampResolutionNanos(targetCD)
 			if err != nil {
 				p.Logger.Warnw("Error resolving history_backfill report timestamp resolution", "err", err, "channelID", cid, "stage", "Report", "seqNr", seqNr)
 				continue
@@ -82,14 +83,14 @@ func (p *Plugin) reports(ctx context.Context, seqNr uint64, rawOutcome ocr3types
 			if tsNanos >= resNanos {
 				validAfter = tsNanos - resNanos
 			}
-			report := llocommon.Report{
+			report := protocol.Report{
 				ConfigDigest:                    p.ConfigDigest,
 				SeqNr:                           seqNr,
 				ChannelID:                       cid,
 				ValidAfterNanoseconds:           validAfter,
 				ObservationTimestampNanoseconds: tsNanos,
 				Values:                          values,
-				Specimen:                        outcome.LifeCycleStage != llocommon.LifeCycleStageProduction,
+				Specimen:                        outcome.LifeCycleStage != protocol.LifeCycleStageProduction,
 			}
 			reportForEncode := report
 			reportForEncode.ChannelID = opts.TargetChannelID
@@ -121,19 +122,19 @@ func (p *Plugin) reports(ctx context.Context, seqNr uint64, rawOutcome ocr3types
 			continue
 		}
 
-		values := make([]llocommon.StreamValue, 0, len(cd.Streams))
+		values := make([]protocol.StreamValue, 0, len(cd.Streams))
 		for _, strm := range cd.Streams {
 			values = append(values, outcome.StreamAggregates[strm.StreamID][strm.Aggregator])
 		}
 
-		report := llocommon.Report{
+		report := protocol.Report{
 			ConfigDigest:                    p.ConfigDigest,
 			SeqNr:                           seqNr,
 			ChannelID:                       cid,
 			ValidAfterNanoseconds:           outcome.ValidAfterNanoseconds[cid],
 			ObservationTimestampNanoseconds: outcome.ObservationTimestampNanoseconds,
 			Values:                          values,
-			Specimen:                        outcome.LifeCycleStage != llocommon.LifeCycleStageProduction,
+			Specimen:                        outcome.LifeCycleStage != protocol.LifeCycleStageProduction,
 		}
 
 		if p.Config.VerboseLogging {
@@ -163,7 +164,7 @@ func (p *Plugin) reports(ctx context.Context, seqNr uint64, rawOutcome ocr3types
 	return rwis, nil
 }
 
-func (p *Plugin) encodeReport(r llocommon.Report, cd llotypes.ChannelDefinition) (types.Report, error) {
+func (p *Plugin) encodeReport(r protocol.Report, cd llotypes.ChannelDefinition) (types.Report, error) {
 	codec, exists := p.ReportCodecs[cd.ReportFormat]
 	if !exists {
 		return nil, fmt.Errorf("codec missing for ReportFormat=%q", cd.ReportFormat)
@@ -172,7 +173,7 @@ func (p *Plugin) encodeReport(r llocommon.Report, cd llotypes.ChannelDefinition)
 	return codec.Encode(r, cd, p.OptsCache)
 }
 
-func (p *Plugin) captureReportTelemetry(r llocommon.Report, cd llotypes.ChannelDefinition) {
+func (p *Plugin) captureReportTelemetry(r protocol.Report, cd llotypes.ChannelDefinition) {
 	if p.ReportTelemetryCh != nil {
 		rt, err := makeReportTelemetry(r, cd, p.DonID)
 		if err != nil {
@@ -187,26 +188,26 @@ func (p *Plugin) captureReportTelemetry(r llocommon.Report, cd llotypes.ChannelD
 	}
 }
 
-func makeReportTelemetry(r llocommon.Report, cd llotypes.ChannelDefinition, donID uint32) (*llocommon.LLOReportTelemetry, error) {
-	streams := make([]*llocommon.LLOStreamDefinition, len(cd.Streams))
+func makeReportTelemetry(r protocol.Report, cd llotypes.ChannelDefinition, donID uint32) (*protocol.LLOReportTelemetry, error) {
+	streams := make([]*protocol.LLOStreamDefinition, len(cd.Streams))
 	for i, s := range cd.Streams {
-		streams[i] = &llocommon.LLOStreamDefinition{
+		streams[i] = &protocol.LLOStreamDefinition{
 			StreamID:   s.StreamID,
 			Aggregator: uint32(s.Aggregator),
 		}
 	}
-	svs := make([]*llocommon.LLOStreamValue, len(r.Values))
+	svs := make([]*protocol.LLOStreamValue, len(r.Values))
 	for i, v := range r.Values {
 		b, err := v.MarshalBinary()
 		if err != nil {
 			return nil, fmt.Errorf("error marshalling stream value: %w", err)
 		}
-		svs[i] = &llocommon.LLOStreamValue{
+		svs[i] = &protocol.LLOStreamValue{
 			Type:  v.Type(),
 			Value: b,
 		}
 	}
-	rt := &llocommon.LLOReportTelemetry{
+	rt := &protocol.LLOReportTelemetry{
 		ChannelId:                       r.ChannelID,
 		ValidAfterNanoseconds:           r.ValidAfterNanoseconds,
 		ObservationTimestampNanoseconds: r.ObservationTimestampNanoseconds,

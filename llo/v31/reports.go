@@ -6,7 +6,8 @@ import (
 	"sort"
 
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
-	llocommon "github.com/smartcontractkit/chainlink-data-streams/llo/common"
+
+	protocol "github.com/smartcontractkit/chainlink-data-streams/llo/protocol"
 
 	"github.com/smartcontractkit/libocr/offchainreporting2plus/ocr3_1types"
 	"github.com/smartcontractkit/libocr/offchainreporting2plus/ocr3types"
@@ -26,9 +27,9 @@ func (p *Plugin) Reports(ctx context.Context, seqNr uint64, rawPrecursor ocr3_1t
 
 	rwis := []ocr3types.ReportPlus[llotypes.ReportInfo]{}
 
-	if out.LifeCycleStage == llocommon.LifeCycleStageRetired {
+	if out.LifeCycleStage == protocol.LifeCycleStageRetired {
 		// Emit a retirement report to hand over ValidAfterNanoseconds for a gapless handover.
-		retirementReport := llocommon.RetirementReport{
+		retirementReport := protocol.RetirementReport{
 			ProtocolVersion:       p.ProtocolVersion,
 			ValidAfterNanoseconds: out.ValidAfterNanoseconds,
 		}
@@ -40,7 +41,7 @@ func (p *Plugin) Reports(ctx context.Context, seqNr uint64, rawPrecursor ocr3_1t
 			ReportWithInfo: ocr3types.ReportWithInfo[llotypes.ReportInfo]{
 				Report: encoded,
 				Info: llotypes.ReportInfo{
-					LifeCycleStage: llocommon.LifeCycleStageRetired,
+					LifeCycleStage: protocol.LifeCycleStageRetired,
 					ReportFormat:   llotypes.ReportFormatRetirement,
 				},
 			},
@@ -61,12 +62,12 @@ func (p *Plugin) Reports(ctx context.Context, seqNr uint64, rawPrecursor ocr3_1t
 				p.Logger.Warnw("missing target channel for history_backfill", "channelID", cid, "targetChannelID", opts.TargetChannelID, "stage", "Report", "seqNr", seqNr)
 				continue
 			}
-			values, err := llocommon.BuildBackfillStreamValues(targetCD, opts.Observations[rawTS])
+			values, err := protocol.BuildBackfillStreamValues(targetCD, opts.Observations[rawTS])
 			if err != nil {
 				p.Logger.Warnw("Error building backfill stream values", "err", err, "channelID", cid, "stage", "Report", "seqNr", seqNr)
 				continue
 			}
-			resNanos, err := llocommon.ReportTimestampResolutionNanos(targetCD)
+			resNanos, err := protocol.ReportTimestampResolutionNanos(targetCD)
 			if err != nil {
 				p.Logger.Warnw("Error resolving history_backfill report timestamp resolution", "err", err, "channelID", cid, "stage", "Report", "seqNr", seqNr)
 				continue
@@ -76,14 +77,14 @@ func (p *Plugin) Reports(ctx context.Context, seqNr uint64, rawPrecursor ocr3_1t
 			if tsNanos >= resNanos {
 				validAfter = tsNanos - resNanos
 			}
-			report := llocommon.Report{
+			report := protocol.Report{
 				ConfigDigest:                    p.ConfigDigest,
 				SeqNr:                           seqNr,
 				ChannelID:                       cid,
 				ValidAfterNanoseconds:           validAfter,
 				ObservationTimestampNanoseconds: tsNanos,
 				Values:                          values,
-				Specimen:                        out.LifeCycleStage != llocommon.LifeCycleStageProduction,
+				Specimen:                        out.LifeCycleStage != protocol.LifeCycleStageProduction,
 			}
 			// The report is encoded with, and attributed to, the target channel.
 			reportForEncode := report
@@ -112,19 +113,19 @@ func (p *Plugin) Reports(ctx context.Context, seqNr uint64, rawPrecursor ocr3_1t
 			continue
 		}
 
-		values := make([]llocommon.StreamValue, 0, len(cd.Streams))
+		values := make([]protocol.StreamValue, 0, len(cd.Streams))
 		for _, strm := range cd.Streams {
 			values = append(values, out.StreamAggregates[strm.StreamID][strm.Aggregator])
 		}
 
-		report := llocommon.Report{
+		report := protocol.Report{
 			ConfigDigest:                    p.ConfigDigest,
 			SeqNr:                           seqNr,
 			ChannelID:                       cid,
 			ValidAfterNanoseconds:           out.ValidAfterNanoseconds[cid],
 			ObservationTimestampNanoseconds: out.ObservationTimestampNanoseconds,
 			Values:                          values,
-			Specimen:                        out.LifeCycleStage != llocommon.LifeCycleStageProduction,
+			Specimen:                        out.LifeCycleStage != protocol.LifeCycleStageProduction,
 		}
 
 		p.captureReportTelemetry(report, cd)
@@ -167,7 +168,7 @@ func (o precursor) reportableChannels(minReportInterval uint64) []llotypes.Chann
 }
 
 func (o precursor) isReportable(channelID llotypes.ChannelID, minReportInterval uint64) bool {
-	if o.LifeCycleStage == llocommon.LifeCycleStageRetired {
+	if o.LifeCycleStage == protocol.LifeCycleStageRetired {
 		return false
 	}
 	cd, exists := o.ChannelDefinitions[channelID]

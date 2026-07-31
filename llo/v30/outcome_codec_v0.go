@@ -5,9 +5,10 @@ import (
 	"math"
 	"sort"
 
-	llocommon "github.com/smartcontractkit/chainlink-data-streams/llo/common"
 	"github.com/smartcontractkit/libocr/offchainreporting2plus/ocr3types"
 	"google.golang.org/protobuf/proto"
+
+	protocol "github.com/smartcontractkit/chainlink-data-streams/llo/protocol"
 
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
 )
@@ -35,7 +36,7 @@ func (protoOutcomeCodecV0) Encode(outcome Outcome) (ocr3types.Outcome, error) {
 	if outcome.ObservationTimestampNanoseconds > math.MaxInt64 {
 		return nil, fmt.Errorf("cannot marshal protobuf; observation timestamp too large: %d", outcome.ObservationTimestampNanoseconds)
 	}
-	pbuf := &llocommon.LLOOutcomeProtoV0{
+	pbuf := &protocol.LLOOutcomeProtoV0{
 		LifeCycleStage:                  string(outcome.LifeCycleStage),
 		ObservationTimestampNanoseconds: int64(outcome.ObservationTimestampNanoseconds),
 		ChannelDefinitions:              dfns,
@@ -48,15 +49,15 @@ func (protoOutcomeCodecV0) Encode(outcome Outcome) (ocr3types.Outcome, error) {
 	return proto.MarshalOptions{Deterministic: true}.Marshal(pbuf)
 }
 
-func validAfterNanosecondsToProtoOutcomeSeconds(in map[llotypes.ChannelID]uint64) (out []*llocommon.LLOChannelIDAndValidAfterSecondsProto, err error) {
+func validAfterNanosecondsToProtoOutcomeSeconds(in map[llotypes.ChannelID]uint64) (out []*protocol.LLOChannelIDAndValidAfterSecondsProto, err error) {
 	if len(in) > 0 {
-		out = make([]*llocommon.LLOChannelIDAndValidAfterSecondsProto, 0, len(in))
+		out = make([]*protocol.LLOChannelIDAndValidAfterSecondsProto, 0, len(in))
 		for id, v := range in {
 			seconds := v / 1e9
 			if seconds > math.MaxUint32 {
 				return nil, fmt.Errorf("valid after seconds too large: %d", seconds)
 			}
-			out = append(out, &llocommon.LLOChannelIDAndValidAfterSecondsProto{
+			out = append(out, &protocol.LLOChannelIDAndValidAfterSecondsProto{
 				ChannelID:         id,
 				ValidAfterSeconds: uint32(seconds),
 			})
@@ -69,7 +70,7 @@ func validAfterNanosecondsToProtoOutcomeSeconds(in map[llotypes.ChannelID]uint64
 }
 
 func (protoOutcomeCodecV0) Decode(b ocr3types.Outcome) (outcome Outcome, err error) {
-	pbuf := &llocommon.LLOOutcomeProtoV0{}
+	pbuf := &protocol.LLOOutcomeProtoV0{}
 	err = proto.Unmarshal(b, pbuf)
 	if err != nil {
 		return Outcome{}, fmt.Errorf("failed to decode outcome: expected protobuf (got: 0x%x); %w", b, err)
@@ -96,7 +97,7 @@ func (protoOutcomeCodecV0) Decode(b ocr3types.Outcome) (outcome Outcome, err err
 	return outcome, nil
 }
 
-func validAfterNanosecondsFromProtoOutcomeSeconds(in []*llocommon.LLOChannelIDAndValidAfterSecondsProto) (out map[llotypes.ChannelID]uint64) {
+func validAfterNanosecondsFromProtoOutcomeSeconds(in []*protocol.LLOChannelIDAndValidAfterSecondsProto) (out map[llotypes.ChannelID]uint64) {
 	if len(in) > 0 {
 		out = make(map[llotypes.ChannelID]uint64, len(in))
 		for _, v := range in {

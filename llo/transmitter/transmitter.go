@@ -15,9 +15,9 @@ import (
 	"github.com/smartcontractkit/chainlink-common/pkg/services"
 	coretypes "github.com/smartcontractkit/chainlink-common/pkg/types/core"
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
-	mercurytransmitter "github.com/smartcontractkit/chainlink-data-streams/llo/transmitter/de"
 
-	"github.com/smartcontractkit/chainlink-data-streams/llo/config"
+	"github.com/smartcontractkit/chainlink-data-streams/llo/pluginconfig"
+	mercurytransmitter "github.com/smartcontractkit/chainlink-data-streams/llo/transmitter/dataengine"
 )
 
 // LLO Transmitter implementation, based on
@@ -80,7 +80,7 @@ type TransmitterOpts struct {
 	VerboseLogging         bool
 	FromAccount            string
 	MercuryTransmitterOpts *mercurytransmitter.Opts
-	Subtransmitters        []config.TransmitterConfig
+	Subtransmitters        []pluginconfig.TransmitterConfig
 	RetirementReportCache  TransmitterRetirementReportCacheWriter
 	CapabilitiesRegistry   coretypes.CapabilitiesRegistry
 }
