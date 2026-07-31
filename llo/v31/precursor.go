@@ -35,7 +35,7 @@ func encodePrecursor(p precursor) (ocr3_1types.ReportsPlusPrecursor, error) {
 		for id, cd := range p.ChannelDefinitions {
 			pb.ChannelDefinitions = append(pb.ChannelDefinitions, &llocommon.LLOChannelIDAndDefinitionProto{
 				ChannelID:         id,
-				ChannelDefinition: makeChannelDefinitionProto(cd),
+				ChannelDefinition: llocommon.ChannelDefinitionToProto(cd),
 			})
 		}
 		sort.Slice(pb.ChannelDefinitions, func(i, j int) bool {
@@ -59,7 +59,7 @@ func encodePrecursor(p precursor) (ocr3_1types.ReportsPlusPrecursor, error) {
 	if len(p.StreamAggregates) > 0 {
 		for sid, aggregates := range p.StreamAggregates {
 			for agg, v := range aggregates {
-				pbSv, err := makeLLOStreamValue(v)
+				pbSv, err := llocommon.StreamValueToProto(v)
 				if err != nil {
 					return nil, fmt.Errorf("stream %d aggregator %v: %w", sid, agg, err)
 				}
@@ -101,7 +101,7 @@ func decodePrecursor(b ocr3_1types.ReportsPlusPrecursor) (precursor, error) {
 		if cd.ChannelDefinition == nil {
 			return precursor{}, errors.New("nil channel definition in precursor")
 		}
-		p.ChannelDefinitions[cd.ChannelID] = channelDefinitionFromProto(cd.ChannelDefinition)
+		p.ChannelDefinitions[cd.ChannelID] = llocommon.ChannelDefinitionFromProto(cd.ChannelDefinition)
 	}
 	for _, va := range pb.ValidAfterNanoseconds {
 		p.ValidAfterNanoseconds[va.ChannelID] = va.ValidAfterNanoseconds

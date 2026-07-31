@@ -41,7 +41,7 @@ func makeOutcomeTelemetry(out precursor, configDigest ocrtypes.ConfigDigest, seq
 		DonId:                           donID,
 	}
 	for id, cd := range out.ChannelDefinitions {
-		ot.ChannelDefinitions[id] = makeChannelDefinitionProto(cd)
+		ot.ChannelDefinitions[id] = llocommon.ChannelDefinitionToProto(cd)
 	}
 	for id, va := range out.ValidAfterNanoseconds {
 		ot.ValidAfterNanoseconds[id] = va
@@ -52,7 +52,7 @@ func makeOutcomeTelemetry(out precursor, configDigest ocrtypes.ConfigDigest, seq
 		}
 		aggVals := make(map[uint32]*llocommon.LLOStreamValue, len(aggMap))
 		for agg, sv := range aggMap {
-			v, err := makeLLOStreamValue(sv)
+			v, err := llocommon.StreamValueToProto(sv)
 			if err != nil {
 				return nil, fmt.Errorf("failed to make outcome telemetry; %w", err)
 			}

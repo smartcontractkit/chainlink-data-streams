@@ -127,7 +127,7 @@ func loadKVState(r ocr3_1types.KeyValueStateReader) (*kvState, error) {
 		if err := proto.Unmarshal(cdBytes, pb); err != nil {
 			return nil, fmt.Errorf("unmarshal channel %d: %w", id, err)
 		}
-		s.channelDefinitions[id] = channelDefinitionFromProto(pb)
+		s.channelDefinitions[id] = llocommon.ChannelDefinitionFromProto(pb)
 
 		vaBytes, err := r.Read(validAfterKey(id))
 		if err != nil {
@@ -185,7 +185,7 @@ func writeChannelIndex(w ocr3_1types.KeyValueStateReadWriter, ids []llotypes.Cha
 
 // writeChannelDefinition persists a single channel definition deterministically.
 func writeChannelDefinition(w ocr3_1types.KeyValueStateReadWriter, id llotypes.ChannelID, cd llotypes.ChannelDefinition) error {
-	b, err := deterministicMarshal.Marshal(makeChannelDefinitionProto(cd))
+	b, err := deterministicMarshal.Marshal(llocommon.ChannelDefinitionToProto(cd))
 	if err != nil {
 		return fmt.Errorf("marshal channel %d: %w", id, err)
 	}

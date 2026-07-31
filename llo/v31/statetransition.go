@@ -476,7 +476,7 @@ func medianTimestamp(timestampsNanoseconds []uint64) uint64 {
 func makeChannelHash(cd llocommon.ChannelDefinitionWithID) [32]byte {
 	pb := &llocommon.LLOChannelIDAndDefinitionProto{
 		ChannelID:         cd.ChannelID,
-		ChannelDefinition: makeChannelDefinitionProto(cd.ChannelDefinition),
+		ChannelDefinition: llocommon.ChannelDefinitionToProto(cd.ChannelDefinition),
 	}
 	b, err := deterministicMarshal.Marshal(pb)
 	if err != nil {
