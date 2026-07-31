@@ -11,7 +11,8 @@ import (
 	"github.com/smartcontractkit/chainlink-common/pkg/logger"
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
 	"github.com/smartcontractkit/chainlink-common/pkg/utils/tests"
-	llocommon "github.com/smartcontractkit/chainlink-data-streams/llo/common"
+
+	protocol "github.com/smartcontractkit/chainlink-data-streams/llo/protocol"
 
 	"github.com/smartcontractkit/libocr/offchainreporting2plus/ocr3types"
 	ocrtypes "github.com/smartcontractkit/libocr/offchainreporting2plus/types"
@@ -31,11 +32,11 @@ func (m *mockChannelDefinitionCache) HealthReport() map[string]error { return ni
 func (m *mockChannelDefinitionCache) Name() string                   { return "mockChannelDefinitionCache" }
 
 type mockDataSource struct {
-	vals       llocommon.StreamValues
+	vals       protocol.StreamValues
 	optsProbed bool
 }
 
-func (m *mockDataSource) Observe(ctx context.Context, sv llocommon.StreamValues, opts DSOpts) error {
+func (m *mockDataSource) Observe(ctx context.Context, sv protocol.StreamValues, opts DSOpts) error {
 	// Exercise the DSOpts accessors.
 	_ = opts.VerboseLogging()
 	_ = opts.SeqNr()
@@ -56,17 +57,17 @@ func (m *mockShouldRetireCache) ShouldRetire(ocrtypes.ConfigDigest) (bool, error
 
 type mockOnchainConfigCodec struct{}
 
-func (mockOnchainConfigCodec) Decode([]byte) (llocommon.OnchainConfig, error) {
-	return llocommon.OnchainConfig{}, nil
+func (mockOnchainConfigCodec) Decode([]byte) (protocol.OnchainConfig, error) {
+	return protocol.OnchainConfig{}, nil
 }
-func (mockOnchainConfigCodec) Encode(llocommon.OnchainConfig) ([]byte, error) { return nil, nil }
+func (mockOnchainConfigCodec) Encode(protocol.OnchainConfig) ([]byte, error) { return nil, nil }
 
-type mockPredecessorRetirementReportCache struct{ report llocommon.RetirementReport }
+type mockPredecessorRetirementReportCache struct{ report protocol.RetirementReport }
 
 func (m *mockPredecessorRetirementReportCache) AttestedRetirementReport(ocrtypes.ConfigDigest) ([]byte, error) {
 	return []byte("attested"), nil
 }
-func (m *mockPredecessorRetirementReportCache) CheckAttestedRetirementReport(ocrtypes.ConfigDigest, []byte) (llocommon.RetirementReport, error) {
+func (m *mockPredecessorRetirementReportCache) CheckAttestedRetirementReport(ocrtypes.ConfigDigest, []byte) (protocol.RetirementReport, error) {
 	return m.report, nil
 }
 
@@ -110,7 +111,7 @@ func Test_Factory_NewReportingPlugin(t *testing.T) {
 
 func Test_Observation_And_Validate_Flow(t *testing.T) {
 	ctx := tests.Context(t)
-	ds := &mockDataSource{vals: llocommon.StreamValues{100: llocommon.ToDecimal(decimal.NewFromInt(5))}}
+	ds := &mockDataSource{vals: protocol.StreamValues{100: protocol.ToDecimal(decimal.NewFromInt(5))}}
 	p := testPlugin(t)
 	p.ChannelDefinitionCache = &mockChannelDefinitionCache{defs: llotypes.ChannelDefinitions{1: jsonChannel()}}
 	p.DataSource = ds
@@ -186,7 +187,7 @@ func Test_StateTransition_Promotion(t *testing.T) {
 	predecessor := ocrtypes.ConfigDigest{0xAB}
 	p.PredecessorConfigDigest = &predecessor
 	p.PredecessorRetirementReportCache = &mockPredecessorRetirementReportCache{
-		report: llocommon.RetirementReport{ValidAfterNanoseconds: map[llotypes.ChannelID]uint64{1: 500}},
+		report: protocol.RetirementReport{ValidAfterNanoseconds: map[llotypes.ChannelID]uint64{1: 500}},
 	}
 	kv := newMemKV()
 	boot := []ocrtypes.AttributedObservation{ao(0, nil), ao(1, nil), ao(2, nil)}
@@ -194,7 +195,7 @@ func Test_StateTransition_Promotion(t *testing.T) {
 	// Bootstrap: staging, because a predecessor is configured.
 	_, err := p.StateTransition(ctx, 1, ocrtypes.AttributedQuery{}, boot, kv, nil)
 	require.NoError(t, err)
-	require.Equal(t, string(llocommon.LifeCycleStageStaging), string(kv.m[string(keyLifecycle)]))
+	require.Equal(t, string(protocol.LifeCycleStageStaging), string(kv.m[string(keyLifecycle)]))
 
 	// A round carrying a valid attested predecessor retirement report promotes to production.
 	promoObs := Observation{UnixTimestampNanoseconds: 1000, AttestedPredecessorRetirement: []byte("attested")}
@@ -205,7 +206,7 @@ func Test_StateTransition_Promotion(t *testing.T) {
 	_, err = p.StateTransition(ctx, 2, ocrtypes.AttributedQuery{}, aos, kv, nil)
 	require.NoError(t, err)
 
-	require.Equal(t, string(llocommon.LifeCycleStageProduction), string(kv.m[string(keyLifecycle)]))
+	require.Equal(t, string(protocol.LifeCycleStageProduction), string(kv.m[string(keyLifecycle)]))
 	// validAfter is seeded from the predecessor's retirement report (gapless handover).
 	require.Equal(t, uint64(500), binary.BigEndian.Uint64(kv.m[string(validAfterKey(1))]))
 }
@@ -223,7 +224,7 @@ func Test_StateTransition_Promotion_StagingOnlyChannelTreatedAsNew(t *testing.T)
 	p.PredecessorConfigDigest = &predecessor
 	// The predecessor's retirement report covers channel 1 only.
 	p.PredecessorRetirementReportCache = &mockPredecessorRetirementReportCache{
-		report: llocommon.RetirementReport{ValidAfterNanoseconds: map[llotypes.ChannelID]uint64{1: 500}},
+		report: protocol.RetirementReport{ValidAfterNanoseconds: map[llotypes.ChannelID]uint64{1: 500}},
 	}
 	kv := newMemKV()
 
@@ -246,7 +247,7 @@ func Test_StateTransition_Promotion_StagingOnlyChannelTreatedAsNew(t *testing.T)
 	}
 	_, err = p.StateTransition(ctx, 3, ocrtypes.AttributedQuery{}, aos, kv, nil)
 	require.NoError(t, err)
-	require.Equal(t, string(llocommon.LifeCycleStageProduction), string(kv.m[string(keyLifecycle)]))
+	require.Equal(t, string(protocol.LifeCycleStageProduction), string(kv.m[string(keyLifecycle)]))
 
 	// Channel 2 must be reseeded to the promotion round's obs timestamp (3000),
 	// NOT keep its carried-forward staging watermark (1000).
@@ -272,8 +273,8 @@ func Test_ValidateObservation_Errors(t *testing.T) {
 	require.Error(t, p.ValidateObservation(ctx, 2, ocrtypes.AttributedQuery{}, ao(0, mustEncodeObs(t, o2)), kv, nil))
 
 	// A TimestampedStreamValue whose nested value is not a Decimal -> error.
-	o3 := Observation{UnixTimestampNanoseconds: 1, StreamValues: llocommon.StreamValues{
-		1: &llocommon.TimestampedStreamValue{StreamValue: &llocommon.TimestampedStreamValue{StreamValue: llocommon.ToDecimal(decimal.NewFromInt(1))}},
+	o3 := Observation{UnixTimestampNanoseconds: 1, StreamValues: protocol.StreamValues{
+		1: &protocol.TimestampedStreamValue{StreamValue: &protocol.TimestampedStreamValue{StreamValue: protocol.ToDecimal(decimal.NewFromInt(1))}},
 	}}
 	require.Error(t, p.ValidateObservation(ctx, 2, ocrtypes.AttributedQuery{}, ao(0, mustEncodeObs(t, o3)), kv, nil))
 }
@@ -281,7 +282,7 @@ func Test_ValidateObservation_Errors(t *testing.T) {
 func Test_StateTransition_Retirement(t *testing.T) {
 	ctx := tests.Context(t)
 	p := testPlugin(t)
-	p.RetirementReportCodec = llocommon.StandardRetirementReportCodec{}
+	p.RetirementReportCodec = protocol.StandardRetirementReportCodec{}
 	kv := newMemKV()
 
 	_, err := p.StateTransition(ctx, 1, ocrtypes.AttributedQuery{}, []ocrtypes.AttributedObservation{ao(0, nil), ao(1, nil), ao(2, nil)}, kv, nil)
@@ -297,12 +298,12 @@ func Test_StateTransition_Retirement(t *testing.T) {
 	}
 	prec, err := p.StateTransition(ctx, 3, ocrtypes.AttributedQuery{}, retireAOs, kv, nil)
 	require.NoError(t, err)
-	require.Equal(t, string(llocommon.LifeCycleStageRetired), string(kv.m[string(keyLifecycle)]))
+	require.Equal(t, string(protocol.LifeCycleStageRetired), string(kv.m[string(keyLifecycle)]))
 
 	// Reports emits a retirement report (and nothing else, since we're retired).
 	reports, err := p.Reports(ctx, 3, prec)
 	require.NoError(t, err)
 	require.Len(t, reports, 1)
 	require.Equal(t, llotypes.ReportFormatRetirement, reports[0].ReportWithInfo.Info.ReportFormat)
-	require.Equal(t, llocommon.LifeCycleStageRetired, reports[0].ReportWithInfo.Info.LifeCycleStage)
+	require.Equal(t, protocol.LifeCycleStageRetired, reports[0].ReportWithInfo.Info.LifeCycleStage)
 }

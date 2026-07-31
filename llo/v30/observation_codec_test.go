@@ -18,7 +18,8 @@ import (
 
 	"github.com/smartcontractkit/chainlink-common/pkg/logger"
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
-	llocommon "github.com/smartcontractkit/chainlink-data-streams/llo/common"
+
+	protocol "github.com/smartcontractkit/chainlink-data-streams/llo/protocol"
 )
 
 func Test_protoObservationCodec(t *testing.T) {
@@ -50,10 +51,10 @@ func Test_protoObservationCodec(t *testing.T) {
 					Opts:         []byte(`{"foo":"bar"}`),
 				},
 			},
-			StreamValues: map[llotypes.StreamID]llocommon.StreamValue{
-				4: llocommon.ToDecimal(decimal.NewFromInt(123)),
-				5: llocommon.ToDecimal(decimal.NewFromInt(456)),
-				6: (*llocommon.Decimal)(nil),
+			StreamValues: map[llotypes.StreamID]protocol.StreamValue{
+				4: protocol.ToDecimal(decimal.NewFromInt(123)),
+				5: protocol.ToDecimal(decimal.NewFromInt(456)),
+				6: (*protocol.Decimal)(nil),
 				7: nil,
 			},
 		}
@@ -113,7 +114,7 @@ func Test_protoObservationCodec(t *testing.T) {
 
 		})
 		t.Run("duplicate RemoveChannelIDs", func(t *testing.T) {
-			pbuf := &llocommon.LLOObservationProto{
+			pbuf := &protocol.LLOObservationProto{
 				RemoveChannelIDs: []uint32{1, 1},
 			}
 
@@ -131,9 +132,9 @@ func Test_protoObservationCodec(t *testing.T) {
 		})
 		t.Run("invalid LLOStreamValue", func(t *testing.T) {
 			t.Run("nil/missing value", func(t *testing.T) {
-				pbuf := &llocommon.LLOObservationProto{
-					StreamValues: map[uint32]*llocommon.LLOStreamValue{
-						1: &llocommon.LLOStreamValue{Type: llocommon.LLOStreamValue_Decimal, Value: nil},
+				pbuf := &protocol.LLOObservationProto{
+					StreamValues: map[uint32]*protocol.LLOStreamValue{
+						1: &protocol.LLOStreamValue{Type: protocol.LLOStreamValue_Decimal, Value: nil},
 					},
 				}
 
@@ -150,9 +151,9 @@ func Test_protoObservationCodec(t *testing.T) {
 				require.EqualError(t, err, "failed to decode observation; invalid stream value for stream ID: 1; error decoding binary []: expected at least 4 bytes, got 0")
 			})
 			t.Run("unsupported type", func(t *testing.T) {
-				pbuf := &llocommon.LLOObservationProto{
-					StreamValues: map[uint32]*llocommon.LLOStreamValue{
-						1: &llocommon.LLOStreamValue{Type: 1000001, Value: []byte("foo")},
+				pbuf := &protocol.LLOObservationProto{
+					StreamValues: map[uint32]*protocol.LLOStreamValue{
+						1: &protocol.LLOStreamValue{Type: 1000001, Value: []byte("foo")},
 					},
 				}
 
@@ -170,14 +171,14 @@ func Test_protoObservationCodec(t *testing.T) {
 			})
 
 			t.Run("compressed observation", func(t *testing.T) {
-				pbuf := &llocommon.LLOObservationProto{
-					StreamValues: map[uint32]*llocommon.LLOStreamValue{},
+				pbuf := &protocol.LLOObservationProto{
+					StreamValues: map[uint32]*protocol.LLOStreamValue{},
 				}
 
 				var id uint32 = 0
 				for i := 0; i <= 1000; i++ {
-					pbuf.StreamValues[id+1] = &llocommon.LLOStreamValue{Type: llocommon.LLOStreamValue_Quote, Value: []byte(decimal.NewFromFloat(rand.Float64()).String())}
-					pbuf.StreamValues[id+2] = &llocommon.LLOStreamValue{Type: llocommon.LLOStreamValue_Quote, Value: []byte(fmt.Sprintf("Q{Bid: %s, Benchmark: %s, Ask: %s}", decimal.NewFromFloat(rand.Float64()).String(), decimal.NewFromFloat(rand.Float64()).String(), decimal.NewFromFloat(rand.Float64()).String()))}
+					pbuf.StreamValues[id+1] = &protocol.LLOStreamValue{Type: protocol.LLOStreamValue_Quote, Value: []byte(decimal.NewFromFloat(rand.Float64()).String())}
+					pbuf.StreamValues[id+2] = &protocol.LLOStreamValue{Type: protocol.LLOStreamValue_Quote, Value: []byte(fmt.Sprintf("Q{Bid: %s, Benchmark: %s, Ask: %s}", decimal.NewFromFloat(rand.Float64()).String(), decimal.NewFromFloat(rand.Float64()).String(), decimal.NewFromFloat(rand.Float64()).String()))}
 					id += 2
 				}
 
@@ -206,7 +207,7 @@ func Test_protoObservationCodec(t *testing.T) {
 			uncompressed, err := compressor.DecompressObservation(encoded)
 			require.NoError(t, err)
 
-			pbuf := &llocommon.LLOObservationProto{}
+			pbuf := &protocol.LLOObservationProto{}
 			require.NoError(t, proto.Unmarshal(uncompressed, pbuf))
 
 			assert.Equal(t, uint64(12345*time.Second), pbuf.UnixTimestampNanoseconds)
@@ -229,7 +230,7 @@ func Test_protoObservationCodec(t *testing.T) {
 			assert.Equal(t, uint64(1234567890), obs.UnixTimestampNanoseconds)
 		})
 		t.Run("decoding negative value fails", func(t *testing.T) {
-			pbuf := &llocommon.LLOObservationProto{
+			pbuf := &protocol.LLOObservationProto{
 				UnixTimestampNanosecondsLegacy: -1,
 			}
 			b, err := proto.Marshal(pbuf)
@@ -274,18 +275,18 @@ func Fuzz_protoObservationCodec_Decode(f *testing.F) {
 				Opts:         []byte(`{"foo":"bar"}`),
 			},
 		},
-		StreamValues: map[llotypes.StreamID]llocommon.StreamValue{
-			4: llocommon.ToDecimal(decimal.NewFromInt(123)),
-			5: llocommon.ToDecimal(decimal.NewFromInt(456)),
-			6: (*llocommon.Decimal)(nil),
+		StreamValues: map[llotypes.StreamID]protocol.StreamValue{
+			4: protocol.ToDecimal(decimal.NewFromInt(123)),
+			5: protocol.ToDecimal(decimal.NewFromInt(456)),
+			6: (*protocol.Decimal)(nil),
 			7: nil,
-			8: &llocommon.Quote{
+			8: &protocol.Quote{
 				Bid:       decimal.NewFromInt(1010),
 				Benchmark: decimal.NewFromInt(1011),
 				Ask:       decimal.NewFromInt(1012),
 			},
-			9:  &llocommon.Quote{},
-			10: (*llocommon.Quote)(nil),
+			9:  &protocol.Quote{},
+			10: (*protocol.Quote)(nil),
 		},
 	}
 

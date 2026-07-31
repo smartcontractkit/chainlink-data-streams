@@ -13,7 +13,10 @@ import (
 	"github.com/smartcontractkit/chainlink-common/pkg/logger"
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
 	"github.com/smartcontractkit/chainlink-common/pkg/utils/tests"
-	llocommon "github.com/smartcontractkit/chainlink-data-streams/llo/common"
+
+	protocol "github.com/smartcontractkit/chainlink-data-streams/llo/protocol"
+	"github.com/smartcontractkit/chainlink-data-streams/llo/protocol/calculated"
+	"github.com/smartcontractkit/chainlink-data-streams/llo/reportcodec"
 
 	"github.com/smartcontractkit/libocr/commontypes"
 	"github.com/smartcontractkit/libocr/offchainreporting2plus/ocr3_1types"
@@ -70,8 +73,8 @@ func testPlugin(t *testing.T) *Plugin {
 		Logger:                              logger.Test(t),
 		N:                                   4,
 		F:                                   1,
-		ReportCodecs:                        map[llotypes.ReportFormat]llocommon.ReportCodec{llotypes.ReportFormatJSON: llocommon.JSONReportCodec{}},
-		OptsCache:                           llocommon.NewOptsCache(),
+		ReportCodecs:                        map[llotypes.ReportFormat]protocol.ReportCodec{llotypes.ReportFormatJSON: reportcodec.JSONReportCodec{}},
+		OptsCache:                           protocol.NewOptsCache(),
 		ProtocolVersion:                     0,
 		DefaultMinReportIntervalNanoseconds: 0,
 	}
@@ -99,8 +102,8 @@ func Test_Observation_InlineRoundTrip(t *testing.T) {
 		UpdateChannelDefinitions: llotypes.ChannelDefinitions{
 			1: {ReportFormat: llotypes.ReportFormatJSON, Streams: []llotypes.Stream{{StreamID: 100, Aggregator: llotypes.AggregatorMedian}}},
 		},
-		StreamValues: llocommon.StreamValues{
-			100: llocommon.ToDecimal(decimal.NewFromInt(42)),
+		StreamValues: protocol.StreamValues{
+			100: protocol.ToDecimal(decimal.NewFromInt(42)),
 		},
 	}
 	enc, err := encodeObservation(ctx, obs, 2, 0, nil)
@@ -127,11 +130,11 @@ func Test_StateTransition_Bootstrap(t *testing.T) {
 	require.NoError(t, err)
 
 	// Lifecycle should be production (no predecessor).
-	require.Equal(t, string(llocommon.LifeCycleStageProduction), string(kv.m[string(keyLifecycle)]))
+	require.Equal(t, string(protocol.LifeCycleStageProduction), string(kv.m[string(keyLifecycle)]))
 
 	prec, err := decodePrecursor(precBytes)
 	require.NoError(t, err)
-	require.Equal(t, llocommon.LifeCycleStageProduction, prec.LifeCycleStage)
+	require.Equal(t, protocol.LifeCycleStageProduction, prec.LifeCycleStage)
 
 	// No reports on the initial round.
 	reports, err := p.Reports(ctx, 1, precBytes)
@@ -174,7 +177,7 @@ func Test_FullRound_AddChannelThenReport(t *testing.T) {
 	// Round 3 (seqNr=3): later timestamp + stream observations -> reportable.
 	valObs := Observation{
 		UnixTimestampNanoseconds: 2_000,
-		StreamValues:             llocommon.StreamValues{100: llocommon.ToDecimal(decimal.NewFromInt(42))},
+		StreamValues:             protocol.StreamValues{100: protocol.ToDecimal(decimal.NewFromInt(42))},
 	}
 	valAOs := []ocrtypes.AttributedObservation{}
 	for i := 0; i < 4; i++ {
@@ -191,16 +194,16 @@ func Test_FullRound_AddChannelThenReport(t *testing.T) {
 
 func Test_Precursor_RoundTrip_And_Determinism(t *testing.T) {
 	p := precursor{
-		LifeCycleStage:                  llocommon.LifeCycleStageProduction,
+		LifeCycleStage:                  protocol.LifeCycleStageProduction,
 		ObservationTimestampNanoseconds: 999,
 		ChannelDefinitions: llotypes.ChannelDefinitions{
 			1: {ReportFormat: llotypes.ReportFormatJSON, Streams: []llotypes.Stream{{StreamID: 100, Aggregator: llotypes.AggregatorMedian}}},
 			2: {ReportFormat: llotypes.ReportFormatJSON, Streams: []llotypes.Stream{{StreamID: 200, Aggregator: llotypes.AggregatorMedian}}},
 		},
 		ValidAfterNanoseconds: map[llotypes.ChannelID]uint64{1: 100, 2: 200},
-		StreamAggregates: llocommon.StreamAggregates{
-			100: {llotypes.AggregatorMedian: llocommon.ToDecimal(decimal.NewFromInt(1))},
-			200: {llotypes.AggregatorMedian: llocommon.ToDecimal(decimal.NewFromInt(2))},
+		StreamAggregates: protocol.StreamAggregates{
+			100: {llotypes.AggregatorMedian: protocol.ToDecimal(decimal.NewFromInt(1))},
+			200: {llotypes.AggregatorMedian: protocol.ToDecimal(decimal.NewFromInt(2))},
 		},
 	}
 
@@ -230,7 +233,7 @@ func Test_StateTransition_Determinism_ShuffledObservations(t *testing.T) {
 		return ao(observer, mustEncodeObs(t, Observation{
 			UnixTimestampNanoseconds: ts,
 			UpdateChannelDefinitions: llotypes.ChannelDefinitions{1: channelDef},
-			StreamValues:             llocommon.StreamValues{100: llocommon.ToDecimal(decimal.NewFromInt(val))},
+			StreamValues:             protocol.StreamValues{100: protocol.ToDecimal(decimal.NewFromInt(val))},
 		}))
 	}
 
@@ -260,9 +263,9 @@ func Test_Observation_BlobOffloadFallback(t *testing.T) {
 	ctx := tests.Context(t)
 
 	// Build an observation whose serialized stream values exceed a tiny threshold.
-	sv := llocommon.StreamValues{}
+	sv := protocol.StreamValues{}
 	for i := 0; i < 500; i++ {
-		sv[llotypes.StreamID(i)] = llocommon.ToDecimal(decimal.NewFromInt(int64(i)))
+		sv[llotypes.StreamID(i)] = protocol.ToDecimal(decimal.NewFromInt(int64(i)))
 	}
 	obs := Observation{UnixTimestampNanoseconds: 1, StreamValues: sv}
 
@@ -292,7 +295,7 @@ func Test_decodeObservation_RejectsHugeHandleCount(t *testing.T) {
 func Test_SecondsResolutionOverlap(t *testing.T) {
 	mkPrec := func(format llotypes.ReportFormat, opts []byte, validAfterNs, obsTsNs uint64) precursor {
 		return precursor{
-			LifeCycleStage:                  llocommon.LifeCycleStageProduction,
+			LifeCycleStage:                  protocol.LifeCycleStageProduction,
 			ObservationTimestampNanoseconds: obsTsNs,
 			ChannelDefinitions:              llotypes.ChannelDefinitions{1: {ReportFormat: format, Opts: opts}},
 			ValidAfterNanoseconds:           map[llotypes.ChannelID]uint64{1: validAfterNs},
@@ -339,9 +342,9 @@ func Test_DisableNilStreamValues(t *testing.T) {
 		DisableNilStreamValues: true,
 		Streams:                []llotypes.Stream{{StreamID: 100, Aggregator: llotypes.AggregatorMedian}, {StreamID: 200, Aggregator: llotypes.AggregatorMedian}},
 	}
-	base := func(aggs llocommon.StreamAggregates) precursor {
+	base := func(aggs protocol.StreamAggregates) precursor {
 		return precursor{
-			LifeCycleStage:                  llocommon.LifeCycleStageProduction,
+			LifeCycleStage:                  protocol.LifeCycleStageProduction,
 			ObservationTimestampNanoseconds: 2000,
 			ChannelDefinitions:              llotypes.ChannelDefinitions{1: cd},
 			ValidAfterNanoseconds:           map[llotypes.ChannelID]uint64{1: 1000},
@@ -350,13 +353,13 @@ func Test_DisableNilStreamValues(t *testing.T) {
 	}
 
 	// Missing stream 200 -> not reportable.
-	missing := base(llocommon.StreamAggregates{100: {llotypes.AggregatorMedian: llocommon.ToDecimal(decimal.NewFromInt(1))}})
+	missing := base(protocol.StreamAggregates{100: {llotypes.AggregatorMedian: protocol.ToDecimal(decimal.NewFromInt(1))}})
 	require.Empty(t, missing.reportableChannels(0))
 
 	// Both streams present -> reportable.
-	full := base(llocommon.StreamAggregates{
-		100: {llotypes.AggregatorMedian: llocommon.ToDecimal(decimal.NewFromInt(1))},
-		200: {llotypes.AggregatorMedian: llocommon.ToDecimal(decimal.NewFromInt(2))},
+	full := base(protocol.StreamAggregates{
+		100: {llotypes.AggregatorMedian: protocol.ToDecimal(decimal.NewFromInt(1))},
+		200: {llotypes.AggregatorMedian: protocol.ToDecimal(decimal.NewFromInt(2))},
 	})
 	require.Equal(t, []llotypes.ChannelID{1}, full.reportableChannels(0))
 }
@@ -366,14 +369,14 @@ func Test_TimestampedAggregate_CarryForward(t *testing.T) {
 	kv := newMemKV()
 	defs := llotypes.ChannelDefinitions{1: {ReportFormat: llotypes.ReportFormatJSON, Streams: []llotypes.Stream{{StreamID: 100, Aggregator: llotypes.AggregatorMedian}}}}
 
-	tsv := func(ts uint64, v int64) llocommon.StreamValue {
-		return &llocommon.TimestampedStreamValue{ObservedAtNanoseconds: ts, StreamValue: llocommon.ToDecimal(decimal.NewFromInt(v))}
+	tsv := func(ts uint64, v int64) protocol.StreamValue {
+		return &protocol.TimestampedStreamValue{ObservedAtNanoseconds: ts, StreamValue: protocol.ToDecimal(decimal.NewFromInt(v))}
 	}
-	roundAgg := func(ts uint64, v int64) *llocommon.TimestampedStreamValue {
-		out := llocommon.StreamAggregates{}
-		obs := map[llotypes.StreamID][]llocommon.StreamValue{100: {tsv(ts, v), tsv(ts, v), tsv(ts, v)}}
+	roundAgg := func(ts uint64, v int64) *protocol.TimestampedStreamValue {
+		out := protocol.StreamAggregates{}
+		obs := map[llotypes.StreamID][]protocol.StreamValue{100: {tsv(ts, v), tsv(ts, v), tsv(ts, v)}}
 		require.NoError(t, p.aggregate(kv, defs, obs, out))
-		res, ok := out[100][llotypes.AggregatorMedian].(*llocommon.TimestampedStreamValue)
+		res, ok := out[100][llotypes.AggregatorMedian].(*protocol.TimestampedStreamValue)
 		require.True(t, ok, "expected a TimestampedStreamValue aggregate")
 		return res
 	}
@@ -393,8 +396,8 @@ func Test_TimestampedAggregate_CarryForward(t *testing.T) {
 
 func Test_Telemetry(t *testing.T) {
 	ctx := tests.Context(t)
-	otCh := make(chan *llocommon.LLOOutcomeTelemetry, 8)
-	rtCh := make(chan *llocommon.LLOReportTelemetry, 8)
+	otCh := make(chan *protocol.LLOOutcomeTelemetry, 8)
+	rtCh := make(chan *protocol.LLOReportTelemetry, 8)
 	p := testPlugin(t)
 	p.DonID = 7
 	p.OutcomeTelemetryCh = otCh
@@ -405,7 +408,7 @@ func Test_Telemetry(t *testing.T) {
 	obs := func(ts uint64, withVal bool) []ocrtypes.AttributedObservation {
 		o := Observation{UnixTimestampNanoseconds: ts, UpdateChannelDefinitions: llotypes.ChannelDefinitions{1: channelDef}}
 		if withVal {
-			o.StreamValues = llocommon.StreamValues{100: llocommon.ToDecimal(decimal.NewFromInt(42))}
+			o.StreamValues = protocol.StreamValues{100: protocol.ToDecimal(decimal.NewFromInt(42))}
 		}
 		aos := make([]ocrtypes.AttributedObservation, 0, 4)
 		for i := 0; i < 4; i++ {
@@ -452,18 +455,18 @@ func Test_CalculatedStreams(t *testing.T) {
 				{StreamID: 2, Aggregator: llotypes.AggregatorMedian},
 			},
 		}},
-		StreamAggregates: llocommon.StreamAggregates{
-			1: {llotypes.AggregatorMedian: llocommon.ToDecimal(decimal.NewFromInt(3))},
-			2: {llotypes.AggregatorMedian: llocommon.ToDecimal(decimal.NewFromInt(4))},
+		StreamAggregates: protocol.StreamAggregates{
+			1: {llotypes.AggregatorMedian: protocol.ToDecimal(decimal.NewFromInt(3))},
+			2: {llotypes.AggregatorMedian: protocol.ToDecimal(decimal.NewFromInt(4))},
 		},
 	}
 
-	llocommon.ProcessCalculatedStreams(p.Logger, prec.ChannelDefinitions, prec.StreamAggregates, prec.ObservationTimestampNanoseconds, p.OptsCache)
+	calculated.ProcessCalculatedStreams(p.Logger, prec.ChannelDefinitions, prec.StreamAggregates, prec.ObservationTimestampNanoseconds, p.OptsCache)
 
 	// The calculated stream (999) should hold Add(s1, s2) = 7.
 	got := prec.StreamAggregates[999][llotypes.AggregatorCalculated]
 	require.NotNil(t, got)
-	d, ok := got.(*llocommon.Decimal)
+	d, ok := got.(*protocol.Decimal)
 	require.True(t, ok)
 	require.True(t, d.Decimal().Equal(decimal.NewFromInt(7)), "expected 7, got %s", d.Decimal())
 
@@ -473,7 +476,7 @@ func Test_CalculatedStreams(t *testing.T) {
 	require.EqualValues(t, llotypes.AggregatorCalculated, prec.ChannelDefinitions[cid].Streams[2].Aggregator)
 
 	// Dry-run helper should accept a valid expression.
-	require.NoError(t, llocommon.ProcessCalculatedStreamsDryRun("Add(s1, s2)"))
+	require.NoError(t, calculated.ProcessCalculatedStreamsDryRun("Add(s1, s2)"))
 }
 
 func Test_HistoryBackfill(t *testing.T) {
@@ -511,11 +514,11 @@ func Test_HistoryBackfill(t *testing.T) {
 
 	// Reports emits the backfill report, encoded with the target channel's format.
 	prec := precursor{
-		LifeCycleStage:                  llocommon.LifeCycleStageProduction,
+		LifeCycleStage:                  protocol.LifeCycleStageProduction,
 		ObservationTimestampNanoseconds: tenSec,
 		ChannelDefinitions:              defs,
 		ValidAfterNanoseconds:           map[llotypes.ChannelID]uint64{targetCID: tenSec /* target not reportable */, backfillCID: 0},
-		StreamAggregates:                llocommon.StreamAggregates{},
+		StreamAggregates:                protocol.StreamAggregates{},
 	}
 	b, err := encodePrecursor(prec)
 	require.NoError(t, err)
@@ -545,7 +548,7 @@ func validBlobHandleBytes() []byte {
 // only some oracles (Finding 2).
 func Test_decodeObservation_BlobFetchErrorIsClassified(t *testing.T) {
 	ctx := tests.Context(t)
-	mainBytes, err := proto.Marshal(&llocommon.LLOObservationProto{UnixTimestampNanoseconds: 42})
+	mainBytes, err := proto.Marshal(&protocol.LLOObservationProto{UnixTimestampNanoseconds: 42})
 	require.NoError(t, err)
 	frame := frameObservation([][]byte{validBlobHandleBytes()}, mainBytes)
 
@@ -595,7 +598,7 @@ func Test_StateTransition_PropagatesBlobFetchFailure(t *testing.T) {
 	require.NoError(t, err)
 
 	// All four observations reference a blob that cannot be fetched.
-	mainBytes, err := proto.Marshal(&llocommon.LLOObservationProto{UnixTimestampNanoseconds: 1000})
+	mainBytes, err := proto.Marshal(&protocol.LLOObservationProto{UnixTimestampNanoseconds: 1000})
 	require.NoError(t, err)
 	frame := frameObservation([][]byte{validBlobHandleBytes()}, mainBytes)
 	aos := make([]ocrtypes.AttributedObservation, 0, 4)
@@ -609,7 +612,7 @@ func Test_StateTransition_PropagatesBlobFetchFailure(t *testing.T) {
 }
 
 // equalStreamValue compares two stream values by their binary encoding.
-func equalStreamValue(a, b llocommon.StreamValue) bool {
+func equalStreamValue(a, b protocol.StreamValue) bool {
 	ba, err := a.MarshalBinary()
 	if err != nil {
 		return false

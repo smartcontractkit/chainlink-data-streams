@@ -12,8 +12,9 @@ import (
 	"github.com/smartcontractkit/chainlink-common/pkg/capabilities"
 	"github.com/smartcontractkit/chainlink-common/pkg/logger"
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
-	llocommon "github.com/smartcontractkit/chainlink-data-streams/llo/common"
 	"github.com/smartcontractkit/chainlink-protos/cre/go/values"
+
+	protocol "github.com/smartcontractkit/chainlink-data-streams/llo/protocol"
 )
 
 const (
@@ -78,13 +79,13 @@ func buildRegistrationRequest(t *testing.T, triggerID string, streamIDs []LLOStr
 
 func encodeReport(t *testing.T, timestamp uint64) ocr3types.ReportWithInfo[llotypes.ReportInfo] {
 	codec := NewReportCodecCapabilityTrigger(logger.Test(t), donID)
-	rep := llocommon.Report{
+	rep := protocol.Report{
 		ConfigDigest:                    types.ConfigDigest{1, 2, 3},
 		SeqNr:                           32,
 		ChannelID:                       llotypes.ChannelID(31),
 		ValidAfterNanoseconds:           28,
 		ObservationTimestampNanoseconds: timestamp,
-		Values:                          []llocommon.StreamValue{llocommon.ToDecimal(decimal.NewFromInt(35)), llocommon.ToDecimal(decimal.NewFromInt(36))},
+		Values:                          []protocol.StreamValue{protocol.ToDecimal(decimal.NewFromInt(35)), protocol.ToDecimal(decimal.NewFromInt(36))},
 		Specimen:                        false,
 	}
 	cd := llotypes.ChannelDefinition{
@@ -94,7 +95,7 @@ func encodeReport(t *testing.T, timestamp uint64) ocr3types.ReportWithInfo[lloty
 			{StreamID: 2},
 		},
 	}
-	cache := llocommon.NewOptsCache()
+	cache := protocol.NewOptsCache()
 	cache.Set(rep.ChannelID, []byte{})
 	rawReport, err := codec.Encode(rep, cd, cache)
 	require.NoError(t, err)
@@ -102,7 +103,7 @@ func encodeReport(t *testing.T, timestamp uint64) ocr3types.ReportWithInfo[lloty
 	return ocr3types.ReportWithInfo[llotypes.ReportInfo]{
 		Report: rawReport,
 		Info: llotypes.ReportInfo{
-			LifeCycleStage: llocommon.LifeCycleStageProduction,
+			LifeCycleStage: protocol.LifeCycleStageProduction,
 			ReportFormat:   llotypes.ReportFormatCapabilityTrigger,
 		},
 	}

@@ -16,10 +16,11 @@ import (
 	"github.com/smartcontractkit/chainlink-common/pkg/services"
 	coretypes "github.com/smartcontractkit/chainlink-common/pkg/types/core"
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
-	mercurytransmitter "github.com/smartcontractkit/chainlink-data-streams/llo/transmitter/de"
 
-	"github.com/smartcontractkit/chainlink-data-streams/llo/config"
+	mercurytransmitter "github.com/smartcontractkit/chainlink-data-streams/llo/transmitter/dataengine"
+
 	"github.com/smartcontractkit/chainlink-data-streams/llo/cre"
+	"github.com/smartcontractkit/chainlink-data-streams/llo/pluginconfig"
 )
 
 // LLO Transmitter implementation, based on
@@ -82,7 +83,7 @@ type TransmitterOpts struct {
 	VerboseLogging         bool
 	FromAccount            string
 	MercuryTransmitterOpts *mercurytransmitter.Opts
-	Subtransmitters        []config.TransmitterConfig
+	Subtransmitters        []pluginconfig.TransmitterConfig
 	RetirementReportCache  TransmitterRetirementReportCacheWriter
 	CapabilitiesRegistry   coretypes.CapabilitiesRegistry
 }
@@ -99,7 +100,7 @@ func NewTransmitter(opts TransmitterOpts) (Transmitter, error) {
 	}
 	for _, cfg := range opts.Subtransmitters {
 		switch cfg.Type {
-		case config.TransmitterTypeCRE:
+		case pluginconfig.TransmitterTypeCRE:
 			var creTransmitterCfg cre.TransmitterConfig
 			err := json.Unmarshal(cfg.Opts, &creTransmitterCfg)
 			if err != nil {

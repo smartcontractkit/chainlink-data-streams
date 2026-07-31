@@ -6,7 +6,8 @@ import (
 	"fmt"
 
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
-	llocommon "github.com/smartcontractkit/chainlink-data-streams/llo/common"
+
+	protocol "github.com/smartcontractkit/chainlink-data-streams/llo/protocol"
 
 	"github.com/smartcontractkit/libocr/offchainreporting2plus/ocr3_1types"
 	ocrtypes "github.com/smartcontractkit/libocr/offchainreporting2plus/types"
@@ -22,7 +23,7 @@ type Observation struct {
 	UnixTimestampNanoseconds      uint64
 	RemoveChannelIDs              map[llotypes.ChannelID]struct{}
 	UpdateChannelDefinitions      llotypes.ChannelDefinitions
-	StreamValues                  llocommon.StreamValues
+	StreamValues                  protocol.StreamValues
 }
 
 // observationWireVersion is the leading byte of the v31 observation framing.
@@ -39,7 +40,7 @@ const maxObservationBlobHandles = 64
 // referenced by handle instead of being sent inline. A threshold of 0 disables
 // blob offloading. A nil broadcaster also disables offloading (values inline).
 func encodeObservation(ctx context.Context, obs Observation, seqNr uint64, blobThreshold int, bbf ocr3_1types.BlobBroadcaster) (ocrtypes.Observation, error) {
-	main := &llocommon.LLOObservationProto{
+	main := &protocol.LLOObservationProto{
 		AttestedPredecessorRetirement: obs.AttestedPredecessorRetirement,
 		ShouldRetire:                  obs.ShouldRetire,
 		UnixTimestampNanoseconds:      obs.UnixTimestampNanoseconds,
@@ -48,9 +49,9 @@ func encodeObservation(ctx context.Context, obs Observation, seqNr uint64, blobT
 		main.RemoveChannelIDs = append(main.RemoveChannelIDs, id)
 	}
 	if len(obs.UpdateChannelDefinitions) > 0 {
-		main.UpdateChannelDefinitions = make(map[uint32]*llocommon.LLOChannelDefinitionProto, len(obs.UpdateChannelDefinitions))
+		main.UpdateChannelDefinitions = make(map[uint32]*protocol.LLOChannelDefinitionProto, len(obs.UpdateChannelDefinitions))
 		for id, cd := range obs.UpdateChannelDefinitions {
-			main.UpdateChannelDefinitions[id] = llocommon.ChannelDefinitionToProto(cd)
+			main.UpdateChannelDefinitions[id] = protocol.ChannelDefinitionToProto(cd)
 		}
 	}
 
@@ -62,7 +63,7 @@ func encodeObservation(ctx context.Context, obs Observation, seqNr uint64, blobT
 	// Decide whether to offload stream values to a blob.
 	var handles [][]byte
 	if len(streamValues) > 0 {
-		svOnly := &llocommon.LLOObservationProto{StreamValues: streamValues}
+		svOnly := &protocol.LLOObservationProto{StreamValues: streamValues}
 		svBytes, err := proto.Marshal(svOnly)
 		if err != nil {
 			return nil, fmt.Errorf("marshal stream values: %w", err)
@@ -156,7 +157,7 @@ func decodeObservation(ctx context.Context, raw ocrtypes.Observation, bf ocr3_1t
 		rest = rest[l:]
 	}
 
-	main := &llocommon.LLOObservationProto{}
+	main := &protocol.LLOObservationProto{}
 	if err := proto.Unmarshal(rest, main); err != nil {
 		return Observation{}, fmt.Errorf("unmarshal observation: %w", err)
 	}
@@ -175,12 +176,12 @@ func decodeObservation(ctx context.Context, raw ocrtypes.Observation, bf ocr3_1t
 		if ferr != nil {
 			return Observation{}, &blobFetchError{fmt.Errorf("fetch blob: %w", ferr)}
 		}
-		chunk := &llocommon.LLOObservationProto{}
+		chunk := &protocol.LLOObservationProto{}
 		if err := proto.Unmarshal(payload, chunk); err != nil {
 			return Observation{}, fmt.Errorf("unmarshal blob payload: %w", err)
 		}
 		if obs.StreamValues == nil {
-			obs.StreamValues = make(llocommon.StreamValues, len(chunk.StreamValues))
+			obs.StreamValues = make(protocol.StreamValues, len(chunk.StreamValues))
 		}
 		for id, pbSv := range chunk.StreamValues {
 			sv, err := streamValueFromProtoAllowNil(pbSv)
@@ -194,7 +195,7 @@ func decodeObservation(ctx context.Context, raw ocrtypes.Observation, bf ocr3_1t
 	return obs, nil
 }
 
-func observationFromProto(main *llocommon.LLOObservationProto) (Observation, error) {
+func observationFromProto(main *protocol.LLOObservationProto) (Observation, error) {
 	obs := Observation{
 		AttestedPredecessorRetirement: main.AttestedPredecessorRetirement,
 		ShouldRetire:                  main.ShouldRetire,
@@ -212,11 +213,11 @@ func observationFromProto(main *llocommon.LLOObservationProto) (Observation, err
 			if pb == nil {
 				return Observation{}, fmt.Errorf("nil channel definition for channel %d", id)
 			}
-			obs.UpdateChannelDefinitions[id] = llocommon.ChannelDefinitionFromProto(pb)
+			obs.UpdateChannelDefinitions[id] = protocol.ChannelDefinitionFromProto(pb)
 		}
 	}
 	if len(main.StreamValues) > 0 {
-		obs.StreamValues = make(llocommon.StreamValues, len(main.StreamValues))
+		obs.StreamValues = make(protocol.StreamValues, len(main.StreamValues))
 		for id, pbSv := range main.StreamValues {
 			sv, err := streamValueFromProtoAllowNil(pbSv)
 			if err != nil {
@@ -228,17 +229,17 @@ func observationFromProto(main *llocommon.LLOObservationProto) (Observation, err
 	return obs, nil
 }
 
-func streamValuesToProto(in llocommon.StreamValues) (map[uint32]*llocommon.LLOStreamValue, error) {
+func streamValuesToProto(in protocol.StreamValues) (map[uint32]*protocol.LLOStreamValue, error) {
 	if len(in) == 0 {
 		return nil, nil
 	}
-	out := make(map[uint32]*llocommon.LLOStreamValue, len(in))
+	out := make(map[uint32]*protocol.LLOStreamValue, len(in))
 	for id, sv := range in {
 		if sv == nil {
 			// Unobserved stream; skip (matches v30 semantics of not setting a value).
 			continue
 		}
-		pb, err := llocommon.StreamValueToProto(sv)
+		pb, err := protocol.StreamValueToProto(sv)
 		if err != nil {
 			return nil, fmt.Errorf("stream %d: %w", id, err)
 		}
@@ -249,9 +250,9 @@ func streamValuesToProto(in llocommon.StreamValues) (map[uint32]*llocommon.LLOSt
 
 // streamValueFromProtoAllowNil decodes a possibly-nil stream value proto,
 // returning a nil StreamValue for a nil proto (an unobserved stream).
-func streamValueFromProtoAllowNil(pb *llocommon.LLOStreamValue) (llocommon.StreamValue, error) {
+func streamValueFromProtoAllowNil(pb *protocol.LLOStreamValue) (protocol.StreamValue, error) {
 	if pb == nil {
 		return nil, nil
 	}
-	return llocommon.UnmarshalProtoStreamValue(pb)
+	return protocol.UnmarshalProtoStreamValue(pb)
 }

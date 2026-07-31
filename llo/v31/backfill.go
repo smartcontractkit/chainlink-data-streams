@@ -2,7 +2,8 @@ package llo
 
 import (
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
-	llocommon "github.com/smartcontractkit/chainlink-data-streams/llo/common"
+
+	protocol "github.com/smartcontractkit/chainlink-data-streams/llo/protocol"
 )
 
 // selectBackfillCandidate returns the next history-backfill observation to emit
@@ -15,32 +16,32 @@ import (
 // watermark and strictly before obsTsNanos. This mirrors the v30
 // SelectBackfillCandidate but operates on plain fields (shared by precursor and
 // kvState) and returns a bool instead of an UnreportableChannelError.
-func selectBackfillCandidate(defs llotypes.ChannelDefinitions, validAfter map[llotypes.ChannelID]uint64, obsTsNanos uint64, backfillCID llotypes.ChannelID) (tsNanos uint64, rawTS uint64, opts llocommon.HistoryBackfillOpts, ok bool) {
+func selectBackfillCandidate(defs llotypes.ChannelDefinitions, validAfter map[llotypes.ChannelID]uint64, obsTsNanos uint64, backfillCID llotypes.ChannelID) (tsNanos uint64, rawTS uint64, opts protocol.HistoryBackfillOpts, ok bool) {
 	cd, exists := defs[backfillCID]
 	if !exists || cd.ReportFormat != llotypes.ReportFormatHistoryBackfill {
-		return 0, 0, llocommon.HistoryBackfillOpts{}, false
+		return 0, 0, protocol.HistoryBackfillOpts{}, false
 	}
-	o, err := llocommon.ParseHistoryBackfillOpts(cd.Opts)
+	o, err := protocol.ParseHistoryBackfillOpts(cd.Opts)
 	if err != nil {
-		return 0, 0, llocommon.HistoryBackfillOpts{}, false
+		return 0, 0, protocol.HistoryBackfillOpts{}, false
 	}
 	target, exists := defs[o.TargetChannelID]
 	if !exists {
-		return 0, 0, llocommon.HistoryBackfillOpts{}, false
+		return 0, 0, protocol.HistoryBackfillOpts{}, false
 	}
-	res, err := llocommon.TargetChannelTimeResolution(target)
+	res, err := protocol.TargetChannelTimeResolution(target)
 	if err != nil {
-		return 0, 0, llocommon.HistoryBackfillOpts{}, false
+		return 0, 0, protocol.HistoryBackfillOpts{}, false
 	}
 	watermark, exists := validAfter[backfillCID]
 	if !exists {
-		return 0, 0, llocommon.HistoryBackfillOpts{}, false
+		return 0, 0, protocol.HistoryBackfillOpts{}, false
 	}
 
 	var bestRaw, bestNanos uint64
 	found := false
 	for rawKey := range o.Observations {
-		tsN := llocommon.ObservationTimestampKeyToNanoseconds(rawKey, res)
+		tsN := protocol.ObservationTimestampKeyToNanoseconds(rawKey, res)
 		if tsN >= obsTsNanos || tsN <= watermark {
 			continue
 		}
@@ -51,7 +52,7 @@ func selectBackfillCandidate(defs llotypes.ChannelDefinitions, validAfter map[ll
 		}
 	}
 	if !found {
-		return 0, 0, llocommon.HistoryBackfillOpts{}, false
+		return 0, 0, protocol.HistoryBackfillOpts{}, false
 	}
 	return bestNanos, bestRaw, o, true
 }

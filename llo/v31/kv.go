@@ -6,7 +6,8 @@ import (
 	"sort"
 
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
-	llocommon "github.com/smartcontractkit/chainlink-data-streams/llo/common"
+
+	protocol "github.com/smartcontractkit/chainlink-data-streams/llo/protocol"
 
 	"github.com/smartcontractkit/libocr/offchainreporting2plus/ocr3_1types"
 	"google.golang.org/protobuf/proto"
@@ -123,11 +124,11 @@ func loadKVState(r ocr3_1types.KeyValueStateReader) (*kvState, error) {
 			// index/def divergence; treat defensively as absent
 			continue
 		}
-		pb := &llocommon.LLOChannelDefinitionProto{}
+		pb := &protocol.LLOChannelDefinitionProto{}
 		if err := proto.Unmarshal(cdBytes, pb); err != nil {
 			return nil, fmt.Errorf("unmarshal channel %d: %w", id, err)
 		}
-		s.channelDefinitions[id] = llocommon.ChannelDefinitionFromProto(pb)
+		s.channelDefinitions[id] = protocol.ChannelDefinitionFromProto(pb)
 
 		vaBytes, err := r.Read(validAfterKey(id))
 		if err != nil {
@@ -185,7 +186,7 @@ func writeChannelIndex(w ocr3_1types.KeyValueStateReadWriter, ids []llotypes.Cha
 
 // writeChannelDefinition persists a single channel definition deterministically.
 func writeChannelDefinition(w ocr3_1types.KeyValueStateReadWriter, id llotypes.ChannelID, cd llotypes.ChannelDefinition) error {
-	b, err := deterministicMarshal.Marshal(llocommon.ChannelDefinitionToProto(cd))
+	b, err := deterministicMarshal.Marshal(protocol.ChannelDefinitionToProto(cd))
 	if err != nil {
 		return fmt.Errorf("marshal channel %d: %w", id, err)
 	}
@@ -219,7 +220,7 @@ func writeReported(w ocr3_1types.KeyValueStateReadWriter, id llotypes.ChannelID,
 
 // readTimestampedAggregate returns the carry-forward TimestampedStreamValue for
 // a (stream, aggregator) pair, or nil if none is stored.
-func readTimestampedAggregate(r ocr3_1types.KeyValueStateReader, sid llotypes.StreamID, agg llotypes.Aggregator) (*llocommon.TimestampedStreamValue, error) {
+func readTimestampedAggregate(r ocr3_1types.KeyValueStateReader, sid llotypes.StreamID, agg llotypes.Aggregator) (*protocol.TimestampedStreamValue, error) {
 	b, err := r.Read(timestampedKey(sid, agg))
 	if err != nil {
 		return nil, err
@@ -227,15 +228,15 @@ func readTimestampedAggregate(r ocr3_1types.KeyValueStateReader, sid llotypes.St
 	if len(b) == 0 {
 		return nil, nil
 	}
-	pb := &llocommon.LLOStreamValue{}
+	pb := &protocol.LLOStreamValue{}
 	if err := proto.Unmarshal(b, pb); err != nil {
 		return nil, err
 	}
-	sv, err := llocommon.UnmarshalProtoStreamValue(pb)
+	sv, err := protocol.UnmarshalProtoStreamValue(pb)
 	if err != nil {
 		return nil, err
 	}
-	tsv, ok := sv.(*llocommon.TimestampedStreamValue)
+	tsv, ok := sv.(*protocol.TimestampedStreamValue)
 	if !ok {
 		return nil, nil
 	}
@@ -243,12 +244,12 @@ func readTimestampedAggregate(r ocr3_1types.KeyValueStateReader, sid llotypes.St
 }
 
 // writeTimestampedAggregate persists a timestamped aggregate deterministically.
-func writeTimestampedAggregate(w ocr3_1types.KeyValueStateReadWriter, sid llotypes.StreamID, agg llotypes.Aggregator, tsv *llocommon.TimestampedStreamValue) error {
+func writeTimestampedAggregate(w ocr3_1types.KeyValueStateReadWriter, sid llotypes.StreamID, agg llotypes.Aggregator, tsv *protocol.TimestampedStreamValue) error {
 	value, err := tsv.MarshalBinary()
 	if err != nil {
 		return err
 	}
-	pb := &llocommon.LLOStreamValue{Type: tsv.Type(), Value: value}
+	pb := &protocol.LLOStreamValue{Type: tsv.Type(), Value: value}
 	b, err := deterministicMarshal.Marshal(pb)
 	if err != nil {
 		return err

@@ -6,16 +6,17 @@ import (
 	"github.com/shopspring/decimal"
 	"github.com/smartcontractkit/chainlink-common/pkg/logger"
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
-	llocommon "github.com/smartcontractkit/chainlink-data-streams/llo/common"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	protocol "github.com/smartcontractkit/chainlink-data-streams/llo/protocol"
 )
 
 func TestProcessStreamCalculated(t *testing.T) {
 	tests := []struct {
 		name           string
 		outcome        Outcome
-		expectedValues map[llotypes.StreamID]llocommon.StreamValue
+		expectedValues map[llotypes.StreamID]protocol.StreamValue
 	}{
 		{
 			name: "simple addition",
@@ -30,13 +31,13 @@ func TestProcessStreamCalculated(t *testing.T) {
 						Opts: []byte(`{"abi":[{"type":"int256","expression":"Sum(s1, s2)","expressionStreamID":3}]}`),
 					},
 				},
-				StreamAggregates: llocommon.StreamAggregates{
-					1: {llotypes.AggregatorMedian: llocommon.ToDecimal(decimal.NewFromInt(5))},
-					2: {llotypes.AggregatorMedian: llocommon.ToDecimal(decimal.NewFromInt(3))},
+				StreamAggregates: protocol.StreamAggregates{
+					1: {llotypes.AggregatorMedian: protocol.ToDecimal(decimal.NewFromInt(5))},
+					2: {llotypes.AggregatorMedian: protocol.ToDecimal(decimal.NewFromInt(3))},
 				},
 			},
-			expectedValues: map[llotypes.StreamID]llocommon.StreamValue{
-				3: llocommon.ToDecimal(decimal.NewFromInt(8)),
+			expectedValues: map[llotypes.StreamID]protocol.StreamValue{
+				3: protocol.ToDecimal(decimal.NewFromInt(8)),
 			},
 		},
 		{
@@ -53,14 +54,14 @@ func TestProcessStreamCalculated(t *testing.T) {
 						Opts: []byte(`{"abi":[{"type":"int256","expression":"Mul(Sum(s1, s2), s3)","expressionStreamID":4}]}`),
 					},
 				},
-				StreamAggregates: llocommon.StreamAggregates{
-					1: {llotypes.AggregatorMedian: llocommon.ToDecimal(decimal.NewFromInt(2))},
-					2: {llotypes.AggregatorMedian: llocommon.ToDecimal(decimal.NewFromInt(3))},
-					3: {llotypes.AggregatorMedian: llocommon.ToDecimal(decimal.NewFromInt(4))},
+				StreamAggregates: protocol.StreamAggregates{
+					1: {llotypes.AggregatorMedian: protocol.ToDecimal(decimal.NewFromInt(2))},
+					2: {llotypes.AggregatorMedian: protocol.ToDecimal(decimal.NewFromInt(3))},
+					3: {llotypes.AggregatorMedian: protocol.ToDecimal(decimal.NewFromInt(4))},
 				},
 			},
-			expectedValues: map[llotypes.StreamID]llocommon.StreamValue{
-				4: llocommon.ToDecimal(decimal.NewFromInt(20)),
+			expectedValues: map[llotypes.StreamID]protocol.StreamValue{
+				4: protocol.ToDecimal(decimal.NewFromInt(20)),
 			},
 		},
 		{
@@ -76,21 +77,21 @@ func TestProcessStreamCalculated(t *testing.T) {
 						Opts: []byte(`{"abi":[{"type":"int256","expression":"Sum(s1_benchmark, s2_benchmark)","expressionStreamID":3}]}`),
 					},
 				},
-				StreamAggregates: llocommon.StreamAggregates{
-					1: {llotypes.AggregatorMedian: &llocommon.Quote{
+				StreamAggregates: protocol.StreamAggregates{
+					1: {llotypes.AggregatorMedian: &protocol.Quote{
 						Bid:       decimal.NewFromInt(1),
 						Benchmark: decimal.NewFromInt(2),
 						Ask:       decimal.NewFromInt(3),
 					}},
-					2: {llotypes.AggregatorMedian: &llocommon.Quote{
+					2: {llotypes.AggregatorMedian: &protocol.Quote{
 						Bid:       decimal.NewFromInt(4),
 						Benchmark: decimal.NewFromInt(5),
 						Ask:       decimal.NewFromInt(6),
 					}},
 				},
 			},
-			expectedValues: map[llotypes.StreamID]llocommon.StreamValue{
-				3: llocommon.ToDecimal(decimal.NewFromInt(7)),
+			expectedValues: map[llotypes.StreamID]protocol.StreamValue{
+				3: protocol.ToDecimal(decimal.NewFromInt(7)),
 			},
 		},
 		{
@@ -155,7 +156,7 @@ func TestProcessStreamCalculated(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			lggr, err := logger.New()
 			require.NoError(t, err)
-			p := &Plugin{Logger: lggr, OptsCache: llocommon.NewOptsCache()}
+			p := &Plugin{Logger: lggr, OptsCache: protocol.NewOptsCache()}
 			for cid, cd := range tt.outcome.ChannelDefinitions {
 				p.OptsCache.Set(cid, cd.Opts)
 			}
@@ -174,10 +175,10 @@ func TestProcessStreamCalculated(t *testing.T) {
 }
 
 func BenchmarkProcessCalculatedStreams(b *testing.B) {
-	aggr := llocommon.StreamAggregates{
-		1: {llotypes.AggregatorMedian: llocommon.ToDecimal(decimal.NewFromInt(2))},
-		2: {llotypes.AggregatorMedian: llocommon.ToDecimal(decimal.NewFromInt(3))},
-		3: {llotypes.AggregatorMedian: llocommon.ToDecimal(decimal.NewFromInt(4))},
+	aggr := protocol.StreamAggregates{
+		1: {llotypes.AggregatorMedian: protocol.ToDecimal(decimal.NewFromInt(2))},
+		2: {llotypes.AggregatorMedian: protocol.ToDecimal(decimal.NewFromInt(3))},
+		3: {llotypes.AggregatorMedian: protocol.ToDecimal(decimal.NewFromInt(4))},
 	}
 	outcome := Outcome{
 		ObservationTimestampNanoseconds: 1750169759775700000,
@@ -195,7 +196,7 @@ func BenchmarkProcessCalculatedStreams(b *testing.B) {
 		StreamAggregates: aggr,
 	}
 
-	p := &Plugin{Logger: logger.Nop(), OptsCache: llocommon.NewOptsCache()}
+	p := &Plugin{Logger: logger.Nop(), OptsCache: protocol.NewOptsCache()}
 	for cid, cd := range outcome.ChannelDefinitions {
 		p.OptsCache.Set(cid, cd.Opts)
 	}

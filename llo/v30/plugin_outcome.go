@@ -7,9 +7,10 @@ import (
 	"fmt"
 	"sort"
 
-	llocommon "github.com/smartcontractkit/chainlink-data-streams/llo/common"
 	"github.com/smartcontractkit/libocr/offchainreporting2/types"
 	"github.com/smartcontractkit/libocr/offchainreporting2plus/ocr3types"
+
+	protocol "github.com/smartcontractkit/chainlink-data-streams/llo/protocol"
 
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
 )
@@ -27,9 +28,9 @@ func (p *Plugin) outcome(outctx ocr3types.OutcomeContext, query types.Query, aos
 		// This is enforced by the contract.
 		if p.PredecessorConfigDigest == nil {
 			// Start straight in production if we have no predecessor
-			lifeCycleStage = llocommon.LifeCycleStageProduction
+			lifeCycleStage = protocol.LifeCycleStageProduction
 		} else {
-			lifeCycleStage = llocommon.LifeCycleStageStaging
+			lifeCycleStage = protocol.LifeCycleStageStaging
 		}
 		outcome := Outcome{
 			lifeCycleStage,
@@ -68,21 +69,21 @@ func (p *Plugin) outcome(outctx ocr3types.OutcomeContext, query types.Query, aos
 	/////////////////////////////////
 	// outcome.LifeCycleStage
 	/////////////////////////////////
-	if previousOutcome.LifeCycleStage == llocommon.LifeCycleStageStaging && validPredecessorRetirementReport != nil {
+	if previousOutcome.LifeCycleStage == protocol.LifeCycleStageStaging && validPredecessorRetirementReport != nil {
 		// Promote this protocol instance to the production stage! 🚀
 		p.Logger.Infow("Promoting protocol instance from staging to production 🎖️", "seqNr", outctx.SeqNr, "stage", "Outcome", "validAfterNanoseconds", validPredecessorRetirementReport.ValidAfterNanoseconds)
 
 		// override ValidAfterNanoseconds with the value from the retirement report
 		// so that we have no gaps in the validity time range.
 		outcome.ValidAfterNanoseconds = validPredecessorRetirementReport.ValidAfterNanoseconds
-		outcome.LifeCycleStage = llocommon.LifeCycleStageProduction
+		outcome.LifeCycleStage = protocol.LifeCycleStageProduction
 	} else {
 		outcome.LifeCycleStage = previousOutcome.LifeCycleStage
 	}
 
-	if outcome.LifeCycleStage == llocommon.LifeCycleStageProduction && shouldRetireVotes > p.F {
+	if outcome.LifeCycleStage == protocol.LifeCycleStageProduction && shouldRetireVotes > p.F {
 		p.Logger.Infow("Retiring production protocol instance ⚰️", "seqNr", outctx.SeqNr, "stage", "Outcome")
-		outcome.LifeCycleStage = llocommon.LifeCycleStageRetired
+		outcome.LifeCycleStage = protocol.LifeCycleStageRetired
 	}
 
 	/////////////////////////////////
@@ -101,7 +102,7 @@ func (p *Plugin) outcome(outctx ocr3types.OutcomeContext, query types.Query, aos
 	}
 
 	// if retired, stop updating channel definitions
-	if outcome.LifeCycleStage == llocommon.LifeCycleStageRetired {
+	if outcome.LifeCycleStage == protocol.LifeCycleStageRetired {
 		removeChannelVotesByID, updateChannelDefinitionsByHash = nil, nil
 	}
 
@@ -116,8 +117,8 @@ func (p *Plugin) outcome(outctx ocr3types.OutcomeContext, query types.Query, aos
 	}
 
 	type hashWithID struct {
-		llocommon.ChannelHash
-		llocommon.ChannelDefinitionWithID
+		protocol.ChannelHash
+		protocol.ChannelDefinitionWithID
 	}
 	orderedHashes := make([]hashWithID, 0, len(updateChannelDefinitionsByHash))
 	for channelHash, dfnWithID := range updateChannelDefinitionsByHash {
@@ -140,9 +141,9 @@ func (p *Plugin) outcome(outctx ocr3types.OutcomeContext, query types.Query, aos
 				"seqNr", outctx.SeqNr,
 				"stage", "Outcome",
 			)
-		} else if len(outcome.ChannelDefinitions) >= llocommon.MaxOutcomeChannelDefinitionsLength {
+		} else if len(outcome.ChannelDefinitions) >= protocol.MaxOutcomeChannelDefinitionsLength {
 			p.Logger.Warnw("Adding channel FAILED. Cannot add channel, outcome already contains maximum number of channels",
-				"maxOutcomeChannelDefinitionsLength", llocommon.MaxOutcomeChannelDefinitionsLength,
+				"maxOutcomeChannelDefinitionsLength", protocol.MaxOutcomeChannelDefinitionsLength,
 				"addChannelDefinition", defWithID,
 				"seqNr", outctx.SeqNr,
 				"stage", "Outcome",
@@ -225,7 +226,7 @@ func (p *Plugin) outcome(outctx ocr3types.OutcomeContext, query types.Query, aos
 	/////////////////////////////////
 	// outcome.StreamAggregates
 	/////////////////////////////////
-	outcome.StreamAggregates = make(map[llotypes.StreamID]map[llotypes.Aggregator]llocommon.StreamValue, len(streamObservations))
+	outcome.StreamAggregates = make(map[llotypes.StreamID]map[llotypes.Aggregator]protocol.StreamValue, len(streamObservations))
 	// Aggregation methods are defined on a per-channel basis, but we only want
 	// to do the minimum necessary number of aggregations (one per stream/aggregator
 	// pair) and re-use the same result, in case multiple channels share the
@@ -258,7 +259,7 @@ func (p *Plugin) outcome(outctx ocr3types.OutcomeContext, query types.Query, aos
 			// Create the aggregator => stream ID map if it doesn't already exist
 			m, exists := outcome.StreamAggregates[sid]
 			if !exists {
-				m = make(map[llotypes.Aggregator]llocommon.StreamValue)
+				m = make(map[llotypes.Aggregator]protocol.StreamValue)
 				outcome.StreamAggregates[sid] = m
 			}
 
@@ -266,14 +267,14 @@ func (p *Plugin) outcome(outctx ocr3types.OutcomeContext, query types.Query, aos
 			// This may be replaced later if we get an observation with a newer timestamp
 			if prev, exists := previousOutcome.StreamAggregates[sid]; exists {
 				if prevValue, exists := prev[agg]; exists {
-					if timestampedValue, is := prevValue.(*llocommon.TimestampedStreamValue); is {
+					if timestampedValue, is := prevValue.(*protocol.TimestampedStreamValue); is {
 						m[agg] = timestampedValue
 					}
 				}
 			}
 
 			// Perform the aggregation
-			aggF := llocommon.GetAggregatorFunc(agg)
+			aggF := protocol.GetAggregatorFunc(agg)
 			if aggF == nil {
 				return nil, fmt.Errorf("no aggregator function defined for aggregator of type %v", agg)
 			}
@@ -281,7 +282,7 @@ func (p *Plugin) outcome(outctx ocr3types.OutcomeContext, query types.Query, aos
 
 			// Handle aggregation results
 			switch v := result.(type) {
-			case *llocommon.TimestampedStreamValue:
+			case *protocol.TimestampedStreamValue:
 				// In case of failed aggregation, keep the copied value from
 				// last time.
 				if err != nil {
@@ -305,7 +306,7 @@ func (p *Plugin) outcome(outctx ocr3types.OutcomeContext, query types.Query, aos
 					m[agg] = v
 					continue
 				}
-				prevTSV, is := prevValue.(*llocommon.TimestampedStreamValue)
+				prevTSV, is := prevValue.(*protocol.TimestampedStreamValue)
 				if !is {
 					// If the copied previous value is nil or not a
 					// TimestampedStreamValue, always write the new value.
@@ -347,11 +348,11 @@ func (p *Plugin) outcome(outctx ocr3types.OutcomeContext, query types.Query, aos
 	return p.OutcomeCodec.Encode(outcome)
 }
 
-func (p *Plugin) decodeObservations(aos []types.AttributedObservation, outctx ocr3types.OutcomeContext) (timestampsNanoseconds []uint64, validPredecessorRetirementReport *llocommon.RetirementReport, shouldRetireVotes int, removeChannelVotesByID map[llotypes.ChannelID]int, updateChannelDefinitionsByHash map[llocommon.ChannelHash]llocommon.ChannelDefinitionWithID, updateChannelVotesByHash map[llocommon.ChannelHash]int, streamObservations map[llotypes.StreamID][]llocommon.StreamValue) {
+func (p *Plugin) decodeObservations(aos []types.AttributedObservation, outctx ocr3types.OutcomeContext) (timestampsNanoseconds []uint64, validPredecessorRetirementReport *protocol.RetirementReport, shouldRetireVotes int, removeChannelVotesByID map[llotypes.ChannelID]int, updateChannelDefinitionsByHash map[protocol.ChannelHash]protocol.ChannelDefinitionWithID, updateChannelVotesByHash map[protocol.ChannelHash]int, streamObservations map[llotypes.StreamID][]protocol.StreamValue) {
 	removeChannelVotesByID = make(map[llotypes.ChannelID]int)
-	updateChannelDefinitionsByHash = make(map[llocommon.ChannelHash]llocommon.ChannelDefinitionWithID)
-	updateChannelVotesByHash = make(map[llocommon.ChannelHash]int)
-	streamObservations = make(map[llotypes.StreamID][]llocommon.StreamValue)
+	updateChannelDefinitionsByHash = make(map[protocol.ChannelHash]protocol.ChannelDefinitionWithID)
+	updateChannelVotesByHash = make(map[protocol.ChannelHash]int)
+	streamObservations = make(map[llotypes.StreamID][]protocol.StreamValue)
 
 	for _, ao := range aos {
 		observation, err2 := p.ObservationCodec.Decode(ao.Observation)
@@ -383,7 +384,7 @@ func (p *Plugin) decodeObservations(aos []types.AttributedObservation, outctx oc
 
 		// for each channelId count number of votes that mention it and count number of votes that include it.
 		for channelID, channelDefinition := range observation.UpdateChannelDefinitions {
-			defWithID := llocommon.ChannelDefinitionWithID{ChannelDefinition: channelDefinition, ChannelID: channelID}
+			defWithID := protocol.ChannelDefinitionWithID{ChannelDefinition: channelDefinition, ChannelID: channelID}
 			channelHash := MakeChannelHash(defWithID)
 			updateChannelVotesByHash[channelHash]++
 			updateChannelDefinitionsByHash[channelHash] = defWithID
@@ -418,11 +419,11 @@ type Outcome struct {
 	// Usually you will only have one aggregation type per stream but since
 	// channels can define different aggregation methods, sometimes we will
 	// need multiple.
-	StreamAggregates llocommon.StreamAggregates
+	StreamAggregates protocol.StreamAggregates
 }
 
-func (out *Outcome) GenRetirementReport(protocolVersion uint32) llocommon.RetirementReport {
-	return llocommon.RetirementReport{
+func (out *Outcome) GenRetirementReport(protocolVersion uint32) protocol.RetirementReport {
+	return protocol.RetirementReport{
 		ProtocolVersion:       protocolVersion,
 		ValidAfterNanoseconds: out.ValidAfterNanoseconds,
 	}
@@ -433,7 +434,7 @@ func (out *Outcome) GenRetirementReport(protocolVersion uint32) llocommon.Retire
 
 // timeResolutionOpts is used to read TimeResolution from cached opts in IsReportable.
 type timeResolutionOpts struct {
-	TimeResolution llocommon.TimeResolution `json:"TimeResolution"`
+	TimeResolution protocol.TimeResolution `json:"TimeResolution"`
 }
 
 // IsReportable checks if a report can be generated for the given channel.
@@ -447,8 +448,8 @@ type timeResolutionOpts struct {
 // other reasons (e.g. codec errors, bid/mid/ask validation failures). Those
 // failure modes are not covered here and can still result in report gaps if
 // DisableNilStreamValues is false or if the report codec fails to encode the report.
-func (out *Outcome) IsReportable(channelID llotypes.ChannelID, protocolVersion uint32, minReportInterval uint64, optsCache *llocommon.OptsCache) *UnreportableChannelError {
-	if out.LifeCycleStage == llocommon.LifeCycleStageRetired {
+func (out *Outcome) IsReportable(channelID llotypes.ChannelID, protocolVersion uint32, minReportInterval uint64, optsCache *protocol.OptsCache) *UnreportableChannelError {
+	if out.LifeCycleStage == protocol.LifeCycleStageRetired {
 		return &UnreportableChannelError{nil, "IsReportable=false; retired channel", channelID}
 	}
 
@@ -505,7 +506,7 @@ func (out *Outcome) IsReportable(channelID llotypes.ChannelID, protocolVersion u
 	// This keeps compatibility with old nodes that may not have nanosecond resolution
 	//
 	// Also use seconds resolution for report formats that require it to prevent overlap
-	if protocolVersion == 0 || IsSecondsResolution(llocommon.ChannelDefinitionWithID{ChannelDefinition: cd, ChannelID: channelID}, optsCache) {
+	if protocolVersion == 0 || IsSecondsResolution(protocol.ChannelDefinitionWithID{ChannelDefinition: cd, ChannelID: channelID}, optsCache) {
 		validAfterSeconds := validAfterNanos / 1e9
 		obsTsSeconds := obsTsNanos / 1e9
 		if validAfterSeconds >= obsTsSeconds {
@@ -520,7 +521,7 @@ func (out *Outcome) IsReportable(channelID llotypes.ChannelID, protocolVersion u
 // for the given opts. For ReportFormatEVMABIEncodeUnpacked, the cache must be populated
 // (e.g. by Outcome's reset or Set during channel add/update) for correct resolution;
 // no fallback to decoding opts is used — on cache miss it returns false.
-func IsSecondsResolution(cd llocommon.ChannelDefinitionWithID, optsCache *llocommon.OptsCache) bool {
+func IsSecondsResolution(cd protocol.ChannelDefinitionWithID, optsCache *protocol.OptsCache) bool {
 	switch cd.ReportFormat {
 	// TODO: Might be cleaner to expose a TimeResolution() uint64 field on the
 	// ReportCodec so that the plugin doesn't have to have special knowledge of
@@ -528,8 +529,8 @@ func IsSecondsResolution(cd llocommon.ChannelDefinitionWithID, optsCache *llocom
 	case llotypes.ReportFormatEVMPremiumLegacy:
 		return true
 	case llotypes.ReportFormatEVMABIEncodeUnpacked:
-		if o, err := llocommon.GetOpts[timeResolutionOpts](optsCache, cd.ChannelID); err == nil {
-			return o.TimeResolution == llocommon.ResolutionSeconds
+		if o, err := protocol.GetOpts[timeResolutionOpts](optsCache, cd.ChannelID); err == nil {
+			return o.TimeResolution == protocol.ResolutionSeconds
 		}
 		return false
 	default:
@@ -538,7 +539,7 @@ func IsSecondsResolution(cd llocommon.ChannelDefinitionWithID, optsCache *llocom
 }
 
 // ReportableChannels returns a sorted list of reportable channel IDs and errors for unreportable ones.
-func (out *Outcome) ReportableChannels(protocolVersion uint32, defaultMinReportInterval uint64, optsCache *llocommon.OptsCache) (reportable []llotypes.ChannelID, unreportable []*UnreportableChannelError) {
+func (out *Outcome) ReportableChannels(protocolVersion uint32, defaultMinReportInterval uint64, optsCache *protocol.OptsCache) (reportable []llotypes.ChannelID, unreportable []*UnreportableChannelError) {
 	for channelID := range out.ChannelDefinitions {
 		// In theory in future, minReportInterval could be overridden on a
 		// per-channel basis in the ChannelDefinitions
@@ -579,7 +580,7 @@ func (e *UnreportableChannelError) Unwrap() error {
 }
 
 // MakeChannelHash is used for mapping ChannelDefinitionWithIDs
-func MakeChannelHash(cd llocommon.ChannelDefinitionWithID) llocommon.ChannelHash {
+func MakeChannelHash(cd protocol.ChannelDefinitionWithID) protocol.ChannelHash {
 	h := sha256.New()
 	merr := errors.Join(
 		binary.Write(h, binary.BigEndian, cd.ChannelID),
@@ -620,19 +621,19 @@ func (p *Plugin) captureOutcomeTelemetry(outcome Outcome, outctx ocr3types.Outco
 	}
 }
 
-func makeOutcomeTelemetry(outcome Outcome, configDigest types.ConfigDigest, seqNr uint64, donID uint32) (*llocommon.LLOOutcomeTelemetry, error) {
-	ot := &llocommon.LLOOutcomeTelemetry{
+func makeOutcomeTelemetry(outcome Outcome, configDigest types.ConfigDigest, seqNr uint64, donID uint32) (*protocol.LLOOutcomeTelemetry, error) {
+	ot := &protocol.LLOOutcomeTelemetry{
 		LifeCycleStage:                  string(outcome.LifeCycleStage),
 		ObservationTimestampNanoseconds: outcome.ObservationTimestampNanoseconds,
-		ChannelDefinitions:              make(map[uint32]*llocommon.LLOChannelDefinitionProto, len(outcome.ChannelDefinitions)),
+		ChannelDefinitions:              make(map[uint32]*protocol.LLOChannelDefinitionProto, len(outcome.ChannelDefinitions)),
 		ValidAfterNanoseconds:           make(map[uint32]uint64, len(outcome.ValidAfterNanoseconds)),
-		StreamAggregates:                make(map[uint32]*llocommon.LLOAggregatorStreamValue, len(outcome.StreamAggregates)),
+		StreamAggregates:                make(map[uint32]*protocol.LLOAggregatorStreamValue, len(outcome.StreamAggregates)),
 		SeqNr:                           seqNr,
 		ConfigDigest:                    configDigest[:],
 		DonId:                           donID,
 	}
 	for id, cd := range outcome.ChannelDefinitions {
-		ot.ChannelDefinitions[id] = llocommon.ChannelDefinitionToProto(cd)
+		ot.ChannelDefinitions[id] = protocol.ChannelDefinitionToProto(cd)
 	}
 	for id, va := range outcome.ValidAfterNanoseconds {
 		ot.ValidAfterNanoseconds[id] = va
@@ -641,15 +642,15 @@ func makeOutcomeTelemetry(outcome Outcome, configDigest types.ConfigDigest, seqN
 		if len(aggMap) == 0 {
 			continue
 		}
-		aggVals := make(map[uint32]*llocommon.LLOStreamValue, len(aggMap))
+		aggVals := make(map[uint32]*protocol.LLOStreamValue, len(aggMap))
 		for agg, sv := range aggMap {
-			v, err := llocommon.StreamValueToProto(sv)
+			v, err := protocol.StreamValueToProto(sv)
 			if err != nil {
 				return nil, fmt.Errorf("failed to make outcome telemetry; %w", err)
 			}
 			aggVals[uint32(agg)] = v
 		}
-		ot.StreamAggregates[sid] = &llocommon.LLOAggregatorStreamValue{AggregatorValues: aggVals}
+		ot.StreamAggregates[sid] = &protocol.LLOAggregatorStreamValue{AggregatorValues: aggVals}
 	}
 	return ot, nil
 }

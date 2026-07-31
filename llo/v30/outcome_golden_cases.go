@@ -5,7 +5,8 @@ import (
 	"github.com/shopspring/decimal"
 
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
-	llocommon "github.com/smartcontractkit/chainlink-data-streams/llo/common"
+
+	protocol "github.com/smartcontractkit/chainlink-data-streams/llo/protocol"
 )
 
 // GoldenOutcomeCase defines a single outcome serialization golden test case.
@@ -43,7 +44,7 @@ func GoldenOutcomeCases() []GoldenOutcomeCase {
 		{
 			Name: "initial",
 			Outcome: Outcome{
-				LifeCycleStage:                  llocommon.LifeCycleStageProduction,
+				LifeCycleStage:                  protocol.LifeCycleStageProduction,
 				ObservationTimestampNanoseconds: 0,
 				ChannelDefinitions:              nil,
 				ValidAfterNanoseconds:           nil,
@@ -61,19 +62,19 @@ func GoldenOutcomeCases() []GoldenOutcomeCase {
 					1: 5000000000,
 					2: 6000000000,
 				},
-				StreamAggregates: map[llotypes.StreamID]map[llotypes.Aggregator]llocommon.StreamValue{
+				StreamAggregates: map[llotypes.StreamID]map[llotypes.Aggregator]protocol.StreamValue{
 					1: {
-						llotypes.AggregatorMedian: llocommon.ToDecimal(decimal.NewFromInt(12345)),
+						llotypes.AggregatorMedian: protocol.ToDecimal(decimal.NewFromInt(12345)),
 					},
 					2: {
-						llotypes.AggregatorQuote: &llocommon.Quote{
+						llotypes.AggregatorQuote: &protocol.Quote{
 							Bid:       decimal.NewFromInt(1010),
 							Benchmark: decimal.NewFromInt(1011),
 							Ask:       decimal.NewFromInt(1012),
 						},
 					},
 					3: {
-						llotypes.AggregatorMedian: llocommon.ToDecimal(decimal.NewFromFloat(123.456)),
+						llotypes.AggregatorMedian: protocol.ToDecimal(decimal.NewFromFloat(123.456)),
 					},
 				},
 			},
@@ -89,7 +90,7 @@ func GoldenOutcomeCases() []GoldenOutcomeCase {
 					1: 5000000000, // tombstone channel, kept from previous
 					2: 9876543210, // reportable channel, set to previous ObservationTimestampNanoseconds
 				},
-				StreamAggregates: map[llotypes.StreamID]map[llotypes.Aggregator]llocommon.StreamValue{
+				StreamAggregates: map[llotypes.StreamID]map[llotypes.Aggregator]protocol.StreamValue{
 					3: {}, // no observations for stream 3, aggregation failed → empty map
 				},
 			},

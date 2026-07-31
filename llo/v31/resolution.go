@@ -4,12 +4,13 @@ import (
 	"github.com/goccy/go-json"
 
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
-	llocommon "github.com/smartcontractkit/chainlink-data-streams/llo/common"
+
+	protocol "github.com/smartcontractkit/chainlink-data-streams/llo/protocol"
 )
 
 // timeResolutionOpts reads TimeResolution from a channel's opts.
 type timeResolutionOpts struct {
-	TimeResolution llocommon.TimeResolution `json:"TimeResolution"`
+	TimeResolution protocol.TimeResolution `json:"TimeResolution"`
 }
 
 // isSecondsResolution reports whether a channel's report format encodes report
@@ -38,7 +39,7 @@ func isSecondsResolution(cd llotypes.ChannelDefinition) bool {
 				return false
 			}
 		}
-		return o.TimeResolution == llocommon.ResolutionSeconds
+		return o.TimeResolution == protocol.ResolutionSeconds
 	default:
 		return false
 	}

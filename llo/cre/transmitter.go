@@ -8,10 +8,11 @@ import (
 
 	"google.golang.org/protobuf/proto"
 
-	llocommon "github.com/smartcontractkit/chainlink-data-streams/llo/common"
 	"github.com/smartcontractkit/libocr/offchainreporting2/types"
 	"github.com/smartcontractkit/libocr/offchainreporting2plus/ocr3types"
 	ocr2types "github.com/smartcontractkit/libocr/offchainreporting2plus/types"
+
+	protocol "github.com/smartcontractkit/chainlink-data-streams/llo/protocol"
 
 	"github.com/smartcontractkit/chainlink-common/pkg/capabilities"
 	capabilitiespb "github.com/smartcontractkit/chainlink-common/pkg/capabilities/pb"
@@ -140,7 +141,7 @@ func (t *transmitter) Transmit(
 		return nil
 	}
 	switch report.Info.LifeCycleStage {
-	case llocommon.LifeCycleStageProduction:
+	case protocol.LifeCycleStageProduction:
 	default:
 		// NOTE: Ignore retirement and staging reports; for now we assume that
 		// we only care about sending production reports.

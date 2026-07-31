@@ -14,7 +14,7 @@ import (
 	"github.com/smartcontractkit/chainlink-common/pkg/services"
 	"github.com/smartcontractkit/chainlink-common/pkg/sqlutil"
 
-	"github.com/smartcontractkit/chainlink-data-streams/llo/reportcodecs/retirement"
+	"github.com/smartcontractkit/chainlink-data-streams/llo/protocol"
 )
 
 // RetirementReportCacheReader is used by the plugin-scoped
@@ -90,14 +90,14 @@ func (r *retirementReportCache) StoreAttestedRetirementReport(ctx context.Contex
 	}
 	r.mu.RUnlock()
 
-	pbSigs := make([]*retirement.AttributedOnchainSignature, len(sigs))
+	pbSigs := make([]*protocol.AttributedOnchainSignature, len(sigs))
 	for i, s := range sigs {
-		pbSigs[i] = &retirement.AttributedOnchainSignature{
+		pbSigs[i] = &protocol.AttributedOnchainSignature{
 			Signer:    uint32(s.Signer),
 			Signature: s.Signature,
 		}
 	}
-	attestedRetirementReport := retirement.AttestedRetirementReport{
+	attestedRetirementReport := protocol.AttestedRetirementReport{
 		RetirementReport: retirementReport,
 		SeqNr:            seqNr,
 		Sigs:             pbSigs,

@@ -8,7 +8,9 @@ import (
 	"sort"
 
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
-	llocommon "github.com/smartcontractkit/chainlink-data-streams/llo/common"
+
+	protocol "github.com/smartcontractkit/chainlink-data-streams/llo/protocol"
+	"github.com/smartcontractkit/chainlink-data-streams/llo/protocol/calculated"
 
 	"github.com/smartcontractkit/libocr/offchainreporting2plus/ocr3_1types"
 	ocrtypes "github.com/smartcontractkit/libocr/offchainreporting2plus/types"
@@ -27,9 +29,9 @@ func (p *Plugin) StateTransition(ctx context.Context, seqNr uint64, _ ocrtypes.A
 
 	// Initial round: establish the lifecycle stage and nothing else.
 	if seqNr <= 1 {
-		stage := llocommon.LifeCycleStageProduction
+		stage := protocol.LifeCycleStageProduction
 		if p.PredecessorConfigDigest != nil {
-			stage = llocommon.LifeCycleStageStaging
+			stage = protocol.LifeCycleStageStaging
 		}
 		if err := writeLifecycle(kvRW, stage); err != nil {
 			return nil, err
@@ -57,21 +59,21 @@ func (p *Plugin) StateTransition(ctx context.Context, seqNr uint64, _ ocrtypes.A
 		ObservationTimestampNanoseconds: medianTimestamp(timestamps),
 		ChannelDefinitions:              cloneChannelDefinitions(prev.channelDefinitions),
 		ValidAfterNanoseconds:           map[llotypes.ChannelID]uint64{},
-		StreamAggregates:                llocommon.StreamAggregates{},
+		StreamAggregates:                protocol.StreamAggregates{},
 	}
 
 	// Lifecycle stage & promotion.
 	promotedValidAfter := map[llotypes.ChannelID]uint64(nil)
-	if prev.lifeCycleStage == llocommon.LifeCycleStageStaging && validPredecessorRetirementReport != nil {
+	if prev.lifeCycleStage == protocol.LifeCycleStageStaging && validPredecessorRetirementReport != nil {
 		p.Logger.Infow("Promoting protocol instance from staging to production 🎖️", "seqNr", seqNr, "validAfterNanoseconds", validPredecessorRetirementReport.ValidAfterNanoseconds)
-		out.LifeCycleStage = llocommon.LifeCycleStageProduction
+		out.LifeCycleStage = protocol.LifeCycleStageProduction
 		promotedValidAfter = validPredecessorRetirementReport.ValidAfterNanoseconds
 	} else {
 		out.LifeCycleStage = prev.lifeCycleStage
 	}
-	if out.LifeCycleStage == llocommon.LifeCycleStageProduction && shouldRetireVotes > p.F {
+	if out.LifeCycleStage == protocol.LifeCycleStageProduction && shouldRetireVotes > p.F {
 		p.Logger.Infow("Retiring production protocol instance ⚰️", "seqNr", seqNr)
-		out.LifeCycleStage = llocommon.LifeCycleStageRetired
+		out.LifeCycleStage = protocol.LifeCycleStageRetired
 	}
 
 	// Keep the node-local OptsCache in sync with the channel set. It is decode
@@ -87,7 +89,7 @@ func (p *Plugin) StateTransition(ctx context.Context, seqNr uint64, _ ocrtypes.A
 
 	// Channel definition changes (skipped once retired).
 	var removedChannelIDs []llotypes.ChannelID
-	if out.LifeCycleStage != llocommon.LifeCycleStageRetired {
+	if out.LifeCycleStage != protocol.LifeCycleStageRetired {
 		removedChannelIDs = applyChannelVotes(out.ChannelDefinitions, removeChannelVotesByID, updateDefsByHash, updateVotesByHash, p.F, p.OptsCache)
 	}
 
@@ -148,8 +150,9 @@ func (p *Plugin) StateTransition(ctx context.Context, seqNr uint64, _ ocrtypes.A
 
 	// Evaluate calculated streams (EVMABIEncodeUnpackedExpr channels): appends
 	// the calculated streams to their channel definitions and writes the
-	// evaluated values into StreamAggregates. The engine is shared via llo/common.
-	llocommon.ProcessCalculatedStreams(p.Logger, out.ChannelDefinitions, out.StreamAggregates, out.ObservationTimestampNanoseconds, p.OptsCache)
+	// evaluated values into StreamAggregates. The engine is shared via
+	// llo/protocol/calculated.
+	calculated.ProcessCalculatedStreams(p.Logger, out.ChannelDefinitions, out.StreamAggregates, out.ObservationTimestampNanoseconds, p.OptsCache)
 
 	// Flush KV mutations.
 	if err := p.flushKV(kvRW, prev, out, removedChannelIDs); err != nil {
@@ -165,18 +168,18 @@ func (p *Plugin) StateTransition(ctx context.Context, seqNr uint64, _ ocrtypes.A
 
 func (p *Plugin) decodeObservations(ctx context.Context, aos []ocrtypes.AttributedObservation, seqNr uint64, bf ocr3_1types.BlobFetcher) (
 	timestampsNanoseconds []uint64,
-	validPredecessorRetirementReport *llocommon.RetirementReport,
+	validPredecessorRetirementReport *protocol.RetirementReport,
 	shouldRetireVotes int,
 	removeChannelVotesByID map[llotypes.ChannelID]int,
-	updateChannelDefinitionsByHash map[[32]byte]llocommon.ChannelDefinitionWithID,
+	updateChannelDefinitionsByHash map[[32]byte]protocol.ChannelDefinitionWithID,
 	updateChannelVotesByHash map[[32]byte]int,
-	streamObservations map[llotypes.StreamID][]llocommon.StreamValue,
+	streamObservations map[llotypes.StreamID][]protocol.StreamValue,
 	err error,
 ) {
 	removeChannelVotesByID = make(map[llotypes.ChannelID]int)
-	updateChannelDefinitionsByHash = make(map[[32]byte]llocommon.ChannelDefinitionWithID)
+	updateChannelDefinitionsByHash = make(map[[32]byte]protocol.ChannelDefinitionWithID)
 	updateChannelVotesByHash = make(map[[32]byte]int)
-	streamObservations = make(map[llotypes.StreamID][]llocommon.StreamValue)
+	streamObservations = make(map[llotypes.StreamID][]protocol.StreamValue)
 
 	for _, ao := range aos {
 		observation, derr := decodeObservation(ctx, ao.Observation, bf)
@@ -216,7 +219,7 @@ func (p *Plugin) decodeObservations(ctx context.Context, aos []ocrtypes.Attribut
 			removeChannelVotesByID[channelID]++
 		}
 		for channelID, channelDefinition := range observation.UpdateChannelDefinitions {
-			defWithID := llocommon.ChannelDefinitionWithID{ChannelDefinition: channelDefinition, ChannelID: channelID}
+			defWithID := protocol.ChannelDefinitionWithID{ChannelDefinition: channelDefinition, ChannelID: channelID}
 			h := makeChannelHash(defWithID)
 			updateChannelVotesByHash[h]++
 			updateChannelDefinitionsByHash[h] = defWithID
@@ -237,10 +240,10 @@ func (p *Plugin) decodeObservations(ctx context.Context, aos []ocrtypes.Attribut
 func applyChannelVotes(
 	defs llotypes.ChannelDefinitions,
 	removeVotesByID map[llotypes.ChannelID]int,
-	updateDefsByHash map[[32]byte]llocommon.ChannelDefinitionWithID,
+	updateDefsByHash map[[32]byte]protocol.ChannelDefinitionWithID,
 	updateVotesByHash map[[32]byte]int,
 	f int,
-	optsCache *llocommon.OptsCache,
+	optsCache *protocol.OptsCache,
 ) []llotypes.ChannelID {
 	removed := make([]llotypes.ChannelID, 0, len(removeVotesByID))
 	for channelID, voteCount := range removeVotesByID {
@@ -257,7 +260,7 @@ func applyChannelVotes(
 
 	type hashWithID struct {
 		hash [32]byte
-		def  llocommon.ChannelDefinitionWithID
+		def  protocol.ChannelDefinitionWithID
 	}
 	ordered := make([]hashWithID, 0, len(updateDefsByHash))
 	for h, d := range updateDefsByHash {
@@ -270,7 +273,7 @@ func applyChannelVotes(
 		}
 		defWithID := hwid.def
 		_, exists := defs[defWithID.ChannelID]
-		if !exists && len(defs) >= llocommon.MaxOutcomeChannelDefinitionsLength {
+		if !exists && len(defs) >= protocol.MaxOutcomeChannelDefinitionsLength {
 			// Skip additions beyond the cap; a replacement of an existing channel is still fine.
 			continue
 		}
@@ -290,7 +293,7 @@ func applyChannelVotes(
 // fresh aggregation is older or fails, and only a strictly-newer value is
 // written back. Regular (non-timestamped) aggregates are recomputed fresh each
 // round and never persisted.
-func (p *Plugin) aggregate(kvRW ocr3_1types.KeyValueStateReadWriter, defs llotypes.ChannelDefinitions, streamObservations map[llotypes.StreamID][]llocommon.StreamValue, out llocommon.StreamAggregates) error {
+func (p *Plugin) aggregate(kvRW ocr3_1types.KeyValueStateReadWriter, defs llotypes.ChannelDefinitions, streamObservations map[llotypes.StreamID][]protocol.StreamValue, out protocol.StreamAggregates) error {
 	for _, cd := range defs {
 		if cd.Tombstone || cd.ReportFormat == llotypes.ReportFormatHistoryBackfill {
 			continue
@@ -305,7 +308,7 @@ func (p *Plugin) aggregate(kvRW ocr3_1types.KeyValueStateReadWriter, defs llotyp
 			}
 			m, exists := out[sid]
 			if !exists {
-				m = make(map[llotypes.Aggregator]llocommon.StreamValue)
+				m = make(map[llotypes.Aggregator]protocol.StreamValue)
 				out[sid] = m
 			}
 
@@ -314,14 +317,14 @@ func (p *Plugin) aggregate(kvRW ocr3_1types.KeyValueStateReadWriter, defs llotyp
 				return fmt.Errorf("read carry-forward aggregate for stream %d aggregator %v: %w", sid, agg, err)
 			}
 
-			aggF := llocommon.GetAggregatorFunc(agg)
+			aggF := protocol.GetAggregatorFunc(agg)
 			if aggF == nil {
 				return fmt.Errorf("no aggregator function defined for aggregator of type %v", agg)
 			}
 			result, aerr := aggF(streamObservations[sid], p.F)
 
 			switch v := result.(type) {
-			case *llocommon.TimestampedStreamValue:
+			case *protocol.TimestampedStreamValue:
 				if aerr != nil {
 					// Aggregation failed: keep the carried-forward value (if any).
 					if prevTSV != nil {
@@ -473,10 +476,10 @@ func medianTimestamp(timestampsNanoseconds []uint64) uint64 {
 	return timestampsNanoseconds[len(timestampsNanoseconds)/2]
 }
 
-func makeChannelHash(cd llocommon.ChannelDefinitionWithID) [32]byte {
-	pb := &llocommon.LLOChannelIDAndDefinitionProto{
+func makeChannelHash(cd protocol.ChannelDefinitionWithID) [32]byte {
+	pb := &protocol.LLOChannelIDAndDefinitionProto{
 		ChannelID:         cd.ChannelID,
-		ChannelDefinition: llocommon.ChannelDefinitionToProto(cd.ChannelDefinition),
+		ChannelDefinition: protocol.ChannelDefinitionToProto(cd.ChannelDefinition),
 	}
 	b, err := deterministicMarshal.Marshal(pb)
 	if err != nil {

@@ -4,7 +4,8 @@ import (
 	"fmt"
 
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
-	llocommon "github.com/smartcontractkit/chainlink-data-streams/llo/common"
+
+	protocol "github.com/smartcontractkit/chainlink-data-streams/llo/protocol"
 
 	ocrtypes "github.com/smartcontractkit/libocr/offchainreporting2plus/types"
 )
@@ -29,19 +30,19 @@ func (p *Plugin) captureOutcomeTelemetry(out precursor, seqNr uint64) {
 	}
 }
 
-func makeOutcomeTelemetry(out precursor, configDigest ocrtypes.ConfigDigest, seqNr uint64, donID uint32) (*llocommon.LLOOutcomeTelemetry, error) {
-	ot := &llocommon.LLOOutcomeTelemetry{
+func makeOutcomeTelemetry(out precursor, configDigest ocrtypes.ConfigDigest, seqNr uint64, donID uint32) (*protocol.LLOOutcomeTelemetry, error) {
+	ot := &protocol.LLOOutcomeTelemetry{
 		LifeCycleStage:                  string(out.LifeCycleStage),
 		ObservationTimestampNanoseconds: out.ObservationTimestampNanoseconds,
-		ChannelDefinitions:              make(map[uint32]*llocommon.LLOChannelDefinitionProto, len(out.ChannelDefinitions)),
+		ChannelDefinitions:              make(map[uint32]*protocol.LLOChannelDefinitionProto, len(out.ChannelDefinitions)),
 		ValidAfterNanoseconds:           make(map[uint32]uint64, len(out.ValidAfterNanoseconds)),
-		StreamAggregates:                make(map[uint32]*llocommon.LLOAggregatorStreamValue, len(out.StreamAggregates)),
+		StreamAggregates:                make(map[uint32]*protocol.LLOAggregatorStreamValue, len(out.StreamAggregates)),
 		SeqNr:                           seqNr,
 		ConfigDigest:                    configDigest[:],
 		DonId:                           donID,
 	}
 	for id, cd := range out.ChannelDefinitions {
-		ot.ChannelDefinitions[id] = llocommon.ChannelDefinitionToProto(cd)
+		ot.ChannelDefinitions[id] = protocol.ChannelDefinitionToProto(cd)
 	}
 	for id, va := range out.ValidAfterNanoseconds {
 		ot.ValidAfterNanoseconds[id] = va
@@ -50,20 +51,20 @@ func makeOutcomeTelemetry(out precursor, configDigest ocrtypes.ConfigDigest, seq
 		if len(aggMap) == 0 {
 			continue
 		}
-		aggVals := make(map[uint32]*llocommon.LLOStreamValue, len(aggMap))
+		aggVals := make(map[uint32]*protocol.LLOStreamValue, len(aggMap))
 		for agg, sv := range aggMap {
-			v, err := llocommon.StreamValueToProto(sv)
+			v, err := protocol.StreamValueToProto(sv)
 			if err != nil {
 				return nil, fmt.Errorf("failed to make outcome telemetry; %w", err)
 			}
 			aggVals[uint32(agg)] = v
 		}
-		ot.StreamAggregates[sid] = &llocommon.LLOAggregatorStreamValue{AggregatorValues: aggVals}
+		ot.StreamAggregates[sid] = &protocol.LLOAggregatorStreamValue{AggregatorValues: aggVals}
 	}
 	return ot, nil
 }
 
-func (p *Plugin) captureReportTelemetry(r llocommon.Report, cd llotypes.ChannelDefinition) {
+func (p *Plugin) captureReportTelemetry(r protocol.Report, cd llotypes.ChannelDefinition) {
 	if p.ReportTelemetryCh == nil {
 		return
 	}
@@ -79,32 +80,32 @@ func (p *Plugin) captureReportTelemetry(r llocommon.Report, cd llotypes.ChannelD
 	}
 }
 
-func makeReportTelemetry(r llocommon.Report, cd llotypes.ChannelDefinition, donID uint32) (*llocommon.LLOReportTelemetry, error) {
-	streams := make([]*llocommon.LLOStreamDefinition, len(cd.Streams))
+func makeReportTelemetry(r protocol.Report, cd llotypes.ChannelDefinition, donID uint32) (*protocol.LLOReportTelemetry, error) {
+	streams := make([]*protocol.LLOStreamDefinition, len(cd.Streams))
 	for i, s := range cd.Streams {
-		streams[i] = &llocommon.LLOStreamDefinition{
+		streams[i] = &protocol.LLOStreamDefinition{
 			StreamID:   s.StreamID,
 			Aggregator: uint32(s.Aggregator),
 		}
 	}
-	svs := make([]*llocommon.LLOStreamValue, len(r.Values))
+	svs := make([]*protocol.LLOStreamValue, len(r.Values))
 	for i, v := range r.Values {
 		if v == nil {
 			// Missing stream value (allowed when DisableNilStreamValues is false);
 			// emit an empty entry rather than panicking.
-			svs[i] = &llocommon.LLOStreamValue{}
+			svs[i] = &protocol.LLOStreamValue{}
 			continue
 		}
 		b, err := v.MarshalBinary()
 		if err != nil {
 			return nil, fmt.Errorf("error marshalling stream value: %w", err)
 		}
-		svs[i] = &llocommon.LLOStreamValue{
+		svs[i] = &protocol.LLOStreamValue{
 			Type:  v.Type(),
 			Value: b,
 		}
 	}
-	rt := &llocommon.LLOReportTelemetry{
+	rt := &protocol.LLOReportTelemetry{
 		ChannelId:                       r.ChannelID,
 		ValidAfterNanoseconds:           r.ValidAfterNanoseconds,
 		ObservationTimestampNanoseconds: r.ObservationTimestampNanoseconds,

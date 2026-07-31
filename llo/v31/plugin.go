@@ -10,7 +10,9 @@ import (
 
 	"github.com/smartcontractkit/chainlink-common/pkg/logger"
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
-	llocommon "github.com/smartcontractkit/chainlink-data-streams/llo/common"
+
+	"github.com/smartcontractkit/chainlink-data-streams/llo/datasource"
+	"github.com/smartcontractkit/chainlink-data-streams/llo/protocol"
 
 	"github.com/smartcontractkit/libocr/offchainreporting2plus/ocr3_1types"
 	"github.com/smartcontractkit/libocr/offchainreporting2plus/ocr3types"
@@ -31,21 +33,21 @@ type Plugin struct {
 	Config                           Config
 	PredecessorConfigDigest          *ocrtypes.ConfigDigest
 	ConfigDigest                     ocrtypes.ConfigDigest
-	PredecessorRetirementReportCache llocommon.PredecessorRetirementReportCache
+	PredecessorRetirementReportCache protocol.PredecessorRetirementReportCache
 	ShouldRetireCache                ShouldRetireCache
 	ChannelDefinitionCache           llotypes.ChannelDefinitionCache
 	DataSource                       DataSource
 	Logger                           logger.Logger
 	N                                int
 	F                                int
-	RetirementReportCodec            llocommon.RetirementReportCodec
-	ReportCodecs                     map[llotypes.ReportFormat]llocommon.ReportCodec
+	RetirementReportCodec            protocol.RetirementReportCodec
+	ReportCodecs                     map[llotypes.ReportFormat]protocol.ReportCodec
 	DonID                            uint32
-	OptsCache                        *llocommon.OptsCache
+	OptsCache                        *protocol.OptsCache
 
 	// Optional telemetry sinks; best-effort, non-blocking.
-	OutcomeTelemetryCh chan<- *llocommon.LLOOutcomeTelemetry
-	ReportTelemetryCh  chan<- *llocommon.LLOReportTelemetry
+	OutcomeTelemetryCh chan<- *protocol.LLOOutcomeTelemetry
+	ReportTelemetryCh  chan<- *protocol.LLOReportTelemetry
 
 	MaxDurationObservation time.Duration
 
@@ -81,14 +83,14 @@ func (p *Plugin) Observation(ctx context.Context, seqNr uint64, _ ocrtypes.Attri
 
 	var obs Observation
 
-	if state.lifeCycleStage == llocommon.LifeCycleStageRetired {
+	if state.lifeCycleStage == protocol.LifeCycleStageRetired {
 		p.Logger.Debugw("Node is retired, will generate empty observation", "stage", "Observation", "seqNr", seqNr)
 	} else {
-		if err = llocommon.VerifyChannelDefinitions(p.ReportCodecs, state.channelDefinitions); err != nil {
+		if err = protocol.VerifyChannelDefinitions(p.ReportCodecs, state.channelDefinitions); err != nil {
 			return nil, fmt.Errorf("state.channelDefinitions is invalid: %w", err)
 		}
 
-		if p.PredecessorConfigDigest != nil && state.lifeCycleStage == llocommon.LifeCycleStageStaging {
+		if p.PredecessorConfigDigest != nil && state.lifeCycleStage == protocol.LifeCycleStageStaging {
 			obs.AttestedPredecessorRetirement, err = p.PredecessorRetirementReportCache.AttestedRetirementReport(*p.PredecessorConfigDigest)
 			if err != nil {
 				return nil, fmt.Errorf("error fetching attested retirement report from cache: %w", err)
@@ -103,7 +105,7 @@ func (p *Plugin) Observation(ctx context.Context, seqNr uint64, _ ocrtypes.Attri
 		p.voteOnChannels(&obs, state, seqNr)
 
 		if len(state.channelDefinitions) > 0 {
-			obs.StreamValues = make(llocommon.StreamValues)
+			obs.StreamValues = make(protocol.StreamValues)
 			for _, cd := range state.channelDefinitions {
 				if cd.Tombstone {
 					continue
@@ -118,7 +120,7 @@ func (p *Plugin) Observation(ctx context.Context, seqNr uint64, _ ocrtypes.Attri
 
 			observationCtx, cancel := context.WithTimeout(ctx, p.MaxDurationObservation)
 			defer cancel()
-			opts := llocommon.NewDSOpts(p.Config.VerboseLogging, seqNr, p.ConfigDigest, time.Now(), state.lifeCycleStage)
+			opts := datasource.NewDSOpts(p.Config.VerboseLogging, seqNr, p.ConfigDigest, time.Now(), state.lifeCycleStage)
 			if err = p.DataSource.Observe(observationCtx, obs.StreamValues, opts); err != nil {
 				return nil, fmt.Errorf("DataSource.Observe error: %w", err)
 			}
@@ -140,13 +142,13 @@ func (p *Plugin) voteOnChannels(obs *Observation, state *kvState, seqNr uint64) 
 	obs.RemoveChannelIDs = map[llotypes.ChannelID]struct{}{}
 
 	expectedChannelDefs := p.ChannelDefinitionCache.Definitions(state.channelDefinitions)
-	if err := llocommon.VerifyChannelDefinitions(p.ReportCodecs, expectedChannelDefs); err != nil {
+	if err := protocol.VerifyChannelDefinitions(p.ReportCodecs, expectedChannelDefs); err != nil {
 		// Don't halt on an invalid channel-definitions file; just don't vote.
 		p.Logger.Errorw("ChannelDefinitionCache.Definitions is invalid", "err", err)
 		return
 	}
 
-	removeChannelDefinitions := llocommon.SubtractChannelDefinitions(state.channelDefinitions, expectedChannelDefs, llocommon.MaxObservationRemoveChannelIDsLength)
+	removeChannelDefinitions := protocol.SubtractChannelDefinitions(state.channelDefinitions, expectedChannelDefs, protocol.MaxObservationRemoveChannelIDsLength)
 	for channelID := range removeChannelDefinitions {
 		obs.RemoveChannelIDs[channelID] = struct{}{}
 	}
@@ -161,7 +163,7 @@ func (p *Plugin) voteOnChannels(obs *Observation, state *kvState, seqNr uint64) 
 			continue
 		}
 		obs.UpdateChannelDefinitions[channelID] = channelDefinition
-		if len(obs.UpdateChannelDefinitions) >= llocommon.MaxObservationUpdateChannelDefinitionsLength {
+		if len(obs.UpdateChannelDefinitions) >= protocol.MaxObservationUpdateChannelDefinitionsLength {
 			break
 		}
 	}
@@ -187,11 +189,11 @@ func (p *Plugin) ValidateObservation(ctx context.Context, seqNr uint64, _ ocrtyp
 	if p.PredecessorConfigDigest == nil && len(observation.AttestedPredecessorRetirement) != 0 {
 		return errors.New("AttestedPredecessorRetirement is not empty even though this instance has no predecessor")
 	}
-	if len(observation.UpdateChannelDefinitions) > llocommon.MaxObservationUpdateChannelDefinitionsLength {
-		return fmt.Errorf("UpdateChannelDefinitions is too long: %v vs %v", len(observation.UpdateChannelDefinitions), llocommon.MaxObservationUpdateChannelDefinitionsLength)
+	if len(observation.UpdateChannelDefinitions) > protocol.MaxObservationUpdateChannelDefinitionsLength {
+		return fmt.Errorf("UpdateChannelDefinitions is too long: %v vs %v", len(observation.UpdateChannelDefinitions), protocol.MaxObservationUpdateChannelDefinitionsLength)
 	}
-	if len(observation.RemoveChannelIDs) > llocommon.MaxObservationRemoveChannelIDsLength {
-		return fmt.Errorf("RemoveChannelIDs is too long: %v vs %v", len(observation.RemoveChannelIDs), llocommon.MaxObservationRemoveChannelIDsLength)
+	if len(observation.RemoveChannelIDs) > protocol.MaxObservationRemoveChannelIDsLength {
+		return fmt.Errorf("RemoveChannelIDs is too long: %v vs %v", len(observation.RemoveChannelIDs), protocol.MaxObservationRemoveChannelIDsLength)
 	}
 
 	defsForVerify := observation.UpdateChannelDefinitions
@@ -209,16 +211,16 @@ func (p *Plugin) ValidateObservation(ctx context.Context, seqNr uint64, _ ocrtyp
 		}
 		defsForVerify = merged
 	}
-	if err := llocommon.VerifyChannelDefinitions(p.ReportCodecs, defsForVerify); err != nil {
+	if err := protocol.VerifyChannelDefinitions(p.ReportCodecs, defsForVerify); err != nil {
 		return fmt.Errorf("UpdateChannelDefinitions is invalid: %w", err)
 	}
 
-	if len(observation.StreamValues) > llocommon.MaxObservationStreamValuesLength {
-		return fmt.Errorf("StreamValues is too long: %v vs %v", len(observation.StreamValues), llocommon.MaxObservationStreamValuesLength)
+	if len(observation.StreamValues) > protocol.MaxObservationStreamValuesLength {
+		return fmt.Errorf("StreamValues is too long: %v vs %v", len(observation.StreamValues), protocol.MaxObservationStreamValuesLength)
 	}
 	for _, streamValue := range observation.StreamValues {
-		if v, ok := streamValue.(*llocommon.TimestampedStreamValue); ok {
-			if v.StreamValue.Type() != llocommon.LLOStreamValue_Decimal {
+		if v, ok := streamValue.(*protocol.TimestampedStreamValue); ok {
+			if v.StreamValue.Type() != protocol.LLOStreamValue_Decimal {
 				return fmt.Errorf("nested stream value on TimestampedStreamValue must be a Decimal, got: %v", v.StreamValue.Type())
 			}
 		}
