@@ -50,7 +50,7 @@ func encodeObservation(ctx context.Context, obs Observation, seqNr uint64, blobT
 	if len(obs.UpdateChannelDefinitions) > 0 {
 		main.UpdateChannelDefinitions = make(map[uint32]*llocommon.LLOChannelDefinitionProto, len(obs.UpdateChannelDefinitions))
 		for id, cd := range obs.UpdateChannelDefinitions {
-			main.UpdateChannelDefinitions[id] = makeChannelDefinitionProto(cd)
+			main.UpdateChannelDefinitions[id] = llocommon.ChannelDefinitionToProto(cd)
 		}
 	}
 
@@ -212,7 +212,7 @@ func observationFromProto(main *llocommon.LLOObservationProto) (Observation, err
 			if pb == nil {
 				return Observation{}, fmt.Errorf("nil channel definition for channel %d", id)
 			}
-			obs.UpdateChannelDefinitions[id] = channelDefinitionFromProto(pb)
+			obs.UpdateChannelDefinitions[id] = llocommon.ChannelDefinitionFromProto(pb)
 		}
 	}
 	if len(main.StreamValues) > 0 {
@@ -238,7 +238,7 @@ func streamValuesToProto(in llocommon.StreamValues) (map[uint32]*llocommon.LLOSt
 			// Unobserved stream; skip (matches v30 semantics of not setting a value).
 			continue
 		}
-		pb, err := makeLLOStreamValue(sv)
+		pb, err := llocommon.StreamValueToProto(sv)
 		if err != nil {
 			return nil, fmt.Errorf("stream %d: %w", id, err)
 		}

@@ -1,17 +1,16 @@
-package llo
+package common
 
 import (
 	"errors"
 
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
-	llocommon "github.com/smartcontractkit/chainlink-data-streams/llo/common"
 )
 
 // Conversion glue between LLO domain types and the shared generated protobuf
-// types. These mirror the equivalent (unexported) helpers in v30; v31 keeps its
-// own copies to stay self-contained.
+// types. Shared across all LLO plugin versions (v30, v31, ...).
 
-func makeLLOStreamValue(v llocommon.StreamValue) (*llocommon.LLOStreamValue, error) {
+// StreamValueToProto encodes a StreamValue into its protobuf wire form.
+func StreamValueToProto(v StreamValue) (*LLOStreamValue, error) {
 	if v == nil {
 		return nil, errors.New("nil value for stream")
 	}
@@ -19,18 +18,19 @@ func makeLLOStreamValue(v llocommon.StreamValue) (*llocommon.LLOStreamValue, err
 	if err != nil {
 		return nil, err
 	}
-	return &llocommon.LLOStreamValue{Type: v.Type(), Value: b}, nil
+	return &LLOStreamValue{Type: v.Type(), Value: b}, nil
 }
 
-func makeChannelDefinitionProto(d llotypes.ChannelDefinition) *llocommon.LLOChannelDefinitionProto {
-	streams := make([]*llocommon.LLOStreamDefinition, len(d.Streams))
+// ChannelDefinitionToProto encodes a ChannelDefinition into its protobuf form.
+func ChannelDefinitionToProto(d llotypes.ChannelDefinition) *LLOChannelDefinitionProto {
+	streams := make([]*LLOStreamDefinition, len(d.Streams))
 	for i, strm := range d.Streams {
-		streams[i] = &llocommon.LLOStreamDefinition{
+		streams[i] = &LLOStreamDefinition{
 			StreamID:   strm.StreamID,
 			Aggregator: uint32(strm.Aggregator),
 		}
 	}
-	return &llocommon.LLOChannelDefinitionProto{
+	return &LLOChannelDefinitionProto{
 		ReportFormat:           uint32(d.ReportFormat),
 		Streams:                streams,
 		Opts:                   d.Opts,
@@ -40,7 +40,9 @@ func makeChannelDefinitionProto(d llotypes.ChannelDefinition) *llocommon.LLOChan
 	}
 }
 
-func channelDefinitionFromProto(pb *llocommon.LLOChannelDefinitionProto) llotypes.ChannelDefinition {
+// ChannelDefinitionFromProto decodes a protobuf ChannelDefinition. The caller
+// must ensure pb is non-nil.
+func ChannelDefinitionFromProto(pb *LLOChannelDefinitionProto) llotypes.ChannelDefinition {
 	streams := make([]llotypes.Stream, len(pb.Streams))
 	for i, strm := range pb.Streams {
 		streams[i] = llotypes.Stream{

@@ -19,7 +19,7 @@ func StreamAggregatesToProtoOutcome(in llocommon.StreamAggregates) (out []*lloco
 				return nil, fmt.Errorf("cannot marshal protobuf; nil aggregates for stream ID: %d", sid)
 			}
 			for agg, v := range aggregates {
-				pbSv, err := makeLLOStreamValue(v)
+				pbSv, err := llocommon.StreamValueToProto(v)
 				if err != nil {
 					return nil, fmt.Errorf("cannot marshal protobuf; stream ID: %d; aggregator: %v; %w", sid, agg, err)
 				}
@@ -40,42 +40,13 @@ func StreamAggregatesToProtoOutcome(in llocommon.StreamAggregates) (out []*lloco
 	return
 }
 
-func makeLLOStreamValue(v llocommon.StreamValue) (*llocommon.LLOStreamValue, error) {
-	if v == nil {
-		return nil, errors.New("nil value for stream")
-	}
-	value, err := v.MarshalBinary()
-	if err != nil {
-		return nil, err
-	}
-	return &llocommon.LLOStreamValue{Type: v.Type(), Value: value}, nil
-}
-
-func makeChannelDefinitionProto(d llotypes.ChannelDefinition) *llocommon.LLOChannelDefinitionProto {
-	streams := make([]*llocommon.LLOStreamDefinition, len(d.Streams))
-	for i, strm := range d.Streams {
-		streams[i] = &llocommon.LLOStreamDefinition{
-			StreamID:   strm.StreamID,
-			Aggregator: uint32(strm.Aggregator),
-		}
-	}
-	return &llocommon.LLOChannelDefinitionProto{
-		ReportFormat:           uint32(d.ReportFormat),
-		Streams:                streams,
-		Opts:                   d.Opts,
-		Tombstone:              d.Tombstone,
-		Source:                 d.Source,
-		DisableNilStreamValues: d.DisableNilStreamValues,
-	}
-}
-
 func channelDefinitionsToProtoOutcome(in llotypes.ChannelDefinitions) (out []*llocommon.LLOChannelIDAndDefinitionProto) {
 	if len(in) > 0 {
 		out = make([]*llocommon.LLOChannelIDAndDefinitionProto, 0, len(in))
 		for id, d := range in {
 			out = append(out, &llocommon.LLOChannelIDAndDefinitionProto{
 				ChannelID:         id,
-				ChannelDefinition: makeChannelDefinitionProto(d),
+				ChannelDefinition: llocommon.ChannelDefinitionToProto(d),
 			})
 		}
 		sort.Slice(out, func(i, j int) bool {
@@ -94,21 +65,7 @@ func channelDefinitionsFromProtoOutcome(in []*llocommon.LLOChannelIDAndDefinitio
 				// node should never encode nil definitions here
 				return out, errors.New("failed to decode outcome; nil channel definition")
 			}
-			streams := make([]llotypes.Stream, len(d.ChannelDefinition.Streams))
-			for i, strm := range d.ChannelDefinition.Streams {
-				streams[i] = llotypes.Stream{
-					StreamID:   strm.StreamID,
-					Aggregator: llotypes.Aggregator(strm.Aggregator),
-				}
-			}
-			out[d.ChannelID] = llotypes.ChannelDefinition{
-				ReportFormat:           llotypes.ReportFormat(d.ChannelDefinition.ReportFormat),
-				Streams:                streams,
-				Opts:                   d.ChannelDefinition.Opts,
-				Tombstone:              d.ChannelDefinition.Tombstone,
-				Source:                 d.ChannelDefinition.Source,
-				DisableNilStreamValues: d.ChannelDefinition.DisableNilStreamValues,
-			}
+			out[d.ChannelID] = llocommon.ChannelDefinitionFromProto(d.ChannelDefinition)
 		}
 	}
 	return out, nil
