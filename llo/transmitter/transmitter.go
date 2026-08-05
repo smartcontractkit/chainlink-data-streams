@@ -2,7 +2,6 @@ package transmitter
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"sync"
 
@@ -19,7 +18,6 @@ import (
 	mercurytransmitter "github.com/smartcontractkit/chainlink-data-streams/llo/transmitter/de"
 
 	"github.com/smartcontractkit/chainlink-data-streams/llo/config"
-	"github.com/smartcontractkit/chainlink-data-streams/llo/cre"
 )
 
 // LLO Transmitter implementation, based on
@@ -96,26 +94,6 @@ func NewTransmitter(opts TransmitterOpts) (Transmitter, error) {
 			subTransmitters,
 			mercurytransmitter.New(*opts.MercuryTransmitterOpts),
 		)
-	}
-	for _, cfg := range opts.Subtransmitters {
-		switch cfg.Type {
-		case config.TransmitterTypeCRE:
-			var creTransmitterCfg cre.TransmitterConfig
-			err := json.Unmarshal(cfg.Opts, &creTransmitterCfg)
-			if err != nil {
-				return nil, fmt.Errorf("failed to unmarshal CRE transmitter config: %w", err)
-			}
-			creTransmitterCfg.Logger = opts.Lggr
-			creTransmitterCfg.CapabilitiesRegistry = opts.CapabilitiesRegistry
-			creTransmitterCfg.DonID = opts.DonID
-			creTransmitter, err := creTransmitterCfg.NewTransmitter()
-			if err != nil {
-				return nil, fmt.Errorf("failed to create CRE transmitter: %w", err)
-			}
-			subTransmitters = append(subTransmitters, creTransmitter)
-		default:
-			return nil, fmt.Errorf("unknown transmitter type: %s", cfg.Type)
-		}
 	}
 	return &transmitter{
 		services.StateMachine{},
