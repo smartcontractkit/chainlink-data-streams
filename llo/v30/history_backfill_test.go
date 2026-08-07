@@ -9,7 +9,8 @@ import (
 	"github.com/smartcontractkit/chainlink-common/pkg/logger"
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
 	"github.com/smartcontractkit/chainlink-common/pkg/utils/tests"
-	llocommon "github.com/smartcontractkit/chainlink-data-streams/llo/common"
+
+	protocol "github.com/smartcontractkit/chainlink-data-streams/llo/protocol"
 )
 
 func TestSelectBackfillCandidate_picksSmallestEligible(t *testing.T) {
@@ -82,7 +83,7 @@ func TestValidateHistoryBackfillAgainstDefinitions_invalidTargetOpts(t *testing.
 			Opts:         []byte(`{"targetChannelId":2,"observations":{"1000":{"1":"1"}}}`),
 		},
 	}
-	err := llocommon.ValidateHistoryBackfillAgainstDefinitions(defs[10], defs, 0)
+	err := protocol.ValidateHistoryBackfillAgainstDefinitions(defs[10], defs, 0)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "target channel opts")
 }
@@ -100,7 +101,7 @@ func TestDropInvalidHistoryBackfillChannels_dropsInvalid(t *testing.T) {
 		},
 	}
 	ref := uint64(time.Now().Add(time.Hour).UnixNano())
-	out := llocommon.DropInvalidHistoryBackfillChannels(lggr, defs, ref)
+	out := protocol.DropInvalidHistoryBackfillChannels(lggr, defs, ref)
 	_, ok := out[10]
 	require.False(t, ok)
 	_, still := defs[10]
@@ -111,6 +112,6 @@ func FuzzParseHistoryBackfillOpts(f *testing.F) {
 	f.Add([]byte(`{"targetChannelId":1,"observations":{"1":{"1":"1"}}}`))
 	f.Fuzz(func(t *testing.T, data []byte) {
 		t.Parallel()
-		_, _ = llocommon.ParseHistoryBackfillOpts(data)
+		_, _ = protocol.ParseHistoryBackfillOpts(data)
 	})
 }

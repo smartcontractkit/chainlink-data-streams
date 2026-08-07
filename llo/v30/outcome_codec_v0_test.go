@@ -14,7 +14,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
-	llocommon "github.com/smartcontractkit/chainlink-data-streams/llo/common"
+
+	protocol "github.com/smartcontractkit/chainlink-data-streams/llo/protocol"
 )
 
 func Test_protoOutcomeCodecV0(t *testing.T) {
@@ -42,24 +43,24 @@ func Test_protoOutcomeCodecV0(t *testing.T) {
 			ValidAfterNanoseconds: map[llotypes.ChannelID]uint64{
 				3: uint64(123 * time.Second),
 			},
-			StreamAggregates: map[llotypes.StreamID]map[llotypes.Aggregator]llocommon.StreamValue{
-				1: map[llotypes.Aggregator]llocommon.StreamValue{
-					llotypes.AggregatorMedian: llocommon.ToDecimal(decimal.NewFromInt(123)),
+			StreamAggregates: map[llotypes.StreamID]map[llotypes.Aggregator]protocol.StreamValue{
+				1: map[llotypes.Aggregator]protocol.StreamValue{
+					llotypes.AggregatorMedian: protocol.ToDecimal(decimal.NewFromInt(123)),
 				},
-				2: map[llotypes.Aggregator]llocommon.StreamValue{
-					llotypes.AggregatorMedian: llocommon.ToDecimal(decimal.NewFromInt(456)),
+				2: map[llotypes.Aggregator]protocol.StreamValue{
+					llotypes.AggregatorMedian: protocol.ToDecimal(decimal.NewFromInt(456)),
 				},
-				3: map[llotypes.Aggregator]llocommon.StreamValue{},
-				4: map[llotypes.Aggregator]llocommon.StreamValue{
-					llotypes.AggregatorQuote: &llocommon.Quote{
+				3: map[llotypes.Aggregator]protocol.StreamValue{},
+				4: map[llotypes.Aggregator]protocol.StreamValue{
+					llotypes.AggregatorQuote: &protocol.Quote{
 						Bid:       decimal.NewFromInt(1010),
 						Benchmark: decimal.NewFromInt(1011),
 						Ask:       decimal.NewFromInt(1012),
 					},
-					llotypes.AggregatorMedian: llocommon.ToDecimal(decimal.NewFromInt(457)),
+					llotypes.AggregatorMedian: protocol.ToDecimal(decimal.NewFromInt(457)),
 				},
-				5: map[llotypes.Aggregator]llocommon.StreamValue{
-					llotypes.AggregatorQuote: &llocommon.Quote{
+				5: map[llotypes.Aggregator]protocol.StreamValue{
+					llotypes.AggregatorQuote: &protocol.Quote{
 						Bid:       decimal.NewFromInt(1013),
 						Benchmark: decimal.NewFromInt(1014),
 						Ask:       decimal.NewFromInt(1015),
@@ -137,24 +138,24 @@ func Fuzz_protoOutcomeCodecV0_Decode(f *testing.F) {
 		ValidAfterNanoseconds: map[llotypes.ChannelID]uint64{
 			3: uint64(123 * time.Second),
 		},
-		StreamAggregates: map[llotypes.StreamID]map[llotypes.Aggregator]llocommon.StreamValue{
-			1: map[llotypes.Aggregator]llocommon.StreamValue{
-				llotypes.AggregatorMedian: llocommon.ToDecimal(decimal.NewFromInt(123)),
+		StreamAggregates: map[llotypes.StreamID]map[llotypes.Aggregator]protocol.StreamValue{
+			1: map[llotypes.Aggregator]protocol.StreamValue{
+				llotypes.AggregatorMedian: protocol.ToDecimal(decimal.NewFromInt(123)),
 			},
-			2: map[llotypes.Aggregator]llocommon.StreamValue{
-				llotypes.AggregatorMedian: llocommon.ToDecimal(decimal.NewFromInt(456)),
+			2: map[llotypes.Aggregator]protocol.StreamValue{
+				llotypes.AggregatorMedian: protocol.ToDecimal(decimal.NewFromInt(456)),
 			},
-			3: map[llotypes.Aggregator]llocommon.StreamValue{},
-			4: map[llotypes.Aggregator]llocommon.StreamValue{
-				llotypes.AggregatorQuote: &llocommon.Quote{
+			3: map[llotypes.Aggregator]protocol.StreamValue{},
+			4: map[llotypes.Aggregator]protocol.StreamValue{
+				llotypes.AggregatorQuote: &protocol.Quote{
 					Bid:       decimal.NewFromInt(1010),
 					Benchmark: decimal.NewFromInt(1011),
 					Ask:       decimal.NewFromInt(1012),
 				},
-				llotypes.AggregatorMedian: llocommon.ToDecimal(decimal.NewFromInt(457)),
+				llotypes.AggregatorMedian: protocol.ToDecimal(decimal.NewFromInt(457)),
 			},
-			5: map[llotypes.Aggregator]llocommon.StreamValue{
-				llotypes.AggregatorQuote: &llocommon.Quote{
+			5: map[llotypes.Aggregator]protocol.StreamValue{
+				llotypes.AggregatorQuote: &protocol.Quote{
 					Bid:       decimal.NewFromInt(1013),
 					Benchmark: decimal.NewFromInt(1014),
 					Ask:       decimal.NewFromInt(1015),

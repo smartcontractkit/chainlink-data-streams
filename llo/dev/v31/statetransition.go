@@ -1,0 +1,515 @@
+package llo
+
+import (
+	"context"
+	"crypto/sha256"
+	"errors"
+	"fmt"
+	"sort"
+
+	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
+
+	protocol "github.com/smartcontractkit/chainlink-data-streams/llo/protocol"
+	"github.com/smartcontractkit/chainlink-data-streams/llo/protocol/calculated"
+
+	"github.com/smartcontractkit/libocr/offchainreporting2plus/ocr3_1types"
+	ocrtypes "github.com/smartcontractkit/libocr/offchainreporting2plus/types"
+)
+
+// StateTransition mutates the replicated KeyValueState based on the round's
+// observations and returns a self-sufficient precursor for Reports.
+//
+// This is a faithful port of the core of the v30 Outcome computation, adapted
+// to read/write per-channel keys in the KeyValueState instead of decoding and
+// re-encoding a monolithic previous outcome.
+func (p *Plugin) StateTransition(ctx context.Context, seqNr uint64, _ ocrtypes.AttributedQuery, aos []ocrtypes.AttributedObservation, kvRW ocr3_1types.KeyValueStateReadWriter, bf ocr3_1types.BlobFetcher) (ocr3_1types.ReportsPlusPrecursor, error) {
+	if len(aos) < 2*p.F+1 {
+		return nil, fmt.Errorf("invariant violation: expected at least 2f+1 attributed observations, got %d (f: %d)", len(aos), p.F)
+	}
+
+	// Initial round: establish the lifecycle stage and nothing else.
+	if seqNr <= 1 {
+		stage := protocol.LifeCycleStageProduction
+		if p.PredecessorConfigDigest != nil {
+			stage = protocol.LifeCycleStageStaging
+		}
+		if err := writeLifecycle(kvRW, stage); err != nil {
+			return nil, err
+		}
+		if err := writeChannelIndex(kvRW, nil); err != nil {
+			return nil, err
+		}
+		return encodePrecursor(precursor{LifeCycleStage: stage})
+	}
+
+	prev, err := loadKVState(kvRW)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load KV state: %w", err)
+	}
+
+	timestamps, validPredecessorRetirementReport, shouldRetireVotes, removeChannelVotesByID, updateDefsByHash, updateVotesByHash, streamObservations, err := p.decodeObservations(ctx, aos, seqNr, bf)
+	if err != nil {
+		return nil, err
+	}
+	if len(timestamps) == 0 {
+		return nil, fmt.Errorf("no valid observations")
+	}
+
+	out := precursor{
+		ObservationTimestampNanoseconds: medianTimestamp(timestamps),
+		ChannelDefinitions:              cloneChannelDefinitions(prev.channelDefinitions),
+		ValidAfterNanoseconds:           map[llotypes.ChannelID]uint64{},
+		StreamAggregates:                protocol.StreamAggregates{},
+	}
+
+	// Lifecycle stage & promotion.
+	promotedValidAfter := map[llotypes.ChannelID]uint64(nil)
+	if prev.lifeCycleStage == protocol.LifeCycleStageStaging && validPredecessorRetirementReport != nil {
+		p.Logger.Infow("Promoting protocol instance from staging to production 🎖️", "seqNr", seqNr, "validAfterNanoseconds", validPredecessorRetirementReport.ValidAfterNanoseconds)
+		out.LifeCycleStage = protocol.LifeCycleStageProduction
+		promotedValidAfter = validPredecessorRetirementReport.ValidAfterNanoseconds
+	} else {
+		out.LifeCycleStage = prev.lifeCycleStage
+	}
+	if out.LifeCycleStage == protocol.LifeCycleStageProduction && shouldRetireVotes > p.F {
+		p.Logger.Infow("Retiring production protocol instance ⚰️", "seqNr", seqNr)
+		out.LifeCycleStage = protocol.LifeCycleStageRetired
+	}
+
+	// Keep the node-local OptsCache in sync with the channel set. It is decode
+	// memoization, not replicated state, but it is READ at consensus time by
+	// calculated-stream evaluation and by opts-dependent report codecs, so it
+	// must be populated identically on every oracle. After a mismatch (e.g. a
+	// restart leaves it empty) repopulate it wholesale from the current channel
+	// definitions; applyChannelVotes then keeps it current incrementally. This
+	// mirrors the v30 Outcome() safeguard.
+	if p.OptsCache.Len() != len(out.ChannelDefinitions) {
+		p.OptsCache.ResetTo(out.ChannelDefinitions)
+	}
+
+	// Channel definition changes (skipped once retired).
+	var removedChannelIDs []llotypes.ChannelID
+	if out.LifeCycleStage != protocol.LifeCycleStageRetired {
+		removedChannelIDs = applyChannelVotes(out.ChannelDefinitions, removeChannelVotesByID, updateDefsByHash, updateVotesByHash, p.F, p.OptsCache)
+	}
+
+	// validAfter.
+	if promotedValidAfter != nil {
+		// Promotion round: seed validAfter solely from the predecessor's
+		// retirement report (gapless handover). Do NOT carry forward this
+		// staging instance's own watermarks — staging channels absent from the
+		// report were never covered by the predecessor's production reports, so
+		// they fall through to the new-channel loop below (validAfter = obsTs).
+		// This mirrors v30, which replaces ValidAfterNanoseconds wholesale with
+		// the report's map and skips carry-forward during promotion.
+		for id, va := range promotedValidAfter {
+			out.ValidAfterNanoseconds[id] = va
+		}
+	} else {
+		for channelID, prevValidAfter := range prev.validAfterNanoseconds {
+			if _, done := out.ValidAfterNanoseconds[channelID]; done {
+				continue
+			}
+			if cd, ok := prev.channelDefinitions[channelID]; ok && cd.ReportFormat == llotypes.ReportFormatHistoryBackfill {
+				// Backfill: the watermark advances to whatever observation the
+				// previous round would have selected (and emitted), or stays put.
+				if tsNanos, _, _, found := selectBackfillCandidate(prev.channelDefinitions, prev.validAfterNanoseconds, prev.observationTimestampNs, channelID); found {
+					out.ValidAfterNanoseconds[channelID] = tsNanos
+				} else {
+					out.ValidAfterNanoseconds[channelID] = prevValidAfter
+				}
+				continue
+			}
+			if prevReportable(prev, channelID) {
+				// Previous round reported; advance to the previous observation timestamp.
+				out.ValidAfterNanoseconds[channelID] = prev.observationTimestampNs
+			} else {
+				out.ValidAfterNanoseconds[channelID] = prevValidAfter
+			}
+		}
+	}
+	for channelID := range out.ChannelDefinitions {
+		if _, ok := out.ValidAfterNanoseconds[channelID]; !ok {
+			if out.ChannelDefinitions[channelID].ReportFormat == llotypes.ReportFormatHistoryBackfill {
+				// New backfill channel: watermark starts at 0 (before any observation).
+				out.ValidAfterNanoseconds[channelID] = 0
+			} else {
+				// New channel; becomes reportable in later rounds.
+				out.ValidAfterNanoseconds[channelID] = out.ObservationTimestampNanoseconds
+			}
+		}
+	}
+	for _, channelID := range removedChannelIDs {
+		delete(out.ValidAfterNanoseconds, channelID)
+	}
+
+	// Aggregation (regular fresh; timestamped with cross-round carry-forward via KV).
+	if err := p.aggregate(kvRW, out.ChannelDefinitions, streamObservations, out.StreamAggregates); err != nil {
+		return nil, err
+	}
+
+	// Evaluate calculated streams (EVMABIEncodeUnpackedExpr channels): appends
+	// the calculated streams to their channel definitions and writes the
+	// evaluated values into StreamAggregates. The engine is shared via
+	// llo/protocol/calculated.
+	calculated.ProcessCalculatedStreams(p.Logger, out.ChannelDefinitions, out.StreamAggregates, out.ObservationTimestampNanoseconds, p.OptsCache)
+
+	// Flush KV mutations.
+	if err := p.flushKV(kvRW, prev, out, removedChannelIDs); err != nil {
+		return nil, err
+	}
+
+	if p.Config.VerboseLogging {
+		p.Logger.Debugw("Generated precursor", "lifeCycleStage", out.LifeCycleStage, "channels", len(out.ChannelDefinitions), "seqNr", seqNr)
+	}
+	p.captureOutcomeTelemetry(out, seqNr)
+	return encodePrecursor(out)
+}
+
+func (p *Plugin) decodeObservations(ctx context.Context, aos []ocrtypes.AttributedObservation, seqNr uint64, bf ocr3_1types.BlobFetcher) (
+	timestampsNanoseconds []uint64,
+	validPredecessorRetirementReport *protocol.RetirementReport,
+	shouldRetireVotes int,
+	removeChannelVotesByID map[llotypes.ChannelID]int,
+	updateChannelDefinitionsByHash map[[32]byte]protocol.ChannelDefinitionWithID,
+	updateChannelVotesByHash map[[32]byte]int,
+	streamObservations map[llotypes.StreamID][]protocol.StreamValue,
+	err error,
+) {
+	removeChannelVotesByID = make(map[llotypes.ChannelID]int)
+	updateChannelDefinitionsByHash = make(map[[32]byte]protocol.ChannelDefinitionWithID)
+	updateChannelVotesByHash = make(map[[32]byte]int)
+	streamObservations = make(map[llotypes.StreamID][]protocol.StreamValue)
+
+	for _, ao := range aos {
+		observation, derr := decodeObservation(ctx, ao.Observation, bf)
+		if derr != nil {
+			var bfErr *blobFetchError
+			if errors.As(derr, &bfErr) {
+				// Node-local, possibly transient failure. Dropping this
+				// observation on only some oracles would make StateTransition
+				// non-deterministic; instead abort the round so every oracle
+				// retries uniformly. Determinism is not required when returning
+				// an error (see the ReportingPlugin contract).
+				err = fmt.Errorf("failed to fetch blob for observation from oracle %v: %w", ao.Observer, derr)
+				return
+			}
+			// Deterministic decode failure (same bytes on every oracle): safe to
+			// drop just this observation.
+			p.Logger.Warnw("ignoring invalid observation", "oracleID", ao.Observer, "error", derr)
+			continue
+		}
+
+		if len(observation.AttestedPredecessorRetirement) != 0 && validPredecessorRetirementReport == nil && p.PredecessorConfigDigest != nil {
+			pcd := *p.PredecessorConfigDigest
+			retirementReport, cerr := p.PredecessorRetirementReportCache.CheckAttestedRetirementReport(pcd, observation.AttestedPredecessorRetirement)
+			if cerr != nil {
+				p.Logger.Warnw("ignoring observation with invalid attested predecessor retirement", "oracleID", ao.Observer, "error", cerr, "predecessorConfigDigest", pcd)
+				continue
+			}
+			validPredecessorRetirementReport = &retirementReport
+		}
+
+		if observation.ShouldRetire {
+			shouldRetireVotes++
+		}
+		timestampsNanoseconds = append(timestampsNanoseconds, observation.UnixTimestampNanoseconds)
+
+		for channelID := range observation.RemoveChannelIDs {
+			removeChannelVotesByID[channelID]++
+		}
+		for channelID, channelDefinition := range observation.UpdateChannelDefinitions {
+			defWithID := protocol.ChannelDefinitionWithID{ChannelDefinition: channelDefinition, ChannelID: channelID}
+			h := makeChannelHash(defWithID)
+			updateChannelVotesByHash[h]++
+			updateChannelDefinitionsByHash[h] = defWithID
+		}
+		for id, sv := range observation.StreamValues {
+			if sv == nil {
+				continue
+			}
+			streamObservations[id] = append(streamObservations[id], sv)
+		}
+	}
+	return
+}
+
+// applyChannelVotes applies remove/add votes with a >F threshold, in ascending
+// channelID order, respecting MaxOutcomeChannelDefinitionsLength. Returns the
+// channel IDs that were removed.
+func applyChannelVotes(
+	defs llotypes.ChannelDefinitions,
+	removeVotesByID map[llotypes.ChannelID]int,
+	updateDefsByHash map[[32]byte]protocol.ChannelDefinitionWithID,
+	updateVotesByHash map[[32]byte]int,
+	f int,
+	optsCache *protocol.OptsCache,
+) []llotypes.ChannelID {
+	removed := make([]llotypes.ChannelID, 0, len(removeVotesByID))
+	for channelID, voteCount := range removeVotesByID {
+		if voteCount <= f {
+			continue
+		}
+		removed = append(removed, channelID)
+		delete(defs, channelID)
+		if optsCache != nil {
+			optsCache.Remove(channelID)
+		}
+	}
+	sort.Slice(removed, func(i, j int) bool { return removed[i] < removed[j] })
+
+	type hashWithID struct {
+		hash [32]byte
+		def  protocol.ChannelDefinitionWithID
+	}
+	ordered := make([]hashWithID, 0, len(updateDefsByHash))
+	for h, d := range updateDefsByHash {
+		ordered = append(ordered, hashWithID{h, d})
+	}
+	sort.Slice(ordered, func(i, j int) bool { return ordered[i].def.ChannelID < ordered[j].def.ChannelID })
+	for _, hwid := range ordered {
+		if updateVotesByHash[hwid.hash] <= f {
+			continue
+		}
+		defWithID := hwid.def
+		_, exists := defs[defWithID.ChannelID]
+		if !exists && len(defs) >= protocol.MaxOutcomeChannelDefinitionsLength {
+			// Skip additions beyond the cap; a replacement of an existing channel is still fine.
+			continue
+		}
+		defs[defWithID.ChannelID] = defWithID.ChannelDefinition
+		if optsCache != nil {
+			optsCache.Set(defWithID.ChannelID, defWithID.Opts)
+		}
+	}
+	return removed
+}
+
+// aggregate computes stream aggregates for all non-tombstone, non-backfill
+// channels, one aggregation per (streamID, aggregator) pair.
+//
+// Timestamped stream values carry forward across rounds via the t/ KV keys with
+// newer-wins monotonicity (mirroring v30): the previous value is kept when the
+// fresh aggregation is older or fails, and only a strictly-newer value is
+// written back. Regular (non-timestamped) aggregates are recomputed fresh each
+// round and never persisted.
+func (p *Plugin) aggregate(kvRW ocr3_1types.KeyValueStateReadWriter, defs llotypes.ChannelDefinitions, streamObservations map[llotypes.StreamID][]protocol.StreamValue, out protocol.StreamAggregates) error {
+	for _, cd := range defs {
+		if cd.Tombstone || cd.ReportFormat == llotypes.ReportFormatHistoryBackfill {
+			continue
+		}
+		for _, strm := range cd.Streams {
+			sid, agg := strm.StreamID, strm.Aggregator
+			if agg == llotypes.AggregatorCalculated {
+				continue // handled after aggregation by ProcessCalculatedStreams
+			}
+			if _, exists := out[sid][agg]; exists {
+				continue
+			}
+			m, exists := out[sid]
+			if !exists {
+				m = make(map[llotypes.Aggregator]protocol.StreamValue)
+				out[sid] = m
+			}
+
+			prevTSV, err := readTimestampedAggregate(kvRW, sid, agg)
+			if err != nil {
+				return fmt.Errorf("read carry-forward aggregate for stream %d aggregator %v: %w", sid, agg, err)
+			}
+
+			aggF := protocol.GetAggregatorFunc(agg)
+			if aggF == nil {
+				return fmt.Errorf("no aggregator function defined for aggregator of type %v", agg)
+			}
+			result, aerr := aggF(streamObservations[sid], p.F)
+
+			switch v := result.(type) {
+			case *protocol.TimestampedStreamValue:
+				if aerr != nil {
+					// Aggregation failed: keep the carried-forward value (if any).
+					if prevTSV != nil {
+						m[agg] = prevTSV
+					}
+					continue
+				}
+				if prevTSV == nil || v.ObservedAtNanoseconds > prevTSV.ObservedAtNanoseconds {
+					// Strictly newer: adopt and persist.
+					m[agg] = v
+					if err := writeTimestampedAggregate(kvRW, sid, agg, v); err != nil {
+						return err
+					}
+				} else {
+					// Not newer: keep the previous value (monotonic).
+					m[agg] = prevTSV
+				}
+			default:
+				if aerr != nil {
+					// Ignore streams that cannot be aggregated; absent from the precursor.
+					continue
+				}
+				m[agg] = result
+				// Defensive: if this pair was previously timestamped but now
+				// yields a non-timestamped value, drop the stale carry-forward.
+				if prevTSV != nil {
+					if err := deleteTimestampedAggregate(kvRW, sid, agg); err != nil {
+						return err
+					}
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// cleanupOrphanedTimestamped deletes t/ carry-forward keys for (stream,aggregator)
+// pairs of removed channels that are no longer referenced by any live channel.
+func cleanupOrphanedTimestamped(kvRW ocr3_1types.KeyValueStateReadWriter, prev *kvState, out precursor, removedChannelIDs []llotypes.ChannelID) error {
+	type pair struct {
+		sid llotypes.StreamID
+		agg llotypes.Aggregator
+	}
+	referenced := map[pair]bool{}
+	for _, cd := range out.ChannelDefinitions {
+		for _, strm := range cd.Streams {
+			referenced[pair{strm.StreamID, strm.Aggregator}] = true
+		}
+	}
+	for _, id := range removedChannelIDs {
+		cd, ok := prev.channelDefinitions[id]
+		if !ok {
+			continue
+		}
+		for _, strm := range cd.Streams {
+			if !referenced[pair{strm.StreamID, strm.Aggregator}] {
+				if err := deleteTimestampedAggregate(kvRW, strm.StreamID, strm.Aggregator); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// flushKV persists the computed state, writing only what changed and cleaning
+// up removed channels.
+func (p *Plugin) flushKV(kvRW ocr3_1types.KeyValueStateReadWriter, prev *kvState, out precursor, removedChannelIDs []llotypes.ChannelID) error {
+	if out.LifeCycleStage != prev.lifeCycleStage {
+		if err := writeLifecycle(kvRW, out.LifeCycleStage); err != nil {
+			return err
+		}
+	}
+	if err := writeObsTS(kvRW, out.ObservationTimestampNanoseconds); err != nil {
+		return err
+	}
+
+	// Channel definitions: write current set, delete removed.
+	prevIDs := make(map[llotypes.ChannelID]struct{}, len(prev.channelDefinitions))
+	for id := range prev.channelDefinitions {
+		prevIDs[id] = struct{}{}
+	}
+	for id, cd := range out.ChannelDefinitions {
+		prevCd, existed := prev.channelDefinitions[id]
+		if existed && prevCd.Equals(cd) {
+			continue // unchanged; avoid an unnecessary modified-key
+		}
+		if err := writeChannelDefinition(kvRW, id, cd); err != nil {
+			return err
+		}
+	}
+	for _, id := range removedChannelIDs {
+		if err := deleteChannel(kvRW, id); err != nil {
+			return err
+		}
+	}
+
+	// validAfter: write current entries; delete removed.
+	for id, va := range out.ValidAfterNanoseconds {
+		if prevVA, ok := prev.validAfterNanoseconds[id]; ok && prevVA == va {
+			continue
+		}
+		if err := writeValidAfter(kvRW, id, va); err != nil {
+			return err
+		}
+	}
+
+	// Reportability bit: persist this round's decision for each channel so the
+	// next round can advance validAfter faithfully (see prevReportable). Written
+	// only on change to minimize modified keys.
+	for id := range out.ChannelDefinitions {
+		reportable := out.isReportable(id, p.DefaultMinReportIntervalNanoseconds)
+		if reportable != prev.reportedLastRound[id] {
+			if err := writeReported(kvRW, id, reportable); err != nil {
+				return err
+			}
+		}
+	}
+
+	// Drop carry-forward aggregates orphaned by channel removals.
+	if err := cleanupOrphanedTimestamped(kvRW, prev, out, removedChannelIDs); err != nil {
+		return err
+	}
+
+	// Index: rewrite if the channel set changed.
+	if !sameChannelSet(prev.channelDefinitions, out.ChannelDefinitions) {
+		ids := make([]llotypes.ChannelID, 0, len(out.ChannelDefinitions))
+		for id := range out.ChannelDefinitions {
+			ids = append(ids, id)
+		}
+		if err := writeChannelIndex(kvRW, ids); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// prevReportable reports whether the channel was reportable in the previous
+// round. This reads the reportability decision persisted by the previous
+// round's StateTransition (see reportedKey / flushKV), which already accounts
+// for min-interval, seconds-resolution overlap, and DisableNilStreamValues. It
+// is exactly the value the v30 code derives from previousOutcome.IsReportable.
+func prevReportable(prev *kvState, channelID llotypes.ChannelID) bool {
+	return prev.reportedLastRound[channelID]
+}
+
+func medianTimestamp(timestampsNanoseconds []uint64) uint64 {
+	sort.Slice(timestampsNanoseconds, func(i, j int) bool { return timestampsNanoseconds[i] < timestampsNanoseconds[j] })
+	return timestampsNanoseconds[len(timestampsNanoseconds)/2]
+}
+
+func makeChannelHash(cd protocol.ChannelDefinitionWithID) [32]byte {
+	pb := &protocol.LLOChannelIDAndDefinitionProto{
+		ChannelID:         cd.ChannelID,
+		ChannelDefinition: protocol.ChannelDefinitionToProto(cd.ChannelDefinition),
+	}
+	b, err := deterministicMarshal.Marshal(pb)
+	if err != nil {
+		// Marshaling a well-formed definition cannot fail; hash empty on the
+		// impossible error path rather than panicking.
+		return sha256.Sum256(nil)
+	}
+	return sha256.Sum256(b)
+}
+
+func sortChannelIDs(cids []llotypes.ChannelID) {
+	sort.Slice(cids, func(i, j int) bool { return cids[i] < cids[j] })
+}
+
+func cloneChannelDefinitions(in llotypes.ChannelDefinitions) llotypes.ChannelDefinitions {
+	out := make(llotypes.ChannelDefinitions, len(in))
+	for id, cd := range in {
+		out[id] = cd
+	}
+	return out
+}
+
+func sameChannelSet(a, b llotypes.ChannelDefinitions) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for id := range a {
+		if _, ok := b[id]; !ok {
+			return false
+		}
+	}
+	return true
+}

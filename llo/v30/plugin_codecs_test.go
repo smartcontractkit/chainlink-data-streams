@@ -10,7 +10,8 @@ import (
 	"golang.org/x/exp/maps"
 
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
-	llocommon "github.com/smartcontractkit/chainlink-data-streams/llo/common"
+
+	protocol "github.com/smartcontractkit/chainlink-data-streams/llo/protocol"
 )
 
 func genLifecycleStage() gopter.Gen {
@@ -32,10 +33,10 @@ func genChannelDefinitions() gopter.Gen {
 }
 
 func genStreamAggregates() gopter.Gen {
-	return gen.MapOf(gen.UInt32(), genMapOfAggregatorStreamValue()).Map(func(m map[uint32]map[uint32]llocommon.StreamValue) map[llotypes.StreamID]map[llotypes.Aggregator]llocommon.StreamValue {
-		m2 := make(map[llotypes.StreamID]map[llotypes.Aggregator]llocommon.StreamValue)
+	return gen.MapOf(gen.UInt32(), genMapOfAggregatorStreamValue()).Map(func(m map[uint32]map[uint32]protocol.StreamValue) map[llotypes.StreamID]map[llotypes.Aggregator]protocol.StreamValue {
+		m2 := make(map[llotypes.StreamID]map[llotypes.Aggregator]protocol.StreamValue)
 		for k, v := range m {
-			m3 := make(map[llotypes.Aggregator]llocommon.StreamValue)
+			m3 := make(map[llotypes.Aggregator]protocol.StreamValue)
 			for k2, v2 := range v {
 				m3[llotypes.Aggregator(k2)] = v2
 			}
@@ -50,8 +51,8 @@ func genMapOfAggregatorStreamValue() gopter.Gen {
 }
 
 func genStreamValuesMap() gopter.Gen {
-	return genStreamValues(true).Map(func(values []llocommon.StreamValue) map[llotypes.StreamID]llocommon.StreamValue {
-		m := make(map[llotypes.StreamID]llocommon.StreamValue)
+	return genStreamValues(true).Map(func(values []protocol.StreamValue) map[llotypes.StreamID]protocol.StreamValue {
+		m := make(map[llotypes.StreamID]protocol.StreamValue)
 		for i, v := range values {
 			m[llotypes.StreamID(i)] = v //nolint:gosec // don't care if it overflows
 		}
@@ -244,7 +245,7 @@ func equalOutcomes(t *testing.T, outcome, outcome2 Outcome) bool {
 	return true
 }
 
-func equalStreamAggregates(m1, m2 map[llotypes.Aggregator]llocommon.StreamValue) bool {
+func equalStreamAggregates(m1, m2 map[llotypes.Aggregator]protocol.StreamValue) bool {
 	if len(m1) != len(m2) {
 		return false
 	}
