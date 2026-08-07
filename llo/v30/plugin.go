@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"maps"
-	sync "sync"
 	"time"
 
 	"github.com/smartcontractkit/libocr/quorumhelper"
@@ -19,17 +18,6 @@ import (
 	"github.com/smartcontractkit/libocr/offchainreporting2/types"
 	ocr2types "github.com/smartcontractkit/libocr/offchainreporting2/types"
 	"github.com/smartcontractkit/libocr/offchainreporting2plus/ocr3types"
-)
-
-var (
-	// ballastAlloc is a byte slice initialized to 1GB to reduce CPU cycles spent in garbage collection.
-	// The plugin's data source pipeline performs many small allocations, which can frequently trigger the GC
-	// and increase CPU usage during the mark phase. The ballast allocation is virtually addressed and does not
-	// consume physical memory unless accessed. Since the Go GC runs when the heap size doubles, this ensures
-	// GC is only triggered when the heap grows to 2GB.
-	ballastAlloc []byte
-	ballastOnce  sync.Once
-	ballastSz    int = 1e9 // 1GB
 )
 
 // OCR3.0 transport limits, reported in the v3.0 ReportingPluginInfo. The
@@ -168,9 +156,7 @@ func (f *PluginFactory) NewReportingPlugin(ctx context.Context, cfg ocr3types.Re
 	}
 
 	// Initialize the memory ballast
-	ballastOnce.Do(func() {
-		ballastAlloc = make([]byte, ballastSz)
-	})
+	protocol.InitMemoryBallast()
 
 	return &Plugin{
 			f.Config,
