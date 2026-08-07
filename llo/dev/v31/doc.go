@@ -1,7 +1,15 @@
-// Package llo (import path .../llo/v31) implements the LLO reporting plugin
+// Package llo (import path .../llo/dev/v31) implements the LLO reporting plugin
 // against libocr's OCR3.1 interface (offchainreporting2plus/ocr3_1types).
 //
-// It is a sibling of the OCR3.0 plugin at .../llo/v30. Version-agnostic
+// # Experimental
+//
+// This package lives under llo/dev and is experimental: OCR3.1 is not released,
+// the state model is still moving, and the API carries no stability guarantee.
+// See the llo/dev package documentation. It graduates to .../llo/v31 once the
+// protocol version ships.
+//
+// It is a dev-tree counterpart of the production OCR3.0 plugin at
+// .../llo/v30, not a peer of it. Version-agnostic
 // primitives (stream values, report codecs, aggregators, channel-definition
 // helpers, opts cache, retirement types, lifecycle constants, limits and all
 // generated protobuf types) live in the root llo package and are shared via a

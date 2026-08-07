@@ -62,7 +62,7 @@ func (f *PluginFactory) NewReportingPlugin(ctx context.Context, cfg ocr3types.Re
 	}
 
 	l := logger.Sugared(f.Logger).With("lloProtocolVersion", offchainConfig.ProtocolVersion, "configDigest", cfg.ConfigDigest, "lloOCRVersion", "3.1")
-	l.Infow("llo/v31.NewReportingPlugin", "onchainConfig", onchainConfig, "offchainConfig", offchainConfig)
+	l.Infow("llo/dev/v31.NewReportingPlugin", "onchainConfig", onchainConfig, "offchainConfig", offchainConfig)
 
 	// Initialize the memory ballast
 	protocol.InitMemoryBallast()
