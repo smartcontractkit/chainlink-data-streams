@@ -30,7 +30,50 @@ type StreamValue interface {
 
 var (
 	ErrNilStreamValue = errors.New("nil stream value")
+	// ErrDecimalExponentOutOfRange is returned when a decimal decoded from an
+	// untrusted source carries an exponent outside ±MaxDecimalExponent. A
+	// well-behaved node never encodes such a value; accepting one would let a
+	// single byzantine node force unbounded rescale work on every honest node.
+	ErrDecimalExponentOutOfRange = errors.New("decimal exponent out of range")
 )
+
+// checkDecimalExponent bounds the exponent of a decimal decoded from an
+// untrusted source. See MaxDecimalExponent.
+func checkDecimalExponent(d decimal.Decimal) error {
+	exp := d.Exponent()
+	if exp > MaxDecimalExponent || exp < -MaxDecimalExponent {
+		return fmt.Errorf("%w: got %d, expected absolute value <= %d", ErrDecimalExponentOutOfRange, exp, MaxDecimalExponent)
+	}
+	return nil
+}
+
+// unmarshalBinaryDecimal decodes a decimal and enforces the exponent bound
+// before writing it to d.
+func unmarshalBinaryDecimal(d *decimal.Decimal, data []byte) error {
+	var decoded decimal.Decimal
+	if err := decoded.UnmarshalBinary(data); err != nil {
+		return err
+	}
+	if err := checkDecimalExponent(decoded); err != nil {
+		return err
+	}
+	*d = decoded
+	return nil
+}
+
+// unmarshalTextDecimal decodes a decimal and enforces the exponent bound
+// before writing it to d.
+func unmarshalTextDecimal(d *decimal.Decimal, data []byte) error {
+	var decoded decimal.Decimal
+	if err := decoded.UnmarshalText(data); err != nil {
+		return err
+	}
+	if err := checkDecimalExponent(decoded); err != nil {
+		return err
+	}
+	*d = decoded
+	return nil
+}
 
 func UnmarshalProtoStreamValue(enc *LLOStreamValue) (sv StreamValue, err error) {
 	if enc == nil {
@@ -138,13 +181,13 @@ func (v *Quote) UnmarshalBinary(data []byte) error {
 	if err := proto.Unmarshal(data, q); err != nil {
 		return err
 	}
-	if err := (&v.Bid).UnmarshalBinary(q.Bid); err != nil {
+	if err := unmarshalBinaryDecimal(&v.Bid, q.Bid); err != nil {
 		return err
 	}
-	if err := (&v.Benchmark).UnmarshalBinary(q.Benchmark); err != nil {
+	if err := unmarshalBinaryDecimal(&v.Benchmark, q.Benchmark); err != nil {
 		return err
 	}
-	return (&v.Ask).UnmarshalBinary(q.Ask)
+	return unmarshalBinaryDecimal(&v.Ask, q.Ask)
 }
 
 func (v *Quote) MarshalText() ([]byte, error) {
@@ -169,13 +212,13 @@ func (v *Quote) UnmarshalText(data []byte) error {
 	bid := matches[1]
 	benchmark := matches[2]
 	ask := matches[3]
-	if err := v.Bid.UnmarshalText([]byte(bid)); err != nil {
+	if err := unmarshalTextDecimal(&v.Bid, []byte(bid)); err != nil {
 		return err
 	}
-	if err := v.Benchmark.UnmarshalText([]byte(benchmark)); err != nil {
+	if err := unmarshalTextDecimal(&v.Benchmark, []byte(benchmark)); err != nil {
 		return err
 	}
-	return v.Ask.UnmarshalText([]byte(ask))
+	return unmarshalTextDecimal(&v.Ask, []byte(ask))
 }
 
 func (v *Quote) Type() LLOStreamValue_Type {
@@ -209,7 +252,10 @@ func (v *Decimal) MarshalBinary() ([]byte, error) {
 }
 
 func (v *Decimal) UnmarshalBinary(data []byte) error {
-	return (*decimal.Decimal)(v).UnmarshalBinary(data)
+	if v == nil {
+		return ErrNilStreamValue
+	}
+	return unmarshalBinaryDecimal((*decimal.Decimal)(v), data)
 }
 
 func (v *Decimal) String() string {
@@ -227,7 +273,7 @@ func (v *Decimal) UnmarshalText(data []byte) error {
 	if v == nil {
 		return ErrNilStreamValue
 	}
-	return (*decimal.Decimal)(v).UnmarshalText(data)
+	return unmarshalTextDecimal((*decimal.Decimal)(v), data)
 }
 
 func (v *Decimal) Type() LLOStreamValue_Type {

@@ -29,6 +29,12 @@ const (
 	MaxObservationStreamValuesLength = 10_000
 	// Maximum allowed number of streams per channel
 	MaxStreamsPerChannel = 10_000
+	// MaxDecimalExponent bounds the absolute value of the base-10 exponent of
+	// any decimal decoded from an untrusted source (peer observations, stored
+	// state etc).
+	// Stream values need only a couple of dozen decimal places, so this
+	// leaves enough headroom.
+	MaxDecimalExponent = 1_000
 	// MaxOutcomeChannelDefinitionsLength is the maximum number of channels that
 	// can be supported
 	MaxOutcomeChannelDefinitionsLength = MaxReportCount
