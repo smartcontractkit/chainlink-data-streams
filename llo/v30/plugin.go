@@ -271,7 +271,9 @@ func (p *Plugin) ValidateObservation(ctx context.Context, outctx ocr3types.Outco
 
 	observation, err := p.ObservationCodec.Decode(ao.Observation)
 	if err != nil {
-		return fmt.Errorf("Observation decode error (got: 0x%x): %w", ao.Observation, err)
+		// NOTE: deliberately does not echo the payload; ao.Observation is
+		// untrusted and up to MaxObservationLength bytes.
+		return fmt.Errorf("Observation decode error (len: %d): %w", len(ao.Observation), err)
 	}
 
 	if p.PredecessorConfigDigest == nil && len(observation.AttestedPredecessorRetirement) != 0 {

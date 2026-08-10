@@ -38,4 +38,14 @@ const (
 	// MaxOutcomeChannelDefinitionsLength is the maximum number of channels that
 	// can be supported
 	MaxOutcomeChannelDefinitionsLength = MaxReportCount
+
+	// MaxDecompressedObservationLength bounds the size of an observation after
+	// zstd decompression. 
+	//
+	// A legitimate observation is bounded by
+	// MaxObservationStreamValuesLength stream values plus
+	// MaxObservationUpdateChannelDefinitionsLength channel definitions of up
+	// to MaxStreamsPerChannel streams each, which lands in the low single-digit
+	// MiB range. 16 MiB leaves generous headroom.
+	MaxDecompressedObservationLength = 16 << 20
 )

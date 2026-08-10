@@ -101,7 +101,10 @@ func (c protoObservationCodec) Decode(b types.Observation) (Observation, error) 
 	pbuf := &protocol.LLOObservationProto{}
 	err = proto.Unmarshal(b, pbuf)
 	if err != nil {
-		return Observation{}, fmt.Errorf("failed to decode observation: expected protobuf (got: 0x%x); %w", b, err)
+		// NOTE: deliberately does not echo the payload; b is untrusted and may
+		// be orders of magnitude larger than the wire message when compression
+		// is enabled.
+		return Observation{}, fmt.Errorf("failed to decode observation: expected protobuf (len: %d); %w", len(b), err)
 	}
 	var removeChannelIDs map[llotypes.ChannelID]struct{}
 	if len(pbuf.RemoveChannelIDs) > 0 {
