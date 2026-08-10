@@ -81,18 +81,21 @@ func TestPersistenceManagerAsyncDelete(t *testing.T) {
 
 	err = pm.Start(ctx)
 	require.NoError(t, err)
+	// Ensure the background loops are stopped even if an assertion below fails,
+	// otherwise they keep logging after the test completes and panic.
+	t.Cleanup(func() { _ = pm.Close() })
 
 	pm.AsyncDelete(&pb.TransmitRequest{Payload: reports[0]})
 
-	// Wait for next poll.
+	// Wait for the flush loop to actually delete the row. The delete queue is
+	// drained before the DB delete is issued, so an empty queue is not a
+	// sufficient signal - poll the persisted state instead.
+	var transmissions []*Transmission
 	tests.AssertEventually(t, func() bool {
-		pm.deleteMu.Lock()
-		defer pm.deleteMu.Unlock()
-		return len(pm.deleteQueue) == 0
+		transmissions, err = pm.Load(ctx)
+		require.NoError(t, err)
+		return len(transmissions) == 1
 	})
-
-	transmissions, err := pm.Load(ctx)
-	require.NoError(t, err)
 	require.Equal(t, []*Transmission{
 		{Req: &pb.TransmitRequest{Payload: reports[1]}},
 	}, transmissions)
