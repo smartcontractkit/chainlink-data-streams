@@ -21,77 +21,72 @@ import (
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
 )
 
+// defaultEnv is the single source of truth for the bindings every expression
+// environment must carry. The pool, the reserved-name set and release() are all
+// derived from it, so a function cannot be registered in one place and missed in
+// another.
+//
+// Add new functions here and nowhere else.
+var defaultEnv = map[string]any{
+	"EQ":                 Equal,
+	"Equal":              Equal,
+	"GT":                 GreaterThan,
+	"GreaterThan":        GreaterThan,
+	"GTE":                GreaterThanOrEqual,
+	"GreaterThanOrEqual": GreaterThanOrEqual,
+	"LT":                 LessThan,
+	"LessThan":           LessThan,
+	"LTE":                LessThanOrEqual,
+	"LessThanOrEqual":    LessThanOrEqual,
+	"Abs":                Abs,
+	"Mul":                Mul,
+	"Div":                Div,
+	"Add":                Add,
+	"Sum":                Add,
+	"Sub":                Sub,
+	"Pow":                Pow,
+	"Sqrt":               Sqrt,
+	"Ln":                 Ln,
+	"Log":                Log,
+	"IsZero":             IsZero,
+	"IsNegative":         IsNegative,
+	"IsPositive":         IsPositive,
+	"Round":              Round,
+	"Max":                Max,
+	"Min":                Min,
+	"Ceil":               Ceil,
+	"Floor":              Floor,
+	"Avg":                Avg,
+	"Duration":           ParseDuration,
+}
+
 var (
 	pool = sync.Pool{
 		New: func() any {
-			return environment{
-				"EQ":                 Equal,
-				"Equal":              Equal,
-				"GT":                 GreaterThan,
-				"GreaterThan":        GreaterThan,
-				"GTE":                GreaterThanOrEqual,
-				"GreaterThanOrEqual": GreaterThanOrEqual,
-				"LT":                 LessThan,
-				"LessThan":           LessThan,
-				"LTE":                LessThanOrEqual,
-				"LessThanOrEqual":    LessThanOrEqual,
-				"Abs":                Abs,
-				"Mul":                Mul,
-				"Div":                Div,
-				"Add":                Add,
-				"Sum":                Add,
-				"Sub":                Sub,
-				"Pow":                Pow,
-				"Sqrt":               Sqrt,
-				"Ln":                 Ln,
-				"Log":                Log,
-				"IsZero":             IsZero,
-				"IsNegative":         IsNegative,
-				"IsPositive":         IsPositive,
-				"Round":              Round,
-				"Max":                Max,
-				"Min":                Min,
-				"Ceil":               Ceil,
-				"Floor":              Floor,
-				"Avg":                Avg,
-				"Duration":           ParseDuration,
-			}
+			return newDefaultEnvironment()
 		},
 	}
 
-	keys = map[string]bool{
-		"EQ":                 true,
-		"Equal":              true,
-		"GT":                 true,
-		"GreaterThan":        true,
-		"GTE":                true,
-		"GreaterThanOrEqual": true,
-		"LT":                 true,
-		"LessThan":           true,
-		"LTE":                true,
-		"LessThanOrEqual":    true,
-		"Abs":                true,
-		"Mul":                true,
-		"Div":                true,
-		"Add":                true,
-		"Sum":                true,
-		"Sub":                true,
-		"Pow":                true,
-		"Sqrt":               true,
-		"Ln":                 true,
-		"Log":                true,
-		"IsZero":             true,
-		"IsNegative":         true,
-		"IsPositive":         true,
-		"Round":              true,
-		"Max":                true,
-		"Min":                true,
-		"Ceil":               true,
-		"Floor":              true,
-		"Avg":                true,
-		"Duration":           true,
-	}
+	// keys is the set of names reserved by defaultEnv, derived so the two can
+	// never disagree.
+	keys = func() map[string]bool {
+		k := make(map[string]bool, len(defaultEnv))
+		for name := range defaultEnv {
+			k[name] = true
+		}
+		return k
+	}()
 )
+
+// newDefaultEnvironment returns a fresh environment carrying every default
+// binding.
+func newDefaultEnvironment() environment {
+	env := make(environment, len(defaultEnv))
+	for name, fn := range defaultEnv {
+		env[name] = fn
+	}
+	return env
+}
 
 const (
 	// precision defines the precision level for power calculations, representing the number of decimal places.
@@ -126,12 +121,25 @@ func (e environment) SetStreamValue(id llotypes.StreamID, value protocol.StreamV
 	return nil
 }
 
+// release returns an environment to the pool, stripped of everything the caller
+// added (stream values, observations_timestamp) and with every default binding
+// restored.
+//
+// Restoring rather than assuming is deliberate: release() cannot verify that e
+// came from the pool, so a hand-built or partially populated map must be
+// repaired here instead of being handed to the next NewEnv caller with functions
+// missing. Expressions are compiled against whatever the environment holds, so a
+// stripped environment does not misbehave subtly — it fails every expression
+// that uses the absent function.
 func (e environment) release() {
 	for k := range e {
-		if keys[k] {
-			continue
+		if _, ok := defaultEnv[k]; !ok {
+			delete(e, k)
 		}
-		delete(e, k)
+	}
+	// Also repairs a default that the caller shadowed.
+	for k, v := range defaultEnv {
+		e[k] = v
 	}
 	pool.Put(e)
 }
