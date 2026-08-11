@@ -27,8 +27,12 @@ func NewReportCodecEVMABIEncodeUnpackedExpr(lggr logger.Logger, donID uint32) Re
 }
 
 func (r ReportCodecEVMABIEncodeUnpackedExpr) Encode(report protocol.Report, cd llotypes.ChannelDefinition, optsCache *protocol.OptsCache) ([]byte, error) {
-	if report.Specimen {
-		return nil, errors.New("ReportCodecEVMABIEncodeUnpackedExpr does not support encoding specimen reports")
+	opts, getErr := protocol.GetOpts[ReportFormatEVMABIEncodeOpts](optsCache, report.ChannelID)
+	if getErr != nil {
+		return nil, fmt.Errorf("opts not in cache for channel %d: %w", report.ChannelID, getErr)
+	}
+	if report.Specimen && !opts.AllowSpecimen {
+		return nil, errors.New("ReportCodecEVMABIEncodeUnpackedExpr does not support encoding specimen reports; set allowSpecimen:true in channel opts to enable")
 	}
 	if len(report.Values) < 2 {
 		return nil, fmt.Errorf("ReportCodecEVMABIEncodeUnpackedExpr requires at least 2 values (NativePrice, LinkPrice, ...); got report.Values: %v", report.Values)
@@ -40,11 +44,6 @@ func (r ReportCodecEVMABIEncodeUnpackedExpr) Encode(report protocol.Report, cd l
 	linkPrice, err := extractPrice(report.Values[1])
 	if err != nil {
 		return nil, fmt.Errorf("ReportCodecEVMABIEncodeUnpackedExpr failed to extract link price: %w", err)
-	}
-
-	opts, getErr := protocol.GetOpts[ReportFormatEVMABIEncodeOpts](optsCache, report.ChannelID)
-	if getErr != nil {
-		return nil, fmt.Errorf("opts not in cache for channel %d: %w", report.ChannelID, getErr)
 	}
 
 	if len(opts.ABI) < 1 {

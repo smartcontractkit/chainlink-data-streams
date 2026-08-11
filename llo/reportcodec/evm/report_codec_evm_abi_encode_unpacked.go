@@ -65,6 +65,11 @@ type ReportFormatEVMABIEncodeOpts struct {
 	// The range will be limited to ObservationTimestamp + MaxReportRange if the report is longer than the max range.
 	// Defaults to 5 minutes if not specified.
 	MaxReportRange protocol.Duration `json:"maxReportRange,omitempty"`
+	// AllowSpecimen allows encoding of specimen (staging) reports for this
+	// channel. By default specimen reports are rejected to prevent
+	// on-chain-validable payloads from being produced by staging instances.
+	// Enable this only for test channels
+	AllowSpecimen bool `json:"allowSpecimen,omitempty"`
 }
 
 func (r *ReportFormatEVMABIEncodeOpts) Decode(opts []byte) error {
@@ -87,8 +92,12 @@ type BaseReportFields struct {
 }
 
 func (r ReportCodecEVMABIEncodeUnpacked) Encode(report protocol.Report, cd llotypes.ChannelDefinition, optsCache *protocol.OptsCache) ([]byte, error) {
-	if report.Specimen {
-		return nil, errors.New("ReportCodecEVMABIEncodeUnpacked does not support encoding specimen reports")
+	opts, getErr := protocol.GetOpts[ReportFormatEVMABIEncodeOpts](optsCache, report.ChannelID)
+	if getErr != nil {
+		return nil, fmt.Errorf("opts not in cache for channel %d: %w", report.ChannelID, getErr)
+	}
+	if report.Specimen && !opts.AllowSpecimen {
+		return nil, errors.New("ReportCodecEVMABIEncodeUnpacked does not support encoding specimen reports; set allowSpecimen:true in channel opts to enable")
 	}
 	if len(report.Values) < 2 {
 		return nil, fmt.Errorf("ReportCodecEVMABIEncodeUnpacked requires at least 2 values (NativePrice, LinkPrice, ...); got report.Values: %v", report.Values)
@@ -100,11 +109,6 @@ func (r ReportCodecEVMABIEncodeUnpacked) Encode(report protocol.Report, cd lloty
 	linkPrice, err := extractPrice(report.Values[1])
 	if err != nil {
 		return nil, fmt.Errorf("ReportCodecEVMABIEncodeUnpacked failed to extract link price: %w", err)
-	}
-
-	opts, getErr := protocol.GetOpts[ReportFormatEVMABIEncodeOpts](optsCache, report.ChannelID)
-	if getErr != nil {
-		return nil, fmt.Errorf("opts not in cache for channel %d: %w", report.ChannelID, getErr)
 	}
 
 	report.ValidAfterNanoseconds = ClampReportRange(r, report, opts.MaxReportRange)

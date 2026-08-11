@@ -78,7 +78,20 @@ func Test_ReportCodecPremiumLegacy(t *testing.T) {
 
 		_, err := rc.Encode(report, cd, cache)
 		require.Error(t, err)
-		require.EqualError(t, err, "ReportCodecPremiumLegacy does not support encoding specimen reports")
+		require.Contains(t, err.Error(), "does not support encoding specimen reports")
+	})
+
+	t.Run("encodes specimen reports when allowSpecimen is set", func(t *testing.T) {
+		report := newValidPremiumLegacyReport()
+		report.Specimen = true
+		specimenCD := cd
+		specimenCD.Opts = llotypes.ChannelOpts(fmt.Sprintf(`{"baseUSDFee":"10.50","expirationWindow":60,"feedId":"0x%x","multiplier":10,"allowSpecimen":true}`, feedID))
+		cache := protocol.NewOptsCache()
+		cache.Set(report.ChannelID, specimenCD.Opts)
+
+		encoded, err := rc.Encode(report, specimenCD, cache)
+		require.NoError(t, err)
+		assert.NotEmpty(t, encoded)
 	})
 
 	t.Run("Encode constructs a report from observations", func(t *testing.T) {

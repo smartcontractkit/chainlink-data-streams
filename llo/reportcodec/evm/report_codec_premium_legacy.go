@@ -70,6 +70,11 @@ type ReportFormatEVMPremiumLegacyOpts struct {
 	// The range will be limited to ObservationTimestamp + MaxReportRange if the report is longer than the max range.
 	// Defaults to 5 minutes if not specified.
 	MaxReportRange protocol.Duration `json:"maxReportRange,omitempty"`
+	// AllowSpecimen allows encoding of specimen (staging) reports for this
+	// channel. By default specimen reports are rejected to prevent
+	// on-chain-validable payloads from being produced by staging instances.
+	// Enable this only for test channels
+	AllowSpecimen bool `json:"allowSpecimen,omitempty"`
 }
 
 func (r *ReportFormatEVMPremiumLegacyOpts) Decode(opts []byte) error {
@@ -83,17 +88,16 @@ func (r *ReportFormatEVMPremiumLegacyOpts) Decode(opts []byte) error {
 }
 
 func (r ReportCodecPremiumLegacy) Encode(report protocol.Report, cd llotypes.ChannelDefinition, optsCache *protocol.OptsCache) ([]byte, error) {
-	if report.Specimen {
-		return nil, errors.New("ReportCodecPremiumLegacy does not support encoding specimen reports")
+	opts, getErr := protocol.GetOpts[ReportFormatEVMPremiumLegacyOpts](optsCache, report.ChannelID)
+	if getErr != nil {
+		return nil, fmt.Errorf("opts not in cache for channel %d: %w", report.ChannelID, getErr)
+	}
+	if report.Specimen && !opts.AllowSpecimen {
+		return nil, errors.New("ReportCodecPremiumLegacy does not support encoding specimen reports; set allowSpecimen:true in channel opts to enable")
 	}
 	nativePrice, linkPrice, quote, err := ExtractReportValues(report)
 	if err != nil {
 		return nil, fmt.Errorf("ReportCodecPremiumLegacy cannot encode; got unusable report; %w", err)
-	}
-
-	opts, getErr := protocol.GetOpts[ReportFormatEVMPremiumLegacyOpts](optsCache, report.ChannelID)
-	if getErr != nil {
-		return nil, fmt.Errorf("opts not in cache for channel %d: %w", report.ChannelID, getErr)
 	}
 
 	report.ValidAfterNanoseconds = ClampReportRange(r, report, opts.MaxReportRange)
