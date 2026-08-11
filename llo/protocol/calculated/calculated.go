@@ -12,6 +12,7 @@ import (
 	"github.com/smartcontractkit/chainlink-data-streams/llo/protocol"
 
 	"github.com/expr-lang/expr"
+	"github.com/goccy/go-json"
 	"github.com/expr-lang/expr/ast"
 	"github.com/expr-lang/expr/parser"
 	"github.com/shopspring/decimal"
@@ -579,18 +580,17 @@ func ProcessCalculatedStreams(lggr logger.Logger, channelDefinitions llotypes.Ch
 			continue
 		}
 
-		copt, getErr := protocol.GetOpts[calculatedStreamOpts](optsCache, cid)
+		copt, getErr := getCalculatedStreamOpts(optsCache, cd, cid)
 		if getErr != nil {
-			lggr.Errorw("channel opts not in cache", "channelID", cid, "error", getErr)
+			lggr.Errorw("failed to resolve calculated stream opts", "channelID", cid, "error", getErr)
 			env.release()
 			continue
 		}
 
-		if len(copt.ABI) == 0 || len(cd.Streams) == 0 {
-			lggr.Errorw("no streams or expressions found in channel definition", "channelID", cid)
+		if len(cd.Streams) == 0 {
+			lggr.Errorw("no streams found in channel definition", "channelID", cid)
 			env.release()
 			continue
-
 		}
 
 		// channel definitions are inherited from the previous outcome,
@@ -654,6 +654,55 @@ type calculatedStreamOpts struct {
 		Expression         string            `json:"expression"`
 		ExpressionStreamID llotypes.StreamID `json:"expressionStreamID"`
 	} `json:"abi"`
+}
+
+// getCalculatedStreamOpts resolves a channel's calculated-stream opts, preferring
+// the (node-local) decode cache and falling back to decoding the channel
+// definition's opts on a cache miss. The fallback keeps the result deterministic
+// across oracles even when the cache has not been populated (e.g. after a
+// restart, or in stages that never reset it).
+//
+// Returns an error if the opts cannot be decoded or declare no expressions.
+func getCalculatedStreamOpts(optsCache *protocol.OptsCache, cd llotypes.ChannelDefinition, cid llotypes.ChannelID) (calculatedStreamOpts, error) {
+	var o calculatedStreamOpts
+	var err error
+	if optsCache != nil {
+		o, err = protocol.GetOpts[calculatedStreamOpts](optsCache, cid)
+	}
+	if optsCache == nil || err != nil {
+		o = calculatedStreamOpts{}
+		if uerr := json.Unmarshal(cd.Opts, &o); uerr != nil {
+			return o, fmt.Errorf("failed to decode calculated stream opts, channelID: %d: %w", cid, uerr)
+		}
+	}
+	if len(o.ABI) == 0 {
+		return o, fmt.Errorf("no expressions found in channel definition, channelID: %d", cid)
+	}
+	return o, nil
+}
+
+// ExpressionStreamIDs returns the calculated (expression) stream IDs declared by
+// a channel's opts, in declaration order. It is the source of truth for which
+// calculated streams a channel is expected to produce: the streams appended to
+// the channel definition by ProcessCalculatedStreams are only present when
+// evaluation reached that point, so callers that need to verify completeness
+// (e.g. reportability checks) must consult the opts instead.
+//
+// Returns an error if the opts cannot be resolved, declare no expressions, or
+// declare a zero expression stream ID.
+func ExpressionStreamIDs(optsCache *protocol.OptsCache, cd llotypes.ChannelDefinition, cid llotypes.ChannelID) ([]llotypes.StreamID, error) {
+	o, err := getCalculatedStreamOpts(optsCache, cd, cid)
+	if err != nil {
+		return nil, err
+	}
+	ids := make([]llotypes.StreamID, 0, len(o.ABI))
+	for _, abi := range o.ABI {
+		if abi.ExpressionStreamID == 0 {
+			return nil, fmt.Errorf("expression stream ID is 0, channelID: %d, expression: %s", cid, abi.Expression)
+		}
+		ids = append(ids, abi.ExpressionStreamID)
+	}
+	return ids, nil
 }
 
 // ProcessCalculatedStreamsDryRun processes the calculated streams for the given expression

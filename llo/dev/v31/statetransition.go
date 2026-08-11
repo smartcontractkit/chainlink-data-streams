@@ -436,7 +436,7 @@ func (p *Plugin) flushKV(kvRW ocr3_1types.KeyValueStateReadWriter, prev *kvState
 	// next round can advance validAfter faithfully (see prevReportable). Written
 	// only on change to minimize modified keys.
 	for id := range out.ChannelDefinitions {
-		reportable := out.isReportable(id, p.DefaultMinReportIntervalNanoseconds)
+		reportable := out.isReportable(id, p.DefaultMinReportIntervalNanoseconds, p.OptsCache, p.Logger)
 		if reportable != prev.reportedLastRound[id] {
 			if err := writeReported(kvRW, id, reportable); err != nil {
 				return err

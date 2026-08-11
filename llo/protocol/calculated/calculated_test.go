@@ -1616,3 +1616,51 @@ func TestEnvAdd(t *testing.T) {
 		})
 	}
 }
+
+func TestExpressionStreamIDs(t *testing.T) {
+	const cid = llotypes.ChannelID(1)
+
+	newCache := func(opts []byte) *protocol.OptsCache {
+		c := protocol.NewOptsCache()
+		c.Set(cid, opts)
+		return c
+	}
+
+	t.Run("from cache", func(t *testing.T) {
+		opts := []byte(`{"abi":[{"type":"int256","expression":"Add(s1, s2)","expressionStreamID":3},{"type":"int256","expression":"Sub(s1, s2)","expressionStreamID":4}]}`)
+		ids, err := ExpressionStreamIDs(newCache(opts), llotypes.ChannelDefinition{}, cid)
+		require.NoError(t, err)
+		assert.Equal(t, []llotypes.StreamID{3, 4}, ids)
+	})
+
+	t.Run("cache miss falls back to channel definition opts", func(t *testing.T) {
+		opts := []byte(`{"abi":[{"type":"int256","expression":"Add(s1, s2)","expressionStreamID":3}]}`)
+		ids, err := ExpressionStreamIDs(protocol.NewOptsCache(), llotypes.ChannelDefinition{Opts: opts}, cid)
+		require.NoError(t, err)
+		assert.Equal(t, []llotypes.StreamID{3}, ids)
+	})
+
+	t.Run("nil cache falls back to channel definition opts", func(t *testing.T) {
+		opts := []byte(`{"abi":[{"type":"int256","expression":"Add(s1, s2)","expressionStreamID":3}]}`)
+		ids, err := ExpressionStreamIDs(nil, llotypes.ChannelDefinition{Opts: opts}, cid)
+		require.NoError(t, err)
+		assert.Equal(t, []llotypes.StreamID{3}, ids)
+	})
+
+	t.Run("zero expression stream ID", func(t *testing.T) {
+		opts := []byte(`{"abi":[{"type":"int256","expression":"Add(s1, s2)","expressionStreamID":0}]}`)
+		_, err := ExpressionStreamIDs(newCache(opts), llotypes.ChannelDefinition{}, cid)
+		require.ErrorContains(t, err, "expression stream ID is 0")
+	})
+
+	t.Run("empty abi", func(t *testing.T) {
+		_, err := ExpressionStreamIDs(newCache([]byte(`{"abi":[]}`)), llotypes.ChannelDefinition{}, cid)
+		require.ErrorContains(t, err, "no expressions found in channel definition")
+	})
+
+	t.Run("malformed opts", func(t *testing.T) {
+		opts := []byte(`{"abi":`)
+		_, err := ExpressionStreamIDs(newCache(opts), llotypes.ChannelDefinition{Opts: opts}, cid)
+		require.ErrorContains(t, err, "failed to decode calculated stream opts")
+	})
+}
