@@ -17,6 +17,7 @@ import (
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
 
 	"github.com/smartcontractkit/chainlink-data-streams/llo/pluginconfig"
+	"github.com/smartcontractkit/chainlink-data-streams/llo/protocol"
 	mercurytransmitter "github.com/smartcontractkit/chainlink-data-streams/llo/transmitter/dataengine"
 )
 
@@ -147,6 +148,13 @@ func (t *transmitter) Transmit(
 ) (err error) {
 	if t.verboseLogging {
 		t.lggr.Debugw("Transmit report", "digest", digest, "seqNr", seqNr, "report", report, "sigs", sigs)
+	}
+
+	if report.Info.LifeCycleStage != protocol.LifeCycleStageProduction {
+		// Specimen reports must never be transmitted; this is a hard guard even
+		// if the codec was configured to encode them.
+		t.lggr.Debugw("Skipping transmit of non-production report", "digest", digest, "seqNr", seqNr, "lifeCycleStage", report.Info.LifeCycleStage)
+		return nil
 	}
 
 	if report.Info.ReportFormat == llotypes.ReportFormatRetirement {
