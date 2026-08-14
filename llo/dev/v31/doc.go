@@ -46,7 +46,9 @@
 // reportability checks.
 //
 // DisableNilStreamValues (a channel with any nil stream aggregate is
-// unreportable), cross-round timestamped-aggregate carry-forward (t/ KV keys,
+// unreportable; for expression channels the expected calculated streams are
+// taken from the channel's opts rather than from the definition, since the
+// definition only lists them once evaluation succeeded), cross-round timestamped-aggregate carry-forward (t/ KV keys,
 // newer-wins monotonicity), and best-effort outcome/report telemetry are also
 // implemented. Reportability is persisted per channel each round (the r/ KV key)
 // so the next round can advance validAfter faithfully without re-deriving it

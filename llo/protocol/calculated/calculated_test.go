@@ -1336,6 +1336,17 @@ func TestAvg(t *testing.T) {
 	}
 }
 
+// envWithVars returns a pooled environment with extra variables bound. Tests
+// that need custom bindings must build on NewEnv rather than an environment
+// literal, so that release() returns a properly populated map to the pool.
+func envWithVars(observationTimestampNanoseconds uint64, vars map[string]any) environment {
+	env := NewEnv(observationTimestampNanoseconds)
+	for k, v := range vars {
+		env[k] = v
+	}
+	return env
+}
+
 func TestEvalDecimal(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -1357,9 +1368,13 @@ func TestEvalDecimal(t *testing.T) {
 			expected: "30",
 		},
 		{
-			name:     "with variables",
-			stmt:     "Add(x, y)",
-			env:      environment{"Add": Add, "x": 10, "y": 5},
+			name: "with variables",
+			stmt: "Add(x, y)",
+			// Must come from NewEnv, not a literal: release() puts whatever it
+			// is given back into the shared pool, so releasing a hand-built
+			// environment hands a later NewEnv caller a map with no function
+			// bindings.
+			env:      envWithVars(uint64(1750169759775700000), map[string]any{"x": 10, "y": 5}),
 			expected: "15",
 		},
 		{
@@ -1489,6 +1504,75 @@ func TestNewEnvAndRelease(t *testing.T) {
 	})
 }
 
+// TestReleaseRepairsEnvironment covers the pool-poisoning hazard: release()
+// cannot tell whether the map it was handed came from the pool, so it must
+// repair the defaults rather than trust them. Without this, releasing a
+// hand-built or shadowed environment hands the next NewEnv caller an
+// environment with functions missing, and every expression using one of them
+// fails to compile.
+func TestReleaseRepairsEnvironment(t *testing.T) {
+	assertComplete := func(t *testing.T, env environment) {
+		t.Helper()
+		for key := range keys {
+			require.Contains(t, env, key, "environment is missing function %s", key)
+		}
+	}
+
+	t.Run("releasing a hand-built environment does not poison the pool", func(t *testing.T) {
+		// Exactly what the "with variables" test case used to do.
+		foreign := environment{"Add": Add, "x": 10, "y": 5}
+		foreign.release()
+
+		env := NewEnv(uint64(1750169759775700000))
+		defer env.release()
+		assertComplete(t, env)
+	})
+
+	t.Run("releasing an empty environment does not poison the pool", func(t *testing.T) {
+		environment{}.release()
+
+		env := NewEnv(uint64(1750169759775700000))
+		defer env.release()
+		assertComplete(t, env)
+	})
+
+	t.Run("release restores a shadowed default", func(t *testing.T) {
+		env := NewEnv(uint64(1750169759775700000))
+		env["Add"] = "not a function"
+		env.release()
+
+		env2 := NewEnv(uint64(1750169759775700000))
+		defer env2.release()
+		assertComplete(t, env2)
+
+		// The shadowing value is gone, and the expression using it compiles.
+		_, shadowed := env2["Add"].(string)
+		assert.False(t, shadowed, "shadowed binding survived release")
+		result, err := evalDecimal("Add(10, 5)", env2)
+		require.NoError(t, err)
+		assert.True(t, decimal.NewFromInt(15).Equal(result))
+	})
+
+	t.Run("release strips caller additions", func(t *testing.T) {
+		env := NewEnv(uint64(1750169759775700000))
+		env["s1"] = decimal.NewFromInt(1)
+		env.release()
+
+		env2 := NewEnv(uint64(1750169759775700000))
+		defer env2.release()
+		assert.NotContains(t, env2, "s1")
+	})
+}
+
+// TestKeysMatchDefaultEnv guards the invariant that made the two maps drift-prone
+// before they shared a source.
+func TestKeysMatchDefaultEnv(t *testing.T) {
+	require.Len(t, keys, len(defaultEnv))
+	for name := range defaultEnv {
+		assert.True(t, keys[name], "keys is missing %s", name)
+	}
+}
+
 func TestEnvPooling(t *testing.T) {
 	t.Run("environment reuse through pool", func(t *testing.T) {
 		// Get an environment and add a custom key that should be cleaned up
@@ -1615,4 +1699,52 @@ func TestEnvAdd(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestExpressionStreamIDs(t *testing.T) {
+	const cid = llotypes.ChannelID(1)
+
+	newCache := func(opts []byte) *protocol.OptsCache {
+		c := protocol.NewOptsCache()
+		c.Set(cid, opts)
+		return c
+	}
+
+	t.Run("from cache", func(t *testing.T) {
+		opts := []byte(`{"abi":[{"type":"int256","expression":"Add(s1, s2)","expressionStreamID":3},{"type":"int256","expression":"Sub(s1, s2)","expressionStreamID":4}]}`)
+		ids, err := ExpressionStreamIDs(newCache(opts), llotypes.ChannelDefinition{}, cid)
+		require.NoError(t, err)
+		assert.Equal(t, []llotypes.StreamID{3, 4}, ids)
+	})
+
+	t.Run("cache miss falls back to channel definition opts", func(t *testing.T) {
+		opts := []byte(`{"abi":[{"type":"int256","expression":"Add(s1, s2)","expressionStreamID":3}]}`)
+		ids, err := ExpressionStreamIDs(protocol.NewOptsCache(), llotypes.ChannelDefinition{Opts: opts}, cid)
+		require.NoError(t, err)
+		assert.Equal(t, []llotypes.StreamID{3}, ids)
+	})
+
+	t.Run("nil cache falls back to channel definition opts", func(t *testing.T) {
+		opts := []byte(`{"abi":[{"type":"int256","expression":"Add(s1, s2)","expressionStreamID":3}]}`)
+		ids, err := ExpressionStreamIDs(nil, llotypes.ChannelDefinition{Opts: opts}, cid)
+		require.NoError(t, err)
+		assert.Equal(t, []llotypes.StreamID{3}, ids)
+	})
+
+	t.Run("zero expression stream ID", func(t *testing.T) {
+		opts := []byte(`{"abi":[{"type":"int256","expression":"Add(s1, s2)","expressionStreamID":0}]}`)
+		_, err := ExpressionStreamIDs(newCache(opts), llotypes.ChannelDefinition{}, cid)
+		require.ErrorContains(t, err, "expression stream ID is 0")
+	})
+
+	t.Run("empty abi", func(t *testing.T) {
+		_, err := ExpressionStreamIDs(newCache([]byte(`{"abi":[]}`)), llotypes.ChannelDefinition{}, cid)
+		require.ErrorContains(t, err, "no expressions found in channel definition")
+	})
+
+	t.Run("malformed opts", func(t *testing.T) {
+		opts := []byte(`{"abi":`)
+		_, err := ExpressionStreamIDs(newCache(opts), llotypes.ChannelDefinition{Opts: opts}, cid)
+		require.ErrorContains(t, err, "failed to decode calculated stream opts")
+	})
 }

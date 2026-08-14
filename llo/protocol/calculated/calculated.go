@@ -12,6 +12,7 @@ import (
 	"github.com/smartcontractkit/chainlink-data-streams/llo/protocol"
 
 	"github.com/expr-lang/expr"
+	"github.com/goccy/go-json"
 	"github.com/expr-lang/expr/ast"
 	"github.com/expr-lang/expr/parser"
 	"github.com/shopspring/decimal"
@@ -20,77 +21,72 @@ import (
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
 )
 
+// defaultEnv is the single source of truth for the bindings every expression
+// environment must carry. The pool, the reserved-name set and release() are all
+// derived from it, so a function cannot be registered in one place and missed in
+// another.
+//
+// Add new functions here and nowhere else.
+var defaultEnv = map[string]any{
+	"EQ":                 Equal,
+	"Equal":              Equal,
+	"GT":                 GreaterThan,
+	"GreaterThan":        GreaterThan,
+	"GTE":                GreaterThanOrEqual,
+	"GreaterThanOrEqual": GreaterThanOrEqual,
+	"LT":                 LessThan,
+	"LessThan":           LessThan,
+	"LTE":                LessThanOrEqual,
+	"LessThanOrEqual":    LessThanOrEqual,
+	"Abs":                Abs,
+	"Mul":                Mul,
+	"Div":                Div,
+	"Add":                Add,
+	"Sum":                Add,
+	"Sub":                Sub,
+	"Pow":                Pow,
+	"Sqrt":               Sqrt,
+	"Ln":                 Ln,
+	"Log":                Log,
+	"IsZero":             IsZero,
+	"IsNegative":         IsNegative,
+	"IsPositive":         IsPositive,
+	"Round":              Round,
+	"Max":                Max,
+	"Min":                Min,
+	"Ceil":               Ceil,
+	"Floor":              Floor,
+	"Avg":                Avg,
+	"Duration":           ParseDuration,
+}
+
 var (
 	pool = sync.Pool{
 		New: func() any {
-			return environment{
-				"EQ":                 Equal,
-				"Equal":              Equal,
-				"GT":                 GreaterThan,
-				"GreaterThan":        GreaterThan,
-				"GTE":                GreaterThanOrEqual,
-				"GreaterThanOrEqual": GreaterThanOrEqual,
-				"LT":                 LessThan,
-				"LessThan":           LessThan,
-				"LTE":                LessThanOrEqual,
-				"LessThanOrEqual":    LessThanOrEqual,
-				"Abs":                Abs,
-				"Mul":                Mul,
-				"Div":                Div,
-				"Add":                Add,
-				"Sum":                Add,
-				"Sub":                Sub,
-				"Pow":                Pow,
-				"Sqrt":               Sqrt,
-				"Ln":                 Ln,
-				"Log":                Log,
-				"IsZero":             IsZero,
-				"IsNegative":         IsNegative,
-				"IsPositive":         IsPositive,
-				"Round":              Round,
-				"Max":                Max,
-				"Min":                Min,
-				"Ceil":               Ceil,
-				"Floor":              Floor,
-				"Avg":                Avg,
-				"Duration":           ParseDuration,
-			}
+			return newDefaultEnvironment()
 		},
 	}
 
-	keys = map[string]bool{
-		"EQ":                 true,
-		"Equal":              true,
-		"GT":                 true,
-		"GreaterThan":        true,
-		"GTE":                true,
-		"GreaterThanOrEqual": true,
-		"LT":                 true,
-		"LessThan":           true,
-		"LTE":                true,
-		"LessThanOrEqual":    true,
-		"Abs":                true,
-		"Mul":                true,
-		"Div":                true,
-		"Add":                true,
-		"Sum":                true,
-		"Sub":                true,
-		"Pow":                true,
-		"Sqrt":               true,
-		"Ln":                 true,
-		"Log":                true,
-		"IsZero":             true,
-		"IsNegative":         true,
-		"IsPositive":         true,
-		"Round":              true,
-		"Max":                true,
-		"Min":                true,
-		"Ceil":               true,
-		"Floor":              true,
-		"Avg":                true,
-		"Duration":           true,
-	}
+	// keys is the set of names reserved by defaultEnv, derived so the two can
+	// never disagree.
+	keys = func() map[string]bool {
+		k := make(map[string]bool, len(defaultEnv))
+		for name := range defaultEnv {
+			k[name] = true
+		}
+		return k
+	}()
 )
+
+// newDefaultEnvironment returns a fresh environment carrying every default
+// binding.
+func newDefaultEnvironment() environment {
+	env := make(environment, len(defaultEnv))
+	for name, fn := range defaultEnv {
+		env[name] = fn
+	}
+	return env
+}
 
 const (
 	// precision defines the precision level for power calculations, representing the number of decimal places.
@@ -125,12 +121,25 @@ func (e environment) SetStreamValue(id llotypes.StreamID, value protocol.StreamV
 	return nil
 }
 
+// release returns an environment to the pool, stripped of everything the caller
+// added (stream values, observations_timestamp) and with every default binding
+// restored.
+//
+// Restoring rather than assuming is deliberate: release() cannot verify that e
+// came from the pool, so a hand-built or partially populated map must be
+// repaired here instead of being handed to the next NewEnv caller with functions
+// missing. Expressions are compiled against whatever the environment holds, so a
+// stripped environment does not misbehave subtly — it fails every expression
+// that uses the absent function.
 func (e environment) release() {
 	for k := range e {
-		if keys[k] {
-			continue
+		if _, ok := defaultEnv[k]; !ok {
+			delete(e, k)
 		}
-		delete(e, k)
+	}
+	// Also repairs a default that the caller shadowed.
+	for k, v := range defaultEnv {
+		e[k] = v
 	}
 	pool.Put(e)
 }
@@ -579,18 +588,17 @@ func ProcessCalculatedStreams(lggr logger.Logger, channelDefinitions llotypes.Ch
 			continue
 		}
 
-		copt, getErr := protocol.GetOpts[calculatedStreamOpts](optsCache, cid)
+		copt, getErr := getCalculatedStreamOpts(optsCache, cd, cid)
 		if getErr != nil {
-			lggr.Errorw("channel opts not in cache", "channelID", cid, "error", getErr)
+			lggr.Errorw("failed to resolve calculated stream opts", "channelID", cid, "error", getErr)
 			env.release()
 			continue
 		}
 
-		if len(copt.ABI) == 0 || len(cd.Streams) == 0 {
-			lggr.Errorw("no streams or expressions found in channel definition", "channelID", cid)
+		if len(cd.Streams) == 0 {
+			lggr.Errorw("no streams found in channel definition", "channelID", cid)
 			env.release()
 			continue
-
 		}
 
 		// channel definitions are inherited from the previous outcome,
@@ -654,6 +662,55 @@ type calculatedStreamOpts struct {
 		Expression         string            `json:"expression"`
 		ExpressionStreamID llotypes.StreamID `json:"expressionStreamID"`
 	} `json:"abi"`
+}
+
+// getCalculatedStreamOpts resolves a channel's calculated-stream opts, preferring
+// the (node-local) decode cache and falling back to decoding the channel
+// definition's opts on a cache miss. The fallback keeps the result deterministic
+// across oracles even when the cache has not been populated (e.g. after a
+// restart, or in stages that never reset it).
+//
+// Returns an error if the opts cannot be decoded or declare no expressions.
+func getCalculatedStreamOpts(optsCache *protocol.OptsCache, cd llotypes.ChannelDefinition, cid llotypes.ChannelID) (calculatedStreamOpts, error) {
+	var o calculatedStreamOpts
+	var err error
+	if optsCache != nil {
+		o, err = protocol.GetOpts[calculatedStreamOpts](optsCache, cid)
+	}
+	if optsCache == nil || err != nil {
+		o = calculatedStreamOpts{}
+		if uerr := json.Unmarshal(cd.Opts, &o); uerr != nil {
+			return o, fmt.Errorf("failed to decode calculated stream opts, channelID: %d: %w", cid, uerr)
+		}
+	}
+	if len(o.ABI) == 0 {
+		return o, fmt.Errorf("no expressions found in channel definition, channelID: %d", cid)
+	}
+	return o, nil
+}
+
+// ExpressionStreamIDs returns the calculated (expression) stream IDs declared by
+// a channel's opts, in declaration order. It is the source of truth for which
+// calculated streams a channel is expected to produce: the streams appended to
+// the channel definition by ProcessCalculatedStreams are only present when
+// evaluation reached that point, so callers that need to verify completeness
+// (e.g. reportability checks) must consult the opts instead.
+//
+// Returns an error if the opts cannot be resolved, declare no expressions, or
+// declare a zero expression stream ID.
+func ExpressionStreamIDs(optsCache *protocol.OptsCache, cd llotypes.ChannelDefinition, cid llotypes.ChannelID) ([]llotypes.StreamID, error) {
+	o, err := getCalculatedStreamOpts(optsCache, cd, cid)
+	if err != nil {
+		return nil, err
+	}
+	ids := make([]llotypes.StreamID, 0, len(o.ABI))
+	for _, abi := range o.ABI {
+		if abi.ExpressionStreamID == 0 {
+			return nil, fmt.Errorf("expression stream ID is 0, channelID: %d, expression: %s", cid, abi.Expression)
+		}
+		ids = append(ids, abi.ExpressionStreamID)
+	}
+	return ids, nil
 }
 
 // ProcessCalculatedStreamsDryRun processes the calculated streams for the given expression
