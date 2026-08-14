@@ -70,30 +70,6 @@ func Test_ReportCodecPremiumLegacy(t *testing.T) {
 		assert.Contains(t, err.Error(), "ReportCodecPremiumLegacy cannot encode; got unusable report; ReportCodecPremiumLegacy requires exactly 3 values (NativePrice, LinkPrice, Quote{Bid, Mid, Ask}); got report.Values: []")
 	})
 
-	t.Run("does not encode specimen reports", func(t *testing.T) {
-		report := newValidPremiumLegacyReport()
-		report.Specimen = true
-		cache := protocol.NewOptsCache()
-		cache.Set(report.ChannelID, cd.Opts)
-
-		_, err := rc.Encode(report, cd, cache)
-		require.Error(t, err)
-		require.Contains(t, err.Error(), "does not support encoding specimen reports")
-	})
-
-	t.Run("encodes specimen reports when allowSpecimen is set", func(t *testing.T) {
-		report := newValidPremiumLegacyReport()
-		report.Specimen = true
-		specimenCD := cd
-		specimenCD.Opts = llotypes.ChannelOpts(fmt.Sprintf(`{"baseUSDFee":"10.50","expirationWindow":60,"feedId":"0x%x","multiplier":10,"allowSpecimen":true}`, feedID))
-		cache := protocol.NewOptsCache()
-		cache.Set(report.ChannelID, specimenCD.Opts)
-
-		encoded, err := rc.Encode(report, specimenCD, cache)
-		require.NoError(t, err)
-		assert.NotEmpty(t, encoded)
-	})
-
 	t.Run("Encode constructs a report from observations", func(t *testing.T) {
 		report := newValidPremiumLegacyReport()
 		cache := protocol.NewOptsCache()

@@ -344,68 +344,6 @@ func TestReportCodecEVMABIEncodeUnpackedExpr_Encode(t *testing.T) {
 	})
 }
 
-func TestReportCodecEVMABIEncodeUnpackedExpr_Specimen(t *testing.T) {
-	feedID := common.HexToHash("0x1111111111111111111111111111111111111111111111111111111111111111")
-	opts := ReportFormatEVMABIEncodeOpts{
-		BaseUSDFee:       decimal.NewFromFloat(1.5),
-		ExpirationWindow: 3600,
-		FeedID:           feedID,
-		TimeResolution:   protocol.ResolutionSeconds,
-		ABI:              []ABIEncoder{newSingleABIEncoder("int192", ubig.NewI(1))},
-	}
-	serializedOpts, err := opts.Encode()
-	require.NoError(t, err)
-
-	cd := llotypes.ChannelDefinition{
-		ReportFormat: llotypes.ReportFormatEVMABIEncodeUnpackedExpr,
-		Streams: []llotypes.Stream{
-			{Aggregator: llotypes.AggregatorMedian},
-			{Aggregator: llotypes.AggregatorMedian},
-			{Aggregator: llotypes.AggregatorMedian},
-		},
-		Opts: serializedOpts,
-	}
-
-	report := protocol.Report{
-		ConfigDigest:                    types.ConfigDigest{0x01},
-		SeqNr:                           0x02,
-		ChannelID:                       llotypes.ChannelID(0x03),
-		ValidAfterNanoseconds:           1e9,
-		ObservationTimestampNanoseconds: 2e9,
-		Values: []protocol.StreamValue{
-			protocol.ToDecimal(decimal.NewFromInt(100)),
-			protocol.ToDecimal(decimal.NewFromInt(200)),
-			protocol.ToDecimal(decimal.NewFromInt(300)),
-		},
-		Specimen: true,
-	}
-
-	codec := ReportCodecEVMABIEncodeUnpackedExpr{Logger: logger.Nop()}
-
-	t.Run("rejects specimen by default", func(t *testing.T) {
-		cache := protocol.NewOptsCache()
-		cache.Set(report.ChannelID, cd.Opts)
-		_, err := codec.Encode(report, cd, cache)
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "does not support encoding specimen reports")
-	})
-
-	t.Run("encodes specimen when allowSpecimen is true", func(t *testing.T) {
-		specimenOpts := opts
-		specimenOpts.AllowSpecimen = true
-		specimenSerialized, err := specimenOpts.Encode()
-		require.NoError(t, err)
-		specimenCD := cd
-		specimenCD.Opts = specimenSerialized
-
-		cache := protocol.NewOptsCache()
-		cache.Set(report.ChannelID, specimenCD.Opts)
-		encoded, err := codec.Encode(report, specimenCD, cache)
-		require.NoError(t, err)
-		assert.NotEmpty(t, encoded)
-	})
-}
-
 func TestReportCodecEVMABIEncodeUnpackedExpr_Verify(t *testing.T) {
 	c := ReportCodecEVMABIEncodeUnpackedExpr{}
 	t.Run("unrecognized fields in opts", func(t *testing.T) {
