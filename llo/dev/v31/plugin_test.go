@@ -326,7 +326,7 @@ func Test_SecondsResolutionOverlap(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			p := mkPrec(tc.format, tc.opts, tc.validAfter, tc.obsTs)
-			got := p.reportableChannels(0)
+			got := p.reportableChannels(0, protocol.NewOptsCache(), logger.Test(t))
 			if tc.reportable {
 				require.Equal(t, []llotypes.ChannelID{1}, got)
 			} else {
@@ -354,14 +354,107 @@ func Test_DisableNilStreamValues(t *testing.T) {
 
 	// Missing stream 200 -> not reportable.
 	missing := base(protocol.StreamAggregates{100: {llotypes.AggregatorMedian: protocol.ToDecimal(decimal.NewFromInt(1))}})
-	require.Empty(t, missing.reportableChannels(0))
+	require.Empty(t, missing.reportableChannels(0, protocol.NewOptsCache(), logger.Test(t)))
 
 	// Both streams present -> reportable.
 	full := base(protocol.StreamAggregates{
 		100: {llotypes.AggregatorMedian: protocol.ToDecimal(decimal.NewFromInt(1))},
 		200: {llotypes.AggregatorMedian: protocol.ToDecimal(decimal.NewFromInt(2))},
 	})
-	require.Equal(t, []llotypes.ChannelID{1}, full.reportableChannels(0))
+	require.Equal(t, []llotypes.ChannelID{1}, full.reportableChannels(0, protocol.NewOptsCache(), logger.Test(t)))
+}
+
+func Test_DisableNilStreamValues_CalculatedStreams(t *testing.T) {
+	const (
+		base1 = llotypes.StreamID(100)
+		base2 = llotypes.StreamID(200)
+		expr1 = llotypes.StreamID(900)
+	)
+	validOpts := []byte(`{"abi":[{"type":"int256","expression":"Add(s100, s200)","expressionStreamID":900}]}`)
+
+	baseStreams := []llotypes.Stream{
+		{StreamID: base1, Aggregator: llotypes.AggregatorMedian},
+		{StreamID: base2, Aggregator: llotypes.AggregatorMedian},
+	}
+	withCalculated := append(append([]llotypes.Stream{}, baseStreams...),
+		llotypes.Stream{StreamID: expr1, Aggregator: llotypes.AggregatorCalculated})
+
+	baseAggregates := func() protocol.StreamAggregates {
+		return protocol.StreamAggregates{
+			base1: {llotypes.AggregatorMedian: protocol.ToDecimal(decimal.NewFromInt(1))},
+			base2: {llotypes.AggregatorMedian: protocol.ToDecimal(decimal.NewFromInt(2))},
+		}
+	}
+	evaluatedAggregates := func() protocol.StreamAggregates {
+		aggs := baseAggregates()
+		aggs[expr1] = map[llotypes.Aggregator]protocol.StreamValue{
+			llotypes.AggregatorCalculated: protocol.ToDecimal(decimal.NewFromInt(3)),
+		}
+		return aggs
+	}
+
+	mkPrec := func(disableNil bool, opts []byte, streams []llotypes.Stream, aggs protocol.StreamAggregates) precursor {
+		return precursor{
+			LifeCycleStage:                  protocol.LifeCycleStageProduction,
+			ObservationTimestampNanoseconds: 2000,
+			ChannelDefinitions: llotypes.ChannelDefinitions{1: {
+				ReportFormat:           llotypes.ReportFormatEVMABIEncodeUnpackedExpr,
+				DisableNilStreamValues: disableNil,
+				Opts:                   opts,
+				Streams:                streams,
+			}},
+			ValidAfterNanoseconds: map[llotypes.ChannelID]uint64{1: 1000},
+			StreamAggregates:      aggs,
+		}
+	}
+	// A cache populated with the channel's opts, as StateTransition would leave it.
+	populatedCache := func(o precursor) *protocol.OptsCache {
+		c := protocol.NewOptsCache()
+		c.ResetTo(o.ChannelDefinitions)
+		return c
+	}
+
+	t.Run("evaluation failed -> not reportable", func(t *testing.T) {
+		// ProcessCalculatedStreams bailed before appending the calculated stream
+		// and before writing its aggregate; the definition alone looks complete.
+		o := mkPrec(true, validOpts, baseStreams, baseAggregates())
+		require.Empty(t, o.reportableChannels(0, populatedCache(o), logger.Test(t)))
+	})
+
+	t.Run("calculated stream declared but nil aggregate -> not reportable", func(t *testing.T) {
+		o := mkPrec(true, validOpts, withCalculated, baseAggregates())
+		require.Empty(t, o.reportableChannels(0, populatedCache(o), logger.Test(t)))
+	})
+
+	t.Run("fully evaluated -> reportable", func(t *testing.T) {
+		o := mkPrec(true, validOpts, withCalculated, evaluatedAggregates())
+		require.Equal(t, []llotypes.ChannelID{1}, o.reportableChannels(0, populatedCache(o), logger.Test(t)))
+	})
+
+	t.Run("DisableNilStreamValues=false, evaluation failed -> still reportable", func(t *testing.T) {
+		o := mkPrec(false, validOpts, baseStreams, baseAggregates())
+		require.Equal(t, []llotypes.ChannelID{1}, o.reportableChannels(0, populatedCache(o), logger.Test(t)))
+	})
+
+	t.Run("malformed opts -> not reportable", func(t *testing.T) {
+		o := mkPrec(true, []byte(`{"abi":`), withCalculated, evaluatedAggregates())
+		require.Empty(t, o.reportableChannels(0, populatedCache(o), logger.Test(t)))
+	})
+
+	t.Run("opts declare no expressions -> not reportable", func(t *testing.T) {
+		o := mkPrec(true, []byte(`{"abi":[]}`), withCalculated, evaluatedAggregates())
+		require.Empty(t, o.reportableChannels(0, populatedCache(o), logger.Test(t)))
+	})
+
+	t.Run("cache miss falls back to channel opts -> reportable", func(t *testing.T) {
+		o := mkPrec(true, validOpts, withCalculated, evaluatedAggregates())
+		require.Equal(t, []llotypes.ChannelID{1}, o.reportableChannels(0, protocol.NewOptsCache(), logger.Test(t)))
+	})
+
+	t.Run("cache miss falls back to channel opts -> not reportable when unevaluated", func(t *testing.T) {
+		o := mkPrec(true, validOpts, baseStreams, baseAggregates())
+		require.Empty(t, o.reportableChannels(0, protocol.NewOptsCache(), logger.Test(t)))
+	})
 }
 
 func Test_TimestampedAggregate_CarryForward(t *testing.T) {

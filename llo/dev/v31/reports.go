@@ -5,9 +5,11 @@ import (
 	"fmt"
 	"sort"
 
+	"github.com/smartcontractkit/chainlink-common/pkg/logger"
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
 
 	protocol "github.com/smartcontractkit/chainlink-data-streams/llo/protocol"
+	"github.com/smartcontractkit/chainlink-data-streams/llo/protocol/calculated"
 
 	"github.com/smartcontractkit/libocr/offchainreporting2plus/ocr3_1types"
 	"github.com/smartcontractkit/libocr/offchainreporting2plus/ocr3types"
@@ -48,7 +50,7 @@ func (p *Plugin) Reports(ctx context.Context, seqNr uint64, rawPrecursor ocr3_1t
 		})
 	}
 
-	for _, cid := range out.reportableChannels(p.DefaultMinReportIntervalNanoseconds) {
+	for _, cid := range out.reportableChannels(p.DefaultMinReportIntervalNanoseconds, p.OptsCache, p.Logger) {
 		cd := out.ChannelDefinitions[cid]
 
 		if cd.ReportFormat == llotypes.ReportFormatHistoryBackfill {
@@ -156,10 +158,10 @@ func (p *Plugin) Reports(ctx context.Context, seqNr uint64, rawPrecursor ocr3_1t
 
 // reportableChannels returns the sorted set of channels reportable in this
 // (current) round (see isReportable).
-func (o precursor) reportableChannels(minReportInterval uint64) []llotypes.ChannelID {
+func (o precursor) reportableChannels(minReportInterval uint64, optsCache *protocol.OptsCache, lggr logger.Logger) []llotypes.ChannelID {
 	reportable := make([]llotypes.ChannelID, 0, len(o.ChannelDefinitions))
 	for channelID := range o.ChannelDefinitions {
-		if o.isReportable(channelID, minReportInterval) {
+		if o.isReportable(channelID, minReportInterval, optsCache, lggr) {
 			reportable = append(reportable, channelID)
 		}
 	}
@@ -167,7 +169,7 @@ func (o precursor) reportableChannels(minReportInterval uint64) []llotypes.Chann
 	return reportable
 }
 
-func (o precursor) isReportable(channelID llotypes.ChannelID, minReportInterval uint64) bool {
+func (o precursor) isReportable(channelID llotypes.ChannelID, minReportInterval uint64, optsCache *protocol.OptsCache, lggr logger.Logger) bool {
 	if o.LifeCycleStage == protocol.LifeCycleStageRetired {
 		return false
 	}
@@ -185,6 +187,34 @@ func (o precursor) isReportable(channelID llotypes.ChannelID, minReportInterval 
 		for _, strm := range cd.Streams {
 			if o.StreamAggregates[strm.StreamID][strm.Aggregator] == nil {
 				return false
+			}
+		}
+		// Calculated streams are appended to the channel definition by
+		// ProcessCalculatedStreams only once evaluation gets that far; a channel
+		// whose expressions failed (bad input value, undecodable opts, eval
+		// error) therefore has no calculated streams to scan above and would
+		// pass. Verify against the streams the channel's opts declare instead.
+		if cd.ReportFormat == llotypes.ReportFormatEVMABIEncodeUnpackedExpr {
+			expressionStreamIDs, err := calculated.ExpressionStreamIDs(optsCache, cd, channelID)
+			if err != nil {
+				lggr.Warnw("IsReportable=false; cannot resolve calculated stream IDs", "channelID", channelID, "err", err)
+				return false
+			}
+			declared := make(map[llotypes.StreamID]struct{}, len(cd.Streams))
+			for _, strm := range cd.Streams {
+				if strm.Aggregator == llotypes.AggregatorCalculated {
+					declared[strm.StreamID] = struct{}{}
+				}
+			}
+			for _, sid := range expressionStreamIDs {
+				if _, ok := declared[sid]; !ok {
+					lggr.Warnw("IsReportable=false; calculated stream missing from channel definition", "channelID", channelID, "streamID", sid)
+					return false
+				}
+				if o.StreamAggregates[sid][llotypes.AggregatorCalculated] == nil {
+					lggr.Warnw("IsReportable=false; nil calculated stream value", "channelID", channelID, "streamID", sid)
+					return false
+				}
 			}
 		}
 	}
