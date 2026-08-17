@@ -36,13 +36,17 @@ func (p *Plugin) StateTransition(ctx context.Context, seqNr uint64, _ ocrtypes.A
 		if err := writeLifecycle(kvRW, stage); err != nil {
 			return nil, err
 		}
-		if err := writeChannelIndex(kvRW, nil); err != nil {
+		if err := writeChannelState(kvRW, seqNr, nil); err != nil {
 			return nil, err
 		}
+		if err := writeHotState(kvRW, 0, nil, nil, nil); err != nil {
+			return nil, err
+		}
+		p.ChannelCache.invalidate()
 		return encodePrecursor(precursor{LifeCycleStage: stage})
 	}
 
-	prev, err := loadKVState(kvRW)
+	prev, err := loadKVState(kvRW, p.ChannelCache)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load KV state: %w", err)
 	}
@@ -143,8 +147,11 @@ func (p *Plugin) StateTransition(ctx context.Context, seqNr uint64, _ ocrtypes.A
 		delete(out.ValidAfterNanoseconds, channelID)
 	}
 
-	// Aggregation (regular fresh; timestamped with cross-round carry-forward via KV).
-	if err := p.aggregate(kvRW, out.ChannelDefinitions, streamObservations, out.StreamAggregates); err != nil {
+	// Aggregation (regular fresh; timestamped with cross-round carry-forward via
+	// the r/agg record). carryForward accumulates the values to persist for the
+	// next round.
+	carryForward := map[llotypes.StreamID]map[llotypes.Aggregator]*protocol.TimestampedStreamValue{}
+	if err := p.aggregate(prev.carryForward, carryForward, out.ChannelDefinitions, streamObservations, out.StreamAggregates); err != nil {
 		return nil, err
 	}
 
@@ -155,7 +162,7 @@ func (p *Plugin) StateTransition(ctx context.Context, seqNr uint64, _ ocrtypes.A
 	calculated.ProcessCalculatedStreams(p.Logger, out.ChannelDefinitions, out.StreamAggregates, out.ObservationTimestampNanoseconds, p.OptsCache)
 
 	// Flush KV mutations.
-	if err := p.flushKV(kvRW, prev, out, removedChannelIDs); err != nil {
+	if err := p.flushKV(kvRW, seqNr, prev, out, carryForward); err != nil {
 		return nil, err
 	}
 
@@ -288,14 +295,35 @@ func applyChannelVotes(
 // aggregate computes stream aggregates for all non-tombstone, non-backfill
 // channels, one aggregation per (streamID, aggregator) pair.
 //
-// Timestamped stream values carry forward across rounds via the t/ KV keys with
-// newer-wins monotonicity (mirroring v30): the previous value is kept when the
-// fresh aggregation is older or fails, and only a strictly-newer value is
-// written back. Regular (non-timestamped) aggregates are recomputed fresh each
-// round and never persisted.
-func (p *Plugin) aggregate(kvRW ocr3_1types.KeyValueStateReadWriter, defs llotypes.ChannelDefinitions, streamObservations map[llotypes.StreamID][]protocol.StreamValue, out protocol.StreamAggregates) error {
+// Timestamped stream values carry forward across rounds via the r/agg record
+// with newer-wins monotonicity (mirroring v30): the previous value is kept when
+// the fresh aggregation is older or fails, and only a strictly-newer value is
+// adopted. Regular (non-timestamped) aggregates are recomputed fresh each round
+// and never persisted.
+//
+// prevCarry holds the previous round's carry-forward values (read-only);
+// nextCarry is populated with the values to persist for the next round. A pair
+// that is not written into nextCarry is dropped from the store, which is how
+// carry-forward values orphaned by channel removal or tombstoning are
+// reclaimed.
+func (p *Plugin) aggregate(
+	prevCarry, nextCarry map[llotypes.StreamID]map[llotypes.Aggregator]*protocol.TimestampedStreamValue,
+	defs llotypes.ChannelDefinitions,
+	streamObservations map[llotypes.StreamID][]protocol.StreamValue,
+	out protocol.StreamAggregates,
+) error {
+	keep := func(sid llotypes.StreamID, agg llotypes.Aggregator, tsv *protocol.TimestampedStreamValue) {
+		if nextCarry[sid] == nil {
+			nextCarry[sid] = map[llotypes.Aggregator]*protocol.TimestampedStreamValue{}
+		}
+		nextCarry[sid][agg] = tsv
+	}
+
 	for _, cd := range defs {
 		if cd.Tombstone || cd.ReportFormat == llotypes.ReportFormatHistoryBackfill {
+			// Not aggregated, so nothing is carried forward on their behalf. A
+			// pair that some other live channel still aggregates is preserved by
+			// that channel.
 			continue
 		}
 		for _, strm := range cd.Streams {
@@ -312,10 +340,7 @@ func (p *Plugin) aggregate(kvRW ocr3_1types.KeyValueStateReadWriter, defs llotyp
 				out[sid] = m
 			}
 
-			prevTSV, err := readTimestampedAggregate(kvRW, sid, agg)
-			if err != nil {
-				return fmt.Errorf("read carry-forward aggregate for stream %d aggregator %v: %w", sid, agg, err)
-			}
+			prevTSV := prevCarry[sid][agg]
 
 			aggF := protocol.GetAggregatorFunc(agg)
 			if aggF == nil {
@@ -329,137 +354,91 @@ func (p *Plugin) aggregate(kvRW ocr3_1types.KeyValueStateReadWriter, defs llotyp
 					// Aggregation failed: keep the carried-forward value (if any).
 					if prevTSV != nil {
 						m[agg] = prevTSV
+						keep(sid, agg, prevTSV)
 					}
 					continue
 				}
 				if prevTSV == nil || v.ObservedAtNanoseconds > prevTSV.ObservedAtNanoseconds {
 					// Strictly newer: adopt and persist.
 					m[agg] = v
-					if err := writeTimestampedAggregate(kvRW, sid, agg, v); err != nil {
-						return err
-					}
+					keep(sid, agg, v)
 				} else {
 					// Not newer: keep the previous value (monotonic).
 					m[agg] = prevTSV
+					keep(sid, agg, prevTSV)
 				}
 			default:
 				if aerr != nil {
-					// Ignore streams that cannot be aggregated; absent from the precursor.
+					// Ignore streams that cannot be aggregated; absent from the
+					// precursor. A previously-carried value for this pair is
+					// preserved so a transient aggregation failure does not
+					// discard it.
+					if prevTSV != nil {
+						keep(sid, agg, prevTSV)
+					}
 					continue
 				}
 				m[agg] = result
 				// Defensive: if this pair was previously timestamped but now
-				// yields a non-timestamped value, drop the stale carry-forward.
-				if prevTSV != nil {
-					if err := deleteTimestampedAggregate(kvRW, sid, agg); err != nil {
-						return err
-					}
-				}
+				// yields a non-timestamped value, drop the stale carry-forward
+				// by not writing it into nextCarry.
 			}
 		}
 	}
 	return nil
 }
 
-// cleanupOrphanedTimestamped deletes t/ carry-forward keys for (stream,aggregator)
-// pairs of removed channels that are no longer referenced by any live channel.
-func cleanupOrphanedTimestamped(kvRW ocr3_1types.KeyValueStateReadWriter, prev *kvState, out precursor, removedChannelIDs []llotypes.ChannelID) error {
-	type pair struct {
-		sid llotypes.StreamID
-		agg llotypes.Aggregator
-	}
-	referenced := map[pair]bool{}
-	for _, cd := range out.ChannelDefinitions {
-		for _, strm := range cd.Streams {
-			referenced[pair{strm.StreamID, strm.Aggregator}] = true
-		}
-	}
-	for _, id := range removedChannelIDs {
-		cd, ok := prev.channelDefinitions[id]
-		if !ok {
-			continue
-		}
-		for _, strm := range cd.Streams {
-			if !referenced[pair{strm.StreamID, strm.Aggregator}] {
-				if err := deleteTimestampedAggregate(kvRW, strm.StreamID, strm.Aggregator); err != nil {
-					return err
-				}
-			}
-		}
-	}
-	return nil
-}
-
-// flushKV persists the computed state, writing only what changed and cleaning
-// up removed channels.
-func (p *Plugin) flushKV(kvRW ocr3_1types.KeyValueStateReadWriter, prev *kvState, out precursor, removedChannelIDs []llotypes.ChannelID) error {
+// flushKV persists the computed state. The per-round record (r/agg) is always
+// rewritten; the channel record (c/defs, c/seqnr) and the lifecycle stage are
+// written only when they actually change, so that readers can keep serving
+// their in-memory copy of the definitions (see channelCache).
+func (p *Plugin) flushKV(
+	kvRW ocr3_1types.KeyValueStateReadWriter,
+	seqNr uint64,
+	prev *kvState,
+	out precursor,
+	carryForward map[llotypes.StreamID]map[llotypes.Aggregator]*protocol.TimestampedStreamValue,
+) error {
 	if out.LifeCycleStage != prev.lifeCycleStage {
 		if err := writeLifecycle(kvRW, out.LifeCycleStage); err != nil {
 			return err
 		}
 	}
-	if err := writeObsTS(kvRW, out.ObservationTimestampNanoseconds); err != nil {
-		return err
-	}
 
-	// Channel definitions: write current set, delete removed.
-	prevIDs := make(map[llotypes.ChannelID]struct{}, len(prev.channelDefinitions))
-	for id := range prev.channelDefinitions {
-		prevIDs[id] = struct{}{}
-	}
-	for id, cd := range out.ChannelDefinitions {
-		prevCd, existed := prev.channelDefinitions[id]
-		if existed && prevCd.Equals(cd) {
-			continue // unchanged; avoid an unnecessary modified-key
-		}
-		if err := writeChannelDefinition(kvRW, id, cd); err != nil {
+	// Channel definitions: rewrite the whole record if anything changed. Removed
+	// channels disappear by not being part of out.ChannelDefinitions.
+	if channelDefinitionsChanged(prev.channelDefinitions, out.ChannelDefinitions) {
+		if err := writeChannelState(kvRW, seqNr, out.ChannelDefinitions); err != nil {
 			return err
 		}
-	}
-	for _, id := range removedChannelIDs {
-		if err := deleteChannel(kvRW, id); err != nil {
-			return err
-		}
+		// The cache entry for prev.channelStateSeqNr is still valid for the
+		// state this round read; the next round observes the new c/seqnr and
+		// reloads.
 	}
 
-	// validAfter: write current entries; delete removed.
-	for id, va := range out.ValidAfterNanoseconds {
-		if prevVA, ok := prev.validAfterNanoseconds[id]; ok && prevVA == va {
-			continue
-		}
-		if err := writeValidAfter(kvRW, id, va); err != nil {
-			return err
-		}
-	}
-
-	// Reportability bit: persist this round's decision for each channel so the
-	// next round can advance validAfter faithfully (see prevReportable). Written
-	// only on change to minimize modified keys.
+	// Reportability: persist this round's decision for each channel so the next
+	// round can advance validAfter faithfully (see prevReportable).
+	reportable := make(map[llotypes.ChannelID]bool, len(out.ChannelDefinitions))
 	for id := range out.ChannelDefinitions {
-		reportable := out.isReportable(id, p.DefaultMinReportIntervalNanoseconds, p.OptsCache, p.Logger)
-		if reportable != prev.reportedLastRound[id] {
-			if err := writeReported(kvRW, id, reportable); err != nil {
-				return err
-			}
-		}
+		reportable[id] = out.isReportable(id, p.DefaultMinReportIntervalNanoseconds, p.OptsCache, p.Logger)
 	}
 
-	// Drop carry-forward aggregates orphaned by channel removals.
-	if err := cleanupOrphanedTimestamped(kvRW, prev, out, removedChannelIDs); err != nil {
-		return err
-	}
+	return writeHotState(kvRW, out.ObservationTimestampNanoseconds, out.ValidAfterNanoseconds, reportable, carryForward)
+}
 
-	// Index: rewrite if the channel set changed.
-	if !sameChannelSet(prev.channelDefinitions, out.ChannelDefinitions) {
-		ids := make([]llotypes.ChannelID, 0, len(out.ChannelDefinitions))
-		for id := range out.ChannelDefinitions {
-			ids = append(ids, id)
-		}
-		if err := writeChannelIndex(kvRW, ids); err != nil {
-			return err
+// channelDefinitionsChanged reports whether the channel set or any individual
+// definition differs between two rounds.
+func channelDefinitionsChanged(prev, next llotypes.ChannelDefinitions) bool {
+	if len(prev) != len(next) {
+		return true
+	}
+	for id, cd := range next {
+		prevCd, ok := prev[id]
+		if !ok || !prevCd.Equals(cd) {
+			return true
 		}
 	}
-	return nil
+	return false
 }
 
 // prevReportable reports whether the channel was reportable in the previous

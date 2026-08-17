@@ -44,6 +44,10 @@ type Plugin struct {
 	ReportCodecs                     map[llotypes.ReportFormat]protocol.ReportCodec
 	DonID                            uint32
 	OptsCache                        *protocol.OptsCache
+	// ChannelCache memoizes the channel definitions record across rounds so it
+	// is re-read only when its sequence number changes. May be nil, in which
+	// case the definitions are re-read every round.
+	ChannelCache *channelCache
 
 	// Optional telemetry sinks; best-effort, non-blocking.
 	OutcomeTelemetryCh chan<- *protocol.LLOOutcomeTelemetry
@@ -76,7 +80,7 @@ func (p *Plugin) Observation(ctx context.Context, seqNr uint64, _ ocrtypes.Attri
 		return nil, nil
 	}
 
-	state, err := loadKVState(kvReader)
+	state, err := loadKVState(kvReader, p.ChannelCache)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load KV state: %w", err)
 	}
@@ -198,7 +202,7 @@ func (p *Plugin) ValidateObservation(ctx context.Context, seqNr uint64, _ ocrtyp
 
 	defsForVerify := observation.UpdateChannelDefinitions
 	if len(observation.UpdateChannelDefinitions) > 0 {
-		state, serr := loadKVState(kvReader)
+		state, serr := loadKVState(kvReader, p.ChannelCache)
 		if serr != nil {
 			return fmt.Errorf("failed to load KV state for channel definition validation: %w", serr)
 		}

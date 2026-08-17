@@ -2,7 +2,6 @@ package llo
 
 import (
 	"context"
-	"encoding/binary"
 	"testing"
 
 	"github.com/shopspring/decimal"
@@ -163,7 +162,7 @@ func Test_StateTransition_ChannelRemoval(t *testing.T) {
 	require.NoError(t, err)
 	_, err = p.StateTransition(ctx, 2, ocrtypes.AttributedQuery{}, addChannelRound(t, 1000, 1, jsonChannel()), kv, nil)
 	require.NoError(t, err)
-	require.NotEmpty(t, kv.m[string(channelKey(1))])
+	require.Contains(t, kvChannelDefs(t, kv), llotypes.ChannelID(1))
 
 	// Round 3: four oracles vote to remove channel 1.
 	removeObs := Observation{UnixTimestampNanoseconds: 2000, RemoveChannelIDs: map[llotypes.ChannelID]struct{}{1: {}}}
@@ -174,11 +173,11 @@ func Test_StateTransition_ChannelRemoval(t *testing.T) {
 	_, err = p.StateTransition(ctx, 3, ocrtypes.AttributedQuery{}, removeAOs, kv, nil)
 	require.NoError(t, err)
 
-	// Channel and all its per-channel keys should be gone.
-	require.Empty(t, kv.m[string(channelKey(1))])
-	require.Empty(t, kv.m[string(validAfterKey(1))])
-	require.Empty(t, kv.m[string(reportedKey(1))])
-	require.Empty(t, decodeChannelIndex(kv.m[string(keyIndex)]))
+	// The channel and all of its state should be gone.
+	require.Empty(t, kvChannelDefs(t, kv))
+	hot := kvHotState(t, kv)
+	require.NotContains(t, hot.validAfterNanoseconds, llotypes.ChannelID(1))
+	require.NotContains(t, hot.reportedLastRound, llotypes.ChannelID(1))
 }
 
 func Test_StateTransition_Promotion(t *testing.T) {
@@ -208,7 +207,7 @@ func Test_StateTransition_Promotion(t *testing.T) {
 
 	require.Equal(t, string(protocol.LifeCycleStageProduction), string(kv.m[string(keyLifecycle)]))
 	// validAfter is seeded from the predecessor's retirement report (gapless handover).
-	require.Equal(t, uint64(500), binary.BigEndian.Uint64(kv.m[string(validAfterKey(1))]))
+	require.Equal(t, uint64(500), kvHotState(t, kv).validAfterNanoseconds[1])
 }
 
 // Test_StateTransition_Promotion_StagingOnlyChannelTreatedAsNew guards the
@@ -236,7 +235,7 @@ func Test_StateTransition_Promotion_StagingOnlyChannelTreatedAsNew(t *testing.T)
 	// predecessor's retirement report. As a new channel its watermark is obsTs.
 	_, err = p.StateTransition(ctx, 2, ocrtypes.AttributedQuery{}, addChannelRound(t, 1000, 2, jsonChannel()), kv, nil)
 	require.NoError(t, err)
-	require.Equal(t, uint64(1000), binary.BigEndian.Uint64(kv.m[string(validAfterKey(2))]))
+	require.Equal(t, uint64(1000), kvHotState(t, kv).validAfterNanoseconds[2])
 
 	// Round 3 (ts=3000): a valid attested predecessor retirement report promotes
 	// this instance to production.
@@ -251,7 +250,7 @@ func Test_StateTransition_Promotion_StagingOnlyChannelTreatedAsNew(t *testing.T)
 
 	// Channel 2 must be reseeded to the promotion round's obs timestamp (3000),
 	// NOT keep its carried-forward staging watermark (1000).
-	require.Equal(t, uint64(3000), binary.BigEndian.Uint64(kv.m[string(validAfterKey(2))]),
+	require.Equal(t, uint64(3000), kvHotState(t, kv).validAfterNanoseconds[2],
 		"staging-only channel must be treated as new on promotion, not carried forward")
 }
 
