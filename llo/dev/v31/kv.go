@@ -130,12 +130,32 @@ type kvState struct {
 	carryForward map[llotypes.StreamID]map[llotypes.Aggregator]*protocol.TimestampedStreamValue
 }
 
-// loadKVState reconstructs the state from the replicated store. A fresh
-// protocol instance (empty store) yields a zero-valued kvState.
+// loadKVState reconstructs the full state from the replicated store, including
+// the hot (per-round) record. A fresh protocol instance (empty store) yields a
+// zero-valued kvState.
 //
 // cache may be nil, in which case the channel definitions are always re-read
 // and decoded.
 func loadKVState(r ocr3_1types.KeyValueStateReader, cache *channelCache) (*kvState, error) {
+	s, err := loadColdKVState(r, cache)
+	if err != nil {
+		return nil, err
+	}
+	if err := readHotState(r, s); err != nil {
+		return nil, err
+	}
+	return s, nil
+}
+
+// loadColdKVState reconstructs only the rarely-written part of the state: the
+// lifecycle stage and the channel definitions (plus their seqNr). It skips the
+// r/agg record entirely, avoiding a read and the per-stream decode of the
+// carry-forward aggregates.
+//
+// Callers that only inspect lifeCycleStage / channelDefinitions (Observation,
+// ValidateObservation) should use this; the hot fields are left zero-valued.
+// StateTransition needs the hot state and must use loadKVState.
+func loadColdKVState(r ocr3_1types.KeyValueStateReader, cache *channelCache) (*kvState, error) {
 	s := &kvState{
 		channelDefinitions:    llotypes.ChannelDefinitions{},
 		validAfterNanoseconds: map[llotypes.ChannelID]uint64{},
@@ -166,10 +186,6 @@ func loadKVState(r ocr3_1types.KeyValueStateReader, cache *channelCache) (*kvSta
 		}
 		s.channelDefinitions = defs
 		cache.put(s.channelStateSeqNr, defs)
-	}
-
-	if err := readHotState(r, s); err != nil {
-		return nil, err
 	}
 
 	return s, nil

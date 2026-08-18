@@ -80,7 +80,7 @@ func (p *Plugin) Observation(ctx context.Context, seqNr uint64, _ ocrtypes.Attri
 		return nil, nil
 	}
 
-	state, err := loadKVState(kvReader, p.ChannelCache)
+	state, err := loadColdKVState(kvReader, p.ChannelCache)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load KV state: %w", err)
 	}
@@ -202,7 +202,7 @@ func (p *Plugin) ValidateObservation(ctx context.Context, seqNr uint64, _ ocrtyp
 
 	defsForVerify := observation.UpdateChannelDefinitions
 	if len(observation.UpdateChannelDefinitions) > 0 {
-		state, serr := loadKVState(kvReader, p.ChannelCache)
+		state, serr := loadColdKVState(kvReader, p.ChannelCache)
 		if serr != nil {
 			return fmt.Errorf("failed to load KV state for channel definition validation: %w", serr)
 		}

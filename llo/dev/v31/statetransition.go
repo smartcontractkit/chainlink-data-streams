@@ -27,7 +27,7 @@ func (p *Plugin) StateTransition(ctx context.Context, seqNr uint64, _ ocrtypes.A
 		return nil, fmt.Errorf("invariant violation: expected at least 2f+1 attributed observations, got %d (f: %d)", len(aos), p.F)
 	}
 
-	// Initial round: establish the lifecycle stage and nothing else.
+	// Initial round: establish the lifecycle stage and initial states,
 	if seqNr <= 1 {
 		stage := protocol.LifeCycleStageProduction
 		if p.PredecessorConfigDigest != nil {
@@ -443,9 +443,9 @@ func channelDefinitionsChanged(prev, next llotypes.ChannelDefinitions) bool {
 
 // prevReportable reports whether the channel was reportable in the previous
 // round. This reads the reportability decision persisted by the previous
-// round's StateTransition (see reportedKey / flushKV), which already accounts
-// for min-interval, seconds-resolution overlap, and DisableNilStreamValues. It
-// is exactly the value the v30 code derives from previousOutcome.IsReportable.
+// round's StateTransition, which already accounts for min-interval,
+// seconds-resolution overlap, and DisableNilStreamValues. It is exactly
+// the value the v30 code derives from previousOutcome.IsReportable.
 func prevReportable(prev *kvState, channelID llotypes.ChannelID) bool {
 	return prev.reportedLastRound[channelID]
 }
@@ -479,16 +479,4 @@ func cloneChannelDefinitions(in llotypes.ChannelDefinitions) llotypes.ChannelDef
 		out[id] = cd
 	}
 	return out
-}
-
-func sameChannelSet(a, b llotypes.ChannelDefinitions) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for id := range a {
-		if _, ok := b[id]; !ok {
-			return false
-		}
-	}
-	return true
 }
