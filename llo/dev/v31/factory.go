@@ -92,6 +92,7 @@ func (f *PluginFactory) NewReportingPlugin(ctx context.Context, cfg ocr3types.Re
 		OutcomeTelemetryCh:                  f.OutcomeTelemetryCh,
 		ReportTelemetryCh:                   f.ReportTelemetryCh,
 		OptsCache:                           protocol.NewOptsCache(),
+		ChannelCache:                        newChannelCache(),
 		MaxDurationObservation:              cfg.MaxDurationObservation,
 		ProtocolVersion:                     offchainConfig.ProtocolVersion,
 		DefaultMinReportIntervalNanoseconds: offchainConfig.DefaultMinReportIntervalNanoseconds,

@@ -27,11 +27,15 @@ import (
 // --- test doubles ---
 
 // memKV is an in-memory KeyValueStateReadWriter.
-type memKV struct{ m map[string][]byte }
+type memKV struct {
+	m     map[string][]byte
+	reads map[string]int
+}
 
-func newMemKV() *memKV { return &memKV{m: map[string][]byte{}} }
+func newMemKV() *memKV { return &memKV{m: map[string][]byte{}, reads: map[string]int{}} }
 
 func (k *memKV) Read(key []byte) ([]byte, error) {
+	k.reads[string(key)]++
 	v, ok := k.m[string(key)]
 	if !ok {
 		return nil, nil
@@ -48,6 +52,31 @@ func (k *memKV) Delete(key []byte) error {
 }
 
 var _ ocr3_1types.KeyValueStateReadWriter = &memKV{}
+
+// readCount counts Read calls per key, for cache assertions.
+func (k *memKV) readCount(key []byte) int { return k.reads[string(key)] }
+
+// --- KV record accessors for assertions ---
+
+// kvChannelDefs decodes the c/defs record.
+func kvChannelDefs(t *testing.T, kv *memKV) llotypes.ChannelDefinitions {
+	t.Helper()
+	defs, err := readChannelState(kv)
+	require.NoError(t, err)
+	return defs
+}
+
+// kvHotState decodes the r/agg record into a kvState projection.
+func kvHotState(t *testing.T, kv *memKV) *kvState {
+	t.Helper()
+	s := &kvState{
+		validAfterNanoseconds: map[llotypes.ChannelID]uint64{},
+		reportedLastRound:     map[llotypes.ChannelID]bool{},
+		carryForward:          map[llotypes.StreamID]map[llotypes.Aggregator]*protocol.TimestampedStreamValue{},
+	}
+	require.NoError(t, readHotState(kv, s))
+	return s
+}
 
 // errBroadcaster is a BlobBroadcastFetcher whose BroadcastBlob always fails.
 // (A real BlobHandle cannot be constructed outside libocr, so the blob success
@@ -75,6 +104,7 @@ func testPlugin(t *testing.T) *Plugin {
 		F:                                   1,
 		ReportCodecs:                        map[llotypes.ReportFormat]protocol.ReportCodec{llotypes.ReportFormatJSON: reportcodec.JSONReportCodec{}},
 		OptsCache:                           protocol.NewOptsCache(),
+		ChannelCache:                        newChannelCache(),
 		ProtocolVersion:                     0,
 		DefaultMinReportIntervalNanoseconds: 0,
 	}
@@ -169,7 +199,7 @@ func Test_FullRound_AddChannelThenReport(t *testing.T) {
 	require.NoError(t, err)
 
 	// Channel is now in state; not yet reportable (validAfter == obsTs).
-	require.NotEmpty(t, kv.m[string(channelKey(1))])
+	require.Contains(t, kvChannelDefs(t, kv), llotypes.ChannelID(1))
 	reports2, err := p.Reports(ctx, 2, prec2)
 	require.NoError(t, err)
 	require.Empty(t, reports2)
@@ -459,16 +489,18 @@ func Test_DisableNilStreamValues_CalculatedStreams(t *testing.T) {
 
 func Test_TimestampedAggregate_CarryForward(t *testing.T) {
 	p := testPlugin(t) // F=1
-	kv := newMemKV()
 	defs := llotypes.ChannelDefinitions{1: {ReportFormat: llotypes.ReportFormatJSON, Streams: []llotypes.Stream{{StreamID: 100, Aggregator: llotypes.AggregatorMedian}}}}
 
 	tsv := func(ts uint64, v int64) protocol.StreamValue {
 		return &protocol.TimestampedStreamValue{ObservedAtNanoseconds: ts, StreamValue: protocol.ToDecimal(decimal.NewFromInt(v))}
 	}
+	carry := map[llotypes.StreamID]map[llotypes.Aggregator]*protocol.TimestampedStreamValue{}
 	roundAgg := func(ts uint64, v int64) *protocol.TimestampedStreamValue {
 		out := protocol.StreamAggregates{}
 		obs := map[llotypes.StreamID][]protocol.StreamValue{100: {tsv(ts, v), tsv(ts, v), tsv(ts, v)}}
-		require.NoError(t, p.aggregate(kv, defs, obs, out))
+		next := map[llotypes.StreamID]map[llotypes.Aggregator]*protocol.TimestampedStreamValue{}
+		require.NoError(t, p.aggregate(carry, next, defs, obs, out))
+		carry = next
 		res, ok := out[100][llotypes.AggregatorMedian].(*protocol.TimestampedStreamValue)
 		require.True(t, ok, "expected a TimestampedStreamValue aggregate")
 		return res
@@ -480,9 +512,8 @@ func Test_TimestampedAggregate_CarryForward(t *testing.T) {
 	require.Equal(t, uint64(100), roundAgg(50, 7).ObservedAtNanoseconds)
 	// Round 3: a strictly newer aggregation is adopted.
 	require.Equal(t, uint64(200), roundAgg(200, 9).ObservedAtNanoseconds)
-	// And the newer value is persisted to the t/ carry-forward key.
-	persisted, err := readTimestampedAggregate(kv, 100, llotypes.AggregatorMedian)
-	require.NoError(t, err)
+	// And the newer value is what carries into the next round.
+	persisted := carry[100][llotypes.AggregatorMedian]
 	require.NotNil(t, persisted)
 	require.Equal(t, uint64(200), persisted.ObservedAtNanoseconds)
 }

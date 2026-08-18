@@ -20,12 +20,31 @@
 //
 // Unlike v30 (which threads the full outcome through OutcomeContext.PreviousOutcome),
 // v31 stores state in the replicated KeyValueState. The in-round
-// KeyValueStateReader only supports point Read(key); it has no range scan, so
-// the set of live channels is tracked in an explicit index key. See kv.go for
-// the key schema. All values written to the KV store MUST be serialized
-// deterministically (protobuf with Deterministic:true, or fixed-width
-// big-endian integers) because the store is replicated across oracles and any
-// divergence halts the protocol.
+// KeyValueStateReader only supports point Read(key); it has no range scan.
+//
+// State is split by write frequency rather than spread over per-channel and
+// per-stream keys, so a round touches a constant number of keys regardless of
+// how many channels and streams exist:
+//
+//   - r/agg holds the per-round ("hot") state — observation timestamp,
+//     validAfter watermarks, per-channel reportability, and carry-forward
+//     timestamped aggregates — and is rewritten every round.
+//   - c/defs holds every channel definition and is rewritten only when the
+//     definitions change; c/seqnr records the sequence number of that write.
+//   - c/lifecycle holds the lifecycle stage and is written only on change.
+//
+// Because c/defs is a pure function of c/seqnr, the plugin keeps the decoded
+// definitions in memory (channelCache) and re-reads them only at startup or
+// when the stored sequence number differs from the cached one. See kv.go.
+//
+// Only aggregates that must survive across rounds (TimestampedStreamValues) are
+// persisted; regular aggregates are recomputed fresh each round and reach
+// Reports through the precursor.
+//
+// All values written to the KV store MUST be serialized deterministically
+// (protobuf with Deterministic:true and repeated fields sorted by key — not
+// proto maps — or fixed-width big-endian integers) because the store is
+// replicated across oracles and any divergence halts the protocol.
 //
 // # Blobs
 //
@@ -48,11 +67,12 @@
 // DisableNilStreamValues (a channel with any nil stream aggregate is
 // unreportable; for expression channels the expected calculated streams are
 // taken from the channel's opts rather than from the definition, since the
-// definition only lists them once evaluation succeeded), cross-round timestamped-aggregate carry-forward (t/ KV keys,
-// newer-wins monotonicity), and best-effort outcome/report telemetry are also
-// implemented. Reportability is persisted per channel each round (the r/ KV key)
-// so the next round can advance validAfter faithfully without re-deriving it
-// from aggregates that are not otherwise persisted.
+// definition only lists them once evaluation succeeded), cross-round
+// timestamped-aggregate carry-forward (in the r/agg record, newer-wins
+// monotonicity), and best-effort outcome/report telemetry are also implemented.
+// Reportability is persisted per channel each round (also in r/agg) so the next
+// round can advance validAfter faithfully without re-deriving it from
+// aggregates that are not otherwise persisted.
 //
 // Calculated streams (EVMABIEncodeUnpackedExpr channels) are supported via the
 // expression engine in calculated.go, run at the end of StateTransition.

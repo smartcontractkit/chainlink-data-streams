@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"sort"
+	"sync"
 
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
 
@@ -13,37 +14,31 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-// KeyValueState key schema. Keys are byte slices; integer key components are
-// encoded big-endian so that, although the in-round reader offers no range
-// scan, the persisted ordering is deterministic and human-inspectable.
+// KeyValueState key schema. State is split by write frequency so that a round
+// touches a small, constant number of keys regardless of how many channels and
+// streams exist.
 //
-//	m/lifecycle        -> lifecycle stage string bytes
-//	m/ts               -> uint64 BE observation timestamp (nanoseconds)
-//	idx                -> concatenated uint32 BE sorted channel IDs (the channel index)
-//	c/<channelID BE>   -> deterministic LLOChannelDefinitionProto
-//	v/<channelID BE>   -> uint64 BE validAfterNanoseconds
-//	r/<channelID BE>   -> 1 byte (0/1): was the channel reportable in this round
-//	t/<streamID BE><aggregator BE> -> deterministic LLOStreamValue (carry-forward timestamped aggregate)
+//	c/lifecycle -> lifecycle stage string bytes (rarely written)
+//	c/defs      -> LLOChannelStateProto: every live channel definition
+//	               (written only when the definitions change)
+//	c/seqnr     -> uint64 BE seqNr of the last c/defs write
+//	r/agg       -> LLOHotStateProto: observation timestamp, validAfter
+//	               watermarks, per-channel reportability, and carry-forward
+//	               timestamped aggregates (written every round)
+//
+// c/seqnr lets readers cache the decoded c/defs in memory across rounds and
+// re-read it only when the stored sequence number differs from the cached one
+// (see channelCache).
 var (
-	keyLifecycle = []byte("m/lifecycle")
-	keyObsTS     = []byte("m/ts")
-	keyIndex     = []byte("idx")
-
-	prefixChannel     = []byte("c/")
-	prefixValidAfter  = []byte("v/")
-	prefixReported    = []byte("r/")
-	prefixTimestamped = []byte("t/")
+	keyLifecycle    = []byte("c/lifecycle")
+	keyChannelState = []byte("c/defs")
+	keyChannelSeqNr = []byte("c/seqnr")
+	keyHotState     = []byte("r/agg")
 )
 
 // deterministicMarshal marshals a proto message deterministically. All KV
 // values and the precursor rely on this for cross-oracle agreement.
 var deterministicMarshal = proto.MarshalOptions{Deterministic: true}
-
-func beU32(v uint32) []byte {
-	b := make([]byte, 4)
-	binary.BigEndian.PutUint32(b, v)
-	return b
-}
 
 func beU64(v uint64) []byte {
 	b := make([]byte, 8)
@@ -51,48 +46,121 @@ func beU64(v uint64) []byte {
 	return b
 }
 
-func channelKey(id llotypes.ChannelID) []byte {
-	return append(append([]byte{}, prefixChannel...), beU32(id)...)
+// channelCache memoizes the decoded c/defs record across rounds. c/defs is a
+// pure function of c/seqnr (both are written by the same StateTransition into
+// the same replicated, atomically-committed store), so serving cached
+// definitions when the stored sequence number matches the cached one is
+// indistinguishable from re-reading them, and therefore consensus-safe.
+//
+// The comparison is equality, not "cached is older": a node replaying history
+// or restoring from a snapshot can legitimately observe an older c/seqnr, and
+// serving newer definitions into an older round would diverge.
+type channelCache struct {
+	mu     sync.Mutex
+	loaded bool
+	seqNr  uint64
+	defs   llotypes.ChannelDefinitions // treated as immutable once stored
 }
 
-func validAfterKey(id llotypes.ChannelID) []byte {
-	return append(append([]byte{}, prefixValidAfter...), beU32(id)...)
+func newChannelCache() *channelCache {
+	return &channelCache{}
 }
 
-func reportedKey(id llotypes.ChannelID) []byte {
-	return append(append([]byte{}, prefixReported...), beU32(id)...)
+// get returns the cached definitions if they were loaded at seqNr.
+func (c *channelCache) get(seqNr uint64) (llotypes.ChannelDefinitions, bool) {
+	if c == nil {
+		return nil, false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.loaded || c.seqNr != seqNr {
+		return nil, false
+	}
+	return c.defs, true
 }
 
-func timestampedKey(streamID llotypes.StreamID, agg llotypes.Aggregator) []byte {
-	k := append([]byte{}, prefixTimestamped...)
-	k = append(k, beU32(streamID)...)
-	return append(k, beU32(uint32(agg))...)
+// put replaces the cache with definitions decoded from the c/defs record
+// written at seqNr.
+func (c *channelCache) put(seqNr uint64, defs llotypes.ChannelDefinitions) {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.loaded = true
+	c.seqNr = seqNr
+	c.defs = defs
+}
+
+// invalidate drops the cached definitions, forcing the next load to re-read
+// them from the store.
+func (c *channelCache) invalidate() {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.loaded = false
+	c.seqNr = 0
+	c.defs = nil
 }
 
 // kvState is the in-memory projection of the replicated KeyValueState for a
-// single StateTransition round. It is loaded from the reader at the start of
-// the round and mutations are flushed back through the writer.
+// single round. It is loaded from the reader at the start of the round and
+// mutations are flushed back through the writer.
 type kvState struct {
 	lifeCycleStage         llotypes.LifeCycleStage
 	observationTimestampNs uint64
-	channelDefinitions     llotypes.ChannelDefinitions
-	validAfterNanoseconds  map[llotypes.ChannelID]uint64
+	// channelDefinitions may be shared with channelCache and with other
+	// concurrently-running rounds: treat it as read-only. Callers that mutate
+	// must clone first (see cloneChannelDefinitions).
+	channelDefinitions llotypes.ChannelDefinitions
+	// channelStateSeqNr is the seqNr at which channelDefinitions were written.
+	channelStateSeqNr     uint64
+	validAfterNanoseconds map[llotypes.ChannelID]uint64
 	// reportedLastRound[cid] is the persisted reportability decision from the
-	// previous round's StateTransition (see reportedKey). It bakes in every
-	// reportability check (min-interval, seconds-resolution, DisableNilStreamValues),
-	// so the current round can advance validAfter faithfully without re-deriving
-	// it from aggregates that are not persisted.
+	// previous round's StateTransition. It bakes in every reportability check
+	// (min-interval, seconds-resolution, DisableNilStreamValues), so the current
+	// round can advance validAfter faithfully without re-deriving it from
+	// aggregates that are not persisted.
 	reportedLastRound map[llotypes.ChannelID]bool
-	channelIDs        []llotypes.ChannelID // sorted; mirrors the idx key
+	// carryForward holds the timestamped aggregates that survive across rounds
+	// (newer-wins monotonicity). Regular aggregates are recomputed fresh every
+	// round and are never persisted.
+	carryForward map[llotypes.StreamID]map[llotypes.Aggregator]*protocol.TimestampedStreamValue
 }
 
-// loadKVState reconstructs the state from the replicated store. A fresh
-// protocol instance (empty store) yields a zero-valued kvState.
-func loadKVState(r ocr3_1types.KeyValueStateReader) (*kvState, error) {
+// loadKVState reconstructs the full state from the replicated store, including
+// the hot (per-round) record. A fresh protocol instance (empty store) yields a
+// zero-valued kvState.
+//
+// cache may be nil, in which case the channel definitions are always re-read
+// and decoded.
+func loadKVState(r ocr3_1types.KeyValueStateReader, cache *channelCache) (*kvState, error) {
+	s, err := loadColdKVState(r, cache)
+	if err != nil {
+		return nil, err
+	}
+	if err := readHotState(r, s); err != nil {
+		return nil, err
+	}
+	return s, nil
+}
+
+// loadColdKVState reconstructs only the rarely-written part of the state: the
+// lifecycle stage and the channel definitions (plus their seqNr). It skips the
+// r/agg record entirely, avoiding a read and the per-stream decode of the
+// carry-forward aggregates.
+//
+// Callers that only inspect lifeCycleStage / channelDefinitions (Observation,
+// ValidateObservation) should use this; the hot fields are left zero-valued.
+// StateTransition needs the hot state and must use loadKVState.
+func loadColdKVState(r ocr3_1types.KeyValueStateReader, cache *channelCache) (*kvState, error) {
 	s := &kvState{
 		channelDefinitions:    llotypes.ChannelDefinitions{},
 		validAfterNanoseconds: map[llotypes.ChannelID]uint64{},
 		reportedLastRound:     map[llotypes.ChannelID]bool{},
+		carryForward:          map[llotypes.StreamID]map[llotypes.Aggregator]*protocol.TimestampedStreamValue{},
 	}
 
 	lc, err := r.Read(keyLifecycle)
@@ -101,72 +169,88 @@ func loadKVState(r ocr3_1types.KeyValueStateReader) (*kvState, error) {
 	}
 	s.lifeCycleStage = llotypes.LifeCycleStage(lc)
 
-	ts, err := r.Read(keyObsTS)
+	seqNrBytes, err := r.Read(keyChannelSeqNr)
 	if err != nil {
-		return nil, fmt.Errorf("read obsTS: %w", err)
+		return nil, fmt.Errorf("read channel seqNr: %w", err)
 	}
-	if len(ts) == 8 {
-		s.observationTimestampNs = binary.BigEndian.Uint64(ts)
+	if len(seqNrBytes) == 8 {
+		s.channelStateSeqNr = binary.BigEndian.Uint64(seqNrBytes)
 	}
 
-	idx, err := r.Read(keyIndex)
-	if err != nil {
-		return nil, fmt.Errorf("read index: %w", err)
-	}
-	s.channelIDs = decodeChannelIndex(idx)
-
-	for _, id := range s.channelIDs {
-		cdBytes, err := r.Read(channelKey(id))
+	if defs, ok := cache.get(s.channelStateSeqNr); ok {
+		s.channelDefinitions = defs
+	} else {
+		defs, err := readChannelState(r)
 		if err != nil {
-			return nil, fmt.Errorf("read channel %d: %w", id, err)
+			return nil, err
 		}
-		if len(cdBytes) == 0 {
-			// index/def divergence; treat defensively as absent
-			continue
-		}
-		pb := &protocol.LLOChannelDefinitionProto{}
-		if err := proto.Unmarshal(cdBytes, pb); err != nil {
-			return nil, fmt.Errorf("unmarshal channel %d: %w", id, err)
-		}
-		s.channelDefinitions[id] = protocol.ChannelDefinitionFromProto(pb)
-
-		vaBytes, err := r.Read(validAfterKey(id))
-		if err != nil {
-			return nil, fmt.Errorf("read validAfter %d: %w", id, err)
-		}
-		if len(vaBytes) == 8 {
-			s.validAfterNanoseconds[id] = binary.BigEndian.Uint64(vaBytes)
-		}
-
-		repBytes, err := r.Read(reportedKey(id))
-		if err != nil {
-			return nil, fmt.Errorf("read reported %d: %w", id, err)
-		}
-		if len(repBytes) == 1 && repBytes[0] == 1 {
-			s.reportedLastRound[id] = true
-		}
+		s.channelDefinitions = defs
+		cache.put(s.channelStateSeqNr, defs)
 	}
 
 	return s, nil
 }
 
-func decodeChannelIndex(b []byte) []llotypes.ChannelID {
-	n := len(b) / 4
-	ids := make([]llotypes.ChannelID, 0, n)
-	for i := 0; i < n; i++ {
-		ids = append(ids, binary.BigEndian.Uint32(b[i*4:]))
+// readChannelState reads and decodes the c/defs record.
+func readChannelState(r ocr3_1types.KeyValueStateReader) (llotypes.ChannelDefinitions, error) {
+	b, err := r.Read(keyChannelState)
+	if err != nil {
+		return nil, fmt.Errorf("read channel state: %w", err)
 	}
-	return ids
+	defs := llotypes.ChannelDefinitions{}
+	if len(b) == 0 {
+		return defs, nil
+	}
+	pb := &protocol.LLOChannelStateProto{}
+	if err := proto.Unmarshal(b, pb); err != nil {
+		return nil, fmt.Errorf("unmarshal channel state: %w", err)
+	}
+	for _, entry := range pb.ChannelDefinitions {
+		if entry.ChannelDefinition == nil {
+			return nil, fmt.Errorf("nil channel definition for channel %d", entry.ChannelID)
+		}
+		defs[entry.ChannelID] = protocol.ChannelDefinitionFromProto(entry.ChannelDefinition)
+	}
+	return defs, nil
 }
 
-func encodeChannelIndex(ids []llotypes.ChannelID) []byte {
-	sorted := append([]llotypes.ChannelID{}, ids...)
-	sort.Slice(sorted, func(i, j int) bool { return sorted[i] < sorted[j] })
-	b := make([]byte, 0, len(sorted)*4)
-	for _, id := range sorted {
-		b = append(b, beU32(id)...)
+// readHotState reads and decodes the r/agg record into s.
+func readHotState(r ocr3_1types.KeyValueStateReader, s *kvState) error {
+	b, err := r.Read(keyHotState)
+	if err != nil {
+		return fmt.Errorf("read hot state: %w", err)
 	}
-	return b
+	if len(b) == 0 {
+		return nil
+	}
+	pb := &protocol.LLOHotStateProto{}
+	if err := proto.Unmarshal(b, pb); err != nil {
+		return fmt.Errorf("unmarshal hot state: %w", err)
+	}
+	s.observationTimestampNs = pb.ObservationTimestampNanoseconds
+	for _, va := range pb.ValidAfterNanoseconds {
+		s.validAfterNanoseconds[va.ChannelID] = va.ValidAfterNanoseconds
+	}
+	for _, cid := range pb.ReportableChannelIDs {
+		s.reportedLastRound[cid] = true
+	}
+	for _, sa := range pb.StreamAggregates {
+		sv, err := protocol.UnmarshalProtoStreamValue(sa.StreamValue)
+		if err != nil {
+			return fmt.Errorf("unmarshal carry-forward aggregate for stream %d: %w", sa.StreamID, err)
+		}
+		tsv, ok := sv.(*protocol.TimestampedStreamValue)
+		if !ok {
+			// Only timestamped values are persisted; ignore anything else.
+			continue
+		}
+		agg := llotypes.Aggregator(sa.Aggregator)
+		if s.carryForward[sa.StreamID] == nil {
+			s.carryForward[sa.StreamID] = map[llotypes.Aggregator]*protocol.TimestampedStreamValue{}
+		}
+		s.carryForward[sa.StreamID][agg] = tsv
+	}
+	return nil
 }
 
 // writeLifecycle persists the lifecycle stage.
@@ -174,90 +258,92 @@ func writeLifecycle(w ocr3_1types.KeyValueStateReadWriter, stage llotypes.LifeCy
 	return w.Write(keyLifecycle, []byte(stage))
 }
 
-// writeObsTS persists the round's observation timestamp.
-func writeObsTS(w ocr3_1types.KeyValueStateReadWriter, ts uint64) error {
-	return w.Write(keyObsTS, beU64(ts))
-}
-
-// writeChannelIndex persists the sorted set of live channel IDs.
-func writeChannelIndex(w ocr3_1types.KeyValueStateReadWriter, ids []llotypes.ChannelID) error {
-	return w.Write(keyIndex, encodeChannelIndex(ids))
-}
-
-// writeChannelDefinition persists a single channel definition deterministically.
-func writeChannelDefinition(w ocr3_1types.KeyValueStateReadWriter, id llotypes.ChannelID, cd llotypes.ChannelDefinition) error {
-	b, err := deterministicMarshal.Marshal(protocol.ChannelDefinitionToProto(cd))
-	if err != nil {
-		return fmt.Errorf("marshal channel %d: %w", id, err)
+// writeChannelState persists the full set of channel definitions along with the
+// sequence number of this write. Call it only when the definitions actually
+// changed, so that readers can keep serving their in-memory copy.
+func writeChannelState(w ocr3_1types.KeyValueStateReadWriter, seqNr uint64, defs llotypes.ChannelDefinitions) error {
+	pb := &protocol.LLOChannelStateProto{
+		ChannelDefinitions: make([]*protocol.LLOChannelIDAndDefinitionProto, 0, len(defs)),
 	}
-	return w.Write(channelKey(id), b)
-}
-
-// deleteChannel removes a channel's definition, validAfter, and reported entries.
-func deleteChannel(w ocr3_1types.KeyValueStateReadWriter, id llotypes.ChannelID) error {
-	if err := w.Delete(channelKey(id)); err != nil {
-		return err
+	for id, cd := range defs {
+		pb.ChannelDefinitions = append(pb.ChannelDefinitions, &protocol.LLOChannelIDAndDefinitionProto{
+			ChannelID:         id,
+			ChannelDefinition: protocol.ChannelDefinitionToProto(cd),
+		})
 	}
-	if err := w.Delete(validAfterKey(id)); err != nil {
-		return err
-	}
-	return w.Delete(reportedKey(id))
-}
-
-// writeValidAfter persists a channel's validAfter watermark.
-func writeValidAfter(w ocr3_1types.KeyValueStateReadWriter, id llotypes.ChannelID, validAfterNs uint64) error {
-	return w.Write(validAfterKey(id), beU64(validAfterNs))
-}
-
-// writeReported persists the per-channel reportability decision for this round.
-func writeReported(w ocr3_1types.KeyValueStateReadWriter, id llotypes.ChannelID, reported bool) error {
-	b := byte(0)
-	if reported {
-		b = 1
-	}
-	return w.Write(reportedKey(id), []byte{b})
-}
-
-// readTimestampedAggregate returns the carry-forward TimestampedStreamValue for
-// a (stream, aggregator) pair, or nil if none is stored.
-func readTimestampedAggregate(r ocr3_1types.KeyValueStateReader, sid llotypes.StreamID, agg llotypes.Aggregator) (*protocol.TimestampedStreamValue, error) {
-	b, err := r.Read(timestampedKey(sid, agg))
-	if err != nil {
-		return nil, err
-	}
-	if len(b) == 0 {
-		return nil, nil
-	}
-	pb := &protocol.LLOStreamValue{}
-	if err := proto.Unmarshal(b, pb); err != nil {
-		return nil, err
-	}
-	sv, err := protocol.UnmarshalProtoStreamValue(pb)
-	if err != nil {
-		return nil, err
-	}
-	tsv, ok := sv.(*protocol.TimestampedStreamValue)
-	if !ok {
-		return nil, nil
-	}
-	return tsv, nil
-}
-
-// writeTimestampedAggregate persists a timestamped aggregate deterministically.
-func writeTimestampedAggregate(w ocr3_1types.KeyValueStateReadWriter, sid llotypes.StreamID, agg llotypes.Aggregator, tsv *protocol.TimestampedStreamValue) error {
-	value, err := tsv.MarshalBinary()
-	if err != nil {
-		return err
-	}
-	pb := &protocol.LLOStreamValue{Type: tsv.Type(), Value: value}
+	sort.Slice(pb.ChannelDefinitions, func(i, j int) bool {
+		return pb.ChannelDefinitions[i].ChannelID < pb.ChannelDefinitions[j].ChannelID
+	})
 	b, err := deterministicMarshal.Marshal(pb)
 	if err != nil {
+		return fmt.Errorf("marshal channel state: %w", err)
+	}
+	if err := w.Write(keyChannelState, b); err != nil {
 		return err
 	}
-	return w.Write(timestampedKey(sid, agg), b)
+	return w.Write(keyChannelSeqNr, beU64(seqNr))
 }
 
-// deleteTimestampedAggregate removes a carry-forward timestamped aggregate.
-func deleteTimestampedAggregate(w ocr3_1types.KeyValueStateReadWriter, sid llotypes.StreamID, agg llotypes.Aggregator) error {
-	return w.Delete(timestampedKey(sid, agg))
+// writeHotState persists the per-round state: observation timestamp, validAfter
+// watermarks, reportability decisions, and carry-forward timestamped
+// aggregates. It is written every round.
+func writeHotState(
+	w ocr3_1types.KeyValueStateReadWriter,
+	observationTimestampNs uint64,
+	validAfterNanoseconds map[llotypes.ChannelID]uint64,
+	reportable map[llotypes.ChannelID]bool,
+	carryForward map[llotypes.StreamID]map[llotypes.Aggregator]*protocol.TimestampedStreamValue,
+) error {
+	pb := &protocol.LLOHotStateProto{
+		ObservationTimestampNanoseconds: observationTimestampNs,
+	}
+
+	pb.ValidAfterNanoseconds = make([]*protocol.LLOChannelIDAndValidAfterNanosecondsProto, 0, len(validAfterNanoseconds))
+	for id, va := range validAfterNanoseconds {
+		pb.ValidAfterNanoseconds = append(pb.ValidAfterNanoseconds, &protocol.LLOChannelIDAndValidAfterNanosecondsProto{
+			ChannelID:             id,
+			ValidAfterNanoseconds: va,
+		})
+	}
+	sort.Slice(pb.ValidAfterNanoseconds, func(i, j int) bool {
+		return pb.ValidAfterNanoseconds[i].ChannelID < pb.ValidAfterNanoseconds[j].ChannelID
+	})
+
+	for id, ok := range reportable {
+		if ok {
+			pb.ReportableChannelIDs = append(pb.ReportableChannelIDs, id)
+		}
+	}
+	sort.Slice(pb.ReportableChannelIDs, func(i, j int) bool {
+		return pb.ReportableChannelIDs[i] < pb.ReportableChannelIDs[j]
+	})
+
+	for sid, aggregates := range carryForward {
+		for agg, tsv := range aggregates {
+			if tsv == nil {
+				continue
+			}
+			value, err := tsv.MarshalBinary()
+			if err != nil {
+				return fmt.Errorf("marshal carry-forward aggregate for stream %d aggregator %v: %w", sid, agg, err)
+			}
+			pb.StreamAggregates = append(pb.StreamAggregates, &protocol.LLOStreamAggregate{
+				StreamID:    sid,
+				StreamValue: &protocol.LLOStreamValue{Type: tsv.Type(), Value: value},
+				Aggregator:  uint32(agg),
+			})
+		}
+	}
+	sort.Slice(pb.StreamAggregates, func(i, j int) bool {
+		if pb.StreamAggregates[i].StreamID == pb.StreamAggregates[j].StreamID {
+			return pb.StreamAggregates[i].Aggregator < pb.StreamAggregates[j].Aggregator
+		}
+		return pb.StreamAggregates[i].StreamID < pb.StreamAggregates[j].StreamID
+	})
+
+	b, err := deterministicMarshal.Marshal(pb)
+	if err != nil {
+		return fmt.Errorf("marshal hot state: %w", err)
+	}
+	return w.Write(keyHotState, b)
 }

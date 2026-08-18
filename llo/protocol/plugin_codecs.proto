@@ -113,3 +113,33 @@ message LLOStreamAggregate {
     uint32 aggregator = 3;
 }
 
+
+// LLOChannelStateProto is the v31 KeyValueState record holding the full set of
+// live channel definitions under a single key (c/defs). It is rewritten only
+// when the definitions change; c/seqnr records the sequence number of the last
+// write so readers can cache it in memory across rounds.
+//
+// NOTE: must serialize deterministically, hence use of repeated tuple instead
+// of a map. channelDefinitions MUST be sorted ascending by channelID.
+message LLOChannelStateProto {
+    repeated LLOChannelIDAndDefinitionProto channelDefinitions = 1;
+}
+
+// LLOHotStateProto is the v31 KeyValueState record holding the per-round
+// ("hot") state under a single key (r/agg): the state that changes on
+// essentially every round.
+//
+// streamAggregates carries only aggregates that must survive across rounds,
+// i.e. TimestampedStreamValues. Regular aggregates are recomputed fresh every
+// round and are never persisted.
+//
+// NOTE: must serialize deterministically, hence use of repeated tuple instead
+// of maps. validAfterNanoseconds and reportableChannelIDs MUST be sorted
+// ascending by channelID; streamAggregates MUST be sorted ascending by
+// (streamID, aggregator).
+message LLOHotStateProto {
+    uint64 observationTimestampNanoseconds = 1;
+    repeated LLOChannelIDAndValidAfterNanosecondsProto validAfterNanoseconds = 2;
+    repeated uint32 reportableChannelIDs = 3;
+    repeated LLOStreamAggregate streamAggregates = 4;
+}
