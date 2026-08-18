@@ -11,7 +11,6 @@ import (
 	"github.com/smartcontractkit/chainlink-common/pkg/logger"
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
 
-	"github.com/smartcontractkit/chainlink-data-streams/llo/datasource"
 	"github.com/smartcontractkit/chainlink-data-streams/llo/protocol"
 
 	"github.com/smartcontractkit/libocr/offchainreporting2plus/ocr3_1types"
@@ -55,15 +54,13 @@ type Plugin struct {
 	OutcomeTelemetryCh chan<- *protocol.LLOOutcomeTelemetry
 	ReportTelemetryCh  chan<- *protocol.LLOReportTelemetry
 
-	MaxDurationObservation time.Duration
+	// pump gathers stream observations and broadcasts them as blobs off the OCR
+	// critical path. Observation only picks up the handle it parked.
+	pump *blobPump
 
 	// From offchain config
 	ProtocolVersion                     uint32
 	DefaultMinReportIntervalNanoseconds uint64
-
-	// BlobThreshold is the serialized stream-value payload size (bytes) above
-	// which observations offload stream values to a blob. 0 disables offloading.
-	BlobThreshold int
 }
 
 // Query is empty: LLO oracles do not coordinate on what to observe.
@@ -71,10 +68,12 @@ func (p *Plugin) Query(ctx context.Context, seqNr uint64, _ ocr3_1types.KeyValue
 	return nil, nil
 }
 
-// Observation reads current state from the KeyValueState, gathers stream
-// observations, votes on channel changes, and returns a (possibly blob-backed)
-// serialized observation.
-func (p *Plugin) Observation(ctx context.Context, seqNr uint64, _ ocrtypes.AttributedQuery, kvReader ocr3_1types.KeyValueStateReader, bbf ocr3_1types.BlobBroadcastFetcher) (ocrtypes.Observation, error) {
+// Observation reads current state from the KeyValueState, votes on channel
+// changes, and returns a serialized observation referencing the blob of stream
+// values most recently gathered by the blob pump.
+// The per-round BlobBroadcastFetcher is unused: broadcasting happens in the blob
+// pump, which holds the identical fetcher handed to the factory.
+func (p *Plugin) Observation(_ context.Context, seqNr uint64, _ ocrtypes.AttributedQuery, kvReader ocr3_1types.KeyValueStateReader, _ ocr3_1types.BlobBroadcastFetcher) (ocrtypes.Observation, error) {
 	if seqNr < 1 {
 		return nil, fmt.Errorf("got invalid seqnr=%d, must be >=1", seqNr)
 	} else if seqNr == 1 {
@@ -88,6 +87,7 @@ func (p *Plugin) Observation(ctx context.Context, seqNr uint64, _ ocrtypes.Attri
 	}
 
 	var obs Observation
+	var streams []llotypes.StreamID
 
 	if state.lifeCycleStage == protocol.LifeCycleStageRetired {
 		p.Logger.Debugw("Node is retired, will generate empty observation", "stage", "Observation", "seqNr", seqNr)
@@ -110,26 +110,26 @@ func (p *Plugin) Observation(ctx context.Context, seqNr uint64, _ ocrtypes.Attri
 
 		p.voteOnChannels(&obs, state, seqNr)
 
-		if len(state.channelDefinitions) > 0 {
-			obs.StreamValues = make(protocol.StreamValues)
-			for _, cd := range state.channelDefinitions {
-				if cd.Tombstone {
-					continue
-				}
-				for _, strm := range cd.Streams {
-					if strm.Aggregator == llotypes.AggregatorCalculated {
-						continue
-					}
-					obs.StreamValues[strm.StreamID] = nil
-				}
-			}
+		streams = observableStreams(state)
+	}
 
-			observationCtx, cancel := context.WithTimeout(ctx, p.MaxDurationObservation)
-			defer cancel()
-			opts := datasource.NewDSOpts(p.Config.VerboseLogging, seqNr, p.ConfigDigest, time.Now(), state.lifeCycleStage)
-			if err = p.DataSource.Observe(observationCtx, obs.StreamValues, opts); err != nil {
-				return nil, fmt.Errorf("DataSource.Observe error: %w", err)
-			}
+	// Stream values are gathered asynchronously by the blob pump and are always
+	// carried by a blob, never inline. Publish this round's context, then pick up
+	// whatever the pump has ready; a round that finds nothing usable emits an
+	// observation carrying only votes and its timestamp. Missing values cost the
+	// affected streams that round's aggregate (which needs >F values), not the
+	// round itself.
+	var handles [][]byte
+	// A nil pump means stream values were never wired up (or the plugin was built
+	// without the factory); rounds that observe no streams have nothing for the
+	// pump to gather, so neither publishes input nor consumes a snapshot.
+	if p.pump != nil && len(streams) > 0 {
+		p.pump.SetInput(pumpInput{streams: streams, seqNr: seqNr, lifeCycleStage: state.lifeCycleStage})
+
+		if snap, reason := p.pump.Take(seqNr); snap != nil {
+			handles = append(handles, snap.handleBytes)
+		} else {
+			p.Logger.Debugw("No usable stream-value snapshot for this round", "stage", "Observation", "seqNr", seqNr, "reason", reason, "misses", p.pump.Misses(), "cycles", p.pump.Cycles())
 		}
 	}
 
@@ -139,7 +139,34 @@ func (p *Plugin) Observation(ctx context.Context, seqNr uint64, _ ocrtypes.Attri
 	}
 	obs.UnixTimestampNanoseconds = uint64(obsTSNanos)
 
-	return encodeObservation(ctx, obs, seqNr, p.BlobThreshold, bbf)
+	return encodeObservation(obs, handles)
+}
+
+// observableStreams lists the streams a round should observe: every stream of
+// every live channel, minus calculated streams (which are derived in
+// StateTransition rather than observed).
+func observableStreams(state *kvState) []llotypes.StreamID {
+	if len(state.channelDefinitions) == 0 {
+		return nil
+	}
+	seen := make(map[llotypes.StreamID]struct{})
+	streams := make([]llotypes.StreamID, 0, len(state.channelDefinitions))
+	for _, cd := range state.channelDefinitions {
+		if cd.Tombstone {
+			continue
+		}
+		for _, strm := range cd.Streams {
+			if strm.Aggregator == llotypes.AggregatorCalculated {
+				continue
+			}
+			if _, dup := seen[strm.StreamID]; dup {
+				continue
+			}
+			seen[strm.StreamID] = struct{}{}
+			streams = append(streams, strm.StreamID)
+		}
+	}
+	return streams
 }
 
 // voteOnChannels populates obs.RemoveChannelIDs / obs.UpdateChannelDefinitions
@@ -256,5 +283,8 @@ func (p *Plugin) ShouldTransmitAcceptedReport(context.Context, uint64, ocr3types
 }
 
 func (p *Plugin) Close() error {
+	if p.pump != nil {
+		p.pump.Close()
+	}
 	return nil
 }

@@ -76,11 +76,29 @@
 // definition changes within the round that agrees them. Lifecycle changes are
 // NOT deferred: retirement stops reporting in the round it is agreed.
 //
-// # Blobs
+// # Blobs and the blob pump
 //
-// Observations carry per-stream values. When the serialized stream-value
-// payload is large it is disseminated as a blob and referenced by handle in the
-// observation, rather than sent inline. See observation.go.
+// Stream values are always disseminated as a blob, never inline: an observation
+// carries only votes, the retirement report, its timestamp, and the handle of a
+// blob holding the round's stream values. See observation.go for the framing.
+//
+// Gathering those values is off the OCR critical path. blobpump.go runs
+// DataSource.Observe in a background loop, serializes the result, broadcasts it,
+// and parks the marshaled handle; Observation publishes the round context
+// (stream set, seqNr, lifecycle stage) and picks up whatever is parked. Cadence
+// is consumption-driven: a cycle is kicked whenever Observation takes or
+// discards a snapshot, so the pump rate tracks the round rate without knowing
+// deltaRound, and cycles are serial so only one Observe is ever in flight.
+//
+// A snapshot is therefore gathered one round before it is used, and its
+// usability is bounded by the blob expiration hint (forSeqNr +
+// BlobLifetimeRounds) plus a generous wall-clock age check. A round that finds
+// nothing usable — cold start, a failed cycle, or a stale snapshot — emits an
+// observation with no stream values. That is not a halt: quorum counts
+// observations, not values. The cost lands in aggregation, which needs >F values
+// per stream, so streams miss the round only if more than F nodes miss together.
+// The pump counts misses and cycles (Misses / Cycles) so correlated misses show
+// up as more than an unexplained report gap.
 //
 // # Parity status (vs v30)
 //
@@ -116,8 +134,13 @@
 // logic (state transition, aggregation, reportability, backfill, calculated
 // streams) is ported from v30; the transport differs (KV state + blobs).
 //
-// Missing: Blob success path isn't unit-tested: ocr3_1types.BlobHandle has no exported constructor,
-// it's in an internal package, so a test can't fabricate a handle.
-// Tests cover the offload decision + inline fallback;
-// the full broadcast→fetch→merge round-trip needs libocr-provided doubles or an integration test.
+// Blob test coverage: ocr3_1types.BlobHandle has no exported constructor (it
+// lives in an internal package), but a handle can be UnmarshalBinary'd from a
+// syntactically valid encoding. The llotest subpackage exports an in-memory,
+// content-addressed BlobBroadcastFetcher built that way, so the
+// broadcast→fetch→merge round trip is unit-tested; only the real libocr
+// certification of a blob is out of reach without an integration test. Hosts
+// that run this plugin outside libocr (benchmarks, simulation harnesses) must
+// pass llotest.NewBlobBroadcastFetcher() rather than a nil fetcher: with a nil
+// fetcher the pump stays inert and no observation ever carries stream values.
 package llo
