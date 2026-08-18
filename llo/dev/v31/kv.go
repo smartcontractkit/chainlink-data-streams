@@ -55,15 +55,22 @@ func beU64(v uint64) []byte {
 // The comparison is equality, not "cached is older": a node replaying history
 // or restoring from a snapshot can legitimately observe an older c/seqnr, and
 // serving newer definitions into an older round would diverge.
+//
+// The decoded channel opts are a projection of the same record, so the cache
+// owns them too: they are synced exactly when the definitions are (re)loaded
+// and are never mutated for the rest of the round. This is what keeps report
+// encoding from ever using opts that are ahead of the definitions being
+// reported.
 type channelCache struct {
 	mu     sync.Mutex
 	loaded bool
 	seqNr  uint64
 	defs   llotypes.ChannelDefinitions // treated as immutable once stored
+	opts   *protocol.OptsCache
 }
 
-func newChannelCache() *channelCache {
-	return &channelCache{}
+func newChannelCache(opts *protocol.OptsCache) *channelCache {
+	return &channelCache{opts: opts}
 }
 
 // get returns the cached definitions if they were loaded at seqNr.
@@ -80,7 +87,7 @@ func (c *channelCache) get(seqNr uint64) (llotypes.ChannelDefinitions, bool) {
 }
 
 // put replaces the cache with definitions decoded from the c/defs record
-// written at seqNr.
+// written at seqNr, and points the opts cache at the same definitions.
 func (c *channelCache) put(seqNr uint64, defs llotypes.ChannelDefinitions) {
 	if c == nil {
 		return
@@ -90,6 +97,9 @@ func (c *channelCache) put(seqNr uint64, defs llotypes.ChannelDefinitions) {
 	c.loaded = true
 	c.seqNr = seqNr
 	c.defs = defs
+	if c.opts != nil {
+		c.opts.SyncTo(seqNr, defs)
+	}
 }
 
 // invalidate drops the cached definitions, forcing the next load to re-read

@@ -60,7 +60,7 @@ func Test_ChannelCache_StaleSeqNrForcesReload(t *testing.T) {
 	require.NoError(t, writeChannelState(kv, 5, defs))
 	require.NoError(t, writeHotState(kv, 0, nil, nil, nil))
 
-	cache := newChannelCache()
+	cache := newChannelCache(nil)
 	s, err := loadKVState(kv, cache)
 	require.NoError(t, err)
 	require.Equal(t, uint64(5), s.channelStateSeqNr)
@@ -92,7 +92,8 @@ func Test_HotState_DropsOrphanedCarryForward(t *testing.T) {
 	_, err = p.StateTransition(ctx, 2, ocrtypes.AttributedQuery{}, addChannelRound(t, 1_000, 1, tsChannel), kv, nil)
 	require.NoError(t, err)
 
-	// Round 3: observe a timestamped value so it gets carried forward.
+	// Round 3: the channel is now in effect; observe a timestamped value so it
+	// gets carried forward.
 	obs := Observation{UnixTimestampNanoseconds: 2_000, StreamValues: protocol.StreamValues{100: tsv}}
 	aos := make([]ocrtypes.AttributedObservation, 0, 4)
 	for i := 0; i < 4; i++ {
@@ -102,14 +103,25 @@ func Test_HotState_DropsOrphanedCarryForward(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, kvHotState(t, kv).carryForward[100][llotypes.AggregatorMedian])
 
-	// Round 4: remove the only channel referencing the pair; the carry-forward
-	// value is reclaimed by not being written into the new hot record.
+	// Round 4: vote to remove the only channel referencing the pair. The removal
+	// is deferred, so the channel is still in effect and the value is retained.
 	removeObs := Observation{UnixTimestampNanoseconds: 3_000, RemoveChannelIDs: map[llotypes.ChannelID]struct{}{1: {}}}
 	removeAOs := make([]ocrtypes.AttributedObservation, 0, 4)
 	for i := 0; i < 4; i++ {
 		removeAOs = append(removeAOs, ao(i, mustEncodeObs(t, removeObs)))
 	}
 	_, err = p.StateTransition(ctx, 4, ocrtypes.AttributedQuery{}, removeAOs, kv, nil)
+	require.NoError(t, err)
+	require.NotNil(t, kvHotState(t, kv).carryForward[100][llotypes.AggregatorMedian])
+
+	// Round 5: the removal takes effect and the carry-forward value is reclaimed
+	// by not being written into the new hot record.
+	nextObs := Observation{UnixTimestampNanoseconds: 4_000}
+	nextAOs := make([]ocrtypes.AttributedObservation, 0, 4)
+	for i := 0; i < 4; i++ {
+		nextAOs = append(nextAOs, ao(i, mustEncodeObs(t, nextObs)))
+	}
+	_, err = p.StateTransition(ctx, 5, ocrtypes.AttributedQuery{}, nextAOs, kv, nil)
 	require.NoError(t, err)
 	require.Empty(t, kvHotState(t, kv).carryForward)
 }
@@ -157,4 +169,129 @@ func Test_KVRecords_DeterministicAndRoundTrip(t *testing.T) {
 	require.Len(t, s.carryForward, 2)
 	require.Equal(t, uint64(1), s.carryForward[100][llotypes.AggregatorMedian].ObservedAtNanoseconds)
 	require.Equal(t, uint64(2), s.carryForward[200][llotypes.AggregatorMode].ObservedAtNanoseconds)
+}
+
+// Test_DeferredDefinitions_TakeEffectNextRound covers the core rule: an agreed
+// definition change is persisted immediately but is not in effect until the
+// following round, so the round that agreed it still aggregates, reports and
+// caches opts against the definitions Observation actually read.
+func Test_DeferredDefinitions_TakeEffectNextRound(t *testing.T) {
+	ctx := tests.Context(t)
+	p := testPlugin(t)
+	kv := newMemKV()
+
+	v1 := llotypes.ChannelDefinition{
+		ReportFormat: llotypes.ReportFormatJSON,
+		Streams:      []llotypes.Stream{{StreamID: 100, Aggregator: llotypes.AggregatorMedian}},
+		Opts:         []byte(`{"v":1}`),
+	}
+	v2 := llotypes.ChannelDefinition{
+		ReportFormat: llotypes.ReportFormatJSON,
+		Streams:      []llotypes.Stream{{StreamID: 100, Aggregator: llotypes.AggregatorMedian}, {StreamID: 200, Aggregator: llotypes.AggregatorMedian}},
+		Opts:         []byte(`{"v":2}`),
+	}
+
+	round := func(seqNr, ts uint64, defs llotypes.ChannelDefinitions) precursor {
+		o := Observation{UnixTimestampNanoseconds: ts, StreamValues: protocol.StreamValues{100: protocol.ToDecimal(decimal.NewFromInt(1))}}
+		if defs != nil {
+			o.UpdateChannelDefinitions = defs
+		}
+		aos := make([]ocrtypes.AttributedObservation, 0, 4)
+		for i := 0; i < 4; i++ {
+			aos = append(aos, ao(i, mustEncodeObs(t, o)))
+		}
+		raw, err := p.StateTransition(ctx, seqNr, ocrtypes.AttributedQuery{}, aos, kv, nil)
+		require.NoError(t, err)
+		prec, err := decodePrecursor(raw)
+		require.NoError(t, err)
+		return prec
+	}
+
+	_, err := p.StateTransition(ctx, 1, ocrtypes.AttributedQuery{}, []ocrtypes.AttributedObservation{ao(0, nil), ao(1, nil), ao(2, nil)}, kv, nil)
+	require.NoError(t, err)
+
+	// Round 2 agrees the addition. Persisted, but not in effect: the precursor
+	// (and therefore Reports) must not see it.
+	prec2 := round(2, 1_000, llotypes.ChannelDefinitions{1: v1})
+	require.Contains(t, kvChannelDefs(t, kv), llotypes.ChannelID(1))
+	require.NotContains(t, prec2.ChannelDefinitions, llotypes.ChannelID(1))
+
+	// Round 3: in effect, with v1.
+	prec3 := round(3, 2_000, nil)
+	require.Equal(t, v1, prec3.ChannelDefinitions[1])
+
+	// Round 4 agrees the update to v2. The precursor must still carry v1,
+	// because the round-4 observations were gathered against v1.
+	prec4 := round(4, 3_000, llotypes.ChannelDefinitions{1: v2})
+	require.Equal(t, v2, kvChannelDefs(t, kv)[1], "the update is persisted immediately")
+	require.Equal(t, v1, prec4.ChannelDefinitions[1], "but is not in effect until the next round")
+
+	// Round 5: v2 is in effect.
+	prec5 := round(5, 4_000, nil)
+	require.Equal(t, v2, prec5.ChannelDefinitions[1])
+}
+
+// Test_OptsCache_TracksEffectiveDefinitions guards the invariant that decoded
+// opts are never ahead of the definitions being reported.
+func Test_OptsCache_TracksEffectiveDefinitions(t *testing.T) {
+	ctx := tests.Context(t)
+	p := testPlugin(t)
+	kv := newMemKV()
+
+	withOpts := func(raw string) llotypes.ChannelDefinition {
+		return llotypes.ChannelDefinition{
+			ReportFormat: llotypes.ReportFormatJSON,
+			Streams:      []llotypes.Stream{{StreamID: 100, Aggregator: llotypes.AggregatorMedian}},
+			Opts:         []byte(raw),
+		}
+	}
+	type vOpts struct {
+		V int `json:"v"`
+	}
+	cachedV := func() int {
+		o, err := protocol.GetOpts[vOpts](p.OptsCache, 1)
+		require.NoError(t, err)
+		return o.V
+	}
+	round := func(seqNr, ts uint64, defs llotypes.ChannelDefinitions) {
+		o := Observation{UnixTimestampNanoseconds: ts}
+		if defs != nil {
+			o.UpdateChannelDefinitions = defs
+		}
+		aos := make([]ocrtypes.AttributedObservation, 0, 4)
+		for i := 0; i < 4; i++ {
+			aos = append(aos, ao(i, mustEncodeObs(t, o)))
+		}
+		_, err := p.StateTransition(ctx, seqNr, ocrtypes.AttributedQuery{}, aos, kv, nil)
+		require.NoError(t, err)
+	}
+
+	_, err := p.StateTransition(ctx, 1, ocrtypes.AttributedQuery{}, []ocrtypes.AttributedObservation{ao(0, nil), ao(1, nil), ao(2, nil)}, kv, nil)
+	require.NoError(t, err)
+
+	round(2, 1_000, llotypes.ChannelDefinitions{1: withOpts(`{"v":1}`)})
+	_, err = protocol.GetOpts[vOpts](p.OptsCache, 1)
+	require.Error(t, err, "opts for a channel that is not yet in effect must not be cached")
+
+	round(3, 2_000, nil)
+	require.Equal(t, 1, cachedV())
+
+	// Agreeing new opts must not move the cache within the same round.
+	round(4, 3_000, llotypes.ChannelDefinitions{1: withOpts(`{"v":2}`)})
+	require.Equal(t, 1, cachedV(), "opts must not run ahead of the effective definition")
+
+	round(5, 4_000, nil)
+	require.Equal(t, 2, cachedV())
+
+	// Reports syncs the cache to the precursor's definitions, so a cache wiped
+	// by a restart is repopulated from replicated state rather than failing.
+	p.OptsCache.ResetTo(llotypes.ChannelDefinitions{})
+	prec, err := encodePrecursor(precursor{
+		LifeCycleStage:     protocol.LifeCycleStageProduction,
+		ChannelDefinitions: llotypes.ChannelDefinitions{1: withOpts(`{"v":2}`)},
+	})
+	require.NoError(t, err)
+	_, err = p.Reports(ctx, 6, prec)
+	require.NoError(t, err)
+	require.Equal(t, 2, cachedV())
 }

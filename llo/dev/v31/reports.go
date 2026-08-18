@@ -27,6 +27,12 @@ func (p *Plugin) Reports(ctx context.Context, seqNr uint64, rawPrecursor ocr3_1t
 		return nil, fmt.Errorf("error unmarshalling precursor: %w", err)
 	}
 
+	// Point the OptsCache at the definitions this precursor was built from, so
+	// the report codecs can never encode with opts that are ahead of (or behind)
+	// the definitions being reported - including after a restart, where no
+	// StateTransition ran on this node to populate the cache.
+	p.OptsCache.SyncTo(out.ChannelStateSeqNr, out.ChannelDefinitions)
+
 	rwis := []ocr3types.ReportPlus[llotypes.ReportInfo]{}
 
 	if out.LifeCycleStage == protocol.LifeCycleStageRetired {

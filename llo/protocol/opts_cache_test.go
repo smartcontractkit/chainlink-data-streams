@@ -289,3 +289,65 @@ func TestOptsCache_ChannelDefinitionWorkflow(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "ch1", r1Again.FeedID)
 }
+
+func Test_OptsCache_SyncTo_GatesOnSeqNr(t *testing.T) {
+	defs := func(raw string) llotypes.ChannelDefinitions {
+		return llotypes.ChannelDefinitions{1: {Opts: llotypes.ChannelOpts(raw)}}
+	}
+	type vOpts struct {
+		V int `json:"v"`
+	}
+	c := NewOptsCache()
+
+	c.SyncTo(5, defs(`{"v":1}`))
+	got, err := GetOpts[vOpts](c, 1)
+	require.NoError(t, err)
+	require.Equal(t, 1, got.V)
+
+	// Same seqNr: the record is a pure function of its sequence number, so this
+	// returns without inspecting the definitions at all.
+	c.SyncTo(5, defs(`{"v":2}`))
+	got, err = GetOpts[vOpts](c, 1)
+	require.NoError(t, err)
+	require.Equal(t, 1, got.V, "a matching seqNr must short-circuit")
+
+	// A different seqNr syncs, in either direction (replay may present an older
+	// record).
+	c.SyncTo(6, defs(`{"v":2}`))
+	got, err = GetOpts[vOpts](c, 1)
+	require.NoError(t, err)
+	require.Equal(t, 2, got.V)
+
+	c.SyncTo(4, defs(`{"v":3}`))
+	got, err = GetOpts[vOpts](c, 1)
+	require.NoError(t, err)
+	require.Equal(t, 3, got.V, "an older seqNr must still sync")
+
+	// Direct mutation clears the watermark, so a later SyncTo at the same seqNr
+	// cannot be short-circuited into serving mutated content.
+	c.SyncTo(9, defs(`{"v":4}`))
+	c.Set(1, llotypes.ChannelOpts(`{"v":99}`))
+	c.SyncTo(9, defs(`{"v":4}`))
+	got, err = GetOpts[vOpts](c, 1)
+	require.NoError(t, err)
+	require.Equal(t, 4, got.V, "Set must invalidate the watermark")
+
+	c.SyncTo(10, defs(`{"v":5}`))
+	c.Remove(1)
+	c.SyncTo(10, defs(`{"v":5}`))
+	got, err = GetOpts[vOpts](c, 1)
+	require.NoError(t, err)
+	require.Equal(t, 5, got.V, "Remove must invalidate the watermark")
+
+	c.SyncTo(11, defs(`{"v":6}`))
+	c.ResetTo(llotypes.ChannelDefinitions{})
+	c.SyncTo(11, defs(`{"v":6}`))
+	got, err = GetOpts[vOpts](c, 1)
+	require.NoError(t, err)
+	require.Equal(t, 6, got.V, "ResetTo must invalidate the watermark")
+
+	// Channels absent from the definitions are dropped.
+	c.SyncTo(12, llotypes.ChannelDefinitions{})
+	_, err = GetOpts[vOpts](c, 1)
+	require.Error(t, err)
+}
