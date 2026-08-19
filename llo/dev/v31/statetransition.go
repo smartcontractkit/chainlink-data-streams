@@ -60,7 +60,6 @@ func (p *Plugin) StateTransition(ctx context.Context, seqNr uint64, _ ocrtypes.A
 		if err := writeHotState(kvRW, 0, nil, nil, nil); err != nil {
 			return nil, err
 		}
-		p.ChannelCache.invalidate()
 		return encodePrecursor(precursor{LifeCycleStage: stage})
 	}
 
@@ -178,7 +177,7 @@ func (p *Plugin) StateTransition(ctx context.Context, seqNr uint64, _ ocrtypes.A
 	// the calculated streams to their channel definitions and writes the
 	// evaluated values into StreamAggregates. The engine is shared via
 	// llo/protocol/calculated.
-	calculated.ProcessCalculatedStreams(p.Logger, effective, out.StreamAggregates, out.ObservationTimestampNanoseconds, p.OptsCache)
+	calculated.ProcessCalculatedStreams(p.Logger, effective, out.StreamAggregates, out.ObservationTimestampNanoseconds, prev.opts)
 
 	// Carry any calculated streams appended above into pending, so the append
 	// is persisted and does not repeat every round. Channels whose definition
@@ -271,8 +270,8 @@ func (p *Plugin) decodeObservations(ctx context.Context, aos []ocrtypes.Attribut
 // channel IDs whose definition was added or replaced.
 //
 // defs is the PENDING set: everything applied here takes effect next round. It
-// deliberately does not touch the OptsCache, which tracks the effective set for
-// the duration of the round.
+// deliberately does not touch the round's channel generation, whose definitions
+// and decoded opts stay pinned to the effective set for the whole round.
 func applyChannelVotes(
 	defs llotypes.ChannelDefinitions,
 	removeVotesByID map[llotypes.ChannelID]int,
@@ -464,7 +463,7 @@ func (p *Plugin) flushKV(
 	// round can advance validAfter faithfully (see prevReportable).
 	reportable := make(map[llotypes.ChannelID]bool, len(out.ChannelDefinitions))
 	for id := range out.ChannelDefinitions {
-		reportable[id] = out.isReportable(id, p.DefaultMinReportIntervalNanoseconds, p.OptsCache, p.Logger)
+		reportable[id] = out.isReportable(id, p.DefaultMinReportIntervalNanoseconds, prev.opts, p.Logger)
 	}
 
 	return writeHotState(kvRW, out.ObservationTimestampNanoseconds, out.ValidAfterNanoseconds, reportable, carryForward)
@@ -517,10 +516,10 @@ func sortChannelIDs(cids []llotypes.ChannelID) {
 	sort.Slice(cids, func(i, j int) bool { return cids[i] < cids[j] })
 }
 
+// cloneChannelDefinitions deep-copies the definitions so that this round's
+// mutations - notably appending calculated streams - cannot reach the immutable
+// generation the definitions came from, which other rounds are reading
+// concurrently.
 func cloneChannelDefinitions(in llotypes.ChannelDefinitions) llotypes.ChannelDefinitions {
-	out := make(llotypes.ChannelDefinitions, len(in))
-	for id, cd := range in {
-		out[id] = cd
-	}
-	return out
+	return protocol.CloneChannelDefinitions(in)
 }

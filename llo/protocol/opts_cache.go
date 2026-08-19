@@ -24,11 +24,12 @@ type OptsCache struct {
 	mu      sync.Mutex
 	raw     map[llotypes.ChannelID]llotypes.ChannelOpts
 	decoded map[optsCacheKey]any
-	// synced/syncedSeqNr record the channel-definitions sequence number the
-	// cache was last synced to by SyncTo. Any other mutation clears them, so a
-	// stale watermark can never suppress a needed sync.
-	synced      bool
-	syncedSeqNr uint64
+	// sealed marks a cache owned by a ChannelGeneration: it was built from one
+	// immutable set of channel definitions and must never be repointed at
+	// another. Mutators are no-ops on a sealed cache; lazy decoding still
+	// happens, which is unobservable because decoding fixed raw bytes into a
+	// fixed type is deterministic.
+	sealed bool
 }
 
 func NewOptsCache() *OptsCache {
@@ -38,6 +39,21 @@ func NewOptsCache() *OptsCache {
 	}
 }
 
+// newSealedOptsCache builds the immutable opts store for one generation of
+// channel definitions. The raw bytes are fixed at construction; only the lazily
+// decoded values are filled in afterwards.
+func newSealedOptsCache(channelDefinitions llotypes.ChannelDefinitions) *OptsCache {
+	c := &OptsCache{
+		raw:     make(map[llotypes.ChannelID]llotypes.ChannelOpts, len(channelDefinitions)),
+		decoded: make(map[optsCacheKey]any, len(channelDefinitions)),
+		sealed:  true,
+	}
+	for channelID, cd := range channelDefinitions {
+		c.raw[channelID] = cd.Opts
+	}
+	return c
+}
+
 // Set stores the raw opts for a channel and invalidates any previously decoded
 // values for that channel. It is a no-op when the raw bytes are identical to
 // what is already stored.
@@ -45,10 +61,13 @@ func (c *OptsCache) Set(channelID llotypes.ChannelID, raw llotypes.ChannelOpts) 
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	if c.sealed {
+		return
+	}
+
 	if existing, ok := c.raw[channelID]; ok && bytes.Equal(existing, raw) {
 		return
 	}
-	c.synced = false
 	c.raw[channelID] = raw
 	for key := range c.decoded {
 		if key.channelID == channelID {
@@ -69,7 +88,10 @@ func (c *OptsCache) Remove(channelID llotypes.ChannelID) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	c.synced = false
+	if c.sealed {
+		return
+	}
+
 	delete(c.raw, channelID)
 	for key := range c.decoded {
 		if key.channelID == channelID {
@@ -82,7 +104,10 @@ func (c *OptsCache) Remove(channelID llotypes.ChannelID) {
 func (c *OptsCache) ResetTo(channelDefinitions llotypes.ChannelDefinitions) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.synced = false
+
+	if c.sealed {
+		return
+	}
 	c.raw = make(map[llotypes.ChannelID]llotypes.ChannelOpts)
 	c.decoded = make(map[optsCacheKey]any)
 
@@ -126,54 +151,4 @@ func GetOpts[T any](c *OptsCache, channelID llotypes.ChannelID) (T, error) {
 
 	c.decoded[key] = result
 	return result, nil
-}
-
-// SyncTo makes the cache reflect exactly the given channel definitions: raw
-// opts are stored for every channel and channels absent from the definitions
-// are dropped.
-//
-// seqNr identifies the channel-definitions record the definitions came from
-// (the v31 c/seqnr). That record is a pure function of its sequence number, so a
-// call whose seqNr matches the last synced one returns without touching a single
-// channel. Any other mutation of the cache clears the watermark, so the shortcut
-// can never hide a needed sync. The comparison is equality, not "cached is
-// older": replay and snapshot restore can legitimately present an older record.
-//
-// Callers must pass the definitions that are in effect for whatever they are
-// about to do, so that decoded opts can never be ahead of (or behind) the
-// definitions they belong to.
-func (c *OptsCache) SyncTo(seqNr uint64, channelDefinitions llotypes.ChannelDefinitions) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	if c.synced && c.syncedSeqNr == seqNr {
-		return
-	}
-
-	for channelID, cd := range channelDefinitions {
-		if existing, ok := c.raw[channelID]; ok && bytes.Equal(existing, cd.Opts) {
-			continue
-		}
-		c.raw[channelID] = cd.Opts
-		for key := range c.decoded {
-			if key.channelID == channelID {
-				delete(c.decoded, key)
-			}
-		}
-	}
-
-	for channelID := range c.raw {
-		if _, ok := channelDefinitions[channelID]; ok {
-			continue
-		}
-		delete(c.raw, channelID)
-		for key := range c.decoded {
-			if key.channelID == channelID {
-				delete(c.decoded, key)
-			}
-		}
-	}
-
-	c.synced = true
-	c.syncedSeqNr = seqNr
 }

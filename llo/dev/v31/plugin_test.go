@@ -96,7 +96,6 @@ var _ ocr3_1types.BlobBroadcastFetcher = &errBroadcaster{}
 // --- helpers ---
 
 func testPlugin(t *testing.T) *Plugin {
-	optsCache := protocol.NewOptsCache()
 	return &Plugin{
 		Config:                              Config{VerboseLogging: true},
 		ConfigDigest:                        ocrtypes.ConfigDigest{1, 2, 3},
@@ -104,8 +103,7 @@ func testPlugin(t *testing.T) *Plugin {
 		N:                                   4,
 		F:                                   1,
 		ReportCodecs:                        map[llotypes.ReportFormat]protocol.ReportCodec{llotypes.ReportFormatJSON: reportcodec.JSONReportCodec{}},
-		OptsCache:                           optsCache,
-		ChannelCache:                        newChannelCache(optsCache),
+		ChannelCache:                        protocol.NewChannelCache(),
 		ProtocolVersion:                     0,
 		DefaultMinReportIntervalNanoseconds: 0,
 	}
@@ -584,26 +582,32 @@ func Test_Telemetry(t *testing.T) {
 func Test_CalculatedStreams(t *testing.T) {
 	p := testPlugin(t)
 	cid := llotypes.ChannelID(5)
-	opts := []byte(`{"abi":[{"type":"int256","expression":"Add(s1, s2)","expressionStreamID":999}]}`)
-	p.OptsCache.Set(cid, opts)
+
+	definitions := llotypes.ChannelDefinitions{cid: {
+		ReportFormat: llotypes.ReportFormatEVMABIEncodeUnpackedExpr,
+		Opts:         []byte(`{"abi":[{"type":"int256","expression":"Add(s1, s2)","expressionStreamID":999}]}`),
+		Streams: []llotypes.Stream{
+			{StreamID: 1, Aggregator: llotypes.AggregatorMedian},
+			{StreamID: 2, Aggregator: llotypes.AggregatorMedian},
+		},
+	}}
+
+	channelCache := protocol.NewChannelCache()
+	generation, err := channelCache.Load(1, func() (llotypes.ChannelDefinitions, error) {
+		return definitions, nil
+	})
+	require.NoError(t, err)
 
 	prec := precursor{
 		ObservationTimestampNanoseconds: 1000,
-		ChannelDefinitions: llotypes.ChannelDefinitions{cid: {
-			ReportFormat: llotypes.ReportFormatEVMABIEncodeUnpackedExpr,
-			Opts:         opts,
-			Streams: []llotypes.Stream{
-				{StreamID: 1, Aggregator: llotypes.AggregatorMedian},
-				{StreamID: 2, Aggregator: llotypes.AggregatorMedian},
-			},
-		}},
+		ChannelDefinitions:              definitions,
 		StreamAggregates: protocol.StreamAggregates{
 			1: {llotypes.AggregatorMedian: protocol.ToDecimal(decimal.NewFromInt(3))},
 			2: {llotypes.AggregatorMedian: protocol.ToDecimal(decimal.NewFromInt(4))},
 		},
 	}
 
-	calculated.ProcessCalculatedStreams(p.Logger, prec.ChannelDefinitions, prec.StreamAggregates, prec.ObservationTimestampNanoseconds, p.OptsCache)
+	calculated.ProcessCalculatedStreams(p.Logger, prec.ChannelDefinitions, prec.StreamAggregates, prec.ObservationTimestampNanoseconds, generation.Opts())
 
 	// The calculated stream (999) should hold Add(s1, s2) = 7.
 	got := prec.StreamAggregates[999][llotypes.AggregatorCalculated]

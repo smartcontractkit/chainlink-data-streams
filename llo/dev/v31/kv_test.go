@@ -60,7 +60,7 @@ func Test_ChannelCache_StaleSeqNrForcesReload(t *testing.T) {
 	require.NoError(t, writeChannelState(kv, 5, defs))
 	require.NoError(t, writeHotState(kv, 0, nil, nil, nil))
 
-	cache := newChannelCache(nil)
+	cache := protocol.NewChannelCache()
 	s, err := loadKVState(kv, cache)
 	require.NoError(t, err)
 	require.Equal(t, uint64(5), s.channelStateSeqNr)
@@ -231,9 +231,13 @@ func Test_DeferredDefinitions_TakeEffectNextRound(t *testing.T) {
 	require.Equal(t, v2, prec5.ChannelDefinitions[1])
 }
 
-// Test_OptsCache_TracksEffectiveDefinitions guards the invariant that decoded
-// opts are never ahead of the definitions being reported.
-func Test_OptsCache_TracksEffectiveDefinitions(t *testing.T) {
+// Test_ChannelGeneration_BindsOptsToDefinitions guards the invariant that
+// decoded opts always belong to the very definitions record they were loaded
+// with, and that a generation already handed out is never repointed when a later
+// round writes a new record. Rounds overlap (Reports for seqNr N can run while
+// StateTransition for N+1 does), so this is what stops a report from being
+// encoded with another round's opts.
+func Test_ChannelGeneration_BindsOptsToDefinitions(t *testing.T) {
 	ctx := tests.Context(t)
 	p := testPlugin(t)
 	kv := newMemKV()
@@ -248,8 +252,10 @@ func Test_OptsCache_TracksEffectiveDefinitions(t *testing.T) {
 	type vOpts struct {
 		V int `json:"v"`
 	}
-	cachedV := func() int {
-		o, err := protocol.GetOpts[vOpts](p.OptsCache, 1)
+	// optsV reads channel 1's opts exactly the way a round does: through the
+	// generation its own state load resolved.
+	optsV := func(s *kvState) int {
+		o, err := protocol.GetOpts[vOpts](s.opts, 1)
 		require.NoError(t, err)
 		return o.V
 	}
@@ -269,29 +275,78 @@ func Test_OptsCache_TracksEffectiveDefinitions(t *testing.T) {
 	_, err := p.StateTransition(ctx, 1, ocrtypes.AttributedQuery{}, []ocrtypes.AttributedObservation{ao(0, nil), ao(1, nil), ao(2, nil)}, kv, nil)
 	require.NoError(t, err)
 
+	// No channels yet: nothing to decode.
+	s1, err := loadColdKVState(kv, p.ChannelCache)
+	require.NoError(t, err)
+	_, err = protocol.GetOpts[vOpts](s1.opts, 1)
+	require.Error(t, err, "opts for a channel that is not in the record must not be cached")
+
 	round(2, 1_000, llotypes.ChannelDefinitions{1: withOpts(`{"v":1}`)})
-	_, err = protocol.GetOpts[vOpts](p.OptsCache, 1)
-	require.Error(t, err, "opts for a channel that is not yet in effect must not be cached")
+
+	// The record written by round 2 is what round 3 reads and reports on.
+	s2, err := loadColdKVState(kv, p.ChannelCache)
+	require.NoError(t, err)
+	require.Equal(t, uint64(2), s2.channelStateSeqNr)
+	require.Equal(t, 1, optsV(s2))
+	require.JSONEq(t, `{"v":1}`, string(s2.channelDefinitions[1].Opts), "opts must decode from this generation's own definitions")
 
 	round(3, 2_000, nil)
-	require.Equal(t, 1, cachedV())
-
-	// Agreeing new opts must not move the cache within the same round.
 	round(4, 3_000, llotypes.ChannelDefinitions{1: withOpts(`{"v":2}`)})
-	require.Equal(t, 1, cachedV(), "opts must not run ahead of the effective definition")
 
-	round(5, 4_000, nil)
-	require.Equal(t, 2, cachedV())
+	s4, err := loadColdKVState(kv, p.ChannelCache)
+	require.NoError(t, err)
+	require.Equal(t, uint64(4), s4.channelStateSeqNr)
+	require.Equal(t, 2, optsV(s4))
 
-	// Reports syncs the cache to the precursor's definitions, so a cache wiped
-	// by a restart is repopulated from replicated state rather than failing.
-	p.OptsCache.ResetTo(llotypes.ChannelDefinitions{})
+	// The older generation is untouched by the newer record: a round still
+	// holding it keeps the definitions AND the opts it started with.
+	require.Equal(t, 1, optsV(s2), "a handed-out generation must never be repointed")
+	require.JSONEq(t, `{"v":1}`, string(s2.channelDefinitions[1].Opts))
+
+	// Reports resolves the generation of the record the precursor was built from,
+	// so a cache wiped by a restart is repopulated rather than failing.
+	p.ChannelCache = protocol.NewChannelCache()
 	prec, err := encodePrecursor(precursor{
 		LifeCycleStage:     protocol.LifeCycleStageProduction,
+		ChannelStateSeqNr:  4,
 		ChannelDefinitions: llotypes.ChannelDefinitions{1: withOpts(`{"v":2}`)},
 	})
 	require.NoError(t, err)
 	_, err = p.Reports(ctx, 6, prec)
 	require.NoError(t, err)
-	require.Equal(t, 2, cachedV())
+	s6, err := loadColdKVState(kv, p.ChannelCache)
+	require.NoError(t, err)
+	require.Equal(t, 2, optsV(s6))
+}
+
+// Test_ChannelCache_GenesisThenChangeIsVisible covers the bootstrap path, which
+// writes the channel record at seqNr 1 without going through the normal load.
+// Generations are keyed by c/seqnr, so the empty genesis record cannot mask a
+// later change: no explicit cache invalidation is needed.
+func Test_ChannelCache_GenesisThenChangeIsVisible(t *testing.T) {
+	ctx := tests.Context(t)
+	p := testPlugin(t)
+	kv := newMemKV()
+
+	// A reader that runs before any round sees the empty pre-genesis record.
+	pre, err := loadColdKVState(kv, p.ChannelCache)
+	require.NoError(t, err)
+	require.Zero(t, pre.channelStateSeqNr)
+	require.Empty(t, pre.channelDefinitions)
+
+	_, err = p.StateTransition(ctx, 1, ocrtypes.AttributedQuery{}, []ocrtypes.AttributedObservation{ao(0, nil), ao(1, nil), ao(2, nil)}, kv, nil)
+	require.NoError(t, err)
+
+	genesis, err := loadColdKVState(kv, p.ChannelCache)
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), genesis.channelStateSeqNr)
+	require.Empty(t, genesis.channelDefinitions)
+
+	_, err = p.StateTransition(ctx, 2, ocrtypes.AttributedQuery{}, addChannelRound(t, 1_000, 1, jsonChannel()), kv, nil)
+	require.NoError(t, err)
+
+	after, err := loadColdKVState(kv, p.ChannelCache)
+	require.NoError(t, err)
+	require.Equal(t, uint64(2), after.channelStateSeqNr)
+	require.Contains(t, after.channelDefinitions, llotypes.ChannelID(1))
 }

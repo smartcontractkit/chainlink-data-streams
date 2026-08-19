@@ -58,13 +58,17 @@
 // This keeps the observed stream values, the channel definitions and the
 // decoded channel opts consistent across Observation, StateTransition and
 // Reports, so no report is ever encoded under a definition, or with opts, that
-// the observations behind it did not match. The OptsCache is therefore a pure
-// projection of the effective set, synced by channelCache when the definitions
-// are (re)loaded and never mutated mid-round. Reports has no
-// KeyValueStateReader, so it syncs from the precursor instead, which also
-// repopulates the cache when a restart lands between StateTransition and
-// Reports. Both syncs are gated on c/seqnr, which the precursor carries, so a
-// round in which the definitions did not change walks no channels at all.
+// the observations behind it did not match. The decoded channel opts are a pure
+// projection of the definitions record, so the two are cached together as one
+// immutable protocol.ChannelGeneration per c/seqnr: a round reads opts from the
+// generation its own state load resolved and nothing can repoint it. This
+// matters because OCR3.1 runs Observation, StateTransition and Reports in
+// separate goroutines, so rounds overlap - a StateTransition for seqNr N+1 may
+// run while Reports for N is still encoding an older record. Reports has no
+// KeyValueStateReader, so it resolves its generation from the precursor's
+// c/seqnr instead, which also rebuilds it when a restart lands between
+// StateTransition and Reports. A round in which the definitions did not change
+// reuses the memoized generation and walks no channels at all.
 //
 // The cost is one round of latency per change: a channel added at round N is in
 // effect at N+1 and first reportable at N+2, and a channel removed or

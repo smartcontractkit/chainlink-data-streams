@@ -91,16 +91,15 @@ func (f *PluginFactory) NewReportingPlugin(ctx context.Context, cfg ocr3types.Re
 		DonID:                               f.DonID,
 		OutcomeTelemetryCh:                  f.OutcomeTelemetryCh,
 		ReportTelemetryCh:                   f.ReportTelemetryCh,
-		OptsCache:                           protocol.NewOptsCache(),
 		MaxDurationObservation:              cfg.MaxDurationObservation,
 		ProtocolVersion:                     offchainConfig.ProtocolVersion,
 		DefaultMinReportIntervalNanoseconds: offchainConfig.DefaultMinReportIntervalNanoseconds,
 		BlobThreshold:                       blobThreshold,
 	}
 
-	// The opts cache is a projection of the channel definitions record, so the
-	// channel cache owns keeping the two in step.
-	p.ChannelCache = newChannelCache(p.OptsCache)
+	// Definitions and the opts decoded from them are cached together, as one
+	// immutable generation per c/seqnr, so a round can never mix the two.
+	p.ChannelCache = protocol.NewChannelCache()
 
 	info := ocr3_1types.ReportingPluginInfo1{
 		Name: "LLO-3.1",

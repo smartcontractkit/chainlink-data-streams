@@ -43,11 +43,13 @@ type Plugin struct {
 	RetirementReportCodec            protocol.RetirementReportCodec
 	ReportCodecs                     map[llotypes.ReportFormat]protocol.ReportCodec
 	DonID                            uint32
-	OptsCache                        *protocol.OptsCache
-	// ChannelCache memoizes the channel definitions record across rounds so it
-	// is re-read only when its sequence number changes. May be nil, in which
-	// case the definitions are re-read every round.
-	ChannelCache *channelCache
+	// ChannelCache memoizes the channel definitions record, together with the
+	// opts decoded from it, across rounds so it is re-read only when its
+	// sequence number changes. May be nil, in which case a fresh generation is
+	// built every round. Never read opts from anywhere else: each round must use
+	// the generation it loaded (kvState.opts), or a concurrently running round
+	// could swap decoded opts out from under it.
+	ChannelCache *protocol.ChannelCache
 
 	// Optional telemetry sinks; best-effort, non-blocking.
 	OutcomeTelemetryCh chan<- *protocol.LLOOutcomeTelemetry

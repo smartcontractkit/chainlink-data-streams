@@ -104,7 +104,7 @@ func Test_Factory_NewReportingPlugin(t *testing.T) {
 	require.Equal(t, 4, pl.N)
 	require.Equal(t, 1, pl.F)
 	require.Equal(t, DefaultBlobThreshold, pl.BlobThreshold)
-	require.NotNil(t, pl.OptsCache)
+	require.NotNil(t, pl.ChannelCache)
 	require.NoError(t, pl.Close())
 }
 
