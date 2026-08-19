@@ -27,6 +27,19 @@ func (p *Plugin) Reports(ctx context.Context, seqNr uint64, rawPrecursor ocr3_1t
 		return nil, fmt.Errorf("error unmarshalling precursor: %w", err)
 	}
 
+	// Resolve the opts generation of the definitions this precursor was built
+	// from, so the report codecs can never encode with opts that are ahead of (or
+	// behind) the definitions being reported - not when a StateTransition for a
+	// later seqNr is running concurrently, and not after a restart, where no
+	// StateTransition ran on this node to populate the cache.
+	gen, err := p.ChannelCache.Load(out.ChannelStateSeqNr, func() (llotypes.ChannelDefinitions, error) {
+		return out.ChannelDefinitions, nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("error loading channel generation: %w", err)
+	}
+	channelOpts := gen.Opts()
+
 	rwis := []ocr3types.ReportPlus[llotypes.ReportInfo]{}
 
 	if out.LifeCycleStage == protocol.LifeCycleStageRetired {
@@ -50,7 +63,7 @@ func (p *Plugin) Reports(ctx context.Context, seqNr uint64, rawPrecursor ocr3_1t
 		})
 	}
 
-	for _, cid := range out.reportableChannels(p.DefaultMinReportIntervalNanoseconds, p.OptsCache, p.Logger) {
+	for _, cid := range out.reportableChannels(p.DefaultMinReportIntervalNanoseconds, channelOpts, p.Logger) {
 		cd := out.ChannelDefinitions[cid]
 
 		if cd.ReportFormat == llotypes.ReportFormatHistoryBackfill {
@@ -98,7 +111,7 @@ func (p *Plugin) Reports(ctx context.Context, seqNr uint64, rawPrecursor ocr3_1t
 				p.Logger.Warnw("Error encoding backfill report; codec missing for target ReportFormat", "reportFormat", targetCD.ReportFormat, "channelID", cid, "targetChannelID", opts.TargetChannelID, "stage", "Report", "seqNr", seqNr)
 				continue
 			}
-			encoded, err := codec.Encode(reportForEncode, targetCD, p.OptsCache)
+			encoded, err := codec.Encode(reportForEncode, targetCD, channelOpts)
 			if err != nil {
 				p.Logger.Warnw("Error encoding backfill report", "reportFormat", targetCD.ReportFormat, "err", err, "channelID", cid, "stage", "Report", "seqNr", seqNr)
 				continue
@@ -137,7 +150,7 @@ func (p *Plugin) Reports(ctx context.Context, seqNr uint64, rawPrecursor ocr3_1t
 			p.Logger.Warnw("Error encoding report; codec missing for ReportFormat", "reportFormat", cd.ReportFormat, "channelID", cid, "stage", "Report", "seqNr", seqNr)
 			continue
 		}
-		encoded, err := codec.Encode(report, cd, p.OptsCache)
+		encoded, err := codec.Encode(report, cd, channelOpts)
 		if err != nil {
 			p.Logger.Warnw("Error encoding report", "reportFormat", cd.ReportFormat, "err", err, "channelID", cid, "stage", "Report", "seqNr", seqNr)
 			continue

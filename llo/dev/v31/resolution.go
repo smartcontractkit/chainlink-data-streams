@@ -18,8 +18,8 @@ type timeResolutionOpts struct {
 // whose validAfter and observation timestamp fall in the same second, otherwise
 // the reports would overlap (or be not-yet-valid) once truncated to seconds.
 //
-// Unlike the v30 equivalent (which reads a node-local OptsCache and is therefore
-// non-deterministic on a cache miss), this parses the resolution directly from
+// Unlike the v30 equivalent (which reads a node-local, incrementally mutated
+// OptsCache and is therefore non-deterministic on a cache miss), this parses the resolution directly from
 // the channel definition's opts, which are part of the replicated state — so the
 // result is deterministic across oracles.
 //

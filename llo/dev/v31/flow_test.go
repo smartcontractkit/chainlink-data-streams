@@ -104,7 +104,7 @@ func Test_Factory_NewReportingPlugin(t *testing.T) {
 	require.Equal(t, 4, pl.N)
 	require.Equal(t, 1, pl.F)
 	require.Equal(t, DefaultBlobThreshold, pl.BlobThreshold)
-	require.NotNil(t, pl.OptsCache)
+	require.NotNil(t, pl.ChannelCache)
 	require.NoError(t, pl.Close())
 }
 
@@ -173,7 +173,21 @@ func Test_StateTransition_ChannelRemoval(t *testing.T) {
 	_, err = p.StateTransition(ctx, 3, ocrtypes.AttributedQuery{}, removeAOs, kv, nil)
 	require.NoError(t, err)
 
-	// The channel and all of its state should be gone.
+	// The removal is deferred: the definition is already out of the persisted
+	// (pending) set, but the channel was still in effect for round 3, so its
+	// round-3 state is still present.
+	require.Empty(t, kvChannelDefs(t, kv))
+	require.Contains(t, kvHotState(t, kv).validAfterNanoseconds, llotypes.ChannelID(1))
+
+	// Round 4: the removal takes effect and the channel's state is dropped.
+	nextObs := Observation{UnixTimestampNanoseconds: 3000}
+	nextAOs := make([]ocrtypes.AttributedObservation, 0, 4)
+	for i := 0; i < 4; i++ {
+		nextAOs = append(nextAOs, ao(i, mustEncodeObs(t, nextObs)))
+	}
+	_, err = p.StateTransition(ctx, 4, ocrtypes.AttributedQuery{}, nextAOs, kv, nil)
+	require.NoError(t, err)
+
 	require.Empty(t, kvChannelDefs(t, kv))
 	hot := kvHotState(t, kv)
 	require.NotContains(t, hot.validAfterNanoseconds, llotypes.ChannelID(1))
@@ -232,24 +246,35 @@ func Test_StateTransition_Promotion_StagingOnlyChannelTreatedAsNew(t *testing.T)
 	require.NoError(t, err)
 
 	// Round 2 (ts=1000): staging adds its own channel 2, which is absent from the
-	// predecessor's retirement report. As a new channel its watermark is obsTs.
+	// predecessor's retirement report. The addition is deferred, so it has no
+	// watermark yet.
 	_, err = p.StateTransition(ctx, 2, ocrtypes.AttributedQuery{}, addChannelRound(t, 1000, 2, jsonChannel()), kv, nil)
 	require.NoError(t, err)
-	require.Equal(t, uint64(1000), kvHotState(t, kv).validAfterNanoseconds[2])
+	require.NotContains(t, kvHotState(t, kv).validAfterNanoseconds, llotypes.ChannelID(2))
 
-	// Round 3 (ts=3000): a valid attested predecessor retirement report promotes
+	// Round 3 (ts=2000): channel 2 is now in effect and gets its first watermark.
+	seedObs := Observation{UnixTimestampNanoseconds: 2000}
+	seedAOs := make([]ocrtypes.AttributedObservation, 0, 4)
+	for i := 0; i < 4; i++ {
+		seedAOs = append(seedAOs, ao(i, mustEncodeObs(t, seedObs)))
+	}
+	_, err = p.StateTransition(ctx, 3, ocrtypes.AttributedQuery{}, seedAOs, kv, nil)
+	require.NoError(t, err)
+	require.Equal(t, uint64(2000), kvHotState(t, kv).validAfterNanoseconds[2])
+
+	// Round 4 (ts=3000): a valid attested predecessor retirement report promotes
 	// this instance to production.
 	promoObs := Observation{UnixTimestampNanoseconds: 3000, AttestedPredecessorRetirement: []byte("attested")}
 	aos := make([]ocrtypes.AttributedObservation, 0, 4)
 	for i := 0; i < 4; i++ {
 		aos = append(aos, ao(i, mustEncodeObs(t, promoObs)))
 	}
-	_, err = p.StateTransition(ctx, 3, ocrtypes.AttributedQuery{}, aos, kv, nil)
+	_, err = p.StateTransition(ctx, 4, ocrtypes.AttributedQuery{}, aos, kv, nil)
 	require.NoError(t, err)
 	require.Equal(t, string(protocol.LifeCycleStageProduction), string(kv.m[string(keyLifecycle)]))
 
 	// Channel 2 must be reseeded to the promotion round's obs timestamp (3000),
-	// NOT keep its carried-forward staging watermark (1000).
+	// NOT keep its carried-forward staging watermark (2000).
 	require.Equal(t, uint64(3000), kvHotState(t, kv).validAfterNanoseconds[2],
 		"staging-only channel must be treated as new on promotion, not carried forward")
 }

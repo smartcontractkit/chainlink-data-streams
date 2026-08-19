@@ -46,6 +46,36 @@
 // proto maps — or fixed-width big-endian integers) because the store is
 // replicated across oracles and any divergence halts the protocol.
 //
+// # Deferred channel definitions
+//
+// Channel definition changes agreed in a round take effect in the NEXT round.
+// StateTransition carries two sets: the effective set (what the previous round
+// committed, i.e. exactly what Observation read and gathered stream values for)
+// drives aggregation, calculated streams, reportability, validAfter and the
+// precursor; the pending set (effective plus this round's agreed additions,
+// updates, removals and tombstones) is what is persisted to c/defs.
+//
+// This keeps the observed stream values, the channel definitions and the
+// decoded channel opts consistent across Observation, StateTransition and
+// Reports, so no report is ever encoded under a definition, or with opts, that
+// the observations behind it did not match. The decoded channel opts are a pure
+// projection of the definitions record, so the two are cached together as one
+// immutable protocol.ChannelGeneration per c/seqnr: a round reads opts from the
+// generation its own state load resolved and nothing can repoint it. This
+// matters because OCR3.1 runs Observation, StateTransition and Reports in
+// separate goroutines, so rounds overlap - a StateTransition for seqNr N+1 may
+// run while Reports for N is still encoding an older record. Reports has no
+// KeyValueStateReader, so it resolves its generation from the precursor's
+// c/seqnr instead, which also rebuilds it when a restart lands between
+// StateTransition and Reports. A round in which the definitions did not change
+// reuses the memoized generation and walks no channels at all.
+//
+// The cost is one round of latency per change: a channel added at round N is in
+// effect at N+1 and first reportable at N+2, and a channel removed or
+// tombstoned at N still reports at N. This differs from v30, which applies
+// definition changes within the round that agrees them. Lifecycle changes are
+// NOT deferred: retirement stops reporting in the round it is agreed.
+//
 // # Blobs
 //
 // Observations carry per-stream values. When the serialized stream-value

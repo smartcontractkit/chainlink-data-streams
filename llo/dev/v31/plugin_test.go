@@ -103,8 +103,7 @@ func testPlugin(t *testing.T) *Plugin {
 		N:                                   4,
 		F:                                   1,
 		ReportCodecs:                        map[llotypes.ReportFormat]protocol.ReportCodec{llotypes.ReportFormatJSON: reportcodec.JSONReportCodec{}},
-		OptsCache:                           protocol.NewOptsCache(),
-		ChannelCache:                        newChannelCache(),
+		ChannelCache:                        protocol.NewChannelCache(),
 		ProtocolVersion:                     0,
 		DefaultMinReportIntervalNanoseconds: 0,
 	}
@@ -198,28 +197,41 @@ func Test_FullRound_AddChannelThenReport(t *testing.T) {
 	prec2, err := p.StateTransition(ctx, 2, ocrtypes.AttributedQuery{}, addAOs, kv, nil)
 	require.NoError(t, err)
 
-	// Channel is now in state; not yet reportable (validAfter == obsTs).
+	// The definition is persisted, but the addition is deferred: it is not in
+	// effect for round 2, so nothing is reportable.
 	require.Contains(t, kvChannelDefs(t, kv), llotypes.ChannelID(1))
 	reports2, err := p.Reports(ctx, 2, prec2)
 	require.NoError(t, err)
 	require.Empty(t, reports2)
 
-	// Round 3 (seqNr=3): later timestamp + stream observations -> reportable.
-	valObs := Observation{
-		UnixTimestampNanoseconds: 2_000,
-		StreamValues:             protocol.StreamValues{100: protocol.ToDecimal(decimal.NewFromInt(42))},
+	valObs := func(ts uint64) []ocrtypes.AttributedObservation {
+		obs := Observation{
+			UnixTimestampNanoseconds: ts,
+			StreamValues:             protocol.StreamValues{100: protocol.ToDecimal(decimal.NewFromInt(42))},
+		}
+		aos := []ocrtypes.AttributedObservation{}
+		for i := 0; i < 4; i++ {
+			aos = append(aos, ao(i, mustEncodeObs(t, obs)))
+		}
+		return aos
 	}
-	valAOs := []ocrtypes.AttributedObservation{}
-	for i := 0; i < 4; i++ {
-		valAOs = append(valAOs, ao(i, mustEncodeObs(t, valObs)))
-	}
-	prec3, err := p.StateTransition(ctx, 3, ocrtypes.AttributedQuery{}, valAOs, kv, nil)
-	require.NoError(t, err)
 
+	// Round 3: the channel is now in effect and gets its first watermark
+	// (validAfter == obsTs), so it is still not reportable.
+	prec3, err := p.StateTransition(ctx, 3, ocrtypes.AttributedQuery{}, valObs(2_000), kv, nil)
+	require.NoError(t, err)
 	reports3, err := p.Reports(ctx, 3, prec3)
 	require.NoError(t, err)
-	require.Len(t, reports3, 1)
-	assert.Equal(t, llotypes.ReportFormatJSON, reports3[0].ReportWithInfo.Info.ReportFormat)
+	require.Empty(t, reports3)
+
+	// Round 4: later timestamp + stream observations -> reportable.
+	prec4, err := p.StateTransition(ctx, 4, ocrtypes.AttributedQuery{}, valObs(3_000), kv, nil)
+	require.NoError(t, err)
+
+	reports4, err := p.Reports(ctx, 4, prec4)
+	require.NoError(t, err)
+	require.Len(t, reports4, 1)
+	assert.Equal(t, llotypes.ReportFormatJSON, reports4[0].ReportWithInfo.Info.ReportFormat)
 }
 
 func Test_Precursor_RoundTrip_And_Determinism(t *testing.T) {
@@ -545,16 +557,20 @@ func Test_Telemetry(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, otCh, "no outcome telemetry on the bootstrap round")
 
+	// The channel is added at round 2, takes effect at round 3 (where it gets
+	// its first watermark) and first reports at round 4.
 	_, err = p.StateTransition(ctx, 2, ocrtypes.AttributedQuery{}, obs(1000, false), kv, nil)
 	require.NoError(t, err)
-	prec3, err := p.StateTransition(ctx, 3, ocrtypes.AttributedQuery{}, obs(2000, true), kv, nil)
+	_, err = p.StateTransition(ctx, 3, ocrtypes.AttributedQuery{}, obs(2000, true), kv, nil)
+	require.NoError(t, err)
+	prec4, err := p.StateTransition(ctx, 4, ocrtypes.AttributedQuery{}, obs(3000, true), kv, nil)
 	require.NoError(t, err)
 
-	require.Len(t, otCh, 2, "one outcome telemetry per non-bootstrap StateTransition")
+	require.Len(t, otCh, 3, "one outcome telemetry per non-bootstrap StateTransition")
 	ot := <-otCh
 	require.Equal(t, uint32(7), ot.DonId)
 
-	reports, err := p.Reports(ctx, 3, prec3)
+	reports, err := p.Reports(ctx, 4, prec4)
 	require.NoError(t, err)
 	require.Len(t, reports, 1)
 	require.Len(t, rtCh, 1, "one report telemetry per emitted report")
@@ -566,26 +582,32 @@ func Test_Telemetry(t *testing.T) {
 func Test_CalculatedStreams(t *testing.T) {
 	p := testPlugin(t)
 	cid := llotypes.ChannelID(5)
-	opts := []byte(`{"abi":[{"type":"int256","expression":"Add(s1, s2)","expressionStreamID":999}]}`)
-	p.OptsCache.Set(cid, opts)
+
+	definitions := llotypes.ChannelDefinitions{cid: {
+		ReportFormat: llotypes.ReportFormatEVMABIEncodeUnpackedExpr,
+		Opts:         []byte(`{"abi":[{"type":"int256","expression":"Add(s1, s2)","expressionStreamID":999}]}`),
+		Streams: []llotypes.Stream{
+			{StreamID: 1, Aggregator: llotypes.AggregatorMedian},
+			{StreamID: 2, Aggregator: llotypes.AggregatorMedian},
+		},
+	}}
+
+	channelCache := protocol.NewChannelCache()
+	generation, err := channelCache.Load(1, func() (llotypes.ChannelDefinitions, error) {
+		return definitions, nil
+	})
+	require.NoError(t, err)
 
 	prec := precursor{
 		ObservationTimestampNanoseconds: 1000,
-		ChannelDefinitions: llotypes.ChannelDefinitions{cid: {
-			ReportFormat: llotypes.ReportFormatEVMABIEncodeUnpackedExpr,
-			Opts:         opts,
-			Streams: []llotypes.Stream{
-				{StreamID: 1, Aggregator: llotypes.AggregatorMedian},
-				{StreamID: 2, Aggregator: llotypes.AggregatorMedian},
-			},
-		}},
+		ChannelDefinitions:              definitions,
 		StreamAggregates: protocol.StreamAggregates{
 			1: {llotypes.AggregatorMedian: protocol.ToDecimal(decimal.NewFromInt(3))},
 			2: {llotypes.AggregatorMedian: protocol.ToDecimal(decimal.NewFromInt(4))},
 		},
 	}
 
-	calculated.ProcessCalculatedStreams(p.Logger, prec.ChannelDefinitions, prec.StreamAggregates, prec.ObservationTimestampNanoseconds, p.OptsCache)
+	calculated.ProcessCalculatedStreams(p.Logger, prec.ChannelDefinitions, prec.StreamAggregates, prec.ObservationTimestampNanoseconds, generation.Opts())
 
 	// The calculated stream (999) should hold Add(s1, s2) = 7.
 	got := prec.StreamAggregates[999][llotypes.AggregatorCalculated]

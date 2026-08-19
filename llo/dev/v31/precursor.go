@@ -15,20 +15,24 @@ import (
 
 // precursor is the self-sufficient projection that StateTransition produces and
 // Reports consumes. Reports receives no KeyValueStateReader, so everything it
-// needs must be here. It is serialized as the shared LLOOutcomeProtoV1 message
-// (deterministically), which already models exactly this shape.
+// needs must be here. It is serialized deterministically as LLOPrecursorProto.
 type precursor struct {
 	LifeCycleStage                  llotypes.LifeCycleStage
 	ObservationTimestampNanoseconds uint64
 	ChannelDefinitions              llotypes.ChannelDefinitions
 	ValidAfterNanoseconds           map[llotypes.ChannelID]uint64
 	StreamAggregates                protocol.StreamAggregates
+	// ChannelStateSeqNr is the c/seqnr of the channel-definitions record that
+	// ChannelDefinitions came from. It lets Reports tell whether the decoded-opts
+	// cache already matches these definitions without walking every channel.
+	ChannelStateSeqNr uint64
 }
 
 func encodePrecursor(p precursor) (ocr3_1types.ReportsPlusPrecursor, error) {
-	pb := &protocol.LLOOutcomeProtoV1{
+	pb := &protocol.LLOPrecursorProto{
 		LifeCycleStage:                  string(p.LifeCycleStage),
 		ObservationTimestampNanoseconds: p.ObservationTimestampNanoseconds,
+		ChannelStateSeqNr:               p.ChannelStateSeqNr,
 	}
 
 	if len(p.ChannelDefinitions) > 0 {
@@ -87,13 +91,14 @@ func encodePrecursor(p precursor) (ocr3_1types.ReportsPlusPrecursor, error) {
 }
 
 func decodePrecursor(b ocr3_1types.ReportsPlusPrecursor) (precursor, error) {
-	pb := &protocol.LLOOutcomeProtoV1{}
+	pb := &protocol.LLOPrecursorProto{}
 	if err := proto.Unmarshal(b, pb); err != nil {
 		return precursor{}, fmt.Errorf("unmarshal precursor: %w", err)
 	}
 	p := precursor{
 		LifeCycleStage:                  llotypes.LifeCycleStage(pb.LifeCycleStage),
 		ObservationTimestampNanoseconds: pb.ObservationTimestampNanoseconds,
+		ChannelStateSeqNr:               pb.ChannelStateSeqNr,
 		ChannelDefinitions:              llotypes.ChannelDefinitions{},
 		ValidAfterNanoseconds:           map[llotypes.ChannelID]uint64{},
 		StreamAggregates:                protocol.StreamAggregates{},

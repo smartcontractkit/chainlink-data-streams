@@ -24,6 +24,12 @@ type OptsCache struct {
 	mu      sync.Mutex
 	raw     map[llotypes.ChannelID]llotypes.ChannelOpts
 	decoded map[optsCacheKey]any
+	// sealed marks a cache owned by a ChannelGeneration: it was built from one
+	// immutable set of channel definitions and must never be repointed at
+	// another. Mutators are no-ops on a sealed cache; lazy decoding still
+	// happens, which is unobservable because decoding fixed raw bytes into a
+	// fixed type is deterministic.
+	sealed bool
 }
 
 func NewOptsCache() *OptsCache {
@@ -33,12 +39,31 @@ func NewOptsCache() *OptsCache {
 	}
 }
 
+// newSealedOptsCache builds the immutable opts store for one generation of
+// channel definitions. The raw bytes are fixed at construction; only the lazily
+// decoded values are filled in afterwards.
+func newSealedOptsCache(channelDefinitions llotypes.ChannelDefinitions) *OptsCache {
+	c := &OptsCache{
+		raw:     make(map[llotypes.ChannelID]llotypes.ChannelOpts, len(channelDefinitions)),
+		decoded: make(map[optsCacheKey]any, len(channelDefinitions)),
+		sealed:  true,
+	}
+	for channelID, cd := range channelDefinitions {
+		c.raw[channelID] = cd.Opts
+	}
+	return c
+}
+
 // Set stores the raw opts for a channel and invalidates any previously decoded
 // values for that channel. It is a no-op when the raw bytes are identical to
 // what is already stored.
 func (c *OptsCache) Set(channelID llotypes.ChannelID, raw llotypes.ChannelOpts) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+
+	if c.sealed {
+		return
+	}
 
 	if existing, ok := c.raw[channelID]; ok && bytes.Equal(existing, raw) {
 		return
@@ -63,6 +88,10 @@ func (c *OptsCache) Remove(channelID llotypes.ChannelID) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	if c.sealed {
+		return
+	}
+
 	delete(c.raw, channelID)
 	for key := range c.decoded {
 		if key.channelID == channelID {
@@ -75,6 +104,10 @@ func (c *OptsCache) Remove(channelID llotypes.ChannelID) {
 func (c *OptsCache) ResetTo(channelDefinitions llotypes.ChannelDefinitions) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+
+	if c.sealed {
+		return
+	}
 	c.raw = make(map[llotypes.ChannelID]llotypes.ChannelOpts)
 	c.decoded = make(map[optsCacheKey]any)
 

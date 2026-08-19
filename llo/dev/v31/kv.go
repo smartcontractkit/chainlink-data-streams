@@ -4,7 +4,6 @@ import (
 	"encoding/binary"
 	"fmt"
 	"sort"
-	"sync"
 
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
 
@@ -28,7 +27,7 @@ import (
 //
 // c/seqnr lets readers cache the decoded c/defs in memory across rounds and
 // re-read it only when the stored sequence number differs from the cached one
-// (see channelCache).
+// (see protocol.ChannelCache).
 var (
 	keyLifecycle    = []byte("c/lifecycle")
 	keyChannelState = []byte("c/defs")
@@ -46,75 +45,21 @@ func beU64(v uint64) []byte {
 	return b
 }
 
-// channelCache memoizes the decoded c/defs record across rounds. c/defs is a
-// pure function of c/seqnr (both are written by the same StateTransition into
-// the same replicated, atomically-committed store), so serving cached
-// definitions when the stored sequence number matches the cached one is
-// indistinguishable from re-reading them, and therefore consensus-safe.
-//
-// The comparison is equality, not "cached is older": a node replaying history
-// or restoring from a snapshot can legitimately observe an older c/seqnr, and
-// serving newer definitions into an older round would diverge.
-type channelCache struct {
-	mu     sync.Mutex
-	loaded bool
-	seqNr  uint64
-	defs   llotypes.ChannelDefinitions // treated as immutable once stored
-}
-
-func newChannelCache() *channelCache {
-	return &channelCache{}
-}
-
-// get returns the cached definitions if they were loaded at seqNr.
-func (c *channelCache) get(seqNr uint64) (llotypes.ChannelDefinitions, bool) {
-	if c == nil {
-		return nil, false
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if !c.loaded || c.seqNr != seqNr {
-		return nil, false
-	}
-	return c.defs, true
-}
-
-// put replaces the cache with definitions decoded from the c/defs record
-// written at seqNr.
-func (c *channelCache) put(seqNr uint64, defs llotypes.ChannelDefinitions) {
-	if c == nil {
-		return
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.loaded = true
-	c.seqNr = seqNr
-	c.defs = defs
-}
-
-// invalidate drops the cached definitions, forcing the next load to re-read
-// them from the store.
-func (c *channelCache) invalidate() {
-	if c == nil {
-		return
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.loaded = false
-	c.seqNr = 0
-	c.defs = nil
-}
-
 // kvState is the in-memory projection of the replicated KeyValueState for a
 // single round. It is loaded from the reader at the start of the round and
 // mutations are flushed back through the writer.
 type kvState struct {
 	lifeCycleStage         llotypes.LifeCycleStage
 	observationTimestampNs uint64
-	// channelDefinitions may be shared with channelCache and with other
-	// concurrently-running rounds: treat it as read-only. Callers that mutate
-	// must clone first (see cloneChannelDefinitions).
+	// channelDefinitions is owned by a protocol.ChannelGeneration and is shared
+	// with other concurrently-running rounds: treat it as read-only. Callers
+	// that mutate must clone first (see cloneChannelDefinitions).
 	channelDefinitions llotypes.ChannelDefinitions
+	// opts holds the decoded channel opts of the same generation as
+	// channelDefinitions. Binding the two together is what stops a
+	// concurrently-running round from swapping decoded opts out from under this
+	// one; always read opts from here rather than from plugin-wide state.
+	opts *protocol.OptsCache
 	// channelStateSeqNr is the seqNr at which channelDefinitions were written.
 	channelStateSeqNr     uint64
 	validAfterNanoseconds map[llotypes.ChannelID]uint64
@@ -136,7 +81,7 @@ type kvState struct {
 //
 // cache may be nil, in which case the channel definitions are always re-read
 // and decoded.
-func loadKVState(r ocr3_1types.KeyValueStateReader, cache *channelCache) (*kvState, error) {
+func loadKVState(r ocr3_1types.KeyValueStateReader, cache *protocol.ChannelCache) (*kvState, error) {
 	s, err := loadColdKVState(r, cache)
 	if err != nil {
 		return nil, err
@@ -155,7 +100,7 @@ func loadKVState(r ocr3_1types.KeyValueStateReader, cache *channelCache) (*kvSta
 // Callers that only inspect lifeCycleStage / channelDefinitions (Observation,
 // ValidateObservation) should use this; the hot fields are left zero-valued.
 // StateTransition needs the hot state and must use loadKVState.
-func loadColdKVState(r ocr3_1types.KeyValueStateReader, cache *channelCache) (*kvState, error) {
+func loadColdKVState(r ocr3_1types.KeyValueStateReader, cache *protocol.ChannelCache) (*kvState, error) {
 	s := &kvState{
 		channelDefinitions:    llotypes.ChannelDefinitions{},
 		validAfterNanoseconds: map[llotypes.ChannelID]uint64{},
@@ -177,16 +122,14 @@ func loadColdKVState(r ocr3_1types.KeyValueStateReader, cache *channelCache) (*k
 		s.channelStateSeqNr = binary.BigEndian.Uint64(seqNrBytes)
 	}
 
-	if defs, ok := cache.get(s.channelStateSeqNr); ok {
-		s.channelDefinitions = defs
-	} else {
-		defs, err := readChannelState(r)
-		if err != nil {
-			return nil, err
-		}
-		s.channelDefinitions = defs
-		cache.put(s.channelStateSeqNr, defs)
+	gen, err := cache.Load(s.channelStateSeqNr, func() (llotypes.ChannelDefinitions, error) {
+		return readChannelState(r)
+	})
+	if err != nil {
+		return nil, err
 	}
+	s.channelDefinitions = gen.Definitions()
+	s.opts = gen.Opts()
 
 	return s, nil
 }

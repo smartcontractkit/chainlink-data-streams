@@ -143,3 +143,22 @@ message LLOHotStateProto {
     repeated uint32 reportableChannelIDs = 3;
     repeated LLOStreamAggregate streamAggregates = 4;
 }
+
+// LLOPrecursorProto is the v31 ReportsPlusPrecursor: everything Reports needs,
+// since Reports gets no KeyValueStateReader. It mirrors LLOOutcomeProtoV1 (which
+// belongs to the v30 outcome and must not be changed for v31's benefit) and adds
+// the sequence number of the channel-definitions record the precursor was built
+// from, so that consumers can tell whether their decoded-opts cache already
+// matches these definitions.
+//
+// NOTE: must serialize deterministically, hence use of repeated tuple instead of
+// maps. channelDefinitions and validAfterNanoseconds MUST be sorted ascending by
+// channelID; streamAggregates MUST be sorted ascending by (streamID, aggregator).
+message LLOPrecursorProto {
+    string lifeCycleStage = 1;
+    uint64 observationTimestampNanoseconds = 2;
+    repeated LLOChannelIDAndDefinitionProto channelDefinitions = 3;
+    repeated LLOChannelIDAndValidAfterNanosecondsProto validAfterNanoseconds = 4;
+    repeated LLOStreamAggregate streamAggregates = 5;
+    uint64 channelStateSeqNr = 6;
+}
