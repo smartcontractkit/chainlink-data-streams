@@ -146,8 +146,15 @@ func decodeObservation(ctx context.Context, raw ocrtypes.Observation, bf ocr3_1t
 		if ferr != nil {
 			return Observation{}, &blobFetchError{fmt.Errorf("fetch blob: %w", ferr)}
 		}
+		// Framing/codec faults are deterministic across oracles (every one sees
+		// the same bytes), so they stay plain errors and drop this observation
+		// alone, unlike the fetch failure above.
+		raw, err := decodeBlobPayload(payload)
+		if err != nil {
+			return Observation{}, err
+		}
 		chunk := &protocol.LLOObservationProto{}
-		if err := proto.Unmarshal(payload, chunk); err != nil {
+		if err := proto.Unmarshal(raw, chunk); err != nil {
 			return Observation{}, fmt.Errorf("unmarshal blob payload: %w", err)
 		}
 		if obs.StreamValues == nil {

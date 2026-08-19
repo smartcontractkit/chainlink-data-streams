@@ -81,6 +81,10 @@
 // Stream values are always disseminated as a blob, never inline: an observation
 // carries only votes, the retirement report, its timestamp, and the handle of a
 // blob holding the round's stream values. See observation.go for the framing.
+// The blob payload itself is framed by blobcompress.go: a leading codec byte
+// followed by the stream-values proto, zstd-compressed whenever that shrinks
+// it. The codec is chosen by the writer and read from the byte, so nodes need
+// not agree on whether compression paid off.
 //
 // Gathering those values is off the OCR critical path. blobpump.go runs
 // DataSource.Observe in a background loop, serializes the result, broadcasts it,

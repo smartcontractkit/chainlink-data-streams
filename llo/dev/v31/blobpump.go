@@ -299,7 +299,9 @@ func (p *blobPump) observe(in pumpInput) (*blobSnapshot, error) {
 }
 
 // marshalStreamValues serializes stream values into the stream-values-only
-// proto that is carried by a blob. Returns nil when nothing was observed.
+// proto that is carried by a blob, framed by encodeBlobPayload (which
+// compresses it when that shrinks the payload). Returns nil when nothing was
+// observed.
 func marshalStreamValues(sv protocol.StreamValues) ([]byte, error) {
 	pb, err := streamValuesToProto(sv)
 	if err != nil {
@@ -308,9 +310,9 @@ func marshalStreamValues(sv protocol.StreamValues) ([]byte, error) {
 	if len(pb) == 0 {
 		return nil, nil
 	}
-	payload, err := proto.Marshal(&protocol.LLOObservationProto{StreamValues: pb})
+	raw, err := proto.Marshal(&protocol.LLOObservationProto{StreamValues: pb})
 	if err != nil {
 		return nil, fmt.Errorf("marshal stream values: %w", err)
 	}
-	return payload, nil
+	return encodeBlobPayload(raw)
 }
