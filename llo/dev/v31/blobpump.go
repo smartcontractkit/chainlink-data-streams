@@ -34,7 +34,24 @@ const (
 	// purpose: ordinary jitter should reuse the previous snapshot rather than
 	// discard it, since blob expiry already bounds staleness in rounds.
 	DefaultBlobSnapshotAgeMultiplier = 5
+	// MaxBlobLifetimeRounds bounds BlobLifetimeRounds. The pump broadcasts
+	// roughly one blob per round, so the unexpired-blob budget declared to
+	// libocr grows with the lifetime; this keeps that budget sane.
+	MaxBlobLifetimeRounds = 64
+	// BlobReapingMarginRounds is added to blobLifetimeRounds when deriving the
+	// per-oracle unexpired-blob budget, covering blobs that are expired but not
+	// yet reaped (reaping is asynchronous, on the order of tens of seconds).
+	BlobReapingMarginRounds = 16
+	// MinPerOracleUnexpiredBlobCount is the floor for the derived budget.
+	MinPerOracleUnexpiredBlobCount = 32
 )
+
+// perOracleUnexpiredBlobCount derives the per-oracle unexpired-blob budget from
+// the configured blob lifetime: one blob per round, plus a reaping margin.
+func perOracleUnexpiredBlobCount(blobLifetimeRounds uint64) int {
+	n := int(blobLifetimeRounds) + BlobReapingMarginRounds
+	return max(n, MinPerOracleUnexpiredBlobCount)
+}
 
 // pumpInput is the round context the pump needs, published by Observation.
 type pumpInput struct {

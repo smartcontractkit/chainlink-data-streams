@@ -78,6 +78,9 @@ func (f *PluginFactory) NewReportingPlugin(ctx context.Context, cfg ocr3types.Re
 	if blobLifetimeRounds <= 1 {
 		blobLifetimeRounds = DefaultBlobLifetimeRounds
 	}
+	if blobLifetimeRounds > MaxBlobLifetimeRounds {
+		return nil, nil, fmt.Errorf("BlobLifetimeRounds (%d) exceeds MaxBlobLifetimeRounds (%d)", blobLifetimeRounds, MaxBlobLifetimeRounds)
+	}
 	blobObservationTimeout := f.MaxDurationBlobObservation
 	if blobObservationTimeout <= 0 {
 		blobObservationTimeout = DefaultBlobObservationDurationMultiplier * cfg.MaxDurationObservation
@@ -118,6 +121,7 @@ func (f *PluginFactory) NewReportingPlugin(ctx context.Context, cfg ocr3types.Re
 	p.pump = newBlobPump(bbf, f.DataSource, l, cfg.ConfigDigest, f.Config.VerboseLogging, blobObservationTimeout, maxSnapshotAge, blobLifetimeRounds)
 	p.pump.Start()
 
+	unexpiredBlobCount := perOracleUnexpiredBlobCount(blobLifetimeRounds)
 	info := ocr3_1types.ReportingPluginInfo1{
 		Name: "LLO-3.1",
 		Limits: ocr3_1types.ReportingPluginLimits{
@@ -131,10 +135,12 @@ func (f *PluginFactory) NewReportingPlugin(ctx context.Context, cfg ocr3types.Re
 			MaxKeyValueModifiedKeysPlusValuesBytes: ocr3_1types.MaxMaxKeyValueModifiedKeysPlusValuesBytes,
 
 			MaxBlobPayloadBytes: ocr3_1types.MaxMaxBlobPayloadBytes,
-			// Blobs live for blobLifetimeRounds sequence numbers; set loosely to
-			// account for asynchronous reaping (see the libocr docs).
-			MaxPerOracleUnexpiredBlobCount:                  32,
-			MaxPerOracleUnexpiredBlobCumulativePayloadBytes: 32 * ocr3_1types.MaxMaxBlobPayloadBytes,
+			// Blobs live for blobLifetimeRounds sequence numbers and the pump
+			// broadcasts about one per round, so both budgets are derived from
+			// the configured lifetime plus a margin for asynchronous reaping
+			// (see the libocr docs).
+			MaxPerOracleUnexpiredBlobCount:                  unexpiredBlobCount,
+			MaxPerOracleUnexpiredBlobCumulativePayloadBytes: unexpiredBlobCount * ocr3_1types.MaxMaxBlobPayloadBytes,
 		},
 	}
 	if err := info.Validate(); err != nil {
