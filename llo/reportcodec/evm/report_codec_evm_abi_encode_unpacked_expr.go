@@ -16,6 +16,7 @@ import (
 
 var (
 	_ protocol.ReportCodec = ReportCodecEVMABIEncodeUnpackedExpr{}
+	_ protocol.FeedIDer    = ReportCodecEVMABIEncodeUnpackedExpr{}
 )
 
 type ReportCodecEVMABIEncodeUnpackedExpr struct {
@@ -164,4 +165,14 @@ func (r ReportCodecEVMABIEncodeUnpackedExpr) buildHeader(rf BaseReportFields, re
 		return nil, fmt.Errorf("failed to pack base report blob; %w", err)
 	}
 	return b, nil
+}
+
+// FeedID implements protocol.FeedIDer: these reports always carry a feed ID, and
+// Verify has already rejected a zero one.
+func (r ReportCodecEVMABIEncodeUnpackedExpr) FeedID(cd llotypes.ChannelDefinition) ([32]byte, bool, error) {
+	opts := new(ReportFormatEVMABIEncodeOpts)
+	if err := opts.Decode(cd.Opts); err != nil {
+		return [32]byte{}, false, fmt.Errorf("invalid Opts, got: %q; %w", cd.Opts, err)
+	}
+	return opts.FeedID, true, nil
 }

@@ -169,3 +169,137 @@ func (stubReportCodec) Encode(Report, llotypes.ChannelDefinition, *OptsCache) ([
 	return nil, nil
 }
 func (stubReportCodec) Verify(llotypes.ChannelDefinition) error { return nil }
+
+func Test_VerifyChannelDefinitions_CalculatedStreamCollisions(t *testing.T) {
+	codecs := make(map[llotypes.ReportFormat]ReportCodec)
+
+	exprChannel := func(observed llotypes.StreamID, opts string, calculated ...llotypes.StreamID) llotypes.ChannelDefinition {
+		streams := []llotypes.Stream{{StreamID: observed, Aggregator: llotypes.AggregatorMedian}}
+		for _, sid := range calculated {
+			streams = append(streams, llotypes.Stream{StreamID: sid, Aggregator: llotypes.AggregatorCalculated})
+		}
+		return llotypes.ChannelDefinition{
+			ReportFormat: llotypes.ReportFormatEVMABIEncodeUnpackedExpr,
+			Streams:      streams,
+			Opts:         llotypes.ChannelOpts(opts),
+		}
+	}
+
+	t.Run("accepts distinct calculated stream IDs", func(t *testing.T) {
+		channelDefs := llotypes.ChannelDefinitions{
+			1: exprChannel(10, `{"abi":[{"expressionStreamID":100}]}`, 100),
+			2: exprChannel(11, `{"abi":[{"expressionStreamID":101}]}`, 101),
+		}
+		require.NoError(t, VerifyChannelDefinitions(codecs, channelDefs))
+	})
+	t.Run("fails when two channels declare the same calculated stream", func(t *testing.T) {
+		channelDefs := llotypes.ChannelDefinitions{
+			1: exprChannel(10, `{"abi":[{"expressionStreamID":100}]}`, 100),
+			2: exprChannel(11, `{"abi":[{"expressionStreamID":100}]}`, 100),
+		}
+		err := VerifyChannelDefinitions(codecs, channelDefs)
+		require.EqualError(t, err, "ChannelDefinition with ID 2 declares calculated stream 100 already declared by channel 1")
+	})
+	t.Run("fails when a channel declares the same calculated stream twice", func(t *testing.T) {
+		channelDefs := llotypes.ChannelDefinitions{
+			1: exprChannel(10, `{"abi":[{"expressionStreamID":100},{"expressionStreamID":100}]}`, 100),
+		}
+		err := VerifyChannelDefinitions(codecs, channelDefs)
+		require.EqualError(t, err, "ChannelDefinition with ID 1 declares calculated stream 100 already declared by channel 1")
+	})
+	t.Run("fails when a calculated stream collides with an observed stream", func(t *testing.T) {
+		channelDefs := llotypes.ChannelDefinitions{
+			1: exprChannel(10, `{"abi":[{"expressionStreamID":100}]}`, 100),
+			2: {
+				Streams: []llotypes.Stream{{StreamID: 100, Aggregator: llotypes.AggregatorMedian}},
+			},
+		}
+		err := VerifyChannelDefinitions(codecs, channelDefs)
+		require.EqualError(t, err, "ChannelDefinition with ID 1 declares calculated stream 100, which channel 2 observes")
+	})
+	t.Run("fails when a calculated stream collides with its own channel's observed stream", func(t *testing.T) {
+		channelDefs := llotypes.ChannelDefinitions{
+			1: exprChannel(100, `{"abi":[{"expressionStreamID":100}]}`),
+		}
+		err := VerifyChannelDefinitions(codecs, channelDefs)
+		require.EqualError(t, err, "ChannelDefinition with ID 1 declares calculated stream 100, which channel 1 observes")
+	})
+	t.Run("fails for undecodable, empty, and zero-ID expression opts", func(t *testing.T) {
+		for opts, want := range map[string]string{
+			`not json`:                           "invalid ChannelDefinition with ID 1: failed to decode calculated stream opts: invalid character 'o' in literal null (expecting 'u')",
+			`{}`:                                 "invalid ChannelDefinition with ID 1: no expressions found in channel definition",
+			`{"abi":[{"expressionStreamID":0}]}`: "invalid ChannelDefinition with ID 1: expression stream ID is 0, abi index: 0",
+		} {
+			channelDefs := llotypes.ChannelDefinitions{1: exprChannel(10, opts)}
+			require.EqualError(t, VerifyChannelDefinitions(codecs, channelDefs), want)
+		}
+	})
+	t.Run("ignores tombstoned channels", func(t *testing.T) {
+		tombstoned := exprChannel(11, `{"abi":[{"expressionStreamID":100}]}`, 100)
+		tombstoned.Tombstone = true
+		channelDefs := llotypes.ChannelDefinitions{
+			1: exprChannel(10, `{"abi":[{"expressionStreamID":100}]}`, 100),
+			2: tombstoned,
+		}
+		require.NoError(t, VerifyChannelDefinitions(codecs, channelDefs))
+	})
+}
+
+type mockFeedIDCodec struct {
+	mockReportCodec
+	feedID [32]byte
+	ok     bool
+	err    error
+}
+
+func (m mockFeedIDCodec) FeedID(llotypes.ChannelDefinition) ([32]byte, bool, error) {
+	return m.feedID, m.ok, m.err
+}
+
+func Test_VerifyChannelDefinitions_FeedIDCollisions(t *testing.T) {
+	mockReportFormat := llotypes.ReportFormat(0)
+	channel := func() llotypes.ChannelDefinition {
+		return llotypes.ChannelDefinition{
+			ReportFormat: mockReportFormat,
+			Streams:      []llotypes.Stream{{StreamID: 1, Aggregator: llotypes.AggregatorMedian}},
+		}
+	}
+	// The mock returns the same feed ID for every channel, so any definitions
+	// set with more than one channel collides.
+	codecs := func(c ReportCodec) map[llotypes.ReportFormat]ReportCodec {
+		return map[llotypes.ReportFormat]ReportCodec{mockReportFormat: c}
+	}
+
+	t.Run("accepts a single channel with a feed ID", func(t *testing.T) {
+		channelDefs := llotypes.ChannelDefinitions{1: channel()}
+		require.NoError(t, VerifyChannelDefinitions(codecs(mockFeedIDCodec{feedID: [32]byte{0xab}, ok: true}), channelDefs))
+	})
+	t.Run("fails when two channels share a feed ID", func(t *testing.T) {
+		channelDefs := llotypes.ChannelDefinitions{1: channel(), 2: channel()}
+		err := VerifyChannelDefinitions(codecs(mockFeedIDCodec{feedID: [32]byte{0xab}, ok: true}), channelDefs)
+		require.EqualError(t, err, "ChannelDefinition with ID 2 has feed ID 0xab00000000000000000000000000000000000000000000000000000000000000 already used by channel 1")
+	})
+	t.Run("ignores channels that report no feed ID", func(t *testing.T) {
+		channelDefs := llotypes.ChannelDefinitions{1: channel(), 2: channel()}
+		require.NoError(t, VerifyChannelDefinitions(codecs(mockFeedIDCodec{ok: false}), channelDefs))
+	})
+	t.Run("fails when the feed ID cannot be resolved", func(t *testing.T) {
+		channelDefs := llotypes.ChannelDefinitions{1: channel()}
+		err := VerifyChannelDefinitions(codecs(mockFeedIDCodec{err: errors.New("bad opts")}), channelDefs)
+		require.EqualError(t, err, "invalid ChannelDefinition with ID 1: failed to resolve feed ID: bad opts")
+	})
+	t.Run("does not resolve the feed ID of a channel Verify rejected", func(t *testing.T) {
+		channelDefs := llotypes.ChannelDefinitions{1: channel(), 2: channel()}
+		codec := mockFeedIDCodec{feedID: [32]byte{0xab}, ok: true}
+		codec.mockReportCodec = mockReportCodec{err: errors.New("rejected")}
+		err := VerifyChannelDefinitions(codecs(codec), channelDefs)
+		// Only the two Verify errors: no feed ID was collected, so no collision.
+		require.EqualError(t, err, "invalid ChannelDefinition with ID 1: rejected\ninvalid ChannelDefinition with ID 2: rejected")
+	})
+	t.Run("ignores tombstoned channels", func(t *testing.T) {
+		tombstoned := channel()
+		tombstoned.Tombstone = true
+		channelDefs := llotypes.ChannelDefinitions{1: channel(), 2: tombstoned}
+		require.NoError(t, VerifyChannelDefinitions(codecs(mockFeedIDCodec{feedID: [32]byte{0xab}, ok: true}), channelDefs))
+	})
+}
