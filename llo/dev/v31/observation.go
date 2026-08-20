@@ -35,11 +35,11 @@ const observationWireVersion byte = 1
 // crafted handle count in decodeObservation.
 const maxObservationBlobHandles = 64
 
-// encodeObservation serializes an Observation. When the serialized stream-value
-// payload exceeds blobThreshold, the stream values are broadcast as a blob and
-// referenced by handle instead of being sent inline. A threshold of 0 disables
-// blob offloading. A nil broadcaster also disables offloading (values inline).
-func encodeObservation(ctx context.Context, obs Observation, seqNr uint64, blobThreshold int, bbf ocr3_1types.BlobBroadcaster) (ocrtypes.Observation, error) {
+// encodeObservation serializes an Observation into the v31 wire frame. Stream
+// values are never carried inline: they are broadcast as a blob by the blob pump
+// and referenced here by the marshaled handle(s) it produced. An observation
+// with no handles simply carries no stream values.
+func encodeObservation(obs Observation, handles [][]byte) (ocrtypes.Observation, error) {
 	main := &protocol.LLOObservationProto{
 		AttestedPredecessorRetirement: obs.AttestedPredecessorRetirement,
 		ShouldRetire:                  obs.ShouldRetire,
@@ -52,36 +52,6 @@ func encodeObservation(ctx context.Context, obs Observation, seqNr uint64, blobT
 		main.UpdateChannelDefinitions = make(map[uint32]*protocol.LLOChannelDefinitionProto, len(obs.UpdateChannelDefinitions))
 		for id, cd := range obs.UpdateChannelDefinitions {
 			main.UpdateChannelDefinitions[id] = protocol.ChannelDefinitionToProto(cd)
-		}
-	}
-
-	streamValues, err := streamValuesToProto(obs.StreamValues)
-	if err != nil {
-		return nil, err
-	}
-
-	// Decide whether to offload stream values to a blob.
-	var handles [][]byte
-	if len(streamValues) > 0 {
-		svOnly := &protocol.LLOObservationProto{StreamValues: streamValues}
-		svBytes, err := proto.Marshal(svOnly)
-		if err != nil {
-			return nil, fmt.Errorf("marshal stream values: %w", err)
-		}
-		if blobThreshold > 0 && bbf != nil && len(svBytes) > blobThreshold {
-			handle, berr := bbf.BroadcastBlob(ctx, svBytes, ocr3_1types.BlobExpirationHintSequenceNumber{SeqNr: seqNr + 1})
-			if berr != nil {
-				// Blob broadcast failure must not fail Observation; fall back to inline.
-				main.StreamValues = streamValues
-			} else {
-				hb, herr := handle.MarshalBinary()
-				if herr != nil {
-					return nil, fmt.Errorf("marshal blob handle: %w", herr)
-				}
-				handles = append(handles, hb)
-			}
-		} else {
-			main.StreamValues = streamValues
 		}
 	}
 
@@ -176,8 +146,15 @@ func decodeObservation(ctx context.Context, raw ocrtypes.Observation, bf ocr3_1t
 		if ferr != nil {
 			return Observation{}, &blobFetchError{fmt.Errorf("fetch blob: %w", ferr)}
 		}
+		// Framing/codec faults are deterministic across oracles (every one sees
+		// the same bytes), so they stay plain errors and drop this observation
+		// alone, unlike the fetch failure above.
+		raw, err := decodeBlobPayload(payload)
+		if err != nil {
+			return Observation{}, err
+		}
 		chunk := &protocol.LLOObservationProto{}
-		if err := proto.Unmarshal(payload, chunk); err != nil {
+		if err := proto.Unmarshal(raw, chunk); err != nil {
 			return Observation{}, fmt.Errorf("unmarshal blob payload: %w", err)
 		}
 		if obs.StreamValues == nil {

@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/assert"
@@ -14,6 +15,7 @@ import (
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
 	"github.com/smartcontractkit/chainlink-common/pkg/utils/tests"
 
+	"github.com/smartcontractkit/chainlink-data-streams/llo/dev/v31/llotest"
 	protocol "github.com/smartcontractkit/chainlink-data-streams/llo/protocol"
 	"github.com/smartcontractkit/chainlink-data-streams/llo/protocol/calculated"
 	"github.com/smartcontractkit/chainlink-data-streams/llo/reportcodec"
@@ -93,6 +95,11 @@ func (b *errBroadcaster) FetchBlob(context.Context, ocr3_1types.BlobHandle) ([]b
 
 var _ ocr3_1types.BlobBroadcastFetcher = &errBroadcaster{}
 
+// The blob-carrying paths use the exported in-memory double from llotest, which
+// is also what non-libocr hosts (benchmarks, simulation harnesses) should pass
+// to NewReportingPlugin in place of a nil BlobBroadcastFetcher.
+func newFakeBroadcaster() *llotest.BlobBroadcastFetcher { return llotest.NewBlobBroadcastFetcher() }
+
 // --- helpers ---
 
 func testPlugin(t *testing.T) *Plugin {
@@ -109,20 +116,57 @@ func testPlugin(t *testing.T) *Plugin {
 	}
 }
 
+// attachPump wires a plugin to a data source and broadcaster through a blob pump
+// with test-friendly timings, and stops it at the end of the test.
+func attachPump(t *testing.T, p *Plugin, ds DataSource, bbf ocr3_1types.BlobBroadcastFetcher) *blobPump {
+	t.Helper()
+	p.DataSource = ds
+	p.pump = newBlobPump(bbf, ds, logger.Test(t), p.ConfigDigest, true, tests.WaitTimeout(t), time.Minute, DefaultBlobLifetimeRounds)
+	p.pump.Start()
+	t.Cleanup(func() { require.NoError(t, p.Close()) })
+	return p.pump
+}
+
 func ao(observer int, obsBytes []byte) ocrtypes.AttributedObservation {
 	return ocrtypes.AttributedObservation{Observer: commontypes.OracleID(observer), Observation: obsBytes}
 }
 
+// mustEncodeObs encodes an observation for use as a StateTransition fixture.
+// The production encoder never emits stream values inline (they always travel in
+// a blob), but the decoder still accepts inline values, so tests build fixtures
+// that way to avoid a fetcher on every StateTransition call.
 func mustEncodeObs(t *testing.T, obs Observation) []byte {
 	t.Helper()
-	b, err := encodeObservation(context.Background(), obs, 2, 0, nil)
+	b, err := encodeObservation(obs, nil)
 	require.NoError(t, err)
-	return b
+	if len(obs.StreamValues) == 0 {
+		return b
+	}
+	sv, err := streamValuesToProto(obs.StreamValues)
+	require.NoError(t, err)
+	main := &protocol.LLOObservationProto{
+		AttestedPredecessorRetirement: obs.AttestedPredecessorRetirement,
+		ShouldRetire:                  obs.ShouldRetire,
+		UnixTimestampNanoseconds:      obs.UnixTimestampNanoseconds,
+		StreamValues:                  sv,
+	}
+	for id := range obs.RemoveChannelIDs {
+		main.RemoveChannelIDs = append(main.RemoveChannelIDs, id)
+	}
+	if len(obs.UpdateChannelDefinitions) > 0 {
+		main.UpdateChannelDefinitions = make(map[uint32]*protocol.LLOChannelDefinitionProto, len(obs.UpdateChannelDefinitions))
+		for id, cd := range obs.UpdateChannelDefinitions {
+			main.UpdateChannelDefinitions[id] = protocol.ChannelDefinitionToProto(cd)
+		}
+	}
+	mainBytes, err := proto.Marshal(main)
+	require.NoError(t, err)
+	return frameObservation(nil, mainBytes)
 }
 
 // --- tests ---
 
-func Test_Observation_InlineRoundTrip(t *testing.T) {
+func Test_Observation_WireRoundTrip(t *testing.T) {
 	ctx := tests.Context(t)
 	obs := Observation{
 		ShouldRetire:             true,
@@ -131,11 +175,8 @@ func Test_Observation_InlineRoundTrip(t *testing.T) {
 		UpdateChannelDefinitions: llotypes.ChannelDefinitions{
 			1: {ReportFormat: llotypes.ReportFormatJSON, Streams: []llotypes.Stream{{StreamID: 100, Aggregator: llotypes.AggregatorMedian}}},
 		},
-		StreamValues: protocol.StreamValues{
-			100: protocol.ToDecimal(decimal.NewFromInt(42)),
-		},
 	}
-	enc, err := encodeObservation(ctx, obs, 2, 0, nil)
+	enc, err := encodeObservation(obs, nil)
 	require.NoError(t, err)
 
 	got, err := decodeObservation(ctx, enc, nil)
@@ -145,8 +186,57 @@ func Test_Observation_InlineRoundTrip(t *testing.T) {
 	assert.Equal(t, obs.UnixTimestampNanoseconds, got.UnixTimestampNanoseconds)
 	assert.Equal(t, obs.RemoveChannelIDs, got.RemoveChannelIDs)
 	require.Contains(t, got.UpdateChannelDefinitions, llotypes.ChannelID(1))
-	require.Contains(t, got.StreamValues, llotypes.StreamID(100))
-	assert.True(t, equalStreamValue(obs.StreamValues[100], got.StreamValues[100]))
+	require.Empty(t, got.StreamValues)
+}
+
+// Test_Observation_StreamValuesNeverInline pins the invariant that stream values
+// are only ever disseminated by blob: an encoded observation carries no inline
+// stream values even when the Observation struct holds some.
+func Test_Observation_StreamValuesNeverInline(t *testing.T) {
+	ctx := tests.Context(t)
+	obs := Observation{
+		UnixTimestampNanoseconds: 1,
+		StreamValues:             protocol.StreamValues{100: protocol.ToDecimal(decimal.NewFromInt(42))},
+	}
+	enc, err := encodeObservation(obs, nil)
+	require.NoError(t, err)
+
+	got, err := decodeObservation(ctx, enc, nil)
+	require.NoError(t, err)
+	require.Empty(t, got.StreamValues, "stream values must travel in a blob, never inline")
+}
+
+// Test_Observation_BlobRoundTrip covers the blob path end to end: the pump's
+// serialized payload is broadcast, referenced by handle, and recovered by the
+// decoder through the fetcher.
+func Test_Observation_BlobRoundTrip(t *testing.T) {
+	ctx := tests.Context(t)
+	sv := protocol.StreamValues{}
+	for i := 0; i < 500; i++ {
+		sv[llotypes.StreamID(i)] = protocol.ToDecimal(decimal.NewFromInt(int64(i)))
+	}
+	payload, err := marshalStreamValues(sv)
+	require.NoError(t, err)
+
+	bc := newFakeBroadcaster()
+	handle, err := bc.BroadcastBlob(ctx, payload, ocr3_1types.BlobExpirationHintSequenceNumber{SeqNr: 5})
+	require.NoError(t, err)
+	handleBytes, err := handle.MarshalBinary()
+	require.NoError(t, err)
+
+	enc, err := encodeObservation(Observation{UnixTimestampNanoseconds: 1}, [][]byte{handleBytes})
+	require.NoError(t, err)
+
+	got, err := decodeObservation(ctx, enc, bc)
+	require.NoError(t, err)
+	require.Len(t, got.StreamValues, len(sv))
+	require.True(t, equalStreamValue(sv[100], got.StreamValues[100]))
+
+	// Without a fetcher the reference is unusable, and that must be classified
+	// as a node-local blob-fetch failure rather than a malformed observation.
+	_, err = decodeObservation(ctx, enc, nil)
+	var bfErr *blobFetchError
+	require.ErrorAs(t, err, &bfErr)
 }
 
 func Test_StateTransition_Bootstrap(t *testing.T) {
@@ -299,27 +389,6 @@ func Test_StateTransition_Determinism_ShuffledObservations(t *testing.T) {
 
 	require.Equal(t, precA, precB, "precursor must be identical regardless of observation order")
 	require.Equal(t, kvA.m, kvB.m, "KV write-set must be identical regardless of observation order")
-}
-
-func Test_Observation_BlobOffloadFallback(t *testing.T) {
-	ctx := tests.Context(t)
-
-	// Build an observation whose serialized stream values exceed a tiny threshold.
-	sv := protocol.StreamValues{}
-	for i := 0; i < 500; i++ {
-		sv[llotypes.StreamID(i)] = protocol.ToDecimal(decimal.NewFromInt(int64(i)))
-	}
-	obs := Observation{UnixTimestampNanoseconds: 1, StreamValues: sv}
-
-	bc := &errBroadcaster{}
-	enc, err := encodeObservation(ctx, obs, 2, 16, bc) // 16-byte threshold forces an offload attempt
-	require.NoError(t, err)
-	require.True(t, bc.broadcastCalled, "expected a blob broadcast attempt for a large observation")
-
-	// Broadcast failed, so values must have fallen back to inline and decode without a fetcher.
-	got, err := decodeObservation(ctx, enc, nil)
-	require.NoError(t, err)
-	require.Len(t, got.StreamValues, len(sv))
 }
 
 func Test_decodeObservation_RejectsHugeHandleCount(t *testing.T) {
@@ -674,17 +743,19 @@ func Test_HistoryBackfill(t *testing.T) {
 	require.Equal(t, llotypes.ReportFormatJSON, reports[0].ReportWithInfo.Info.ReportFormat)
 }
 
-// validBlobHandleBytes returns the wire encoding of a syntactically-valid (but
-// meaningless) BlobHandle: the sum-type variant byte 0x01 (LightCertifiedBlob)
-// followed by a protobuf carrying only chunk_digests_root (field 1) = 32 bytes,
-// which is the minimum LightCertifiedBlob.UnmarshalBinary accepts. It lets a
-// test build an observation that *references* a blob (so decodeObservation
-// reaches the fetch path); the handle can never be fetched because there is no
-// real blob behind it. A real handle cannot be constructed outside libocr.
+// validBlobHandleBytes returns the wire encoding of a syntactically valid handle
+// for a blob nobody broadcast. It lets a test build an observation that
+// *references* a blob (so decodeObservation reaches the fetch path) while the
+// fetch is guaranteed to fail.
 func validBlobHandleBytes() []byte {
-	b := []byte{0x01}         // BlobHandle sum-type variant: LightCertifiedBlob
-	b = append(b, 0x0A, 0x20) // proto field 1 (bytes), length 32 (== sha256.Size)
-	b = append(b, make([]byte, 32)...)
+	handle, err := llotest.NewBlobHandle([]byte("never broadcast"))
+	if err != nil {
+		panic(err)
+	}
+	b, err := handle.MarshalBinary()
+	if err != nil {
+		panic(err)
+	}
 	return b
 }
 

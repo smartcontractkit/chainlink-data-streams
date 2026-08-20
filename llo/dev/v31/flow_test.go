@@ -2,7 +2,9 @@ package llo
 
 import (
 	"context"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/require"
@@ -30,9 +32,13 @@ func (m *mockChannelDefinitionCache) Ready() error                   { return ni
 func (m *mockChannelDefinitionCache) HealthReport() map[string]error { return nil }
 func (m *mockChannelDefinitionCache) Name() string                   { return "mockChannelDefinitionCache" }
 
+// mockDataSource is observed from the blob pump goroutine, so its bookkeeping is
+// mutex-guarded.
 type mockDataSource struct {
-	vals       protocol.StreamValues
-	optsProbed bool
+	mu    sync.Mutex
+	vals  protocol.StreamValues
+	calls int
+	err   error
 }
 
 func (m *mockDataSource) Observe(ctx context.Context, sv protocol.StreamValues, opts DSOpts) error {
@@ -41,11 +47,64 @@ func (m *mockDataSource) Observe(ctx context.Context, sv protocol.StreamValues, 
 	_ = opts.SeqNr()
 	_ = opts.ConfigDigest()
 	_ = opts.ObservationTimestamp()
-	m.optsProbed = true
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.calls++
+	if m.err != nil {
+		return m.err
+	}
 	for k, v := range m.vals {
 		sv[k] = v
 	}
 	return nil
+}
+
+func (m *mockDataSource) observeCount() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.calls
+}
+
+// blockingDataSource blocks in Observe until released, so tests can observe
+// how many cycles the pump runs concurrently.
+type blockingDataSource struct {
+	release  chan struct{}
+	mu       sync.Mutex
+	inFlight int
+	maxSeen  int
+	starts   int
+}
+
+func (m *blockingDataSource) Observe(ctx context.Context, sv protocol.StreamValues, opts DSOpts) error {
+	m.mu.Lock()
+	m.starts++
+	m.inFlight++
+	if m.inFlight > m.maxSeen {
+		m.maxSeen = m.inFlight
+	}
+	m.mu.Unlock()
+	defer func() {
+		m.mu.Lock()
+		m.inFlight--
+		m.mu.Unlock()
+	}()
+	select {
+	case <-m.release:
+	case <-ctx.Done():
+	}
+	return nil
+}
+
+func (m *blockingDataSource) started() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.starts
+}
+
+func (m *blockingDataSource) concurrent() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.maxSeen
 }
 
 type mockShouldRetireCache struct{ retire bool }
@@ -103,18 +162,20 @@ func Test_Factory_NewReportingPlugin(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, 4, pl.N)
 	require.Equal(t, 1, pl.F)
-	require.Equal(t, DefaultBlobThreshold, pl.BlobThreshold)
 	require.NotNil(t, pl.ChannelCache)
+	require.NotNil(t, pl.pump)
+	require.Equal(t, uint64(DefaultBlobLifetimeRounds), pl.pump.blobLifetimeRounds)
 	require.NoError(t, pl.Close())
 }
 
 func Test_Observation_And_Validate_Flow(t *testing.T) {
 	ctx := tests.Context(t)
 	ds := &mockDataSource{vals: protocol.StreamValues{100: protocol.ToDecimal(decimal.NewFromInt(5))}}
+	bc := newFakeBroadcaster()
 	p := testPlugin(t)
 	p.ChannelDefinitionCache = &mockChannelDefinitionCache{defs: llotypes.ChannelDefinitions{1: jsonChannel()}}
-	p.DataSource = ds
 	p.ShouldRetireCache = &mockShouldRetireCache{}
+	attachPump(t, p, ds, bc)
 	kv := newMemKV()
 
 	// Query is empty; misc callbacks return their fixed values.
@@ -122,7 +183,6 @@ func Test_Observation_And_Validate_Flow(t *testing.T) {
 	require.NoError(t, err)
 	require.Nil(t, q)
 	require.NoError(t, p.Committed(ctx, 2, kv))
-	require.NoError(t, p.Close())
 	acc, err := p.ShouldAcceptAttestedReport(ctx, 2, ocr3types.ReportWithInfo[llotypes.ReportInfo]{})
 	require.NoError(t, err)
 	require.True(t, acc)
@@ -136,18 +196,34 @@ func Test_Observation_And_Validate_Flow(t *testing.T) {
 	_, err = p.StateTransition(ctx, 2, ocrtypes.AttributedQuery{}, addChannelRound(t, 1000, 1, jsonChannel()), kv, nil)
 	require.NoError(t, err)
 
-	// Observation at seqNr=3: channel 1 is now in KV, so DataSource is consulted.
-	obsBytes, err := p.Observation(ctx, 3, ocrtypes.AttributedQuery{}, kv, nil)
+	// Observation at seqNr=3: channel 1 is now in KV, so the pump is fed. The
+	// first round finds nothing parked yet (the pump runs off the critical path)
+	// and returns an observation with votes only; it kicks a cycle whose snapshot
+	// the next round picks up.
+	first, err := p.Observation(ctx, 3, ocrtypes.AttributedQuery{}, kv, nil)
+	require.NoError(t, err)
+	require.NotEmpty(t, first)
+	decodedFirst, err := decodeObservation(ctx, first, bc)
+	require.NoError(t, err)
+	require.Empty(t, decodedFirst.StreamValues)
+
+	require.Eventually(t, func() bool { return p.pump.Cycles() >= 1 }, tests.WaitTimeout(t), 10*time.Millisecond)
+	require.Positive(t, ds.observeCount(), "DataSource.Observe should have been called by the pump")
+	require.Positive(t, bc.Broadcasts(), "stream values must be disseminated as a blob")
+
+	obsBytes, err := p.Observation(ctx, 4, ocrtypes.AttributedQuery{}, kv, nil)
 	require.NoError(t, err)
 	require.NotEmpty(t, obsBytes)
-	require.True(t, ds.optsProbed, "DataSource.Observe should have been called")
+	decoded, err := decodeObservation(ctx, obsBytes, bc)
+	require.NoError(t, err)
+	require.Contains(t, decoded.StreamValues, llotypes.StreamID(100))
 
 	// Quorum + validation of the produced observation.
 	aos := []ocrtypes.AttributedObservation{ao(0, obsBytes), ao(1, obsBytes), ao(2, obsBytes)}
-	reached, err := p.ObservationQuorum(ctx, 3, ocrtypes.AttributedQuery{}, aos, kv, nil)
+	reached, err := p.ObservationQuorum(ctx, 4, ocrtypes.AttributedQuery{}, aos, kv, nil)
 	require.NoError(t, err)
 	require.True(t, reached)
-	require.NoError(t, p.ValidateObservation(ctx, 3, ocrtypes.AttributedQuery{}, ao(0, obsBytes), kv, nil))
+	require.NoError(t, p.ValidateObservation(ctx, 4, ocrtypes.AttributedQuery{}, ao(0, obsBytes), kv, bc))
 
 	// seqNr==1 observation must be empty.
 	require.Error(t, p.ValidateObservation(ctx, 1, ocrtypes.AttributedQuery{}, ao(0, []byte{1}), kv, nil))
