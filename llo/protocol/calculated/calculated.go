@@ -70,6 +70,7 @@ var defaultEnv = map[string]any{
 	"PctChange": PctChange,
 	"Spread":    Spread,
 	"SMA":       SMA,
+	"WMA":       WMA,
 	// History is rewritten away at compile time (see history_ast.go). It is
 	// registered only so that a call surviving to evaluation fails loudly
 	// instead of resolving to an undefined identifier or, worse, to something
