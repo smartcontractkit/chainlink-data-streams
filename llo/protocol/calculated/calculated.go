@@ -12,9 +12,9 @@ import (
 	"github.com/smartcontractkit/chainlink-data-streams/llo/protocol"
 
 	"github.com/expr-lang/expr"
-	"github.com/goccy/go-json"
 	"github.com/expr-lang/expr/ast"
 	"github.com/expr-lang/expr/parser"
+	"github.com/goccy/go-json"
 	"github.com/shopspring/decimal"
 
 	"github.com/smartcontractkit/chainlink-common/pkg/logger"
@@ -58,6 +58,19 @@ var defaultEnv = map[string]any{
 	"Floor":              Floor,
 	"Avg":                Avg,
 	"Duration":           ParseDuration,
+
+	"Count": Count,
+	// History is rewritten away at compile time (see history_ast.go). It is
+	// registered only so that a call surviving to evaluation fails loudly
+	// instead of resolving to an undefined identifier or, worse, to something
+	// that quietly works on scalars. Reaching it means the AST pass was
+	// bypassed.
+	HistoryFunctionName: historyCallReached,
+}
+
+// historyCallReached is the runtime stub for History. See defaultEnv.
+func historyCallReached(...any) (decimal.Decimal, error) {
+	return decimal.Decimal{}, fmt.Errorf("%s was not resolved at compile time; this is a bug in expression compilation", HistoryFunctionName)
 }
 
 var (
@@ -530,17 +543,38 @@ func toDecimal(x any) (decimal.Decimal, error) {
 	}
 }
 
-// evalDecimal evaluates the given expression and returns the result as a decimal.Decimal
+// evalDecimal evaluates the given expression and returns the result as a decimal.Decimal.
+//
+// History calls are resolved at compile time by rewriting them into window
+// identifiers (see history_ast.go), which the caller must already have bound
+// into env. Compiled programs are cached per expression string, so parsing,
+// patching and compiling happen once per distinct expression per node rather
+// than once per round.
 func evalDecimal(stmt string, env map[string]any) (decimal.Decimal, error) {
-	// compile with the environment for	type checking
-	// disable all builtins to avoid unexpected behaviors
-	p, err := expr.Compile(stmt, expr.Env(env), expr.DisableAllBuiltins())
-
-	if err != nil {
-		return decimal.Decimal{}, fmt.Errorf("failed to compile expression: %w", err)
+	// NOTE: the env parameter is deliberately map[string]any rather than the
+	// named environment type, and must stay that way. Patching an expression
+	// discards the checker's type information, so identifier reads fall back to
+	// a dynamic fetch that type-asserts the environment to exactly
+	// map[string]any; passing the named type through would fail that assertion
+	// at run time with "interface conversion: interface {} is
+	// calculated.environment".
+	program := historyAnalysisCache.program(stmt)
+	if program == nil {
+		var err error
+		// compile with the environment for type checking, disable all builtins
+		// to avoid unexpected behaviors, and patch History calls into the
+		// window identifiers bound by the caller.
+		program, err = expr.Compile(stmt, expr.Env(env), expr.DisableAllBuiltins(), expr.Patch(newHistoryPatcher()))
+		if err != nil {
+			// Not cached: unlike analysis, a compile failure can be caused by
+			// the environment (a stream missing from this channel), so it is
+			// not a property of the expression alone.
+			return decimal.Decimal{}, fmt.Errorf("failed to compile expression: %w", err)
+		}
+		historyAnalysisCache.storeProgram(stmt, program)
 	}
 
-	r, err := expr.Run(p, env)
+	r, err := expr.Run(program, env)
 	if err != nil {
 		return decimal.Decimal{}, fmt.Errorf("failed to evaluate expression: %w", err)
 	}
@@ -618,6 +652,30 @@ func ProcessCalculatedStreams(lggr logger.Logger, channelDefinitions llotypes.Ch
 		}
 		env.release()
 	}
+}
+
+// AggregatorByStream indexes a channel's non-calculated streams by stream ID.
+// It is the mapping from what a History call names (a stream) to what history is
+// keyed by (a stream and an aggregator), and is exported so the plugin derives
+// its persisted requirements from exactly the same mapping evaluation uses.
+//
+// A stream appearing twice under different aggregators makes any History call
+// naming it ambiguous — the DSL has no way to say which aggregation is meant —
+// so this is rejected rather than resolved arbitrarily. Rejecting is
+// deterministic; picking one would differ between nodes if map iteration order
+// ever leaked in.
+func AggregatorByStream(cd llotypes.ChannelDefinition) (map[llotypes.StreamID]llotypes.Aggregator, error) {
+	byStream := make(map[llotypes.StreamID]llotypes.Aggregator, len(cd.Streams))
+	for _, stream := range cd.Streams {
+		if stream.Aggregator == llotypes.AggregatorCalculated {
+			continue
+		}
+		if existing, ok := byStream[stream.StreamID]; ok && existing != stream.Aggregator {
+			return nil, fmt.Errorf("stream %d appears with aggregators %d and %d", stream.StreamID, existing, stream.Aggregator)
+		}
+		byStream[stream.StreamID] = stream.Aggregator
+	}
+	return byStream, nil
 }
 
 func evalExpression(o *calculatedStreamOpts, cid llotypes.ChannelID, env environment, streamAggregates protocol.StreamAggregates) error {
@@ -711,6 +769,32 @@ func ExpressionStreamIDs(optsCache *protocol.OptsCache, cd llotypes.ChannelDefin
 		ids = append(ids, abi.ExpressionStreamID)
 	}
 	return ids, nil
+}
+
+// Expressions returns a channel's expressions in declaration order.
+//
+// It exists so the plugin can derive history requirements from the same source of
+// truth evaluation uses — the channel's opts — rather than from the streams
+// appended to the channel definition, which only appear once evaluation has got
+// that far.
+//
+// An ABI entry with no expression is an error, not a skip. Such an entry names a
+// calculated stream that nothing can produce: evalExpression fails on it, the
+// stream stays absent, and the channel is therefore never reportable. Reporting
+// that when the definition is validated is the whole point of validating it.
+func Expressions(optsCache *protocol.OptsCache, cd llotypes.ChannelDefinition, cid llotypes.ChannelID) ([]string, error) {
+	o, err := getCalculatedStreamOpts(optsCache, cd, cid)
+	if err != nil {
+		return nil, err
+	}
+	expressions := make([]string, 0, len(o.ABI))
+	for i, abi := range o.ABI {
+		if abi.Expression == "" {
+			return nil, fmt.Errorf("expression is empty, channelID: %d, abi index: %d, expressionStreamID: %d", cid, i, abi.ExpressionStreamID)
+		}
+		expressions = append(expressions, abi.Expression)
+	}
+	return expressions, nil
 }
 
 // ProcessCalculatedStreamsDryRun processes the calculated streams for the given expression
