@@ -1,0 +1,4 @@
+go test fuzz v1
+string("Pow(s1, s2)")
+int64(26)
+rune('\x1e')
