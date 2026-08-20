@@ -43,7 +43,7 @@ var defaultEnv = map[string]any{
 	"Mul":                Mul,
 	"Div":                Div,
 	"Add":                Add,
-	"Sum":                Add,
+	"Sum":                Sum,
 	"Sub":                Sub,
 	"Pow":                Pow,
 	"Sqrt":               Sqrt,
@@ -60,7 +60,15 @@ var defaultEnv = map[string]any{
 	"Avg":                Avg,
 	"Duration":           ParseDuration,
 
-	"Count": Count,
+	"Count":     Count,
+	"First":     First,
+	"Last":      Last,
+	"Median":    Median,
+	"Variance":  Variance,
+	"Stddev":    Stddev,
+	"Delta":     Delta,
+	"PctChange": PctChange,
+	"Spread":    Spread,
 	// History is rewritten away at compile time (see history_ast.go). It is
 	// registered only so that a call surviving to evaluation fails loudly
 	// instead of resolving to an undefined identifier or, worse, to something
