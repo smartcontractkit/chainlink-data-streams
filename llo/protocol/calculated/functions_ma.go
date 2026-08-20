@@ -51,3 +51,52 @@ func WMA(x any, n any) (decimal.Decimal, error) {
 	totalWeight := count * (count + 1) / 2
 	return divRoundByInt(weighted, totalWeight, precision)
 }
+
+// EMA returns the exponential moving average of a history window with smoothing
+// period n.
+//
+// The series is seeded with the simple mean of its oldest n values, then
+// iterated newest-ward with the conventional smoothing factor:
+//
+//	alpha = 2 / (n + 1)
+//	ema   = value*alpha + ema*(1 - alpha)
+//
+// Determinism note: the recursive form is path-dependent, so the seed rule, the
+// iteration count and the rounding must all be fixed. They are: the window
+// length is exactly the depth the expression requested, the channel does not
+// evaluate until the window is that deep, alpha is an exact decimal fraction
+// rather than a float, and every step is rounded to the package precision. That
+// is what makes the result reproducible across oracles and across restarts.
+func EMA(x any, n any) (decimal.Decimal, error) {
+	series, err := window("EMA", x)
+	if err != nil {
+		return decimal.Decimal{}, err
+	}
+	count, err := windowSize("EMA", series, n)
+	if err != nil {
+		return decimal.Decimal{}, err
+	}
+
+	values := series.Values()
+
+	// Seed: mean of the oldest count values.
+	seedSum := decimal.Zero
+	for _, v := range values[:count] {
+		seedSum = seedSum.Add(v)
+	}
+	ema, err := divRoundByInt(seedSum, count, precision)
+	if err != nil {
+		return decimal.Decimal{}, err
+	}
+
+	alpha, err := divRoundByInt(decimal.NewFromInt(2), count+1, doublePrecision)
+	if err != nil {
+		return decimal.Decimal{}, err
+	}
+	oneMinusAlpha := decimal.NewFromInt(1).Sub(alpha)
+
+	for _, v := range values[count:] {
+		ema = v.Mul(alpha).Add(ema.Mul(oneMinusAlpha)).Round(precision)
+	}
+	return ema, nil
+}
