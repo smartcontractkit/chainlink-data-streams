@@ -177,7 +177,10 @@ func (p *Plugin) StateTransition(ctx context.Context, seqNr uint64, _ ocrtypes.A
 	// the calculated streams to their channel definitions and writes the
 	// evaluated values into StreamAggregates. The engine is shared via
 	// llo/protocol/calculated.
-	calculated.ProcessCalculatedStreams(p.Logger, effective, out.StreamAggregates, out.ObservationTimestampNanoseconds, prev.opts)
+	// nil HistoryReader: the round's history store is not wired up yet, so
+	// expressions using History fail closed rather than evaluating against an
+	// empty window.
+	calculated.ProcessCalculatedStreams(p.Logger, effective, out.StreamAggregates, out.ObservationTimestampNanoseconds, prev.opts, nil)
 
 	// Carry any calculated streams appended above into pending, so the append
 	// is persisted and does not repeat every round. Channels whose definition

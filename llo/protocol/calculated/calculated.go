@@ -1,6 +1,7 @@
 package calculated
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"math/big"
@@ -507,6 +508,10 @@ func ParseDuration(x string) (time.Duration, error) {
 // toDecimal converts x to a decimal.Decimal
 func toDecimal(x any) (decimal.Decimal, error) {
 	switch v := x.(type) {
+	case Series:
+		// Static analysis rejects windows in scalar positions, so this is a
+		// backstop for a bypassed analysis rather than an expected path.
+		return decimal.Decimal{}, fmt.Errorf("%w (length %d)", ErrSeriesAsScalar, v.Len())
 	case string:
 		return decimal.NewFromString(v)
 	case int:
@@ -592,7 +597,7 @@ func evalDecimal(stmt string, env map[string]any) (decimal.Decimal, error) {
 // channel definitions and writing the evaluated values into streamAggregates.
 // It is version-agnostic: both the v30 and v31 plugins call it with their own
 // outcome/precursor fields.
-func ProcessCalculatedStreams(lggr logger.Logger, channelDefinitions llotypes.ChannelDefinitions, streamAggregates protocol.StreamAggregates, observationTimestampNanoseconds uint64, optsCache *protocol.OptsCache) {
+func ProcessCalculatedStreams(lggr logger.Logger, channelDefinitions llotypes.ChannelDefinitions, streamAggregates protocol.StreamAggregates, observationTimestampNanoseconds uint64, optsCache *protocol.OptsCache, history HistoryReader) {
 	for cid, cd := range channelDefinitions {
 		if cd.Tombstone {
 			continue
@@ -602,7 +607,17 @@ func ProcessCalculatedStreams(lggr logger.Logger, channelDefinitions llotypes.Ch
 			continue
 		}
 
-		var err error
+		// aggByStream resolves the aggregator a History call refers to. The DSL
+		// names only a stream, so the channel definition is what says which
+		// aggregation of it the expression sees.
+		aggByStream, err := AggregatorByStream(cd)
+		if err != nil {
+			// Ambiguous aggregation cannot be resolved deterministically, so
+			// the channel is skipped rather than guessed at.
+			lggr.Errorw("skipping channel with ambiguous stream aggregators", "channelID", cid, "error", err)
+			continue
+		}
+
 		env := NewEnv(observationTimestampNanoseconds)
 		for _, stream := range cd.Streams {
 			if stream.Aggregator == llotypes.AggregatorCalculated {
@@ -647,8 +662,15 @@ func ProcessCalculatedStreams(lggr logger.Logger, channelDefinitions llotypes.Ch
 			channelDefinitions[cid] = cd
 		}
 
-		if err := evalExpression(&copt, cid, env, streamAggregates); err != nil {
-			lggr.Errorw("failed to process expression", "channelID", cid, "error", err)
+		if err := evalExpression(&copt, cid, env, streamAggregates, history, aggByStream); err != nil {
+			if errors.Is(err, ErrInsufficientHistory) {
+				// Expected while history warms up, after a depth increase, or
+				// after corrupt state was discarded. No aggregate is written,
+				// so the channel is not reportable this round.
+				lggr.Infow("insufficient stream history; channel not reportable this round", "channelID", cid, "error", err)
+			} else {
+				lggr.Errorw("failed to process expression", "channelID", cid, "error", err)
+			}
 		}
 		env.release()
 	}
@@ -678,7 +700,47 @@ func AggregatorByStream(cd llotypes.ChannelDefinition) (map[llotypes.StreamID]ll
 	return byStream, nil
 }
 
-func evalExpression(o *calculatedStreamOpts, cid llotypes.ChannelID, env environment, streamAggregates protocol.StreamAggregates) error {
+// bindHistory loads every window an expression declares and binds it into the
+// environment under the identifier the compile-time rewrite will use.
+//
+// Returns ErrInsufficientHistory if any window is not yet deep enough. That is
+// not an error in the operational sense — it is the warmup gate — but the
+// expression must not be evaluated, because a short window would silently
+// change the meaning of the result.
+func bindHistory(expression string, env environment, history HistoryReader, aggByStream map[llotypes.StreamID]llotypes.Aggregator) error {
+	refs, err := AnalyzeExpressionHistory(expression)
+	if err != nil {
+		return err
+	}
+	if len(refs) == 0 {
+		return nil
+	}
+	if history == nil {
+		// v30 has no replicated key-value state, so there is nowhere for
+		// history to live. Fail closed rather than evaluate against nothing.
+		return fmt.Errorf("expression uses %s but stream history is unavailable in this protocol version", HistoryFunctionName)
+	}
+
+	for _, ref := range refs {
+		aggregator, ok := aggByStream[ref.StreamID]
+		if !ok {
+			return fmt.Errorf("%s references stream %d, which the channel does not observe", HistoryFunctionName, ref.StreamID)
+		}
+		series, err := history.Series(ref.StreamID, aggregator, ref.Count, ref.Field)
+		if err != nil {
+			return fmt.Errorf("%s: %w", ref, err)
+		}
+		if uint32(series.Len()) != ref.Count {
+			// Defensive: a reader returning a differently sized window would
+			// change what the expression computes.
+			return fmt.Errorf("%s: reader returned %d records, expected %d", ref, series.Len(), ref.Count)
+		}
+		env[ref.envName()] = series
+	}
+	return nil
+}
+
+func evalExpression(o *calculatedStreamOpts, cid llotypes.ChannelID, env environment, streamAggregates protocol.StreamAggregates, history HistoryReader, aggByStream map[llotypes.StreamID]llotypes.Aggregator) error {
 	for _, abi := range o.ABI {
 		if abi.ExpressionStreamID == 0 {
 			return fmt.Errorf("expression stream ID is 0, channelID: %d, expression: %s",
@@ -695,6 +757,12 @@ func evalExpression(o *calculatedStreamOpts, cid llotypes.ChannelID, env environ
 			return fmt.Errorf(
 				"calculated stream aggregate ID already exists, channelID: %d, expressionStreamID: %d, expression: %s",
 				cid, abi.ExpressionStreamID, abi.Expression)
+		}
+
+		if err := bindHistory(abi.Expression, env, history, aggByStream); err != nil {
+			return fmt.Errorf(
+				"failed to bind stream history, channelID: %d, expression: %s, error: %w",
+				cid, abi.Expression, err)
 		}
 
 		value, err := evalDecimal(abi.Expression, env)
@@ -850,7 +918,10 @@ func ProcessCalculatedStreamsDryRun(expression string) error {
 		},
 	}
 
-	env := NewEnv(uint64(time.Now().UnixNano()))
+	// The same timestamp anchors the environment and the synthesized history, so
+	// window-relative functions see records inside their window.
+	dryRunObservationTimestampNanoseconds := uint64(time.Now().UnixNano())
+	env := NewEnv(dryRunObservationTimestampNanoseconds)
 	defer env.release()
 	for _, stream := range cd[1].Streams {
 		if err := env.SetStreamValue(stream.StreamID, aggr[stream.StreamID][stream.Aggregator]); err != nil {
@@ -872,7 +943,21 @@ func ProcessCalculatedStreamsDryRun(expression string) error {
 			},
 		},
 	}
-	err = evalExpression(o, 1, env, aggr)
+	aggByStream, err := AggregatorByStream(cd[1])
+	if err != nil {
+		return fmt.Errorf("failed to index channel streams: %w", err)
+	}
+
+	// History windows are synthesized: there is no persisted state offline, and
+	// what is being validated is the shape of the expression, not the values.
+	// The reader always returns the full requested depth so validation
+	// exercises the evaluable path rather than the warmup gate.
+	dryRunHistory := syntheticHistoryReader{
+		endNanoseconds:      dryRunObservationTimestampNanoseconds,
+		intervalNanoseconds: uint64(time.Second),
+	}
+
+	err = evalExpression(o, 1, env, aggr, dryRunHistory, aggByStream)
 	if err != nil {
 		return fmt.Errorf("failed to process expression: %w", err)
 	}

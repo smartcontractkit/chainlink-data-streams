@@ -676,7 +676,7 @@ func Test_CalculatedStreams(t *testing.T) {
 		},
 	}
 
-	calculated.ProcessCalculatedStreams(p.Logger, prec.ChannelDefinitions, prec.StreamAggregates, prec.ObservationTimestampNanoseconds, generation.Opts())
+	calculated.ProcessCalculatedStreams(p.Logger, prec.ChannelDefinitions, prec.StreamAggregates, prec.ObservationTimestampNanoseconds, generation.Opts(), nil)
 
 	// The calculated stream (999) should hold Add(s1, s2) = 7.
 	got := prec.StreamAggregates[999][llotypes.AggregatorCalculated]
