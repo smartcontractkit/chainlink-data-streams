@@ -94,6 +94,26 @@
 // A pair denied history because a cap was reached gets none at all, and channels
 // reading it do not report. There is no silently shortened window.
 //
+// # Evaluation
+//
+// A round runs in three phases: prepare, evaluate, apply.
+//
+// Prepare is sequential. It reads everything shared — the opts cache, the round's
+// stream aggregates, and the HistoryReader, whose one-read-per-pair memoization
+// is stateful and so cannot be driven from several goroutines. It hands each
+// channel a fully materialized input: an environment and its bound windows.
+//
+// Evaluate is pure and runs on a small worker pool, one channel per unit of work.
+// Nothing it reads is shared and it writes only its own result slot, so no
+// synchronization is needed beyond waiting for the workers. Rounds whose total
+// work is small enough that dispatching would cost more than evaluating run
+// inline instead.
+//
+// Apply is sequential and walks channels in ascending channel ID order, writing
+// aggregates, appending calculated streams to definitions and logging failures.
+// The order is fixed there, not inherited from the worker pool, which is what
+// keeps the outcome independent of scheduling.
+//
 // # Determinism
 //
 // Expression results become consensus values, so identical inputs must give

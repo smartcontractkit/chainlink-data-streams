@@ -400,7 +400,7 @@ func TestEvalDecimalPatchesHistory(t *testing.T) {
 
 	// With the window unbound, the rewrite still happens: the call reaches
 	// Count with a nil window rather than reaching the History stub. This is
-	// also why bindHistory has to gate evaluation — an unbound or too-short
+	// also why history binding has to gate evaluation — an unbound or too-short
 	// window is not a compile error, it is a nil that arrives at a function.
 	_, err := evalDecimal("Count(History(s1, 10))", env)
 	require.Error(t, err)

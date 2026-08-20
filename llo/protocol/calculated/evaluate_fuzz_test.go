@@ -99,8 +99,12 @@ func FuzzEvaluateExpression(f *testing.F) {
 		if err := ValidateExpression(expression); err != nil {
 			return
 		}
-		if err := bindHistory(expression, env, reader, aggByStream); err != nil {
+		window, err := resolveHistory(expression, reader, aggByStream)
+		if err != nil {
 			return
+		}
+		for _, bound := range window {
+			env[bound.name] = bound.series
 		}
 
 		// The result is unconstrained; only the absence of a panic matters, and

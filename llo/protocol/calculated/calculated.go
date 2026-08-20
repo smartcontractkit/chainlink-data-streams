@@ -6,8 +6,11 @@ import (
 	"math"
 	"math/big"
 	"regexp"
+	"runtime"
+	"slices"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/smartcontractkit/chainlink-data-streams/llo/protocol"
@@ -593,20 +596,99 @@ func evalDecimal(stmt string, env map[string]any) (decimal.Decimal, error) {
 	return d, nil
 }
 
+// maxEvaluationWorkers bounds the goroutines used to evaluate channels
+// concurrently. Evaluation is CPU bound and short, and the process has other
+// work to do in the same round, so more workers than this buys contention
+// rather than throughput.
+const maxEvaluationWorkers = 8
+
+// minParallelEvaluationWeight is the amount of evaluation work below which a
+// round is evaluated inline. Dispatching goroutines costs more than evaluating a
+// handful of scalar expressions — measurably so: a round of 32 scalar channels
+// is ~20% slower when it is spread over workers than when it is not.
+//
+// Weight is measured in evaluated values (see evaluationWeight), and the
+// threshold sits above a round of purely scalar channels and far below any round
+// that reads history, which is where the work actually is.
+const minParallelEvaluationWeight = 256
+
 // ProcessCalculatedStreams evaluates expressions for each channel of the
 // EVMABIEncodeUnpackedExpr format, appending the calculated streams to their
 // channel definitions and writing the evaluated values into streamAggregates.
 // It is version-agnostic: both the v30 and v31 plugins call it with their own
 // outcome/precursor fields.
+//
+// Processing runs in three phases — prepare, evaluate, apply — so that only the
+// pure part is parallelized:
+//
+//   - prepare is sequential. It touches everything that is shared or not
+//     goroutine-safe: the opts cache, the stream aggregates it reads inputs
+//     from, and the HistoryReader, whose one-read-per-pair memoization is
+//     inherently stateful.
+//   - evaluate is pure and runs concurrently. A compiled program plus an
+//     environment is all it needs, and nothing it touches is shared with
+//     another channel.
+//   - apply is sequential and walks channels in ascending channel ID order, so
+//     the aggregates written, the definitions mutated and the errors logged do
+//     not depend on how the work was scheduled.
 func ProcessCalculatedStreams(lggr logger.Logger, channelDefinitions llotypes.ChannelDefinitions, streamAggregates protocol.StreamAggregates, observationTimestampNanoseconds uint64, optsCache *protocol.OptsCache, history HistoryReader) {
-	for cid, cd := range channelDefinitions {
-		if cd.Tombstone {
-			continue
-		}
+	works := prepareCalculatedStreams(lggr, channelDefinitions, streamAggregates, observationTimestampNanoseconds, optsCache, history)
+	if len(works) == 0 {
+		return
+	}
+	results := evaluateCalculatedStreams(works)
+	applyCalculatedStreams(lggr, channelDefinitions, streamAggregates, works, results)
+}
 
-		if cd.ReportFormat != llotypes.ReportFormatEVMABIEncodeUnpackedExpr {
+// channelWork is one channel's fully materialized evaluation input: everything
+// read out of shared state, so that evaluation itself reads nothing but this
+// struct.
+type channelWork struct {
+	cid  llotypes.ChannelID
+	cd   llotypes.ChannelDefinition
+	opts calculatedStreamOpts
+	env  environment
+
+	// windows holds the history bound for each of the first len(windows)
+	// expressions, in declaration order. It is shorter than opts.ABI when
+	// binding failed, in which case err says why and expressions from
+	// len(windows) on are not evaluated.
+	windows [][]boundSeries
+	err     error
+}
+
+// channelResult is one channel's evaluation output. values holds the value of
+// each of the first len(values) expressions; err, if set, is why the expression
+// at index len(values) could not be produced and why the ones after it were not
+// attempted.
+type channelResult struct {
+	values []decimal.Decimal
+	err    error
+}
+
+// prepareCalculatedStreams builds the evaluation input for every eligible
+// channel, in ascending channel ID order.
+//
+// It is deliberately sequential: it is the only phase that reads the opts cache,
+// the stream aggregates and the HistoryReader, and the reader's contract is one
+// underlying state read per (streamID, aggregator) pair per round, which a
+// memoizing implementation cannot honour from several goroutines at once.
+func prepareCalculatedStreams(lggr logger.Logger, channelDefinitions llotypes.ChannelDefinitions, streamAggregates protocol.StreamAggregates, observationTimestampNanoseconds uint64, optsCache *protocol.OptsCache, history HistoryReader) []channelWork {
+	cids := make([]llotypes.ChannelID, 0, len(channelDefinitions))
+	for cid, cd := range channelDefinitions {
+		if cd.Tombstone || cd.ReportFormat != llotypes.ReportFormatEVMABIEncodeUnpackedExpr {
 			continue
 		}
+		cids = append(cids, cid)
+	}
+	if len(cids) == 0 {
+		return nil
+	}
+	slices.Sort(cids)
+
+	works := make([]channelWork, 0, len(cids))
+	for _, cid := range cids {
+		cd := channelDefinitions[cid]
 
 		// aggByStream resolves the aggregator a History call refers to. The DSL
 		// names only a stream, so the channel definition is what says which
@@ -651,29 +733,120 @@ func ProcessCalculatedStreams(lggr logger.Logger, channelDefinitions llotypes.Ch
 			continue
 		}
 
+		work := channelWork{cid: cid, cd: cd, opts: copt, env: env}
+		work.windows, work.err = bindChannelHistory(&copt, cid, history, aggByStream)
+		works = append(works, work)
+	}
+	return works
+}
+
+// evaluateCalculatedStreams evaluates every prepared channel. This is the only
+// phase that runs concurrently, and it is pure: each channel reads its own
+// environment and windows and writes its own result slot, so no synchronization
+// beyond the wait is needed and the results do not depend on scheduling.
+//
+// Small batches run inline — spawning goroutines costs more than evaluating a
+// handful of expressions.
+func evaluateCalculatedStreams(works []channelWork) []channelResult {
+	results := make([]channelResult, len(works))
+
+	workers := min(len(works), runtime.GOMAXPROCS(0), maxEvaluationWorkers)
+	if evaluationWeight(works) < minParallelEvaluationWeight {
+		workers = 1
+	}
+	if workers <= 1 {
+		for i := range works {
+			results[i] = evalChannel(&works[i])
+		}
+		return results
+	}
+
+	var next atomic.Int64
+	var wg sync.WaitGroup
+	wg.Add(workers)
+	for range workers {
+		go func() {
+			defer wg.Done()
+			for {
+				i := int(next.Add(1)) - 1
+				if i >= len(works) {
+					return
+				}
+				results[i] = evalChannel(&works[i])
+			}
+		}()
+	}
+	wg.Wait()
+	return results
+}
+
+// evaluationWeight estimates how much evaluation a round holds, in values that
+// will be visited: one per expression, plus one per record in each window it
+// reads. It is the cheapest predictor of cost that distinguishes the two cases
+// that matter — a round of scalar arithmetic from a round of window functions —
+// and it is derived from prepared work, so it costs nothing to compute.
+func evaluationWeight(works []channelWork) int {
+	weight := 0
+	for i := range works {
+		for _, window := range works[i].windows {
+			weight++
+			for _, bound := range window {
+				weight += bound.series.Len()
+			}
+		}
+	}
+	return weight
+}
+
+// applyCalculatedStreams commits the evaluated values, in ascending channel ID
+// order so that the outcome does not depend on the order the work completed in.
+//
+// The duplicate-aggregate check lives here rather than in evaluation because it
+// is the one check whose answer depends on what earlier channels wrote.
+func applyCalculatedStreams(lggr logger.Logger, channelDefinitions llotypes.ChannelDefinitions, streamAggregates protocol.StreamAggregates, works []channelWork, results []channelResult) {
+	for i := range works {
+		work := &works[i]
+		result := &results[i]
+
 		// channel definitions are inherited from the previous outcome,
 		// so we only update the channel definition streams if we haven't done it before
-		if cd.Streams[len(cd.Streams)-1].StreamID != copt.ABI[len(copt.ABI)-1].ExpressionStreamID {
-			for _, abi := range copt.ABI {
+		cd := work.cd
+		if cd.Streams[len(cd.Streams)-1].StreamID != work.opts.ABI[len(work.opts.ABI)-1].ExpressionStreamID {
+			for _, abi := range work.opts.ABI {
 				cd.Streams = append(cd.Streams, llotypes.Stream{
 					StreamID:   abi.ExpressionStreamID,
 					Aggregator: llotypes.AggregatorCalculated,
 				})
 			}
-			channelDefinitions[cid] = cd
+			channelDefinitions[work.cid] = cd
 		}
 
-		if err := evalExpression(&copt, cid, env, streamAggregates, history, aggByStream); err != nil {
+		err := result.err
+		for j, value := range result.values {
+			abi := work.opts.ABI[j]
+			if len(streamAggregates[abi.ExpressionStreamID]) > 0 {
+				err = fmt.Errorf(
+					"calculated stream aggregate ID already exists, channelID: %d, expressionStreamID: %d, expression: %s",
+					work.cid, abi.ExpressionStreamID, abi.Expression)
+				break
+			}
+			// update the aggregates with the new stream value if expression was successfully evaluated
+			streamAggregates[abi.ExpressionStreamID] = map[llotypes.Aggregator]protocol.StreamValue{
+				llotypes.AggregatorCalculated: protocol.ToDecimal(value),
+			}
+		}
+
+		if err != nil {
 			if errors.Is(err, ErrInsufficientHistory) {
 				// Expected while history warms up, after a depth increase, or
 				// after corrupt state was discarded. No aggregate is written,
 				// so the channel is not reportable this round.
-				lggr.Infow("insufficient stream history; channel not reportable this round", "channelID", cid, "error", err)
+				lggr.Infow("insufficient stream history; channel not reportable this round", "channelID", work.cid, "error", err)
 			} else {
-				lggr.Errorw("failed to process expression", "channelID", cid, "error", err)
+				lggr.Errorw("failed to process expression", "channelID", work.cid, "error", err)
 			}
 		}
-		env.release()
+		work.env.release()
 	}
 }
 
@@ -701,84 +874,116 @@ func AggregatorByStream(cd llotypes.ChannelDefinition) (map[llotypes.StreamID]ll
 	return byStream, nil
 }
 
-// bindHistory loads every window an expression declares and binds it into the
-// environment under the identifier the compile-time rewrite will use.
+// bindChannelHistory loads every window each of a channel's expressions
+// declares, keyed by the identifier the compile-time rewrite will use.
 //
-// Returns ErrInsufficientHistory if any window is not yet deep enough. That is
-// not an error in the operational sense — it is the warmup gate — but the
-// expression must not be evaluated, because a short window would silently
-// change the meaning of the result.
-func bindHistory(expression string, env environment, history HistoryReader, aggByStream map[llotypes.StreamID]llotypes.Aggregator) error {
-	refs, err := AnalyzeExpressionHistory(expression)
-	if err != nil {
-		return err
-	}
-	if len(refs) == 0 {
-		return nil
-	}
-	if history == nil {
-		// v30 has no replicated key-value state, so there is nowhere for
-		// history to live. Fail closed rather than evaluate against nothing.
-		return fmt.Errorf("expression uses %s but stream history is unavailable in this protocol version", HistoryFunctionName)
-	}
-
-	for _, ref := range refs {
-		aggregator, ok := aggByStream[ref.StreamID]
-		if !ok {
-			return fmt.Errorf("%s references stream %d, which the channel does not observe", HistoryFunctionName, ref.StreamID)
-		}
-		series, err := history.Series(ref.StreamID, aggregator, ref.Count, ref.Field)
-		if err != nil {
-			return fmt.Errorf("%s: %w", ref, err)
-		}
-		if uint32(series.Len()) != ref.Count {
-			// Defensive: a reader returning a differently sized window would
-			// change what the expression computes.
-			return fmt.Errorf("%s: reader returned %d records, expected %d", ref, series.Len(), ref.Count)
-		}
-		env[ref.envName()] = series
-	}
-	return nil
-}
-
-func evalExpression(o *calculatedStreamOpts, cid llotypes.ChannelID, env environment, streamAggregates protocol.StreamAggregates, history HistoryReader, aggByStream map[llotypes.StreamID]llotypes.Aggregator) error {
+// It runs in the sequential prepare phase because it is the only part of
+// evaluation that reads persisted state. Binding stops at the first expression
+// that cannot be satisfied: the returned slice covers the expressions before it,
+// and the error says why that one — and therefore every one after it — is not
+// evaluated.
+//
+// An unsatisfiable window wraps ErrInsufficientHistory. That is not an error in
+// the operational sense — it is the warmup gate — but the expression must not be
+// evaluated, because a short window would silently change the meaning of the
+// result.
+func bindChannelHistory(o *calculatedStreamOpts, cid llotypes.ChannelID, history HistoryReader, aggByStream map[llotypes.StreamID]llotypes.Aggregator) ([][]boundSeries, error) {
+	windows := make([][]boundSeries, 0, len(o.ABI))
 	for _, abi := range o.ABI {
 		if abi.ExpressionStreamID == 0 {
-			return fmt.Errorf("expression stream ID is 0, channelID: %d, expression: %s",
+			return windows, fmt.Errorf("expression stream ID is 0, channelID: %d, expression: %s",
 				cid, abi.Expression)
 		}
 
 		if abi.Expression == "" {
-			return fmt.Errorf(
+			return windows, fmt.Errorf(
 				"expression is empty, channelID: %d, expressionStreamID: %d",
 				cid, abi.ExpressionStreamID)
 		}
 
-		if len(streamAggregates[abi.ExpressionStreamID]) > 0 {
-			return fmt.Errorf(
-				"calculated stream aggregate ID already exists, channelID: %d, expressionStreamID: %d, expression: %s",
-				cid, abi.ExpressionStreamID, abi.Expression)
-		}
-
-		if err := bindHistory(abi.Expression, env, history, aggByStream); err != nil {
-			return fmt.Errorf(
+		window, err := resolveHistory(abi.Expression, history, aggByStream)
+		if err != nil {
+			return windows, fmt.Errorf(
 				"failed to bind stream history, channelID: %d, expression: %s, error: %w",
 				cid, abi.Expression, err)
 		}
-
-		value, err := evalDecimal(abi.Expression, env)
-		if err != nil {
-			return fmt.Errorf(
-				"failed to evaluate expression, channelID: %d, expression: %s, error: %w",
-				cid, abi.Expression, err)
-		}
-
-		// update the aggregates with the new stream value if expression was successfully evaluated
-		streamAggregates[abi.ExpressionStreamID] = map[llotypes.Aggregator]protocol.StreamValue{
-			llotypes.AggregatorCalculated: protocol.ToDecimal(value),
-		}
+		windows = append(windows, window)
 	}
-	return nil
+	return windows, nil
+}
+
+// boundSeries is a window and the environment identifier the compile-time
+// rewrite of a History call binds it to.
+//
+// A slice of these rather than a map: a window carries at most a handful of
+// series, and the binding is walked once per round per expression, so a map
+// would cost an allocation and a hash to save nothing.
+type boundSeries struct {
+	name   string
+	series Series
+}
+
+// resolveHistory reads the windows one expression declares, keyed by the
+// identifier the compile-time rewrite binds them to. A nil result means the
+// expression declares no windows.
+func resolveHistory(expression string, history HistoryReader, aggByStream map[llotypes.StreamID]llotypes.Aggregator) ([]boundSeries, error) {
+	refs, err := AnalyzeExpressionHistory(expression)
+	if err != nil {
+		return nil, err
+	}
+	if len(refs) == 0 {
+		return nil, nil
+	}
+	if history == nil {
+		// v30 has no replicated key-value state, so there is nowhere for
+		// history to live. Fail closed rather than evaluate against nothing.
+		return nil, fmt.Errorf("expression uses %s but stream history is unavailable in this protocol version", HistoryFunctionName)
+	}
+
+	window := make([]boundSeries, 0, len(refs))
+	for _, ref := range refs {
+		aggregator, ok := aggByStream[ref.StreamID]
+		if !ok {
+			return nil, fmt.Errorf("%s references stream %d, which the channel does not observe", HistoryFunctionName, ref.StreamID)
+		}
+		series, err := history.Series(ref.StreamID, aggregator, ref.Count, ref.Field)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", ref, err)
+		}
+		if uint32(series.Len()) != ref.Count {
+			// Defensive: a reader returning a differently sized window would
+			// change what the expression computes.
+			return nil, fmt.Errorf("%s: reader returned %d records, expected %d", ref, series.Len(), ref.Count)
+		}
+		window = append(window, boundSeries{name: ref.envName(), series: series})
+	}
+	return window, nil
+}
+
+// evalChannel evaluates a channel's expressions against its prepared
+// environment. It is pure — it reads only the work it is given and writes only
+// the result it returns — which is what makes it safe to run concurrently.
+//
+// Expressions do not see each other's values: the environment carries observed
+// streams only, so they are independent and evaluation order is immaterial.
+// Evaluation still stops at the first failure, so a channel either contributes a
+// prefix of its expressions or, at apply time, none of them.
+func evalChannel(work *channelWork) channelResult {
+	values := make([]decimal.Decimal, 0, len(work.windows))
+	for i, window := range work.windows {
+		for _, bound := range window {
+			work.env[bound.name] = bound.series
+		}
+
+		value, err := evalDecimal(work.opts.ABI[i].Expression, work.env)
+		if err != nil {
+			return channelResult{values: values, err: fmt.Errorf(
+				"failed to evaluate expression, channelID: %d, expression: %s, error: %w",
+				work.cid, work.opts.ABI[i].Expression, err)}
+		}
+		values = append(values, value)
+	}
+	return channelResult{values: values, err: work.err}
 }
 
 // calculatedStreamOpts is the options structure for expression/calculated streams.
@@ -958,9 +1163,16 @@ func ProcessCalculatedStreamsDryRun(expression string) error {
 		intervalNanoseconds: uint64(time.Second),
 	}
 
-	err = evalExpression(o, 1, env, aggr, dryRunHistory, aggByStream)
-	if err != nil {
-		return fmt.Errorf("failed to process expression: %w", err)
+	work := channelWork{cid: 1, cd: cd[1], opts: *o, env: env}
+	work.windows, work.err = bindChannelHistory(o, 1, dryRunHistory, aggByStream)
+	result := evalChannel(&work)
+	if result.err != nil {
+		return fmt.Errorf("failed to process expression: %w", result.err)
+	}
+	for i, value := range result.values {
+		aggr[o.ABI[i].ExpressionStreamID] = map[llotypes.Aggregator]protocol.StreamValue{
+			llotypes.AggregatorCalculated: protocol.ToDecimal(value),
+		}
 	}
 
 	if _, ok := aggr[999]; !ok {
