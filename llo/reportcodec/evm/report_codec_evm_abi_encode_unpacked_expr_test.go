@@ -413,10 +413,27 @@ func TestReportCodecEVMABIEncodeUnpackedExpr_Verify(t *testing.T) {
 				{StreamID: 3},
 				{StreamID: 4},
 			},
-			Opts: []byte(`{"ABI":[{"type":"int192"}],"feedID":"0x1111111111111111111111111111111111111111111111111111111111111111"}`),
+			Opts: []byte(`{"ABI":[{"type":"int192","expression":"Add(s3, s4)","expressionStreamID":999}],"feedID":"0x1111111111111111111111111111111111111111111111111111111111111111"}`),
 		}
 		err := c.Verify(cd)
 		require.NoError(t, err)
+	})
+	t.Run("ABI entry without an expression is rejected", func(t *testing.T) {
+		// This format's ABI entries each declare a calculated stream. An entry
+		// with no expression names a stream nothing can produce, so the channel
+		// could never report.
+		cd := llotypes.ChannelDefinition{
+			ReportFormat: llotypes.ReportFormatEVMABIEncodeUnpackedExpr,
+			Streams: []llotypes.Stream{
+				{StreamID: 1},
+				{StreamID: 2},
+				{StreamID: 3},
+			},
+			Opts: []byte(`{"ABI":[{"type":"int192"}],"feedID":"0x1111111111111111111111111111111111111111111111111111111111111111"}`),
+		}
+		err := c.Verify(cd)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "expression is empty")
 	})
 	t.Run("invalid feedID", func(t *testing.T) {
 		cd := llotypes.ChannelDefinition{
@@ -435,10 +452,66 @@ func TestReportCodecEVMABIEncodeUnpackedExpr_Verify(t *testing.T) {
 				{StreamID: 3},
 			},
 			ReportFormat: llotypes.ReportFormatEVMABIEncodeUnpackedExpr,
-			Opts:         []byte(`{"baseUSDFee":"1","feedID":"0x1111111111111111111111111111111111111111111111111111111111111111","ABI":[{"streamID":1,"type":"int192"}]}`),
+			Opts:         []byte(`{"baseUSDFee":"1","feedID":"0x1111111111111111111111111111111111111111111111111111111111111111","ABI":[{"streamID":1,"type":"int192","expression":"Add(s1, s2)","expressionStreamID":999}]}`),
 		}
 		err := c.Verify(cd)
 		require.NoError(t, err)
+	})
+	t.Run("valid expression", func(t *testing.T) {
+		cd := llotypes.ChannelDefinition{
+			Streams: []llotypes.Stream{
+				{StreamID: 1, Aggregator: llotypes.AggregatorMedian},
+				{StreamID: 2, Aggregator: llotypes.AggregatorMedian},
+				{StreamID: 3, Aggregator: llotypes.AggregatorMedian},
+			},
+			ReportFormat: llotypes.ReportFormatEVMABIEncodeUnpackedExpr,
+			Opts:         []byte(`{"baseUSDFee":"1","feedID":"0x1111111111111111111111111111111111111111111111111111111111111111","ABI":[{"type":"int192","expression":"Avg(History(s3, 10))","expressionStreamID":999}]}`),
+		}
+		require.NoError(t, c.Verify(cd))
+	})
+	t.Run("statically invalid expression is rejected", func(t *testing.T) {
+		// A window in a scalar position can never produce a value, so accepting
+		// this definition would install a channel that never reports.
+		cd := llotypes.ChannelDefinition{
+			Streams: []llotypes.Stream{
+				{StreamID: 1, Aggregator: llotypes.AggregatorMedian},
+				{StreamID: 2, Aggregator: llotypes.AggregatorMedian},
+				{StreamID: 3, Aggregator: llotypes.AggregatorMedian},
+			},
+			ReportFormat: llotypes.ReportFormatEVMABIEncodeUnpackedExpr,
+			Opts:         []byte(`{"baseUSDFee":"1","feedID":"0x1111111111111111111111111111111111111111111111111111111111111111","ABI":[{"type":"int192","expression":"Add(History(s3, 10), 1)","expressionStreamID":999}]}`),
+		}
+		err := c.Verify(cd)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "invalid calculated stream expressions")
+	})
+	t.Run("unparseable expression is rejected", func(t *testing.T) {
+		cd := llotypes.ChannelDefinition{
+			Streams: []llotypes.Stream{
+				{StreamID: 1, Aggregator: llotypes.AggregatorMedian},
+				{StreamID: 2, Aggregator: llotypes.AggregatorMedian},
+				{StreamID: 3, Aggregator: llotypes.AggregatorMedian},
+			},
+			ReportFormat: llotypes.ReportFormatEVMABIEncodeUnpackedExpr,
+			Opts:         []byte(`{"baseUSDFee":"1","feedID":"0x1111111111111111111111111111111111111111111111111111111111111111","ABI":[{"type":"int192","expression":"Add(s1,","expressionStreamID":999}]}`),
+		}
+		require.Error(t, c.Verify(cd))
+	})
+	t.Run("ambiguous stream aggregation is rejected", func(t *testing.T) {
+		// Which aggregation a History call means would be undecidable.
+		cd := llotypes.ChannelDefinition{
+			Streams: []llotypes.Stream{
+				{StreamID: 1, Aggregator: llotypes.AggregatorMedian},
+				{StreamID: 2, Aggregator: llotypes.AggregatorMedian},
+				{StreamID: 3, Aggregator: llotypes.AggregatorMedian},
+				{StreamID: 3, Aggregator: llotypes.AggregatorMode},
+			},
+			ReportFormat: llotypes.ReportFormatEVMABIEncodeUnpackedExpr,
+			Opts:         []byte(`{"baseUSDFee":"1","feedID":"0x1111111111111111111111111111111111111111111111111111111111111111","ABI":[{"type":"int192","expression":"Avg(History(s3, 10))","expressionStreamID":999}]}`),
+		}
+		err := c.Verify(cd)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "aggregators")
 	})
 }
 

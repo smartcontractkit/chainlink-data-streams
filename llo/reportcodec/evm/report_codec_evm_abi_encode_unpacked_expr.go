@@ -11,6 +11,7 @@ import (
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
 
 	protocol "github.com/smartcontractkit/chainlink-data-streams/llo/protocol"
+	"github.com/smartcontractkit/chainlink-data-streams/llo/protocol/calculated"
 )
 
 var (
@@ -96,6 +97,18 @@ func (r ReportCodecEVMABIEncodeUnpackedExpr) Verify(cd llotypes.ChannelDefinitio
 	}
 	if len(cd.Streams) < 3 {
 		return fmt.Errorf("expected at least 3 streams; got: %d", len(cd.Streams))
+	}
+	// Reject statically invalid expressions here, before the definition can
+	// reach consensus. An expression that cannot be analyzed can never produce a
+	// value, so the channel would be installed and then never report.
+	//
+	// Verify runs on an untrusted definition and must be a pure function of it:
+	// this check parses and analyzes only, with no stream values and no state.
+	//
+	// nil opts cache: Verify is given the definition directly, so the opts are
+	// decoded from it rather than looked up.
+	if err := calculated.ValidateChannelExpressions(nil, cd, 0); err != nil {
+		return fmt.Errorf("invalid calculated stream expressions: %w", err)
 	}
 	return nil
 }
