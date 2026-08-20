@@ -51,6 +51,56 @@ message LLOTimestampedStreamValue {
   LLOStreamValue streamValue = 2;
 }
 
+// LLOStreamHistoryRecord is one agreed aggregate value of a stream, with the
+// timestamp it was observed at. Per-record timestamps are required: rounds are
+// not evenly spaced, so time-weighted functions and gap detection cannot work
+// from the window bounds alone.
+message LLOStreamHistoryRecord {
+  uint64 observedAtNanoseconds = 1;
+  LLOStreamValue value = 2;
+}
+
+// LLOStreamHistoryChunkProto is one slot of the chunked ring layout: a run of
+// consecutive history records for a single (streamID, aggregator) pair.
+//
+// Only the newest chunk of a window is ever rewritten; once a chunk is full it
+// is immutable for as long as it is retained. That is what makes the per-round
+// write cost a function of the chunk size rather than of the window depth.
+message LLOStreamHistoryChunkProto {
+  // Absolute chunk index, monotonically increasing over the life of the
+  // window. The key holds only sequence mod MaxHistoryChunkSlots, so this is
+  // what distinguishes a live chunk from a stale one left by an earlier lap of
+  // the ring.
+  uint64 sequence = 1;
+  // Oldest first, newest last; observedAtNanoseconds strictly increasing.
+  repeated LLOStreamHistoryRecord records = 2;
+}
+
+// LLOStreamHistoryHeaderProto is the index of a chunked history window: which
+// chunks are retained, how full each one is, and when each one starts.
+//
+// It is sized so that every decision a round makes — is there enough depth,
+// which chunks must be read, may this value be appended, which chunk falls out
+// — can be taken from the header alone, without reading a single chunk.
+message LLOStreamHistoryHeaderProto {
+  // Capacity: the maximum depth required by any live channel/expression
+  // referencing this pair. Zero means the pair is torn down.
+  uint32 requiredCount = 1;
+  // Absolute sequence of the oldest retained chunk. Zero when nothing is
+  // stored.
+  uint64 firstSequence = 2;
+  // Records held by each retained chunk, oldest first. Every entry except the
+  // last equals MaxHistoryChunkRecords; the last is in [1, MaxHistoryChunkRecords].
+  repeated uint32 counts = 3;
+  // observedAtNanoseconds of the first record of each retained chunk, parallel
+  // to counts and strictly increasing. Denormalized so that evicting a chunk
+  // does not require loading its successor to learn the window's new start.
+  repeated uint64 chunkFirstObservationTimestampNanoseconds = 4;
+  // observedAtNanoseconds of the newest record in the window, or 0 when empty.
+  // The strictly-newer append rule is decided against this alone.
+  uint64 lastObservationTimestampNanoseconds = 5;
+}
+
 
 message LLOChannelDefinitionProto {
     uint32 reportFormat = 1;

@@ -24,16 +24,43 @@ import (
 //	r/agg       -> LLOHotStateProto: observation timestamp, validAfter
 //	               watermarks, per-channel reportability, and carry-forward
 //	               timestamped aggregates (written every round)
+//	hh/<streamID BE><aggregator BE>          -> deterministic LLOStreamHistoryHeaderProto (history window index)
+//	hc/<streamID BE><aggregator BE><slot BE> -> deterministic LLOStreamHistoryChunkProto (one ring slot of records)
+//	hidx        -> concatenated (uint32 BE streamID, uint32 BE aggregator) pairs,
+//	               sorted (the history index)
+//	hv          -> 1 byte: history layout version
 //
 // c/seqnr lets readers cache the decoded c/defs in memory across rounds and
 // re-read it only when the stored sequence number differs from the cached one
 // (see protocol.ChannelCache).
+//
+// History is stored as a chunked ring rather than one blob per pair: a slot
+// holds MaxHistoryChunkRecords records, and a round rewrites only the newest
+// one. That makes the per-round write cost a function of the chunk size instead
+// of the window depth (~2 KiB rather than ~60 KiB for a full quote window), at
+// a read cost of depth/chunkSize point reads instead of one. See
+// protocol.RingWindow.
 var (
 	keyLifecycle    = []byte("c/lifecycle")
 	keyChannelState = []byte("c/defs")
 	keyChannelSeqNr = []byte("c/seqnr")
 	keyHotState     = []byte("r/agg")
+
+	keyHistoryIndex   = []byte("hidx")
+	keyHistoryVersion = []byte("hv")
+
+	prefixHistoryHead  = []byte("hh/")
+	prefixHistoryChunk = []byte("hc/")
 )
+
+// historyLayoutVersion is the schema version of the history keys. A stored
+// value other than this one means the layout changed and every window must be
+// dropped and re-warmed.
+//
+// v31 lives under llo/dev and carries no compatibility promise, so a layout
+// change is handled by resetting rather than by a dual-read shim — cheap now,
+// expensive after graduation.
+const historyLayoutVersion byte = 1
 
 // deterministicMarshal marshals a proto message deterministically. All KV
 // values and the precursor rely on this for cross-oracle agreement.
@@ -43,6 +70,25 @@ func beU64(v uint64) []byte {
 	b := make([]byte, 8)
 	binary.BigEndian.PutUint64(b, v)
 	return b
+}
+
+func beU32(v uint32) []byte {
+	b := make([]byte, 4)
+	binary.BigEndian.PutUint32(b, v)
+	return b
+}
+
+func historyHeaderKey(streamID llotypes.StreamID, agg llotypes.Aggregator) []byte {
+	k := append([]byte{}, prefixHistoryHead...)
+	k = append(k, beU32(streamID)...)
+	return append(k, beU32(uint32(agg))...)
+}
+
+func historyChunkKey(streamID llotypes.StreamID, agg llotypes.Aggregator, slot uint32) []byte {
+	k := append([]byte{}, prefixHistoryChunk...)
+	k = append(k, beU32(streamID)...)
+	k = append(k, beU32(uint32(agg))...)
+	return append(k, beU32(slot)...)
 }
 
 // kvState is the in-memory projection of the replicated KeyValueState for a
@@ -289,4 +335,150 @@ func writeHotState(
 		return fmt.Errorf("marshal hot state: %w", err)
 	}
 	return w.Write(keyHotState, b)
+}
+
+// histKey identifies one history window. The aggregator is part of the identity
+// because the same stream can be aggregated differently by different channels,
+// and mixing those series would be silently wrong.
+type histKey struct {
+	streamID   llotypes.StreamID
+	aggregator llotypes.Aggregator
+}
+
+// readHistoryHeader returns the stored header for a pair, or nil if none is
+// stored.
+//
+// Decode failures are returned wrapped in protocol.ErrCorruptStreamHistory so
+// callers can tell untrusted stored state apart from an actual read failure:
+// the first is discarded and re-warmed, the second fails the round.
+func readHistoryHeader(r ocr3_1types.KeyValueStateReader, sid llotypes.StreamID, agg llotypes.Aggregator) (*protocol.StreamHistoryHeader, error) {
+	b, err := r.Read(historyHeaderKey(sid, agg))
+	if err != nil {
+		return nil, err
+	}
+	if len(b) == 0 {
+		return nil, nil
+	}
+	header, err := protocol.UnmarshalStreamHistoryHeader(b)
+	if err != nil {
+		return nil, fmt.Errorf("read history header for stream %d aggregator %d: %w", sid, agg, err)
+	}
+	return header, nil
+}
+
+// writeHistoryHeader persists a history header deterministically, returning the
+// number of bytes written for telemetry.
+func writeHistoryHeader(w ocr3_1types.KeyValueStateReadWriter, sid llotypes.StreamID, agg llotypes.Aggregator, header *protocol.StreamHistoryHeader) (int, error) {
+	b, err := header.MarshalBinary()
+	if err != nil {
+		return 0, fmt.Errorf("marshal history header for stream %d aggregator %d: %w", sid, agg, err)
+	}
+	return len(b), w.Write(historyHeaderKey(sid, agg), b)
+}
+
+// deleteHistoryHeader removes a history header.
+func deleteHistoryHeader(w ocr3_1types.KeyValueStateReadWriter, sid llotypes.StreamID, agg llotypes.Aggregator) error {
+	return w.Delete(historyHeaderKey(sid, agg))
+}
+
+// readHistoryChunk returns the chunk stored in a ring slot, or nil if the slot
+// is empty. As with the header, a decode failure is corruption rather than a
+// read error.
+//
+// A chunk left behind by an earlier lap of the ring decodes fine here; it is
+// rejected when it is matched against the header, which is what makes slot
+// reuse safe. See protocol.RingWindow.Provide.
+func readHistoryChunk(r ocr3_1types.KeyValueStateReader, sid llotypes.StreamID, agg llotypes.Aggregator, slot uint32) (*protocol.StreamHistoryChunk, error) {
+	b, err := r.Read(historyChunkKey(sid, agg, slot))
+	if err != nil {
+		return nil, err
+	}
+	if len(b) == 0 {
+		return nil, nil
+	}
+	chunk, err := protocol.UnmarshalStreamHistoryChunk(b)
+	if err != nil {
+		return nil, fmt.Errorf("read history chunk for stream %d aggregator %d slot %d: %w", sid, agg, slot, err)
+	}
+	return chunk, nil
+}
+
+// writeHistoryChunk persists one ring slot deterministically, returning the
+// number of bytes written for telemetry.
+func writeHistoryChunk(w ocr3_1types.KeyValueStateReadWriter, sid llotypes.StreamID, agg llotypes.Aggregator, chunk *protocol.StreamHistoryChunk) (int, error) {
+	b, err := chunk.MarshalBinary()
+	if err != nil {
+		return 0, fmt.Errorf("marshal history chunk for stream %d aggregator %d slot %d: %w", sid, agg, chunk.Slot(), err)
+	}
+	return len(b), w.Write(historyChunkKey(sid, agg, chunk.Slot()), b)
+}
+
+// deleteHistoryChunk removes one ring slot.
+func deleteHistoryChunk(w ocr3_1types.KeyValueStateReadWriter, sid llotypes.StreamID, agg llotypes.Aggregator, slot uint32) error {
+	return w.Delete(historyChunkKey(sid, agg, slot))
+}
+
+// readHistoryLayoutVersion returns the stored history layout version, or zero
+// when nothing has been written yet.
+func readHistoryLayoutVersion(r ocr3_1types.KeyValueStateReader) (byte, error) {
+	b, err := r.Read(keyHistoryVersion)
+	if err != nil {
+		return 0, err
+	}
+	if len(b) != 1 {
+		return 0, nil
+	}
+	return b[0], nil
+}
+
+// writeHistoryLayoutVersion records the layout the stored history was written
+// with.
+func writeHistoryLayoutVersion(w ocr3_1types.KeyValueStateReadWriter) error {
+	return w.Write(keyHistoryVersion, []byte{historyLayoutVersion})
+}
+
+// readHistoryIndex returns the sorted set of pairs that have history.
+//
+// The index exists only because the in-round reader offers no range scan: orphan
+// cleanup and telemetry need to enumerate history keys. A trailing partial
+// entry is ignored rather than failing the round.
+func readHistoryIndex(r ocr3_1types.KeyValueStateReader) ([]histKey, error) {
+	b, err := r.Read(keyHistoryIndex)
+	if err != nil {
+		return nil, err
+	}
+	return decodeHistoryIndex(b), nil
+}
+
+// writeHistoryIndex persists the sorted set of pairs that have history.
+func writeHistoryIndex(w ocr3_1types.KeyValueStateReadWriter, keys []histKey) error {
+	return w.Write(keyHistoryIndex, encodeHistoryIndex(keys))
+}
+
+func decodeHistoryIndex(b []byte) []histKey {
+	n := len(b) / 8
+	keys := make([]histKey, 0, n)
+	for i := 0; i < n; i++ {
+		keys = append(keys, histKey{
+			streamID:   binary.BigEndian.Uint32(b[i*8:]),
+			aggregator: llotypes.Aggregator(binary.BigEndian.Uint32(b[i*8+4:])),
+		})
+	}
+	return keys
+}
+
+func encodeHistoryIndex(keys []histKey) []byte {
+	sorted := append([]histKey{}, keys...)
+	sort.Slice(sorted, func(i, j int) bool {
+		if sorted[i].streamID != sorted[j].streamID {
+			return sorted[i].streamID < sorted[j].streamID
+		}
+		return sorted[i].aggregator < sorted[j].aggregator
+	})
+	b := make([]byte, 0, len(sorted)*8)
+	for _, k := range sorted {
+		b = append(b, beU32(k.streamID)...)
+		b = append(b, beU32(uint32(k.aggregator))...)
+	}
+	return b
 }
