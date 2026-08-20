@@ -49,6 +49,11 @@ type historyStore struct {
 	// re-warmed from empty; this is kept for telemetry and to force the bad
 	// bytes to be overwritten.
 	corrupt map[histKey]bool
+	// reclaimed lists the pairs whose stored history was deleted this round,
+	// either as orphans or by a layout reset. Telemetry only: per-pair gauges
+	// are keyed by stream and aggregator, so a pair that goes away has to be
+	// deleted from them or it reports its final value forever.
+	reclaimed []histKey
 	// oversized counts agreed values dropped for exceeding the per-record size
 	// cap, each of which leaves a gap in a series. Telemetry only.
 	oversized int
@@ -94,16 +99,31 @@ func newHistoryStore(r ocr3_1types.KeyValueStateReader, lggr logger.Logger) (*hi
 		layoutReset: version != historyLayoutVersion,
 	}
 
+	for _, k := range keys {
+		s.index[k] = true
+	}
+
 	if s.layoutReset {
 		if len(keys) > 0 {
 			lggr.Infow("Stream history layout changed; dropping stored windows and re-warming",
 				"storedVersion", version, "version", historyLayoutVersion, "pairs", len(keys))
 		}
 		s.abandoned = len(keys)
-		return s, nil
-	}
-	for _, k := range keys {
-		s.index[k] = true
+		// Every indexed pair is installed as an already-reset window, without
+		// reading its header. Two things depend on this:
+		//
+		//   - a pair required this round re-warms from empty. Reading the header
+		//     instead would adopt whatever the old layout stored whenever those
+		//     bytes still happen to decode, which is exactly what a version bump
+		//     exists to prevent. A layout change is a reset and a re-warm, not a
+		//     dual-read shim.
+		//   - a pair not required this round is still in the index, so the
+		//     orphan pass finds it and deletes its keys. Dropping the index here
+		//     would strand them: the rewritten index would not name them, so no
+		//     later round could find them either.
+		for _, k := range keys {
+			s.windows[k] = protocol.ResetRingWindow()
+		}
 	}
 	return s, nil
 }
@@ -332,6 +352,7 @@ func (s *historyStore) Flush(w ocr3_1types.KeyValueStateReadWriter) error {
 			return err
 		}
 		delete(s.index, k)
+		s.reclaimed = append(s.reclaimed, k)
 		indexChanged = true
 	}
 

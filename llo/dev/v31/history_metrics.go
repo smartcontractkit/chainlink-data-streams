@@ -153,6 +153,21 @@ func (p *Plugin) captureHistoryTelemetry(history *historyStore, requirements his
 		historySatisfiedMetric.WithLabelValues(donID, streamID, aggregator).Set(satisfied)
 		historyBytesMetric.WithLabelValues(donID, streamID, aggregator).Set(float64(history.written[key]))
 	}
+
+	// Pairs whose history was reclaimed this round are deleted from the per-pair
+	// gauges. Prometheus keeps every label set it has ever seen, so leaving them
+	// behind does two things: the series report their final value forever, so an
+	// alert on an unsatisfied window fires for a pair that no longer exists; and
+	// cardinality grows with the number of distinct pairs ever configured, which
+	// MaxHistoryPairs does not bound because it caps live pairs only.
+	for _, key := range history.reclaimed {
+		streamID := strconv.FormatUint(uint64(key.streamID), 10)
+		aggregator := strconv.FormatUint(uint64(key.aggregator), 10)
+		historyRecordsMetric.DeleteLabelValues(donID, streamID, aggregator)
+		historyRequiredMetric.DeleteLabelValues(donID, streamID, aggregator)
+		historySatisfiedMetric.DeleteLabelValues(donID, streamID, aggregator)
+		historyBytesMetric.DeleteLabelValues(donID, streamID, aggregator)
+	}
 }
 
 // captureInsufficientHistory counts channels that could not be evaluated this

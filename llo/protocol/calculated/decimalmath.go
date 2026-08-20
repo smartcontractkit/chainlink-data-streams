@@ -104,6 +104,30 @@ func checkPowExponent(exponent decimal.Decimal) error {
 	return nil
 }
 
+// decimalToInt converts an integral decimal to an int, refusing anything outside
+// [minimum, maximum].
+//
+// The bounds are checked as decimals, before the narrowing. decimal.IntPart
+// narrows through big.Int.Int64, which returns the low 64 bits of an oversized
+// value rather than failing: 2^64+1 comes back as 1. Every caller here is
+// choosing a sample count, a window length or a gap threshold, so a wrapped
+// value does not error -- it silently selects a different calculation than the
+// expression asked for. These arguments are not required to be literal, so the
+// value can come from a stream and is bounded only by MaxDecimalExponent, which
+// is far wider than an int64.
+func decimalToInt(name string, d decimal.Decimal, minimum, maximum int64) (int, error) {
+	if !d.IsInteger() {
+		return 0, fmt.Errorf("%s must be a whole number, got %s", name, d)
+	}
+	if d.LessThan(decimal.NewFromInt(minimum)) {
+		return 0, fmt.Errorf("%s must be at least %d, got %s", name, minimum, d)
+	}
+	if d.GreaterThan(decimal.NewFromInt(maximum)) {
+		return 0, fmt.Errorf("%s must be at most %d, got %s", name, maximum, d)
+	}
+	return int(d.IntPart()), nil
+}
+
 // Determinism rules for every calculation in this package.
 //
 // Expression results become consensus values, so two oracles computing the same

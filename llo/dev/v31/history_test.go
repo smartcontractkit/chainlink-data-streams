@@ -867,6 +867,59 @@ func TestHistoryStore_ResetsOnLayoutChange(t *testing.T) {
 	assert.Equal(t, writesBefore, kv.writes[string(keyHistoryVersion)], "the version must be written once, not every round")
 }
 
+// TestHistoryStore_LayoutChangeAbandonsStoredWindows covers the two things a
+// layout reset must do to state that was actually written: a pair still required
+// re-warms from empty rather than adopting bytes that merely happen to decode,
+// and a pair no longer required has all of its keys deleted rather than being
+// stranded by an index that no longer names it.
+func TestHistoryStore_LayoutChangeAbandonsStoredWindows(t *testing.T) {
+	t.Parallel()
+
+	kv := newCountingKV()
+	kept := histKey{streamID: 1, aggregator: testAggMedian}
+	dropped := histKey{streamID: 2, aggregator: testAggMedian}
+
+	// Real stored state under the current layout: two pairs, each with a header,
+	// a chunk and an index entry.
+	seed := newTestHistoryStore(t, kv)
+	for _, k := range []histKey{kept, dropped} {
+		require.NoError(t, seed.SetRequired(k.streamID, k.aggregator, 3))
+		_, err := seed.Append(k.streamID, k.aggregator, 1_000, testDecimal(7))
+		require.NoError(t, err)
+	}
+	require.NoError(t, seed.Flush(kv))
+	require.Len(t, readHistoryRecords(t, kv, kept.streamID, kept.aggregator), 1)
+	require.Len(t, readHistoryRecords(t, kv, dropped.streamID, dropped.aggregator), 1)
+
+	// A node comes up on a different layout.
+	require.NoError(t, kv.Write(keyHistoryVersion, []byte{historyLayoutVersion + 1}))
+
+	s := newTestHistoryStore(t, kv)
+	require.NoError(t, s.SetRequired(kept.streamID, kept.aggregator, 3))
+	_, err := s.Append(kept.streamID, kept.aggregator, 2_000, testDecimal(9))
+	require.NoError(t, err)
+	require.NoError(t, s.Flush(kv))
+
+	// The still-required pair starts over: the pre-reset record is gone, even
+	// though it was stored in a form this layout can decode.
+	records := readHistoryRecords(t, kv, kept.streamID, kept.aggregator)
+	require.Len(t, records, 1, "the abandoned record must not be carried over")
+	assert.Equal(t, uint64(2_000), records[0].ObservedAtNanoseconds)
+
+	// The pair nobody requires is reclaimed, keys and all.
+	assert.Nil(t, readHistory(t, kv, dropped.streamID, dropped.aggregator), "the header must be deleted")
+	for _, key := range historyKeys(dropped.streamID, dropped.aggregator) {
+		b, err := kv.Read(key)
+		require.NoError(t, err)
+		assert.Empty(t, b, "key %x must be deleted", key)
+	}
+
+	// And the rewritten index names only what survived.
+	index, err := readHistoryIndex(kv)
+	require.NoError(t, err)
+	assert.Equal(t, []histKey{kept}, index)
+}
+
 // TestHistoryStore_UnusedStateStaysUntouched checks the layout reset does not
 // stamp a version onto a DON that has never stored any history.
 func TestHistoryStore_UnusedStateStaysUntouched(t *testing.T) {

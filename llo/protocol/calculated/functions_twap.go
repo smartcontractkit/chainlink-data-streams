@@ -412,17 +412,22 @@ func twapWindowSeconds(raw any) (int64, error) {
 	}
 	// DivRound rather than Div: Div reads the mutable decimal.DivisionPrecision
 	// global. The division is exact here, but the rule holds everywhere.
-	seconds := nanoseconds.DivRound(perSecond, 0).IntPart()
-	if seconds < 1 {
-		return 0, fmt.Errorf("%w: window must be at least one second, got %d", ErrTWAPConfig, seconds)
+	// Compared and bounded as a decimal, before any narrowing; see decimalToInt.
+	// The upper bound also caps the per-evaluation work: the calculation
+	// allocates and fills one bucket per second of the window.
+	secondsDecimal := nanoseconds.DivRound(perSecond, 0)
+	if secondsDecimal.LessThan(decimal.NewFromInt(1)) {
+		return 0, fmt.Errorf("%w: window must be at least one second, got %s", ErrTWAPConfig, secondsDecimal)
 	}
-	if seconds > twapMaxWindowSeconds {
-		// Bounds the per-evaluation work: the calculation allocates and fills one
-		// bucket per second of the window.
-		return 0, fmt.Errorf("%w: window of %d seconds exceeds the maximum of %d",
-			ErrTWAPConfig, seconds, twapMaxWindowSeconds)
+	if secondsDecimal.GreaterThan(decimal.NewFromInt(twapMaxWindowSeconds)) {
+		return 0, fmt.Errorf("%w: window of %s seconds exceeds the maximum of %d",
+			ErrTWAPConfig, secondsDecimal, twapMaxWindowSeconds)
 	}
-	return seconds, nil
+	seconds, err := decimalToInt("window", secondsDecimal, 1, twapMaxWindowSeconds)
+	if err != nil {
+		return 0, fmt.Errorf("%w: %s", ErrTWAPConfig, err)
+	}
+	return int64(seconds), nil
 }
 
 // twapMaxWindowSeconds bounds the number of one-second buckets a single TWAP
@@ -439,12 +444,12 @@ func twapConfigInt(fields map[string]any, key string, minimum int) (int, error) 
 	if err != nil {
 		return 0, fmt.Errorf("%w: %s: %s", ErrTWAPConfig, key, err)
 	}
-	if !d.IsInteger() {
-		return 0, fmt.Errorf("%w: %s must be a whole number of seconds, got %s", ErrTWAPConfig, key, d)
-	}
-	value := int(d.IntPart())
-	if value < minimum {
-		return 0, fmt.Errorf("%w: %s must be at least %d, got %d", ErrTWAPConfig, key, minimum, value)
+	// Bounded as a decimal before narrowing; see decimalToInt. The upper bound
+	// is the window cap, since every one of these counts seconds or samples
+	// inside a window that cannot itself be longer than that.
+	value, err := decimalToInt(key, d, int64(minimum), twapMaxWindowSeconds)
+	if err != nil {
+		return 0, fmt.Errorf("%w: %s", ErrTWAPConfig, err)
 	}
 	return value, nil
 }

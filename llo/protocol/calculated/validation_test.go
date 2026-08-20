@@ -106,6 +106,22 @@ func TestValidateChannelExpressions(t *testing.T) {
 	assert.Contains(t, err.Error(), "must be passed directly")
 	assert.Contains(t, err.Error(), "at least 1")
 
+	// A History call may only read a stream the channel observes. Requirements
+	// skip such a reference and evaluation fails on it, so admitting this would
+	// install a channel that reserves no history and never reports.
+	err = ValidateChannelExpressions(nil,
+		channel([]llotypes.Stream{median(1)}, "Count(History(s2, 10))"), 1)
+	require.ErrorContains(t, err, "which the channel does not observe")
+	assert.Contains(t, err.Error(), "stream 2")
+
+	// Calculated streams are not observed, so an expression cannot read the
+	// history of one.
+	err = ValidateChannelExpressions(nil, channel([]llotypes.Stream{
+		median(1),
+		{StreamID: 900, Aggregator: llotypes.AggregatorCalculated},
+	}, "Count(History(s900, 10))"), 1)
+	require.ErrorContains(t, err, "which the channel does not observe")
+
 	// A channel aggregating one stream two ways cannot be validated, because
 	// which aggregation a History call means is undecidable.
 	err = ValidateChannelExpressions(nil, channel([]llotypes.Stream{

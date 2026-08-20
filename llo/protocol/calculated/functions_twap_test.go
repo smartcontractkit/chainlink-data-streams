@@ -336,6 +336,29 @@ func TestTWAP_ConfigValidation(t *testing.T) {
 		require.ErrorContains(t, call(cfg), "exceeds the maximum")
 	})
 
+	t.Run("oversized configuration values are rejected, not wrapped", func(t *testing.T) {
+		t.Parallel()
+		// decimal.IntPart narrows through int64 and returns the low 64 bits of
+		// an oversized value, so 2^64+1 comes back as 1. Bounding after that
+		// would silently accept a one-second window or a minSamples of 1. TWAP
+		// configuration is not required to be literal (see checkTWAP), so these
+		// values can come from stream data, bounded only by MaxDecimalExponent.
+		wrapped := decimal.RequireFromString("18446744073709551617")
+
+		cfg := twapConfigMap(3, 1, 0, 0, 0)
+		// A whole number of seconds, so it clears the modulo check first.
+		cfg["window"] = wrapped.Mul(decimal.NewFromInt(int64(time.Second)))
+		require.ErrorContains(t, call(cfg), "exceeds the maximum")
+
+		for _, key := range []string{"minSamples", "maxHeadGap", "maxInteriorGap", "maxTailGap"} {
+			cfg := twapConfigMap(3, 1, 0, 0, 0)
+			cfg[key] = wrapped
+			err := call(cfg)
+			require.ErrorIs(t, err, ErrTWAPConfig, key)
+			require.ErrorContains(t, err, "at most", key)
+		}
+	})
+
 	t.Run("thresholds must be whole and non-negative", func(t *testing.T) {
 		t.Parallel()
 		cfg := twapConfigMap(3, 1, 0, 0, 0)

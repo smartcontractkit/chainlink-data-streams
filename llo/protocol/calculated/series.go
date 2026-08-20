@@ -147,17 +147,15 @@ func windowSize(name string, series Series, x any) (int, error) {
 	if err != nil {
 		return 0, fmt.Errorf("%s: %w", name, err)
 	}
-	if !d.IsInteger() {
-		return 0, fmt.Errorf("%s: sample count must be a whole number, got %s", name, d)
+	// Compared as a decimal, before any narrowing: silently averaging over fewer
+	// samples than asked for would change the meaning of the result, and an
+	// oversized value narrowed first would wrap into the accepted range.
+	if d.GreaterThan(decimal.NewFromInt(int64(series.Len()))) {
+		return 0, fmt.Errorf("%s: sample count %s exceeds the window length %d", name, d, series.Len())
 	}
-	n := int(d.IntPart())
-	if n < 1 {
-		return 0, fmt.Errorf("%s: sample count must be at least 1, got %d", name, n)
-	}
-	if n > series.Len() {
-		// Silently averaging over fewer samples than asked for would change the
-		// meaning of the result.
-		return 0, fmt.Errorf("%s: sample count %d exceeds the window length %d", name, n, series.Len())
+	n, err := decimalToInt("sample count", d, 1, int64(series.Len()))
+	if err != nil {
+		return 0, fmt.Errorf("%s: %w", name, err)
 	}
 	return n, nil
 }

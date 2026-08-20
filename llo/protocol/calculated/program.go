@@ -109,14 +109,35 @@ func ValidateChannelExpressions(optsCache *protocol.OptsCache, cd llotypes.Chann
 
 	// The aggregator a History call resolves to comes from the channel's
 	// streams, so an ambiguous channel cannot be validated — or evaluated.
-	if _, err := AggregatorByStream(cd); err != nil {
+	aggByStream, err := AggregatorByStream(cd)
+	if err != nil {
 		return fmt.Errorf("channel %d: %w", cid, err)
 	}
 
 	var errs []error
 	for _, expression := range expressions {
-		if err := ValidateExpression(expression); err != nil {
+		if expression == "" {
+			errs = append(errs, fmt.Errorf("%w: expression is empty", ErrHistoryExpression))
+			continue
+		}
+		refs, err := AnalyzeExpressionHistory(expression)
+		if err != nil {
 			errs = append(errs, fmt.Errorf("expression %q: %w", expression, err))
+			continue
+		}
+		// A History call may only read a stream the channel observes. The DSL
+		// names a stream, and the channel definition is what says which
+		// aggregation of it is meant, so a reference to a stream that is not
+		// there cannot be resolved. Both consumers already refuse it — history
+		// requirements skip the reference, and evaluation fails on it — so
+		// admitting such a definition installs a channel that reserves no
+		// history and never reports. Reporting it here is the whole point of
+		// validating the definition.
+		for _, ref := range refs {
+			if _, ok := aggByStream[ref.StreamID]; !ok {
+				errs = append(errs, fmt.Errorf("expression %q: %w: %s references stream %d, which the channel does not observe",
+					expression, ErrHistoryExpression, HistoryFunctionName, ref.StreamID))
+			}
 		}
 	}
 	return errors.Join(errs...)

@@ -136,6 +136,15 @@ func TestMovingAverages_Errors(t *testing.T) {
 			_, err = fn(window, -1)
 			require.ErrorContains(t, err, "at least 1")
 
+			// decimal.IntPart narrows through int64 and returns the low 64 bits
+			// of an oversized value: 2^64+1 comes back as 1. Bounding after that
+			// would accept this as a one-sample average instead of rejecting it,
+			// and the count is not required to be literal -- it can come from a
+			// stream value, which is bounded only by MaxDecimalExponent.
+			wrapped := decimal.RequireFromString("18446744073709551617")
+			_, err = fn(window, wrapped)
+			require.ErrorContains(t, err, "exceeds the window length")
+
 			_, err = fn(window, 1.5)
 			require.ErrorContains(t, err, "whole number")
 		})
