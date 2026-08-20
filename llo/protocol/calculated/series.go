@@ -97,6 +97,38 @@ func Count(x any) (decimal.Decimal, error) {
 	return decimal.NewFromInt(int64(series.Len())), nil
 }
 
+// scalarsOrWindow resolves the arguments of a function that accepts either a
+// single history window or a list of scalars.
+//
+// The two forms are deliberately not mixed: Avg(History(s1, 10), s2) would be
+// ambiguous about whether the scalar is one more sample or a weight, so it is
+// rejected rather than given a meaning.
+func scalarsOrWindow(name string, args []any) ([]decimal.Decimal, error) {
+	if len(args) == 0 {
+		return nil, fmt.Errorf("%s requires at least one argument", name)
+	}
+
+	if series, ok := args[0].(Series); ok {
+		if len(args) > 1 {
+			return nil, fmt.Errorf("%s takes either a single history window or a list of scalars, not both", name)
+		}
+		if series.Len() == 0 {
+			return nil, fmt.Errorf("%s: history window is empty", name)
+		}
+		return series.Values(), nil
+	}
+
+	values := make([]decimal.Decimal, 0, len(args))
+	for _, arg := range args {
+		value, err := toDecimal(arg)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", name, err)
+		}
+		values = append(values, value)
+	}
+	return values, nil
+}
+
 // window resolves the single history window argument of a window-only function.
 func window(name string, x any) (Series, error) {
 	series, ok := x.(Series)

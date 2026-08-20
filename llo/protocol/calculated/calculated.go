@@ -196,63 +196,42 @@ func Floor(x any) (decimal.Decimal, error) {
 	return ad.Floor(), nil
 }
 
-// Avg returns the average of x elements
+// Avg returns the average of x elements, which may be a single history window or
+// a list of scalars.
+//
+// NOTE: the division is pinned to legacyDivisionPrecision, which is what this
+// function has always effectively used via decimal.DivisionPrecision. Raising it
+// would change the trailing digits of every existing calculated stream.
 func Avg(x ...any) (decimal.Decimal, error) {
-	if len(x) == 0 {
-		return decimal.Decimal{}, fmt.Errorf("no elements to calculate avg")
-	}
-
-	sum := decimal.Zero
-	for _, v := range x {
-		ad, err := toDecimal(v)
-		if err != nil {
-			return decimal.Decimal{}, err
-		}
-		sum = sum.Add(ad)
-	}
-	return sum.Div(decimal.NewFromInt(int64(len(x)))), nil
-}
-
-// Max returns the maximum of x elements
-func Max(x ...any) (decimal.Decimal, error) {
-	if len(x) == 0 {
-		return decimal.Decimal{}, fmt.Errorf("no elements to calculate max")
-	}
-
-	max, err := toDecimal(x[0])
+	values, err := scalarsOrWindow("Avg", x)
 	if err != nil {
 		return decimal.Decimal{}, err
 	}
 
-	for _, v := range x[1:] {
-		ad, err := toDecimal(v)
-		if err != nil {
-			return decimal.Decimal{}, err
-		}
-		max = decimal.Max(max, ad)
+	sum := decimal.Zero
+	for _, v := range values {
+		sum = sum.Add(v)
 	}
-	return max, nil
+	return divRoundByInt(sum, len(values), legacyDivisionPrecision)
+}
+
+// Max returns the maximum of x elements, which may be a single history window or
+// a list of scalars.
+func Max(x ...any) (decimal.Decimal, error) {
+	values, err := scalarsOrWindow("Max", x)
+	if err != nil {
+		return decimal.Decimal{}, err
+	}
+	return decimal.Max(values[0], values[1:]...), nil
 }
 
 // Min returns the minimum of x elements
 func Min(x ...any) (decimal.Decimal, error) {
-	if len(x) == 0 {
-		return decimal.Decimal{}, fmt.Errorf("no elements to calculate min")
-	}
-
-	min, err := toDecimal(x[0])
+	values, err := scalarsOrWindow("Min", x)
 	if err != nil {
 		return decimal.Decimal{}, err
 	}
-
-	for _, v := range x[1:] {
-		ad, err := toDecimal(v)
-		if err != nil {
-			return decimal.Decimal{}, err
-		}
-		min = decimal.Min(min, ad)
-	}
-	return min, nil
+	return decimal.Min(values[0], values[1:]...), nil
 }
 
 // GreaterThan returns true if x is greater than y
@@ -339,11 +318,10 @@ func Div(x, y any) (decimal.Decimal, error) {
 	if err != nil {
 		return decimal.Decimal{}, err
 	}
-	if bd.IsZero() {
-		return decimal.Decimal{}, fmt.Errorf("division by zero")
-	}
-
-	return ad.Div(bd), nil
+	// NOTE: pinned to legacyDivisionPrecision, the precision this has always
+	// effectively used via the mutable decimal.DivisionPrecision global. Raising
+	// it would change the trailing digits of every existing calculated stream.
+	return divRound(ad, bd, legacyDivisionPrecision)
 }
 
 // Add returns the sum of x and y
@@ -383,7 +361,7 @@ func Pow(x, y any) (decimal.Decimal, error) {
 		return decimal.Decimal{}, err
 	}
 	// We use double precision here in order to offset any float approximation errors.
-	res, err := base.PowWithPrecision(power, doublePrecision)
+	res, err := decimalPow(base, power, doublePrecision)
 	if err != nil {
 		return decimal.Decimal{}, err
 	}
@@ -401,7 +379,7 @@ func Sqrt(x any) (decimal.Decimal, error) {
 	}
 	sqrtPow, _ := toDecimal(0.5)
 	// We use double precision here in order to offset any float approximation errors.
-	res, err := n.PowWithPrecision(sqrtPow, doublePrecision)
+	res, err := decimalPow(n, sqrtPow, doublePrecision)
 	if err != nil {
 		return decimal.Decimal{}, err
 	}
@@ -417,7 +395,7 @@ func Ln(x any) (decimal.Decimal, error) {
 	if n.IsZero() {
 		return decimal.Decimal{}, fmt.Errorf("cannot represent natural logarithm of 0")
 	}
-	return n.Ln(precision)
+	return decimalLn(n, precision)
 }
 
 // Log returns the logarithms of y with base x. This is equivalent to log_x(y).
@@ -432,7 +410,7 @@ func Log(x, y any) (decimal.Decimal, error) {
 	if err != nil {
 		return decimal.Decimal{}, err
 	}
-	lnLog, err := log.Ln(doublePrecision) // double precision, since we're going to divide them
+	lnLog, err := decimalLn(log, doublePrecision) // double precision, since we're going to divide them
 	if err != nil {
 		return decimal.Decimal{}, err
 	}
@@ -441,7 +419,7 @@ func Log(x, y any) (decimal.Decimal, error) {
 	if err != nil {
 		return decimal.Decimal{}, err
 	}
-	lnBase, err := base.Ln(doublePrecision) // double precision, since we're going to divide them
+	lnBase, err := decimalLn(base, doublePrecision) // double precision, since we're going to divide them
 	if err != nil {
 		return decimal.Decimal{}, err
 	}
