@@ -484,3 +484,14 @@ func TestFieldFromSuffix(t *testing.T) {
 	_, ok := fieldFromSuffix("timestamp")
 	assert.False(t, ok, "timestamp must not map to a field")
 }
+
+// TestRangeAcceptingFunctionsAreRegistered keeps the static-analysis list and the
+// environment in agreement. A name in one and not the other means an expression
+// either fails to compile or is rejected as misusing a window.
+func TestRangeAcceptingFunctionsAreRegistered(t *testing.T) {
+	t.Parallel()
+
+	for name := range rangeAcceptingFunctions {
+		assert.Contains(t, defaultEnv, name, "%s accepts a window but is not registered", name)
+	}
+}
