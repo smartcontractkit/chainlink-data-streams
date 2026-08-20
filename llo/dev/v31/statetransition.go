@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"sort"
 
+	"github.com/smartcontractkit/chainlink-common/pkg/logger"
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
 
 	protocol "github.com/smartcontractkit/chainlink-data-streams/llo/protocol"
@@ -165,22 +166,41 @@ func (p *Plugin) StateTransition(ctx context.Context, seqNr uint64, _ ocrtypes.A
 		}
 	}
 
+	// Stream history: derive the depth each (stream, aggregator) pair needs from
+	// the (replicated) channel definitions and their expressions, then set it on
+	// the round's store. This happens before aggregation because the depth is
+	// what decides whether a pair's value is recorded at all.
+	history, err := newHistoryStore(kvRW, p.Logger)
+	if err != nil {
+		return nil, err
+	}
+	requirements := computeHistoryRequirements(effective, prev.opts, p.Logger)
+	if err := requirements.apply(history); err != nil {
+		return nil, err
+	}
+	for _, key := range requirements.sortedDenied() {
+		// Channels reading this pair cannot evaluate and so will not report.
+		p.Logger.Errorw("Stream history denied; channels reading it will not report",
+			"streamID", key.streamID, "aggregator", key.aggregator, "seqNr", seqNr)
+	}
+
 	// Aggregation (regular fresh; timestamped with cross-round carry-forward via
 	// the r/agg record). carryForward accumulates the values to persist for the
-	// next round. Runs over the effective set, which is what was observed.
+	// next round. Runs over the effective set, which is what was observed. The
+	// agreed value of every pair history requires is recorded as it is computed.
 	carryForward := map[llotypes.StreamID]map[llotypes.Aggregator]*protocol.TimestampedStreamValue{}
-	if err := p.aggregate(prev.carryForward, carryForward, effective, streamObservations, out.StreamAggregates); err != nil {
+	if err := p.aggregate(prev.carryForward, carryForward, effective, streamObservations, out.StreamAggregates,
+		history, requirements, out.ObservationTimestampNanoseconds); err != nil {
 		return nil, err
 	}
 
 	// Evaluate calculated streams (EVMABIEncodeUnpackedExpr channels): appends
 	// the calculated streams to their channel definitions and writes the
 	// evaluated values into StreamAggregates. The engine is shared via
-	// llo/protocol/calculated.
-	// nil HistoryReader: the round's history store is not wired up yet, so
-	// expressions using History fail closed rather than evaluating against an
-	// empty window.
-	calculated.ProcessCalculatedStreams(p.Logger, effective, out.StreamAggregates, out.ObservationTimestampNanoseconds, prev.opts, nil)
+	// llo/protocol/calculated. The history store is the read side: expressions
+	// using History(...) read the windows appended above, and are left
+	// unevaluated while a window is still shallower than requested.
+	calculated.ProcessCalculatedStreams(p.Logger, effective, out.StreamAggregates, out.ObservationTimestampNanoseconds, prev.opts, history)
 
 	// Carry any calculated streams appended above into pending, so the append
 	// is persisted and does not repeat every round. Channels whose definition
@@ -189,13 +209,17 @@ func (p *Plugin) StateTransition(ctx context.Context, seqNr uint64, _ ocrtypes.A
 	adoptCalculatedStreams(pending, effective, updatedChannelIDs)
 
 	// Flush KV mutations.
-	if err := p.flushKV(kvRW, seqNr, prev, out, pending, carryForward); err != nil {
+	if err := p.flushKV(kvRW, seqNr, prev, out, pending, carryForward, history); err != nil {
 		return nil, err
 	}
 
 	if p.Config.VerboseLogging {
 		p.Logger.Debugw("Generated precursor", "lifeCycleStage", out.LifeCycleStage, "channels", len(out.ChannelDefinitions), "seqNr", seqNr)
 	}
+	// After the flush, so the recorded window sizes are the ones actually
+	// written. Node-local observation only; nothing reads these back.
+	p.captureHistoryTelemetry(history, requirements)
+	p.captureInsufficientHistory(effective, prev.opts, history)
 	p.captureOutcomeTelemetry(out, seqNr)
 	return encodePrecursor(out)
 }
@@ -350,11 +374,22 @@ func adoptCalculatedStreams(pending, effective llotypes.ChannelDefinitions, upda
 // that is not written into nextCarry is dropped from the store, which is how
 // carry-forward values orphaned by channel removal or tombstoning are
 // reclaimed.
+//
+// The agreed value of each pair is also recorded into stream history for the
+// pairs that require it. History records what the round actually agreed on --
+// the same value written into StreamAggregates -- so a window is always a series
+// of values that reached consensus. A pair with no aggregate this round
+// (aggregation failed, stream absent) contributes nothing: a gap in the series
+// is honest, whereas repeating the previous value would silently weight it
+// twice.
 func (p *Plugin) aggregate(
 	prevCarry, nextCarry map[llotypes.StreamID]map[llotypes.Aggregator]*protocol.TimestampedStreamValue,
 	defs llotypes.ChannelDefinitions,
 	streamObservations map[llotypes.StreamID][]protocol.StreamValue,
 	out protocol.StreamAggregates,
+	history *historyStore,
+	requirements historyRequirements,
+	observationTimestampNanoseconds uint64,
 ) error {
 	keep := func(sid llotypes.StreamID, agg llotypes.Aggregator, tsv *protocol.TimestampedStreamValue) {
 		if nextCarry[sid] == nil {
@@ -427,15 +462,51 @@ func (p *Plugin) aggregate(
 				// yields a non-timestamped value, drop the stale carry-forward
 				// by not writing it into nextCarry.
 			}
+
+			if err := appendHistory(history, requirements, sid, agg, m[agg], observationTimestampNanoseconds, p.Logger); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
 }
 
+// appendHistory records a pair's agreed value for this round.
+//
+// The timestamp is the value's own observation time for timestamped aggregates
+// and the round's consensus observation timestamp otherwise. Either way the
+// append only takes effect if it is strictly newer than the newest stored
+// record, which is what stops a carried-forward value from being counted once
+// per round until it refreshes.
+//
+// A value too large to store is dropped with a loud log rather than failing the
+// round: the round has already agreed on it, so halting over it would take the
+// DON down for a data problem.
+func appendHistory(history *historyStore, requirements historyRequirements, sid llotypes.StreamID, agg llotypes.Aggregator, value protocol.StreamValue, observationTimestampNanoseconds uint64, lggr logger.Logger) error {
+	if history == nil || value == nil || !requirements.requires(sid, agg) {
+		return nil
+	}
+
+	observedAt := observationTimestampNanoseconds
+	if tsv, ok := value.(*protocol.TimestampedStreamValue); ok {
+		observedAt = tsv.ObservedAtNanoseconds
+	}
+
+	_, err := history.Append(sid, agg, observedAt, value)
+	if errors.Is(err, protocol.ErrHistoryRecordTooLarge) {
+		history.oversized++
+		lggr.Errorw("Dropping stream history record: value too large to store",
+			"streamID", sid, "aggregator", agg, "err", err)
+		return nil
+	}
+	return err
+}
+
 // flushKV persists the computed state. The per-round record (r/agg) is always
 // rewritten; the channel record (c/defs, c/seqnr) and the lifecycle stage are
 // written only when they actually change, so that readers can keep serving
-// their in-memory copy of the definitions (see channelCache).
+// their in-memory copy of the definitions (see channelCache). Modified history
+// windows are flushed alongside it.
 func (p *Plugin) flushKV(
 	kvRW ocr3_1types.KeyValueStateReadWriter,
 	seqNr uint64,
@@ -443,6 +514,7 @@ func (p *Plugin) flushKV(
 	out precursor,
 	pending llotypes.ChannelDefinitions,
 	carryForward map[llotypes.StreamID]map[llotypes.Aggregator]*protocol.TimestampedStreamValue,
+	history *historyStore,
 ) error {
 	if out.LifeCycleStage != prev.lifeCycleStage {
 		if err := writeLifecycle(kvRW, out.LifeCycleStage); err != nil {
@@ -467,6 +539,14 @@ func (p *Plugin) flushKV(
 	reportable := make(map[llotypes.ChannelID]bool, len(out.ChannelDefinitions))
 	for id := range out.ChannelDefinitions {
 		reportable[id] = out.isReportable(id, p.DefaultMinReportIntervalNanoseconds, prev.opts, p.Logger)
+	}
+
+	// Stream history: write modified windows, delete pairs no live channel
+	// requires, and rewrite the history index if the stored set changed.
+	if history != nil {
+		if err := history.Flush(kvRW); err != nil {
+			return err
+		}
 	}
 
 	return writeHotState(kvRW, out.ObservationTimestampNanoseconds, out.ValidAfterNanoseconds, reportable, carryForward)

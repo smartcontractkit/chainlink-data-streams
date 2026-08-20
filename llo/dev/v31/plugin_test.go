@@ -542,8 +542,18 @@ func Test_DisableNilStreamValues_CalculatedStreams(t *testing.T) {
 		require.Equal(t, []llotypes.ChannelID{1}, o.reportableChannels(0, populatedCache(o), logger.Test(t)))
 	})
 
-	t.Run("DisableNilStreamValues=false, evaluation failed -> still reportable", func(t *testing.T) {
+	t.Run("DisableNilStreamValues=false, evaluation failed -> not reportable", func(t *testing.T) {
+		// The calculated-stream gate is independent of DisableNilStreamValues,
+		// which is about observed values. A missing calculated stream cannot be
+		// reported around: the codec has nothing to encode, so Reports skips the
+		// report. Treating the channel as reportable would advance validAfter
+		// over a round that emitted nothing.
 		o := mkPrec(false, validOpts, baseStreams, baseAggregates())
+		require.Empty(t, o.reportableChannels(0, populatedCache(o), logger.Test(t)))
+	})
+
+	t.Run("DisableNilStreamValues=false, fully evaluated -> reportable", func(t *testing.T) {
+		o := mkPrec(false, validOpts, withCalculated, evaluatedAggregates())
 		require.Equal(t, []llotypes.ChannelID{1}, o.reportableChannels(0, populatedCache(o), logger.Test(t)))
 	})
 
@@ -580,7 +590,8 @@ func Test_TimestampedAggregate_CarryForward(t *testing.T) {
 		out := protocol.StreamAggregates{}
 		obs := map[llotypes.StreamID][]protocol.StreamValue{100: {tsv(ts, v), tsv(ts, v), tsv(ts, v)}}
 		next := map[llotypes.StreamID]map[llotypes.Aggregator]*protocol.TimestampedStreamValue{}
-		require.NoError(t, p.aggregate(carry, next, defs, obs, out))
+		// No history requirements: this test is about carry-forward aggregation.
+		require.NoError(t, p.aggregate(carry, next, defs, obs, out, nil, historyRequirements{}, ts))
 		carry = next
 		res, ok := out[100][llotypes.AggregatorMedian].(*protocol.TimestampedStreamValue)
 		require.True(t, ok, "expected a TimestampedStreamValue aggregate")

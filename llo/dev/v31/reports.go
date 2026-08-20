@@ -202,32 +202,39 @@ func (o precursor) isReportable(channelID llotypes.ChannelID, minReportInterval 
 				return false
 			}
 		}
-		// Calculated streams are appended to the channel definition by
-		// ProcessCalculatedStreams only once evaluation gets that far; a channel
-		// whose expressions failed (bad input value, undecodable opts, eval
-		// error) therefore has no calculated streams to scan above and would
-		// pass. Verify against the streams the channel's opts declare instead.
-		if cd.ReportFormat == llotypes.ReportFormatEVMABIEncodeUnpackedExpr {
-			expressionStreamIDs, err := calculated.ExpressionStreamIDs(optsCache, cd, channelID)
-			if err != nil {
-				lggr.Warnw("IsReportable=false; cannot resolve calculated stream IDs", "channelID", channelID, "err", err)
+	}
+	// Calculated streams are derived state, and unlike observed streams a
+	// missing one cannot be reported around: the codec has nothing to encode, so
+	// Reports skips the report. Without this check the channel would still be
+	// counted as reported and validAfter would advance over a round that emitted
+	// nothing — a silent coverage gap. This is independent of
+	// DisableNilStreamValues, which is about observed values.
+	//
+	// The check is against the streams the channel's opts declare, not the
+	// streams on the channel definition: ProcessCalculatedStreams only appends
+	// those once evaluation gets that far, so a channel whose expressions failed
+	// (bad input, undecodable opts, eval error, or history still warming up) has
+	// nothing to scan and would otherwise pass.
+	if cd.ReportFormat == llotypes.ReportFormatEVMABIEncodeUnpackedExpr {
+		expressionStreamIDs, err := calculated.ExpressionStreamIDs(optsCache, cd, channelID)
+		if err != nil {
+			lggr.Warnw("IsReportable=false; cannot resolve calculated stream IDs", "channelID", channelID, "err", err)
+			return false
+		}
+		declared := make(map[llotypes.StreamID]struct{}, len(cd.Streams))
+		for _, strm := range cd.Streams {
+			if strm.Aggregator == llotypes.AggregatorCalculated {
+				declared[strm.StreamID] = struct{}{}
+			}
+		}
+		for _, sid := range expressionStreamIDs {
+			if _, ok := declared[sid]; !ok {
+				lggr.Warnw("IsReportable=false; calculated stream missing from channel definition", "channelID", channelID, "streamID", sid)
 				return false
 			}
-			declared := make(map[llotypes.StreamID]struct{}, len(cd.Streams))
-			for _, strm := range cd.Streams {
-				if strm.Aggregator == llotypes.AggregatorCalculated {
-					declared[strm.StreamID] = struct{}{}
-				}
-			}
-			for _, sid := range expressionStreamIDs {
-				if _, ok := declared[sid]; !ok {
-					lggr.Warnw("IsReportable=false; calculated stream missing from channel definition", "channelID", channelID, "streamID", sid)
-					return false
-				}
-				if o.StreamAggregates[sid][llotypes.AggregatorCalculated] == nil {
-					lggr.Warnw("IsReportable=false; nil calculated stream value", "channelID", channelID, "streamID", sid)
-					return false
-				}
+			if o.StreamAggregates[sid][llotypes.AggregatorCalculated] == nil {
+				lggr.Warnw("IsReportable=false; nil calculated stream value", "channelID", channelID, "streamID", sid)
+				return false
 			}
 		}
 	}
