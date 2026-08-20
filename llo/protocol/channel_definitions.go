@@ -1,7 +1,6 @@
 package protocol
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
@@ -54,20 +53,19 @@ func VerifyChannelDefinitions(codecs map[llotypes.ReportFormat]ReportCodec, chan
 				continue
 			}
 			uniqueStreamIDs[strm.StreamID] = struct{}{}
-			// Calculated streams are appended to the definition by expression
-			// evaluation, so they are recorded from the opts that declare them
-			// rather than from here: a definition inherited from a previous
-			// outcome already carries its channel's own calculated streams, and
-			// treating those as observed would report every such channel as
-			// colliding with itself.
+			// Calculated streams are derived from the opts that declare them and
+			// are not stored on the definition, so anything listed here is
+			// observed. Definitions written by older code may still carry their
+			// calculated streams inline; those are skipped so that such a
+			// channel is not reported as colliding with itself.
 			if strm.Aggregator != llotypes.AggregatorCalculated {
 				if _, ok := observedBy[strm.StreamID]; !ok {
 					observedBy[strm.StreamID] = channelID
 				}
 			}
 		}
-		if cd.ReportFormat == llotypes.ReportFormatEVMABIEncodeUnpackedExpr {
-			ids, err := expressionStreamIDs(cd)
+		if HasCalculatedStreams(cd) {
+			ids, err := CalculatedStreamIDs(nil, cd, channelID)
 			if err != nil {
 				merr = errors.Join(merr, fmt.Errorf("invalid ChannelDefinition with ID %d: %w", channelID, err))
 			}
@@ -138,35 +136,6 @@ func sortedStreamIDs(m map[llotypes.StreamID]llotypes.ChannelID) []llotypes.Stre
 	}
 	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
 	return ids
-}
-
-// expressionStreamIDs decodes the calculated stream IDs an expression channel's
-// opts declare. It duplicates the shape of the calculated package's opts rather
-// than calling into it because that package depends on this one; only the field
-// this check needs is decoded, so the shapes cannot drift in a way that matters.
-//
-// Returns the IDs decoded so far along with the first error, so a definition
-// with a bad entry still contributes its good ones to the uniqueness check.
-func expressionStreamIDs(cd llotypes.ChannelDefinition) ([]llotypes.StreamID, error) {
-	var opts struct {
-		ABI []struct {
-			ExpressionStreamID llotypes.StreamID `json:"expressionStreamID"`
-		} `json:"abi"`
-	}
-	if err := json.Unmarshal(cd.Opts, &opts); err != nil {
-		return nil, fmt.Errorf("failed to decode calculated stream opts: %w", err)
-	}
-	if len(opts.ABI) == 0 {
-		return nil, errors.New("no expressions found in channel definition")
-	}
-	ids := make([]llotypes.StreamID, 0, len(opts.ABI))
-	for i, abi := range opts.ABI {
-		if abi.ExpressionStreamID == 0 {
-			return ids, fmt.Errorf("expression stream ID is 0, abi index: %d", i)
-		}
-		ids = append(ids, abi.ExpressionStreamID)
-	}
-	return ids, nil
 }
 
 func SubtractChannelDefinitions(minuend llotypes.ChannelDefinitions, subtrahend llotypes.ChannelDefinitions, limit int) llotypes.ChannelDefinitions {

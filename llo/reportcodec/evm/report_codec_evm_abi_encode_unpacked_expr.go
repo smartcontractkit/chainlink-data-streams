@@ -53,9 +53,12 @@ func (r ReportCodecEVMABIEncodeUnpackedExpr) Encode(report protocol.Report, cd l
 		return nil, fmt.Errorf("ReportCodecEVMABIEncodeUnpackedExpr no expressions found in channel definition")
 	}
 
-	// not enough streams for calculated feed
-	if cd.Streams[len(cd.Streams)-1].StreamID != opts.ABI[len(opts.ABI)-1].encoders[0].ExpressionStreamID {
-		return nil, fmt.Errorf("ReportCodecEVMABIEncodeUnpackedExpr not enough streams for calculated streams; expected: %d, got: %d", opts.ABI[len(opts.ABI)-1].encoders[0].ExpressionStreamID, len(cd.Streams))
+	// The payload is the trailing len(opts.ABI) values, one per declared
+	// calculated stream. protocol.EffectiveStreams guarantees that ordering when
+	// the report is assembled; this asserts the values actually arrived, which
+	// they do not when an expression failed to evaluate.
+	if len(report.Values) < len(opts.ABI) {
+		return nil, fmt.Errorf("ReportCodecEVMABIEncodeUnpackedExpr not enough values for calculated streams; expected at least: %d, got: %d", len(opts.ABI), len(report.Values))
 	}
 
 	report.ValidAfterNanoseconds = ClampReportRange(r, report, opts.MaxReportRange)

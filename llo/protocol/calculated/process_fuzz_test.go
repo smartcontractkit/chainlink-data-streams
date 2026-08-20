@@ -108,9 +108,14 @@ func runFuzzRound(t *testing.T, expression string, reader HistoryReader) map[str
 	t.Helper()
 
 	defs, aggregates := fuzzRound(expression)
+	before := fmt.Sprint(defs)
 	// Nop rather than Test: a round of unevaluable expressions logs one error per
 	// channel, and the fuzzer runs a great many rounds.
 	ProcessCalculatedStreams(logger.Nop(), defs, aggregates, fuzzAnchorNs, protocol.NewOptsCache(), reader)
+
+	// Evaluation contributes to the aggregates and nothing else. Whatever the
+	// expression does, the definitions it ran against come out untouched.
+	require.Equal(t, before, fmt.Sprint(defs), "channel definitions were mutated by evaluation")
 
 	out := make(map[string]string, len(aggregates)+len(defs))
 	for sid, byAggregator := range aggregates {

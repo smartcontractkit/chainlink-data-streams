@@ -106,9 +106,8 @@ func (p *Plugin) StateTransition(ctx context.Context, seqNr uint64, _ ocrtypes.A
 
 	// Channel definition changes (skipped once retired). These apply to pending
 	// only: they take effect next round.
-	var updatedChannelIDs []llotypes.ChannelID
 	if out.LifeCycleStage != protocol.LifeCycleStageRetired {
-		updatedChannelIDs = applyChannelVotes(pending, removeChannelVotesByID, updateDefsByHash, updateVotesByHash, p.F)
+		applyChannelVotes(pending, removeChannelVotesByID, updateDefsByHash, updateVotesByHash, p.F)
 	}
 
 	// validAfter.
@@ -194,19 +193,17 @@ func (p *Plugin) StateTransition(ctx context.Context, seqNr uint64, _ ocrtypes.A
 		return nil, err
 	}
 
-	// Evaluate calculated streams (EVMABIEncodeUnpackedExpr channels): appends
-	// the calculated streams to their channel definitions and writes the
-	// evaluated values into StreamAggregates. The engine is shared via
+	// Evaluate calculated streams (EVMABIEncodeUnpackedExpr channels): writes
+	// the evaluated values into StreamAggregates. The engine is shared via
 	// llo/protocol/calculated. The history store is the read side: expressions
 	// using History(...) read the windows appended above, and are left
 	// unevaluated while a window is still shallower than requested.
+	//
+	// The channel definitions are not touched. Which calculated streams a
+	// channel reports is derived from its opts by protocol.EffectiveStreams, so
+	// nothing about evaluation reaches replicated state and a persisted
+	// definition stays exactly what was voted on.
 	calculated.ProcessCalculatedStreams(p.Logger, effective, out.StreamAggregates, out.ObservationTimestampNanoseconds, prev.opts, history)
-
-	// Carry any calculated streams appended above into pending, so the append
-	// is persisted and does not repeat every round. Channels whose definition
-	// was replaced by a vote this round are skipped: their replacement gets its
-	// calculated streams appended once it becomes effective.
-	adoptCalculatedStreams(pending, effective, updatedChannelIDs)
 
 	// Flush KV mutations.
 	if err := p.flushKV(kvRW, seqNr, prev, out, pending, carryForward, history); err != nil {
@@ -293,8 +290,7 @@ func (p *Plugin) decodeObservations(ctx context.Context, aos []ocrtypes.Attribut
 }
 
 // applyChannelVotes applies remove/add votes with a >F threshold, in ascending
-// channelID order, respecting MaxOutcomeChannelDefinitionsLength. Returns the
-// channel IDs whose definition was added or replaced.
+// channelID order, respecting MaxOutcomeChannelDefinitionsLength.
 //
 // defs is the PENDING set: everything applied here takes effect next round. It
 // deliberately does not touch the round's channel generation, whose definitions
@@ -305,7 +301,7 @@ func applyChannelVotes(
 	updateDefsByHash map[[32]byte]protocol.ChannelDefinitionWithID,
 	updateVotesByHash map[[32]byte]int,
 	f int,
-) []llotypes.ChannelID {
+) {
 	for channelID, voteCount := range removeVotesByID {
 		if voteCount <= f {
 			continue
@@ -322,7 +318,6 @@ func applyChannelVotes(
 		ordered = append(ordered, hashWithID{h, d})
 	}
 	sort.Slice(ordered, func(i, j int) bool { return ordered[i].def.ChannelID < ordered[j].def.ChannelID })
-	updated := make([]llotypes.ChannelID, 0, len(ordered))
 	for _, hwid := range ordered {
 		if updateVotesByHash[hwid.hash] <= f {
 			continue
@@ -334,29 +329,6 @@ func applyChannelVotes(
 			continue
 		}
 		defs[defWithID.ChannelID] = defWithID.ChannelDefinition
-		updated = append(updated, defWithID.ChannelID)
-	}
-	return updated
-}
-
-// adoptCalculatedStreams copies the calculated streams that
-// ProcessCalculatedStreams appended to the effective definitions into the
-// pending set, so the append is persisted once rather than recomputed every
-// round. Channels that a vote replaced this round keep their new definition
-// untouched, and channels a vote removed are not resurrected.
-func adoptCalculatedStreams(pending, effective llotypes.ChannelDefinitions, updatedChannelIDs []llotypes.ChannelID) {
-	updated := make(map[llotypes.ChannelID]struct{}, len(updatedChannelIDs))
-	for _, id := range updatedChannelIDs {
-		updated[id] = struct{}{}
-	}
-	for id, cd := range effective {
-		if _, wasUpdated := updated[id]; wasUpdated {
-			continue
-		}
-		if _, stillPending := pending[id]; !stillPending {
-			continue
-		}
-		pending[id] = cd
 	}
 }
 
@@ -408,7 +380,10 @@ func (p *Plugin) aggregate(
 		for _, strm := range cd.Streams {
 			sid, agg := strm.StreamID, strm.Aggregator
 			if agg == llotypes.AggregatorCalculated {
-				continue // handled after aggregation by ProcessCalculatedStreams
+				// Not observed, so nothing to carry forward. Definitions written
+				// by older code may still list them inline; calculated values
+				// are recomputed each round by ProcessCalculatedStreams.
+				continue
 			}
 			if _, exists := out[sid][agg]; exists {
 				continue
@@ -600,7 +575,7 @@ func sortChannelIDs(cids []llotypes.ChannelID) {
 }
 
 // cloneChannelDefinitions deep-copies the definitions so that this round's
-// mutations - notably appending calculated streams - cannot reach the immutable
+// mutations - the votes applied to the pending set - cannot reach the immutable
 // generation the definitions came from, which other rounds are reading
 // concurrently.
 func cloneChannelDefinitions(in llotypes.ChannelDefinitions) llotypes.ChannelDefinitions {

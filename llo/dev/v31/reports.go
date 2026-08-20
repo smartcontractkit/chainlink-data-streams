@@ -9,7 +9,6 @@ import (
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
 
 	protocol "github.com/smartcontractkit/chainlink-data-streams/llo/protocol"
-	"github.com/smartcontractkit/chainlink-data-streams/llo/protocol/calculated"
 
 	"github.com/smartcontractkit/libocr/offchainreporting2plus/ocr3_1types"
 	"github.com/smartcontractkit/libocr/offchainreporting2plus/ocr3types"
@@ -128,8 +127,17 @@ func (p *Plugin) Reports(ctx context.Context, seqNr uint64, rawPrecursor ocr3_1t
 			continue
 		}
 
-		values := make([]protocol.StreamValue, 0, len(cd.Streams))
-		for _, strm := range cd.Streams {
+		// The streams a channel reports are derived, not read off the
+		// definition: calculated streams live in the channel's opts and are
+		// appended here, in declaration order, as the trailing values the codec
+		// encodes as its payload.
+		streams, err := protocol.EffectiveStreams(channelOpts, cd, cid)
+		if err != nil {
+			p.Logger.Warnw("Error encoding report; cannot derive effective streams", "err", err, "channelID", cid, "stage", "Report", "seqNr", seqNr)
+			continue
+		}
+		values := make([]protocol.StreamValue, 0, len(streams))
+		for _, strm := range streams {
 			values = append(values, out.StreamAggregates[strm.StreamID][strm.Aggregator])
 		}
 
@@ -150,9 +158,9 @@ func (p *Plugin) Reports(ctx context.Context, seqNr uint64, rawPrecursor ocr3_1t
 			p.Logger.Warnw("Error encoding report; codec missing for ReportFormat", "reportFormat", cd.ReportFormat, "channelID", cid, "stage", "Report", "seqNr", seqNr)
 			continue
 		}
-		encoded, err := codec.Encode(report, cd, channelOpts)
-		if err != nil {
-			p.Logger.Warnw("Error encoding report", "reportFormat", cd.ReportFormat, "err", err, "channelID", cid, "stage", "Report", "seqNr", seqNr)
+		encoded, encErr := codec.Encode(report, cd, channelOpts)
+		if encErr != nil {
+			p.Logger.Warnw("Error encoding report", "reportFormat", cd.ReportFormat, "err", encErr, "channelID", cid, "stage", "Report", "seqNr", seqNr)
 			continue
 		}
 		rwis = append(rwis, ocr3types.ReportPlus[llotypes.ReportInfo]{
@@ -210,28 +218,17 @@ func (o precursor) isReportable(channelID llotypes.ChannelID, minReportInterval 
 	// nothing — a silent coverage gap. This is independent of
 	// DisableNilStreamValues, which is about observed values.
 	//
-	// The check is against the streams the channel's opts declare, not the
-	// streams on the channel definition: ProcessCalculatedStreams only appends
-	// those once evaluation gets that far, so a channel whose expressions failed
-	// (bad input, undecodable opts, eval error, or history still warming up) has
-	// nothing to scan and would otherwise pass.
-	if cd.ReportFormat == llotypes.ReportFormatEVMABIEncodeUnpackedExpr {
-		expressionStreamIDs, err := calculated.ExpressionStreamIDs(optsCache, cd, channelID)
+	// The check is against the streams the channel's opts declare, which is also
+	// what protocol.EffectiveStreams derives the report's trailing values from.
+	// A channel whose expressions failed (bad input, undecodable opts, eval
+	// error, or history still warming up) has no aggregate for them.
+	if protocol.HasCalculatedStreams(cd) {
+		calculatedStreamIDs, err := protocol.CalculatedStreamIDs(optsCache, cd, channelID)
 		if err != nil {
 			lggr.Warnw("IsReportable=false; cannot resolve calculated stream IDs", "channelID", channelID, "err", err)
 			return false
 		}
-		declared := make(map[llotypes.StreamID]struct{}, len(cd.Streams))
-		for _, strm := range cd.Streams {
-			if strm.Aggregator == llotypes.AggregatorCalculated {
-				declared[strm.StreamID] = struct{}{}
-			}
-		}
-		for _, sid := range expressionStreamIDs {
-			if _, ok := declared[sid]; !ok {
-				lggr.Warnw("IsReportable=false; calculated stream missing from channel definition", "channelID", channelID, "streamID", sid)
-				return false
-			}
+		for _, sid := range calculatedStreamIDs {
 			if o.StreamAggregates[sid][llotypes.AggregatorCalculated] == nil {
 				lggr.Warnw("IsReportable=false; nil calculated stream value", "channelID", channelID, "streamID", sid)
 				return false

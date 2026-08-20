@@ -18,7 +18,6 @@ import (
 	"github.com/expr-lang/expr"
 	"github.com/expr-lang/expr/ast"
 	"github.com/expr-lang/expr/parser"
-	"github.com/goccy/go-json"
 	"github.com/shopspring/decimal"
 
 	"github.com/smartcontractkit/chainlink-common/pkg/logger"
@@ -613,10 +612,14 @@ const maxEvaluationWorkers = 8
 const minParallelEvaluationWeight = 256
 
 // ProcessCalculatedStreams evaluates expressions for each channel of the
-// EVMABIEncodeUnpackedExpr format, appending the calculated streams to their
-// channel definitions and writing the evaluated values into streamAggregates.
-// It is version-agnostic: both the v30 and v31 plugins call it with their own
-// outcome/precursor fields.
+// EVMABIEncodeUnpackedExpr format and writes the evaluated values into
+// streamAggregates. It is version-agnostic: both the v3.0 and v3.1 plugins call
+// it with their own outcome/precursor fields.
+//
+// channelDefinitions is read-only. The calculated streams a channel reports are
+// derived from its opts by protocol.EffectiveStreams, not stored on the
+// definition, so a definition is exactly what was voted on and evaluation
+// contributes nothing to replicated state.
 //
 // Processing runs in three phases — prepare, evaluate, apply — so that only the
 // pure part is parallelized:
@@ -629,15 +632,29 @@ const minParallelEvaluationWeight = 256
 //     environment is all it needs, and nothing it touches is shared with
 //     another channel.
 //   - apply is sequential and walks channels in ascending channel ID order, so
-//     the aggregates written, the definitions mutated and the errors logged do
-//     not depend on how the work was scheduled.
+//     the aggregates written and the errors logged do not depend on how the
+//     work was scheduled.
 func ProcessCalculatedStreams(lggr logger.Logger, channelDefinitions llotypes.ChannelDefinitions, streamAggregates protocol.StreamAggregates, observationTimestampNanoseconds uint64, optsCache *protocol.OptsCache, history HistoryReader) {
+	process(lggr, channelDefinitions, streamAggregates, observationTimestampNanoseconds, optsCache, history, false)
+}
+
+// ProcessCalculatedStreamsWithDefinitionAppend behaves as
+// ProcessCalculatedStreams but additionally appends each channel's calculated
+// streams to its channel definition.
+//
+// Deprecated: for v3.0 only.
+// v3.0 commits channelDefinitions as part of its outcome.
+func ProcessCalculatedStreamsWithDefinitionAppend(lggr logger.Logger, channelDefinitions llotypes.ChannelDefinitions, streamAggregates protocol.StreamAggregates, observationTimestampNanoseconds uint64, optsCache *protocol.OptsCache, history HistoryReader) {
+	process(lggr, channelDefinitions, streamAggregates, observationTimestampNanoseconds, optsCache, history, true)
+}
+
+func process(lggr logger.Logger, channelDefinitions llotypes.ChannelDefinitions, streamAggregates protocol.StreamAggregates, observationTimestampNanoseconds uint64, optsCache *protocol.OptsCache, history HistoryReader, appendToDefinitions bool) {
 	works := prepareCalculatedStreams(lggr, channelDefinitions, streamAggregates, observationTimestampNanoseconds, optsCache, history)
 	if len(works) == 0 {
 		return
 	}
 	results := evaluateCalculatedStreams(works)
-	applyCalculatedStreams(lggr, channelDefinitions, streamAggregates, works, results)
+	applyCalculatedStreams(lggr, channelDefinitions, streamAggregates, works, results, appendToDefinitions)
 }
 
 // channelWork is one channel's fully materialized evaluation input: everything
@@ -803,22 +820,27 @@ func evaluationWeight(works []channelWork) int {
 //
 // The duplicate-aggregate check lives here rather than in evaluation because it
 // is the one check whose answer depends on what earlier channels wrote.
-func applyCalculatedStreams(lggr logger.Logger, channelDefinitions llotypes.ChannelDefinitions, streamAggregates protocol.StreamAggregates, works []channelWork, results []channelResult) {
+//
+// appendToDefinitions is the deprecated v3.0 behaviour; see
+// ProcessCalculatedStreamsWithDefinitionAppend.
+func applyCalculatedStreams(lggr logger.Logger, channelDefinitions llotypes.ChannelDefinitions, streamAggregates protocol.StreamAggregates, works []channelWork, results []channelResult, appendToDefinitions bool) {
 	for i := range works {
 		work := &works[i]
 		result := &results[i]
 
-		// channel definitions are inherited from the previous outcome,
-		// so we only update the channel definition streams if we haven't done it before
-		cd := work.cd
-		if cd.Streams[len(cd.Streams)-1].StreamID != work.opts.ABI[len(work.opts.ABI)-1].ExpressionStreamID {
-			for _, abi := range work.opts.ABI {
-				cd.Streams = append(cd.Streams, llotypes.Stream{
-					StreamID:   abi.ExpressionStreamID,
-					Aggregator: llotypes.AggregatorCalculated,
-				})
+		if appendToDefinitions {
+			// channel definitions are inherited from the previous outcome,
+			// so we only update the channel definition streams if we haven't done it before
+			cd := work.cd
+			if cd.Streams[len(cd.Streams)-1].StreamID != work.opts.ABI[len(work.opts.ABI)-1].ExpressionStreamID {
+				for _, abi := range work.opts.ABI {
+					cd.Streams = append(cd.Streams, llotypes.Stream{
+						StreamID:   abi.ExpressionStreamID,
+						Aggregator: llotypes.AggregatorCalculated,
+					})
+				}
+				channelDefinitions[work.cid] = cd
 			}
-			channelDefinitions[work.cid] = cd
 		}
 
 		err := result.err
@@ -986,61 +1008,32 @@ func evalChannel(work *channelWork) channelResult {
 	return channelResult{values: values, err: work.err}
 }
 
-// calculatedStreamOpts is the options structure for expression/calculated streams.
-// It is used with protocol.OptsCache for decoding channel opts in ProcessCalculatedStreams.
-type calculatedStreamOpts struct {
-	ABI []struct {
-		Type               string            `json:"type"`
-		Expression         string            `json:"expression"`
-		ExpressionStreamID llotypes.StreamID `json:"expressionStreamID"`
-	} `json:"abi"`
-}
+// calculatedStreamOpts is the options structure for expression/calculated
+// streams. It aliases the protocol-level shape so that evaluation, channel
+// definition verification and effective-stream derivation all decode the same
+// declaration.
+type calculatedStreamOpts = protocol.CalculatedStreamOpts
 
-// getCalculatedStreamOpts resolves a channel's calculated-stream opts, preferring
-// the (node-local) decode cache and falling back to decoding the channel
-// definition's opts on a cache miss. The fallback keeps the result deterministic
-// across oracles even when the cache has not been populated (e.g. after a
-// restart, or in stages that never reset it).
-//
-// Returns an error if the opts cannot be decoded or declare no expressions.
+// getCalculatedStreamOpts resolves a channel's calculated-stream opts. See
+// protocol.DecodeCalculatedStreamOpts for the cache/fallback behaviour.
 func getCalculatedStreamOpts(optsCache *protocol.OptsCache, cd llotypes.ChannelDefinition, cid llotypes.ChannelID) (calculatedStreamOpts, error) {
-	var o calculatedStreamOpts
-	var err error
-	if optsCache != nil {
-		o, err = protocol.GetOpts[calculatedStreamOpts](optsCache, cid)
-	}
-	if optsCache == nil || err != nil {
-		o = calculatedStreamOpts{}
-		if uerr := json.Unmarshal(cd.Opts, &o); uerr != nil {
-			return o, fmt.Errorf("failed to decode calculated stream opts, channelID: %d: %w", cid, uerr)
-		}
-	}
-	if len(o.ABI) == 0 {
-		return o, fmt.Errorf("no expressions found in channel definition, channelID: %d", cid)
+	o, err := protocol.DecodeCalculatedStreamOpts(optsCache, cd, cid)
+	if err != nil {
+		return o, fmt.Errorf("%w, channelID: %d", err, cid)
 	}
 	return o, nil
 }
 
 // ExpressionStreamIDs returns the calculated (expression) stream IDs declared by
 // a channel's opts, in declaration order. It is the source of truth for which
-// calculated streams a channel is expected to produce: the streams appended to
-// the channel definition by ProcessCalculatedStreams are only present when
-// evaluation reached that point, so callers that need to verify completeness
-// (e.g. reportability checks) must consult the opts instead.
+// calculated streams a channel is expected to produce.
 //
 // Returns an error if the opts cannot be resolved, declare no expressions, or
 // declare a zero expression stream ID.
 func ExpressionStreamIDs(optsCache *protocol.OptsCache, cd llotypes.ChannelDefinition, cid llotypes.ChannelID) ([]llotypes.StreamID, error) {
-	o, err := getCalculatedStreamOpts(optsCache, cd, cid)
+	ids, err := protocol.CalculatedStreamIDs(optsCache, cd, cid)
 	if err != nil {
-		return nil, err
-	}
-	ids := make([]llotypes.StreamID, 0, len(o.ABI))
-	for _, abi := range o.ABI {
-		if abi.ExpressionStreamID == 0 {
-			return nil, fmt.Errorf("expression stream ID is 0, channelID: %d, expression: %s", cid, abi.Expression)
-		}
-		ids = append(ids, abi.ExpressionStreamID)
+		return nil, fmt.Errorf("%w, channelID: %d", err, cid)
 	}
 	return ids, nil
 }
@@ -1137,11 +1130,7 @@ func ProcessCalculatedStreamsDryRun(expression string) error {
 
 	// Process the calculated streams
 	o := &calculatedStreamOpts{
-		ABI: []struct {
-			Type               string            `json:"type"`
-			Expression         string            `json:"expression"`
-			ExpressionStreamID llotypes.StreamID `json:"expressionStreamID"`
-		}{
+		ABI: []protocol.CalculatedStreamABI{
 			{
 				Type:               "int256",
 				Expression:         expression,

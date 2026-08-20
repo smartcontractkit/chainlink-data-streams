@@ -118,8 +118,7 @@
 //
 // DisableNilStreamValues (a channel with any nil stream aggregate is
 // unreportable; for expression channels the expected calculated streams are
-// taken from the channel's opts rather than from the definition, since the
-// definition only lists them once evaluation succeeded), cross-round
+// taken from the channel's opts, which is where they are declared), cross-round
 // timestamped-aggregate carry-forward (in the r/agg record, newer-wins
 // monotonicity), and best-effort outcome/report telemetry are also implemented.
 // Reportability is persisted per channel each round (also in r/agg) so the next
@@ -127,12 +126,27 @@
 // aggregates that are not otherwise persisted.
 //
 // Calculated streams (EVMABIEncodeUnpackedExpr channels) are supported via the
-// expression engine in calculated.go, run at the end of StateTransition. A
-// channel whose expressions did not produce every calculated stream its opts
-// declare is not reportable, regardless of DisableNilStreamValues: the codec
-// would have nothing to encode, so the report is skipped, and counting the
-// channel as reported would advance validAfter over a round that emitted
-// nothing.
+// expression engine in llo/protocol/calculated, run at the end of
+// StateTransition. A channel whose expressions did not produce every calculated
+// stream its opts declare is not reportable, regardless of
+// DisableNilStreamValues: the codec would have nothing to encode, so the report
+// is skipped, and counting the channel as reported would advance validAfter over
+// a round that emitted nothing.
+//
+// Evaluation writes stream aggregates and nothing else. It does not touch the
+// channel definitions, so a persisted definition is exactly what was voted on
+// and no derived state reaches the replicated key-value store. Which streams a
+// channel reports — its observed streams followed by one calculated stream per
+// declared expression, in declaration order — is derived on demand by
+// protocol.EffectiveStreams, which is a pure function of the definition and its
+// opts and therefore identical on every oracle. Report assembly must go through
+// it rather than reading cd.Streams, since the trailing calculated values are
+// what ReportCodecEVMABIEncodeUnpackedExpr encodes as its payload.
+//
+// v3.0 instead appends the calculated streams to the definitions it commits in
+// its outcome (calculated.ProcessCalculatedStreamsWithDefinitionAppend), which
+// EffectiveStreams drops any such inline entries before appending the declared
+// ones, so it reads definitions written by either version identically.
 //
 // # Stream history
 //

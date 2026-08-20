@@ -110,9 +110,14 @@
 // inline instead.
 //
 // Apply is sequential and walks channels in ascending channel ID order, writing
-// aggregates, appending calculated streams to definitions and logging failures.
-// The order is fixed there, not inherited from the worker pool, which is what
-// keeps the outcome independent of scheduling.
+// aggregates and logging failures. The order is fixed there, not inherited from
+// the worker pool, which is what keeps the outcome independent of scheduling.
+//
+// Channel definitions are not written. Which calculated streams a channel
+// reports is derived from its opts by protocol.EffectiveStreams, so evaluation
+// contributes nothing to replicated state. v3.0 is the exception: it commits
+// channel definitions in its outcome and so keeps appending to them, via
+// ProcessCalculatedStreamsWithDefinitionAppend.
 //
 // # Determinism
 //

@@ -165,10 +165,10 @@ func ValidateHistoryBackfillAgainstDefinitions(cd llotypes.ChannelDefinition, de
 			return fmt.Errorf("backfill stream %d differs from target", i)
 		}
 	}
-	for _, strm := range target.Streams {
-		if strm.Aggregator == llotypes.AggregatorCalculated {
-			return errors.New("history backfill target channel must not use calculated streams (phase 1 limitation)")
-		}
+	// The target's report format is what says whether it has calculated
+	// streams: they are derived from its opts, not listed on the definition.
+	if HasCalculatedStreams(target) {
+		return errors.New("history backfill target channel must not use calculated streams (phase 1 limitation)")
 	}
 	res, err := TargetChannelTimeResolution(target)
 	if err != nil {
