@@ -150,7 +150,12 @@ func (e environment) SetStreamValue(id llotypes.StreamID, value protocol.StreamV
 	case protocol.LLOStreamValue_TimestampedStreamValue:
 		tsv := value.(*protocol.TimestampedStreamValue)
 		e[fmt.Sprintf("s%d_timestamp", id)] = tsv.ObservedAtNanoseconds
-		e.SetStreamValue(id, tsv.StreamValue)
+		// The wrapped value is what expressions actually name, so failing to
+		// bind it is the caller's error to see here: reported later it surfaces
+		// as an unknown-name compile failure instead.
+		if err := e.SetStreamValue(id, tsv.StreamValue); err != nil {
+			return err
+		}
 	}
 
 	return nil

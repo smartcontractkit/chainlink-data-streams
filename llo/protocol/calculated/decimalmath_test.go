@@ -3,6 +3,7 @@ package calculated
 import (
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/assert"
@@ -141,4 +142,46 @@ func TestTranscendentalsAreConcurrencySafe(t *testing.T) {
 		}()
 	}
 	wg.Wait()
+}
+
+func Test_checkPow(t *testing.T) {
+	// The bound is on the size of the result, not of the exponent: an exponent
+	// well inside maxPowExponent still asks for a result nothing can compute or
+	// store.
+	for _, tc := range []struct {
+		name      string
+		base, exp string
+		wantErr   string
+	}{
+		{"large result from a modest exponent", "3000", "50000.5", "exceeds the maximum magnitude of 2400"},
+		{"large result from an integer exponent", "2", "5000", "exceeds the maximum magnitude of 2400"},
+		{"tiny result", "0.0001", "-40000", "exceeds the maximum magnitude of 2400"},
+		{"absurd exponent is refused by the cheap gate", "2", "100001", "exceeds the maximum magnitude of 100000"},
+		{"largest storable result", "10", "1000", ""},
+		{"base near one with a large exponent", "1.0001", "100000", ""},
+		{"square root", "4", "0.5", ""},
+		{"zero base has no logarithm", "0", "3", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			base, err := decimal.NewFromString(tc.base)
+			require.NoError(t, err)
+			exponent, err := decimal.NewFromString(tc.exp)
+			require.NoError(t, err)
+
+			// checkPow has to be cheap, and so has to reject before the work it
+			// is protecting against would have started.
+			start := time.Now()
+			err = checkPow(base, exponent)
+			require.Less(t, time.Since(start), time.Second)
+
+			if tc.wantErr == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.ErrorContains(t, err, tc.wantErr)
+			// decimalPow reports the same refusal rather than computing.
+			_, err = decimalPow(base, exponent, doublePrecision)
+			require.ErrorContains(t, err, tc.wantErr)
+		})
+	}
 }

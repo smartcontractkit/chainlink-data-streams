@@ -15,6 +15,10 @@ import (
 // and to hand them to Provide before mutating or reading the window.
 var ErrHistoryChunkNotLoaded = errors.New("stream history chunk not loaded")
 
+// ErrHistoryAlreadyAppended is returned by RingWindow.Append when a pair is
+// appended to twice in one round. See Append for why that cannot be allowed.
+var ErrHistoryAlreadyAppended = errors.New("stream history already appended this round")
+
 // StreamHistoryChunk is one slot of a chunked history ring: a run of
 // consecutive records for one (streamID, aggregator) pair, oldest first.
 //
@@ -445,6 +449,9 @@ type RingWindow struct {
 
 	headerDirty bool
 	dirtyChunk  *StreamHistoryChunk
+	// stored reports whether this round already appended a record, which it is
+	// allowed to do at most once. See Append.
+	stored bool
 }
 
 // NewRingWindow returns a working copy over an existing header. A nil header
@@ -659,9 +666,21 @@ func (w *RingWindow) SetRequiredCount(requiredCount uint32) (changed bool, err e
 // A pair with zero capacity stores nothing. A value serializing to more than
 // MaxHistoryRecordBytes is rejected with ErrHistoryRecordTooLarge, leaving an
 // honest gap rather than a window larger than the byte budget assumed.
+//
+// At most one record may be stored per round, and a second attempt returns
+// ErrHistoryAlreadyAppended. Two rules depend on it. The write set carries the
+// newest chunk only, so a second append that sealed a chunk and started another
+// would leave the sealed one's final record unpersisted while the header already
+// counted it -- next round the window reads short and is discarded as corrupt.
+// And the round's write budget is sized on one header and one chunk per pair.
+// The aggregation path appends once per pair per round, so this only rejects
+// misuse, but it is checked rather than assumed because Append is exported.
 func (w *RingWindow) Append(observedAtNanoseconds uint64, value StreamValue) (appended bool, err error) {
 	if value == nil {
 		return false, ErrNilStreamValue
+	}
+	if w.stored {
+		return false, ErrHistoryAlreadyAppended
 	}
 	if w.header.requiredCount == 0 {
 		return false, nil
@@ -706,6 +725,7 @@ func (w *RingWindow) Append(observedAtNanoseconds uint64, value StreamValue) (ap
 	w.header.last = observedAtNanoseconds
 	w.headerDirty = true
 	w.dirtyChunk = tail
+	w.stored = true
 	w.evict()
 	return true, nil
 }

@@ -1748,3 +1748,16 @@ func TestExpressionStreamIDs(t *testing.T) {
 		require.ErrorContains(t, err, "failed to decode calculated stream opts")
 	})
 }
+
+func Test_environment_SetStreamValue_NestedNil(t *testing.T) {
+	// A timestamped value binds its timestamp and then recurses for the value
+	// expressions actually name. Dropping the recursive error would leave the
+	// environment with s1_timestamp and no s1, and the channel would fail later
+	// with "unknown name s1" instead of saying the value was nil.
+	env := NewEnv(uint64(1750169759775700000))
+	defer env.release()
+
+	err := env.SetStreamValue(1, &protocol.TimestampedStreamValue{ObservedAtNanoseconds: 1, StreamValue: nil})
+	require.ErrorContains(t, err, "stream value is nil")
+	require.NotContains(t, env, "s1")
+}

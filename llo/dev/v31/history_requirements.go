@@ -16,7 +16,7 @@ type historyRequirements struct {
 	// depths holds the admitted pairs and their required window depth.
 	depths map[histKey]uint32
 	// denied holds pairs that were required but could not be admitted within
-	// the pair and byte caps, sorted. Channels referencing them cannot evaluate
+	// the pair cap, sorted. Channels referencing them cannot evaluate
 	// and so are not reportable; they are reported here so the caller can say so
 	// loudly rather than silently producing shorter windows.
 	denied []histKey

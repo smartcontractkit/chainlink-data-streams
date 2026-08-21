@@ -823,3 +823,42 @@ func TestRingWindowAtMaximumDepth(t *testing.T) {
 	// layout exists to keep small.
 	assert.LessOrEqual(t, s.slotReads-before, MaxHistoryRecordsPerPair/MaxHistoryChunkRecords+1)
 }
+
+func Test_RingWindow_AppendOncePerRound(t *testing.T) {
+	// The write set carries only the newest chunk, so a second append that
+	// sealed one would lose its last record while the header already counted it.
+	// Rejecting the second append keeps the stored window and its header in
+	// agreement.
+	w := NewRingWindow(nil)
+	_, err := w.SetRequiredCount(MaxHistoryChunkRecords * 2)
+	require.NoError(t, err)
+
+	appended, err := w.Append(1, ToDecimal(decimal.NewFromInt(1)))
+	require.NoError(t, err)
+	require.True(t, appended)
+
+	appended, err = w.Append(2, ToDecimal(decimal.NewFromInt(2)))
+	require.ErrorIs(t, err, ErrHistoryAlreadyAppended)
+	require.False(t, appended)
+	require.Equal(t, uint32(1), w.Header().total(), "a rejected append must not be counted")
+
+	// A rejected append stores nothing, so it does not spend the round's one
+	// append either.
+	w = NewRingWindow(nil)
+	_, err = w.SetRequiredCount(4)
+	require.NoError(t, err)
+	appended, err = w.Append(10, ToDecimal(decimal.NewFromInt(1)))
+	require.NoError(t, err)
+	require.True(t, appended)
+
+	stored := w.WriteSet().Chunk
+	require.NotNil(t, stored)
+	w = NewRingWindow(w.Header())
+	require.NoError(t, w.Provide(stored))
+	appended, err = w.Append(10, ToDecimal(decimal.NewFromInt(2)))
+	require.NoError(t, err, "a value that is not strictly newer is rejected, not an error")
+	require.False(t, appended)
+	appended, err = w.Append(11, ToDecimal(decimal.NewFromInt(3)))
+	require.NoError(t, err)
+	require.True(t, appended)
+}

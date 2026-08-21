@@ -328,7 +328,16 @@ func (p *historyPatcher) checkTWAP(call *ast.CallNode) {
 	if !found {
 		return
 	}
-	if uint32(minSamples) > ref.Count {
+	// Compared as int64: minSamples is a literal and can be any integer the
+	// parser accepted, so narrowing it to the width of ref.Count would let a
+	// value above 2^32 wrap into a small one and pass. The runtime validation
+	// still rejects it, but the diagnostic this check exists to give would be
+	// lost.
+	if minSamples < 1 {
+		p.errorf("%s requires minSamples to be at least 1, got %d", twapFunctionName, minSamples)
+		return
+	}
+	if minSamples > int64(ref.Count) {
 		p.errorf("%s requires at least %d observations but %s only keeps %d records; increase the history depth or lower minSamples",
 			twapFunctionName, minSamples, ref, ref.Count)
 	}

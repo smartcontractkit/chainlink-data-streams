@@ -67,7 +67,7 @@ func recoverTranscendental(operation string, input decimal.Decimal, result *deci
 // A value beyond MaxDecimalExponent could not be stored or transmitted anyway, so
 // refusing it early costs nothing real.
 func decimalPow(base, exponent decimal.Decimal, prec int32) (result decimal.Decimal, err error) {
-	if err := checkPowExponent(exponent); err != nil {
+	if err := checkPow(base, exponent); err != nil {
 		return decimal.Decimal{}, err
 	}
 
@@ -90,19 +90,56 @@ func decimalPow(base, exponent decimal.Decimal, prec int32) (result decimal.Deci
 
 // maxPowExponent bounds the magnitude of an exponent passed to a power.
 //
-// A power whose result needs more than MaxDecimalExponent decimal places, or
-// that many integer digits, is unusable downstream: protocol decoding rejects
-// such a decimal outright. The bound is expressed on the exponent alone because
-// it has to be cheap — the whole point is to refuse before the expensive
-// computation starts, not after.
+// This is only the cheap first gate, and it exists so that the size of the
+// result can be estimated without doing arithmetic on an absurd exponent. What
+// actually has to be bounded is the result: see checkPow.
 const maxPowExponent = 100_000
 
-func checkPowExponent(exponent decimal.Decimal) error {
+// checkPow refuses a power whose result would be too large to compute in useful
+// time, or to store afterwards.
+//
+// Bounding the exponent alone is not enough, because the cost is driven by the
+// size of the result. A power with a non-integer exponent is evaluated as
+// exp(exponent * ln(base)), and ExpTaylor's cost grows with the number of digits
+// it produces: Pow(3000, 50000.5) asks for exp(4e5), a number with about 174,000
+// digits, which does not complete in any useful time. An integer exponent avoids
+// the logarithm but not the size — the repeated multiplication produces the same
+// number of digits.
+//
+// So the quantity exp() guards is checked here, ahead of the work: the magnitude
+// of exponent * ln(base), against maxExpArgument, which is the largest argument
+// whose result still fits MaxDecimalExponent. The logarithm needed to estimate it
+// is taken at low precision, and its input is a stored value, so it is cheap next
+// to the power it is protecting — and exact enough that its rounding error cannot
+// move a value across a bound of 2400.
+//
+// Both operands come from consensus, so an unbounded power is not one node's
+// problem: every node computes it in the same round, inside StateTransition,
+// holding the transcendental lock.
+func checkPow(base, exponent decimal.Decimal) error {
 	if exponent.Abs().GreaterThan(decimal.NewFromInt(maxPowExponent)) {
 		return fmt.Errorf("exponent %s exceeds the maximum magnitude of %d", exponent, maxPowExponent)
 	}
+	// A zero base is 0 or 1 whatever the exponent, and has no logarithm.
+	abs := base.Abs()
+	if abs.IsZero() {
+		return nil
+	}
+	lnBase, err := decimalLn(abs, powEstimatePrecision)
+	if err != nil {
+		return fmt.Errorf("power of %s by %s could not be bounded: %w", base, exponent, err)
+	}
+	if magnitude := exponent.Mul(lnBase).Abs(); magnitude.GreaterThan(decimal.NewFromInt(maxExpArgument)) {
+		return fmt.Errorf("power of %s by %s has a natural logarithm of %s, which exceeds the maximum magnitude of %d",
+			base, exponent, magnitude, maxExpArgument)
+	}
 	return nil
 }
+
+// powEstimatePrecision is the precision of the logarithm used to size a power's
+// result. It only has to place the result on the right side of maxExpArgument, so
+// it is deliberately far below the precision of the calculation itself.
+const powEstimatePrecision = 8
 
 // decimalToInt converts an integral decimal to an int, refusing anything outside
 // [minimum, maximum].

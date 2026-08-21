@@ -67,6 +67,20 @@ func TestValidateExpression_TWAPSatisfiability(t *testing.T) {
 	require.NoError(t, ValidateExpression(
 		`TWAP(History(s1, 240), {window: Duration("4m"), minSamples: 240, maxHeadGap: 30, maxInteriorGap: 10, maxTailGap: 30})`))
 
+	// A minSamples above the width of the record count must not wrap into a
+	// small value and pass. 2^32+5 would narrow to 5.
+	err = ValidateExpression(
+		`TWAP(History(s1, 100), {window: Duration("5m"), minSamples: 4294967301, maxHeadGap: 30, maxInteriorGap: 10, maxTailGap: 30})`)
+	require.ErrorIs(t, err, ErrHistoryExpression)
+	assert.Contains(t, err.Error(), "only keeps 100 records")
+
+	// A non-positive minSamples is reported as such rather than as a depth
+	// problem, which would read as "requires at least 0 observations".
+	err = ValidateExpression(
+		`TWAP(History(s1, 100), {window: Duration("5m"), minSamples: 0, maxHeadGap: 30, maxInteriorGap: 10, maxTailGap: 30})`)
+	require.ErrorIs(t, err, ErrHistoryExpression)
+	assert.Contains(t, err.Error(), "requires minSamples to be at least 1")
+
 	// A non-literal configuration cannot be checked statically; runtime
 	// validation still applies.
 	require.NoError(t, ValidateExpression("TWAP(History(s1, 10), cfg)"))
