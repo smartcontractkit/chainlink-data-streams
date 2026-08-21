@@ -30,6 +30,32 @@ type ReportCodec interface {
 	Verify(llotypes.ChannelDefinition) error
 }
 
+// AdmissionVerifier is optionally implemented by a ReportCodec that has checks
+// which must gate a definition being added or changed, but must not be applied
+// to one that is already committed -- typically a check added after channels
+// were already live, which a grandfathered definition may not satisfy.
+//
+// VerifyForAdmission is only consulted for definitions Verify accepted, and only
+// on the admission path; see VerifyChannelDefinitionsForAdmission. Like Verify it
+// must be a pure function of the definition.
+type AdmissionVerifier interface {
+	VerifyForAdmission(llotypes.ChannelDefinition) error
+}
+
+// FeedIDer is optionally implemented by a ReportCodec whose reports are
+// published under a feed ID. It exists so that VerifyChannelDefinitions can
+// check feed IDs are unique across the whole definition set without knowing the
+// format-specific opts the ID is carried in, or the format-specific rules for
+// when a channel has one at all.
+//
+// FeedID must be a pure function of the definition, like Verify, and is only
+// consulted for definitions Verify accepted. The boolean is false for a channel
+// whose reports carry no feed ID -- those are identified by channel ID, which is
+// unique by construction and so needs no check.
+type FeedIDer interface {
+	FeedID(llotypes.ChannelDefinition) (feedID [32]byte, ok bool, err error)
+}
+
 type ChannelDefinitionWithID struct {
 	llotypes.ChannelDefinition
 	ChannelID llotypes.ChannelID

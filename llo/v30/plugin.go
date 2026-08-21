@@ -288,6 +288,12 @@ func (p *Plugin) ValidateObservation(ctx context.Context, outctx ocr3types.Outco
 		return fmt.Errorf("RemoveChannelIDs is too long: %v vs %v", len(observation.RemoveChannelIDs), protocol.MaxObservationRemoveChannelIDsLength)
 	}
 
+	// Only the baseline checks run here. A definition is installed on more than
+	// f votes for its exact hash, so at least one honest oracle must have voted
+	// for it, and an honest oracle only votes for what its own admission-time
+	// verification accepted (see voteOnChannels). Repeating the admission-only
+	// checks here would add nothing, and would make oracles running different
+	// versions of those checks disagree on whether an observation is valid.
 	defsForVerify := observation.UpdateChannelDefinitions
 	if len(observation.UpdateChannelDefinitions) > 0 && outctx.SeqNr > 1 {
 		prevOutcome, prevErr := p.OutcomeCodec.Decode(outctx.PreviousOutcome)

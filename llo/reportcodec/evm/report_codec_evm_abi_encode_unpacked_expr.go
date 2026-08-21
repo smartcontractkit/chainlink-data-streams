@@ -11,10 +11,13 @@ import (
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
 
 	protocol "github.com/smartcontractkit/chainlink-data-streams/llo/protocol"
+	"github.com/smartcontractkit/chainlink-data-streams/llo/protocol/calculated"
 )
 
 var (
-	_ protocol.ReportCodec = ReportCodecEVMABIEncodeUnpackedExpr{}
+	_ protocol.ReportCodec       = ReportCodecEVMABIEncodeUnpackedExpr{}
+	_ protocol.FeedIDer          = ReportCodecEVMABIEncodeUnpackedExpr{}
+	_ protocol.AdmissionVerifier = ReportCodecEVMABIEncodeUnpackedExpr{}
 )
 
 type ReportCodecEVMABIEncodeUnpackedExpr struct {
@@ -51,9 +54,12 @@ func (r ReportCodecEVMABIEncodeUnpackedExpr) Encode(report protocol.Report, cd l
 		return nil, fmt.Errorf("ReportCodecEVMABIEncodeUnpackedExpr no expressions found in channel definition")
 	}
 
-	// not enough streams for calculated feed
-	if cd.Streams[len(cd.Streams)-1].StreamID != opts.ABI[len(opts.ABI)-1].encoders[0].ExpressionStreamID {
-		return nil, fmt.Errorf("ReportCodecEVMABIEncodeUnpackedExpr not enough streams for calculated streams; expected: %d, got: %d", opts.ABI[len(opts.ABI)-1].encoders[0].ExpressionStreamID, len(cd.Streams))
+	// The payload is the trailing len(opts.ABI) values, one per declared
+	// calculated stream. protocol.EffectiveStreams guarantees that ordering when
+	// the report is assembled; this asserts the values actually arrived, which
+	// they do not when an expression failed to evaluate.
+	if len(report.Values) < len(opts.ABI) {
+		return nil, fmt.Errorf("ReportCodecEVMABIEncodeUnpackedExpr not enough values for calculated streams; expected at least: %d, got: %d", len(opts.ABI), len(report.Values))
 	}
 
 	report.ValidAfterNanoseconds = ClampReportRange(r, report, opts.MaxReportRange)
@@ -96,6 +102,27 @@ func (r ReportCodecEVMABIEncodeUnpackedExpr) Verify(cd llotypes.ChannelDefinitio
 	}
 	if len(cd.Streams) < 3 {
 		return fmt.Errorf("expected at least 3 streams; got: %d", len(cd.Streams))
+	}
+	return nil
+}
+
+// VerifyForAdmission implements protocol.AdmissionVerifier: it rejects
+// statically invalid expressions before the definition can reach consensus. An
+// expression that cannot be analyzed can never produce a value, so the channel
+// would be installed and then never report.
+//
+// This is not part of Verify because definitions committed before the check
+// existed may fail it, and rejecting those would stop every oracle from
+// observing rather than just stopping that one channel from reporting.
+//
+// Like Verify it runs on an untrusted definition and is a pure function of it:
+// this parses and analyzes only, with no stream values and no state.
+//
+// nil opts cache: the definition is given directly, so the opts are decoded from
+// it rather than looked up.
+func (r ReportCodecEVMABIEncodeUnpackedExpr) VerifyForAdmission(cd llotypes.ChannelDefinition) error {
+	if err := calculated.ValidateChannelExpressions(nil, cd, 0); err != nil {
+		return fmt.Errorf("invalid calculated stream expressions: %w", err)
 	}
 	return nil
 }
@@ -151,4 +178,14 @@ func (r ReportCodecEVMABIEncodeUnpackedExpr) buildHeader(rf BaseReportFields, re
 		return nil, fmt.Errorf("failed to pack base report blob; %w", err)
 	}
 	return b, nil
+}
+
+// FeedID implements protocol.FeedIDer: these reports always carry a feed ID, and
+// Verify has already rejected a zero one.
+func (r ReportCodecEVMABIEncodeUnpackedExpr) FeedID(cd llotypes.ChannelDefinition) ([32]byte, bool, error) {
+	opts := new(ReportFormatEVMABIEncodeOpts)
+	if err := opts.Decode(cd.Opts); err != nil {
+		return [32]byte{}, false, fmt.Errorf("invalid Opts, got: %q; %w", cd.Opts, err)
+	}
+	return opts.FeedID, true, nil
 }

@@ -21,6 +21,7 @@ import (
 
 var (
 	_ protocol.ReportCodec = ReportCodecEVMABIEncodeUnpacked{}
+	_ protocol.FeedIDer    = ReportCodecEVMABIEncodeUnpacked{}
 
 	zero = big.NewInt(0)
 )
@@ -260,4 +261,14 @@ func (r ReportCodecEVMABIEncodeUnpacked) buildHeader(rf BaseReportFields, resolu
 		return nil, fmt.Errorf("failed to pack base report blob; %w", err)
 	}
 	return b, nil
+}
+
+// FeedID implements protocol.FeedIDer: these reports always carry a feed ID, and
+// Verify has already rejected a zero one.
+func (r ReportCodecEVMABIEncodeUnpacked) FeedID(cd llotypes.ChannelDefinition) ([32]byte, bool, error) {
+	opts := new(ReportFormatEVMABIEncodeOpts)
+	if err := opts.Decode(cd.Opts); err != nil {
+		return [32]byte{}, false, fmt.Errorf("invalid Opts, got: %q; %w", cd.Opts, err)
+	}
+	return opts.FeedID, true, nil
 }

@@ -336,6 +336,218 @@ func (x *LLOTimestampedStreamValue) GetStreamValue() *LLOStreamValue {
 	return nil
 }
 
+// LLOStreamHistoryRecord is one agreed aggregate value of a stream, with the
+// timestamp it was observed at. Per-record timestamps are required: rounds are
+// not evenly spaced, so time-weighted functions and gap detection cannot work
+// from the window bounds alone.
+type LLOStreamHistoryRecord struct {
+	state                 protoimpl.MessageState `protogen:"open.v1"`
+	ObservedAtNanoseconds uint64                 `protobuf:"varint,1,opt,name=observedAtNanoseconds,proto3" json:"observedAtNanoseconds,omitempty"`
+	Value                 *LLOStreamValue        `protobuf:"bytes,2,opt,name=value,proto3" json:"value,omitempty"`
+	unknownFields         protoimpl.UnknownFields
+	sizeCache             protoimpl.SizeCache
+}
+
+func (x *LLOStreamHistoryRecord) Reset() {
+	*x = LLOStreamHistoryRecord{}
+	mi := &file_plugin_codecs_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *LLOStreamHistoryRecord) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*LLOStreamHistoryRecord) ProtoMessage() {}
+
+func (x *LLOStreamHistoryRecord) ProtoReflect() protoreflect.Message {
+	mi := &file_plugin_codecs_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use LLOStreamHistoryRecord.ProtoReflect.Descriptor instead.
+func (*LLOStreamHistoryRecord) Descriptor() ([]byte, []int) {
+	return file_plugin_codecs_proto_rawDescGZIP(), []int{4}
+}
+
+func (x *LLOStreamHistoryRecord) GetObservedAtNanoseconds() uint64 {
+	if x != nil {
+		return x.ObservedAtNanoseconds
+	}
+	return 0
+}
+
+func (x *LLOStreamHistoryRecord) GetValue() *LLOStreamValue {
+	if x != nil {
+		return x.Value
+	}
+	return nil
+}
+
+// LLOStreamHistoryChunkProto is one slot of the chunked ring layout: a run of
+// consecutive history records for a single (streamID, aggregator) pair.
+//
+// Only the newest chunk of a window is ever rewritten; once a chunk is full it
+// is immutable for as long as it is retained. That is what makes the per-round
+// write cost a function of the chunk size rather than of the window depth.
+type LLOStreamHistoryChunkProto struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Absolute chunk index, monotonically increasing over the life of the
+	// window. The key holds only sequence mod MaxHistoryChunkSlots, so this is
+	// what distinguishes a live chunk from a stale one left by an earlier lap of
+	// the ring.
+	Sequence uint64 `protobuf:"varint,1,opt,name=sequence,proto3" json:"sequence,omitempty"`
+	// Oldest first, newest last; observedAtNanoseconds strictly increasing.
+	Records       []*LLOStreamHistoryRecord `protobuf:"bytes,2,rep,name=records,proto3" json:"records,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *LLOStreamHistoryChunkProto) Reset() {
+	*x = LLOStreamHistoryChunkProto{}
+	mi := &file_plugin_codecs_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *LLOStreamHistoryChunkProto) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*LLOStreamHistoryChunkProto) ProtoMessage() {}
+
+func (x *LLOStreamHistoryChunkProto) ProtoReflect() protoreflect.Message {
+	mi := &file_plugin_codecs_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use LLOStreamHistoryChunkProto.ProtoReflect.Descriptor instead.
+func (*LLOStreamHistoryChunkProto) Descriptor() ([]byte, []int) {
+	return file_plugin_codecs_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *LLOStreamHistoryChunkProto) GetSequence() uint64 {
+	if x != nil {
+		return x.Sequence
+	}
+	return 0
+}
+
+func (x *LLOStreamHistoryChunkProto) GetRecords() []*LLOStreamHistoryRecord {
+	if x != nil {
+		return x.Records
+	}
+	return nil
+}
+
+// LLOStreamHistoryHeaderProto is the index of a chunked history window: which
+// chunks are retained, how full each one is, and when each one starts.
+//
+// It is sized so that every decision a round makes — is there enough depth,
+// which chunks must be read, may this value be appended, which chunk falls out
+// — can be taken from the header alone, without reading a single chunk.
+type LLOStreamHistoryHeaderProto struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Capacity: the maximum depth required by any live channel/expression
+	// referencing this pair. Zero means the pair is torn down.
+	RequiredCount uint32 `protobuf:"varint,1,opt,name=requiredCount,proto3" json:"requiredCount,omitempty"`
+	// Absolute sequence of the oldest retained chunk. Zero when nothing is
+	// stored.
+	FirstSequence uint64 `protobuf:"varint,2,opt,name=firstSequence,proto3" json:"firstSequence,omitempty"`
+	// Records held by each retained chunk, oldest first. Every entry except the
+	// last equals MaxHistoryChunkRecords; the last is in [1, MaxHistoryChunkRecords].
+	Counts []uint32 `protobuf:"varint,3,rep,packed,name=counts,proto3" json:"counts,omitempty"`
+	// observedAtNanoseconds of the first record of each retained chunk, parallel
+	// to counts and strictly increasing. Denormalized so that evicting a chunk
+	// does not require loading its successor to learn the window's new start.
+	ChunkFirstObservationTimestampNanoseconds []uint64 `protobuf:"varint,4,rep,packed,name=chunkFirstObservationTimestampNanoseconds,proto3" json:"chunkFirstObservationTimestampNanoseconds,omitempty"`
+	// observedAtNanoseconds of the newest record in the window, or 0 when empty.
+	// The strictly-newer append rule is decided against this alone.
+	LastObservationTimestampNanoseconds uint64 `protobuf:"varint,5,opt,name=lastObservationTimestampNanoseconds,proto3" json:"lastObservationTimestampNanoseconds,omitempty"`
+	unknownFields                       protoimpl.UnknownFields
+	sizeCache                           protoimpl.SizeCache
+}
+
+func (x *LLOStreamHistoryHeaderProto) Reset() {
+	*x = LLOStreamHistoryHeaderProto{}
+	mi := &file_plugin_codecs_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *LLOStreamHistoryHeaderProto) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*LLOStreamHistoryHeaderProto) ProtoMessage() {}
+
+func (x *LLOStreamHistoryHeaderProto) ProtoReflect() protoreflect.Message {
+	mi := &file_plugin_codecs_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use LLOStreamHistoryHeaderProto.ProtoReflect.Descriptor instead.
+func (*LLOStreamHistoryHeaderProto) Descriptor() ([]byte, []int) {
+	return file_plugin_codecs_proto_rawDescGZIP(), []int{6}
+}
+
+func (x *LLOStreamHistoryHeaderProto) GetRequiredCount() uint32 {
+	if x != nil {
+		return x.RequiredCount
+	}
+	return 0
+}
+
+func (x *LLOStreamHistoryHeaderProto) GetFirstSequence() uint64 {
+	if x != nil {
+		return x.FirstSequence
+	}
+	return 0
+}
+
+func (x *LLOStreamHistoryHeaderProto) GetCounts() []uint32 {
+	if x != nil {
+		return x.Counts
+	}
+	return nil
+}
+
+func (x *LLOStreamHistoryHeaderProto) GetChunkFirstObservationTimestampNanoseconds() []uint64 {
+	if x != nil {
+		return x.ChunkFirstObservationTimestampNanoseconds
+	}
+	return nil
+}
+
+func (x *LLOStreamHistoryHeaderProto) GetLastObservationTimestampNanoseconds() uint64 {
+	if x != nil {
+		return x.LastObservationTimestampNanoseconds
+	}
+	return 0
+}
+
 type LLOChannelDefinitionProto struct {
 	state                  protoimpl.MessageState `protogen:"open.v1"`
 	ReportFormat           uint32                 `protobuf:"varint,1,opt,name=reportFormat,proto3" json:"reportFormat,omitempty"`
@@ -350,7 +562,7 @@ type LLOChannelDefinitionProto struct {
 
 func (x *LLOChannelDefinitionProto) Reset() {
 	*x = LLOChannelDefinitionProto{}
-	mi := &file_plugin_codecs_proto_msgTypes[4]
+	mi := &file_plugin_codecs_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -362,7 +574,7 @@ func (x *LLOChannelDefinitionProto) String() string {
 func (*LLOChannelDefinitionProto) ProtoMessage() {}
 
 func (x *LLOChannelDefinitionProto) ProtoReflect() protoreflect.Message {
-	mi := &file_plugin_codecs_proto_msgTypes[4]
+	mi := &file_plugin_codecs_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -375,7 +587,7 @@ func (x *LLOChannelDefinitionProto) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LLOChannelDefinitionProto.ProtoReflect.Descriptor instead.
 func (*LLOChannelDefinitionProto) Descriptor() ([]byte, []int) {
-	return file_plugin_codecs_proto_rawDescGZIP(), []int{4}
+	return file_plugin_codecs_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *LLOChannelDefinitionProto) GetReportFormat() uint32 {
@@ -430,7 +642,7 @@ type LLOStreamDefinition struct {
 
 func (x *LLOStreamDefinition) Reset() {
 	*x = LLOStreamDefinition{}
-	mi := &file_plugin_codecs_proto_msgTypes[5]
+	mi := &file_plugin_codecs_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -442,7 +654,7 @@ func (x *LLOStreamDefinition) String() string {
 func (*LLOStreamDefinition) ProtoMessage() {}
 
 func (x *LLOStreamDefinition) ProtoReflect() protoreflect.Message {
-	mi := &file_plugin_codecs_proto_msgTypes[5]
+	mi := &file_plugin_codecs_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -455,7 +667,7 @@ func (x *LLOStreamDefinition) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LLOStreamDefinition.ProtoReflect.Descriptor instead.
 func (*LLOStreamDefinition) Descriptor() ([]byte, []int) {
-	return file_plugin_codecs_proto_rawDescGZIP(), []int{5}
+	return file_plugin_codecs_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *LLOStreamDefinition) GetStreamID() uint32 {
@@ -482,7 +694,7 @@ type LLOStreamObservationProto struct {
 
 func (x *LLOStreamObservationProto) Reset() {
 	*x = LLOStreamObservationProto{}
-	mi := &file_plugin_codecs_proto_msgTypes[6]
+	mi := &file_plugin_codecs_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -494,7 +706,7 @@ func (x *LLOStreamObservationProto) String() string {
 func (*LLOStreamObservationProto) ProtoMessage() {}
 
 func (x *LLOStreamObservationProto) ProtoReflect() protoreflect.Message {
-	mi := &file_plugin_codecs_proto_msgTypes[6]
+	mi := &file_plugin_codecs_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -507,7 +719,7 @@ func (x *LLOStreamObservationProto) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LLOStreamObservationProto.ProtoReflect.Descriptor instead.
 func (*LLOStreamObservationProto) Descriptor() ([]byte, []int) {
-	return file_plugin_codecs_proto_rawDescGZIP(), []int{6}
+	return file_plugin_codecs_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *LLOStreamObservationProto) GetValid() bool {
@@ -538,7 +750,7 @@ type LLOOutcomeProtoV0 struct {
 
 func (x *LLOOutcomeProtoV0) Reset() {
 	*x = LLOOutcomeProtoV0{}
-	mi := &file_plugin_codecs_proto_msgTypes[7]
+	mi := &file_plugin_codecs_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -550,7 +762,7 @@ func (x *LLOOutcomeProtoV0) String() string {
 func (*LLOOutcomeProtoV0) ProtoMessage() {}
 
 func (x *LLOOutcomeProtoV0) ProtoReflect() protoreflect.Message {
-	mi := &file_plugin_codecs_proto_msgTypes[7]
+	mi := &file_plugin_codecs_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -563,7 +775,7 @@ func (x *LLOOutcomeProtoV0) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LLOOutcomeProtoV0.ProtoReflect.Descriptor instead.
 func (*LLOOutcomeProtoV0) Descriptor() ([]byte, []int) {
-	return file_plugin_codecs_proto_rawDescGZIP(), []int{7}
+	return file_plugin_codecs_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *LLOOutcomeProtoV0) GetLifeCycleStage() string {
@@ -615,7 +827,7 @@ type LLOOutcomeProtoV1 struct {
 
 func (x *LLOOutcomeProtoV1) Reset() {
 	*x = LLOOutcomeProtoV1{}
-	mi := &file_plugin_codecs_proto_msgTypes[8]
+	mi := &file_plugin_codecs_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -627,7 +839,7 @@ func (x *LLOOutcomeProtoV1) String() string {
 func (*LLOOutcomeProtoV1) ProtoMessage() {}
 
 func (x *LLOOutcomeProtoV1) ProtoReflect() protoreflect.Message {
-	mi := &file_plugin_codecs_proto_msgTypes[8]
+	mi := &file_plugin_codecs_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -640,7 +852,7 @@ func (x *LLOOutcomeProtoV1) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LLOOutcomeProtoV1.ProtoReflect.Descriptor instead.
 func (*LLOOutcomeProtoV1) Descriptor() ([]byte, []int) {
-	return file_plugin_codecs_proto_rawDescGZIP(), []int{8}
+	return file_plugin_codecs_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *LLOOutcomeProtoV1) GetLifeCycleStage() string {
@@ -688,7 +900,7 @@ type LLOChannelIDAndDefinitionProto struct {
 
 func (x *LLOChannelIDAndDefinitionProto) Reset() {
 	*x = LLOChannelIDAndDefinitionProto{}
-	mi := &file_plugin_codecs_proto_msgTypes[9]
+	mi := &file_plugin_codecs_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -700,7 +912,7 @@ func (x *LLOChannelIDAndDefinitionProto) String() string {
 func (*LLOChannelIDAndDefinitionProto) ProtoMessage() {}
 
 func (x *LLOChannelIDAndDefinitionProto) ProtoReflect() protoreflect.Message {
-	mi := &file_plugin_codecs_proto_msgTypes[9]
+	mi := &file_plugin_codecs_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -713,7 +925,7 @@ func (x *LLOChannelIDAndDefinitionProto) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LLOChannelIDAndDefinitionProto.ProtoReflect.Descriptor instead.
 func (*LLOChannelIDAndDefinitionProto) Descriptor() ([]byte, []int) {
-	return file_plugin_codecs_proto_rawDescGZIP(), []int{9}
+	return file_plugin_codecs_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *LLOChannelIDAndDefinitionProto) GetChannelID() uint32 {
@@ -740,7 +952,7 @@ type LLOChannelIDAndValidAfterSecondsProto struct {
 
 func (x *LLOChannelIDAndValidAfterSecondsProto) Reset() {
 	*x = LLOChannelIDAndValidAfterSecondsProto{}
-	mi := &file_plugin_codecs_proto_msgTypes[10]
+	mi := &file_plugin_codecs_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -752,7 +964,7 @@ func (x *LLOChannelIDAndValidAfterSecondsProto) String() string {
 func (*LLOChannelIDAndValidAfterSecondsProto) ProtoMessage() {}
 
 func (x *LLOChannelIDAndValidAfterSecondsProto) ProtoReflect() protoreflect.Message {
-	mi := &file_plugin_codecs_proto_msgTypes[10]
+	mi := &file_plugin_codecs_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -765,7 +977,7 @@ func (x *LLOChannelIDAndValidAfterSecondsProto) ProtoReflect() protoreflect.Mess
 
 // Deprecated: Use LLOChannelIDAndValidAfterSecondsProto.ProtoReflect.Descriptor instead.
 func (*LLOChannelIDAndValidAfterSecondsProto) Descriptor() ([]byte, []int) {
-	return file_plugin_codecs_proto_rawDescGZIP(), []int{10}
+	return file_plugin_codecs_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *LLOChannelIDAndValidAfterSecondsProto) GetChannelID() uint32 {
@@ -792,7 +1004,7 @@ type LLOChannelIDAndValidAfterNanosecondsProto struct {
 
 func (x *LLOChannelIDAndValidAfterNanosecondsProto) Reset() {
 	*x = LLOChannelIDAndValidAfterNanosecondsProto{}
-	mi := &file_plugin_codecs_proto_msgTypes[11]
+	mi := &file_plugin_codecs_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -804,7 +1016,7 @@ func (x *LLOChannelIDAndValidAfterNanosecondsProto) String() string {
 func (*LLOChannelIDAndValidAfterNanosecondsProto) ProtoMessage() {}
 
 func (x *LLOChannelIDAndValidAfterNanosecondsProto) ProtoReflect() protoreflect.Message {
-	mi := &file_plugin_codecs_proto_msgTypes[11]
+	mi := &file_plugin_codecs_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -817,7 +1029,7 @@ func (x *LLOChannelIDAndValidAfterNanosecondsProto) ProtoReflect() protoreflect.
 
 // Deprecated: Use LLOChannelIDAndValidAfterNanosecondsProto.ProtoReflect.Descriptor instead.
 func (*LLOChannelIDAndValidAfterNanosecondsProto) Descriptor() ([]byte, []int) {
-	return file_plugin_codecs_proto_rawDescGZIP(), []int{11}
+	return file_plugin_codecs_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *LLOChannelIDAndValidAfterNanosecondsProto) GetChannelID() uint32 {
@@ -845,7 +1057,7 @@ type LLOStreamAggregate struct {
 
 func (x *LLOStreamAggregate) Reset() {
 	*x = LLOStreamAggregate{}
-	mi := &file_plugin_codecs_proto_msgTypes[12]
+	mi := &file_plugin_codecs_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -857,7 +1069,7 @@ func (x *LLOStreamAggregate) String() string {
 func (*LLOStreamAggregate) ProtoMessage() {}
 
 func (x *LLOStreamAggregate) ProtoReflect() protoreflect.Message {
-	mi := &file_plugin_codecs_proto_msgTypes[12]
+	mi := &file_plugin_codecs_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -870,7 +1082,7 @@ func (x *LLOStreamAggregate) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LLOStreamAggregate.ProtoReflect.Descriptor instead.
 func (*LLOStreamAggregate) Descriptor() ([]byte, []int) {
-	return file_plugin_codecs_proto_rawDescGZIP(), []int{12}
+	return file_plugin_codecs_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *LLOStreamAggregate) GetStreamID() uint32 {
@@ -910,7 +1122,7 @@ type LLOChannelStateProto struct {
 
 func (x *LLOChannelStateProto) Reset() {
 	*x = LLOChannelStateProto{}
-	mi := &file_plugin_codecs_proto_msgTypes[13]
+	mi := &file_plugin_codecs_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -922,7 +1134,7 @@ func (x *LLOChannelStateProto) String() string {
 func (*LLOChannelStateProto) ProtoMessage() {}
 
 func (x *LLOChannelStateProto) ProtoReflect() protoreflect.Message {
-	mi := &file_plugin_codecs_proto_msgTypes[13]
+	mi := &file_plugin_codecs_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -935,7 +1147,7 @@ func (x *LLOChannelStateProto) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LLOChannelStateProto.ProtoReflect.Descriptor instead.
 func (*LLOChannelStateProto) Descriptor() ([]byte, []int) {
-	return file_plugin_codecs_proto_rawDescGZIP(), []int{13}
+	return file_plugin_codecs_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *LLOChannelStateProto) GetChannelDefinitions() []*LLOChannelIDAndDefinitionProto {
@@ -969,7 +1181,7 @@ type LLOHotStateProto struct {
 
 func (x *LLOHotStateProto) Reset() {
 	*x = LLOHotStateProto{}
-	mi := &file_plugin_codecs_proto_msgTypes[14]
+	mi := &file_plugin_codecs_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -981,7 +1193,7 @@ func (x *LLOHotStateProto) String() string {
 func (*LLOHotStateProto) ProtoMessage() {}
 
 func (x *LLOHotStateProto) ProtoReflect() protoreflect.Message {
-	mi := &file_plugin_codecs_proto_msgTypes[14]
+	mi := &file_plugin_codecs_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -994,7 +1206,7 @@ func (x *LLOHotStateProto) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LLOHotStateProto.ProtoReflect.Descriptor instead.
 func (*LLOHotStateProto) Descriptor() ([]byte, []int) {
-	return file_plugin_codecs_proto_rawDescGZIP(), []int{14}
+	return file_plugin_codecs_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *LLOHotStateProto) GetObservationTimestampNanoseconds() uint64 {
@@ -1049,7 +1261,7 @@ type LLOPrecursorProto struct {
 
 func (x *LLOPrecursorProto) Reset() {
 	*x = LLOPrecursorProto{}
-	mi := &file_plugin_codecs_proto_msgTypes[15]
+	mi := &file_plugin_codecs_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1061,7 +1273,7 @@ func (x *LLOPrecursorProto) String() string {
 func (*LLOPrecursorProto) ProtoMessage() {}
 
 func (x *LLOPrecursorProto) ProtoReflect() protoreflect.Message {
-	mi := &file_plugin_codecs_proto_msgTypes[15]
+	mi := &file_plugin_codecs_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1074,7 +1286,7 @@ func (x *LLOPrecursorProto) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LLOPrecursorProto.ProtoReflect.Descriptor instead.
 func (*LLOPrecursorProto) Descriptor() ([]byte, []int) {
-	return file_plugin_codecs_proto_rawDescGZIP(), []int{15}
+	return file_plugin_codecs_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *LLOPrecursorProto) GetLifeCycleStage() string {
@@ -1151,7 +1363,19 @@ const file_plugin_codecs_proto_rawDesc = "" +
 	"\x03ask\x18\x03 \x01(\fR\x03ask\"\x87\x01\n" +
 	"\x19LLOTimestampedStreamValue\x124\n" +
 	"\x15observedAtNanoseconds\x18\x01 \x01(\x04R\x15observedAtNanoseconds\x124\n" +
-	"\vstreamValue\x18\x02 \x01(\v2\x12.v1.LLOStreamValueR\vstreamValue\"\xf4\x01\n" +
+	"\vstreamValue\x18\x02 \x01(\v2\x12.v1.LLOStreamValueR\vstreamValue\"x\n" +
+	"\x16LLOStreamHistoryRecord\x124\n" +
+	"\x15observedAtNanoseconds\x18\x01 \x01(\x04R\x15observedAtNanoseconds\x12(\n" +
+	"\x05value\x18\x02 \x01(\v2\x12.v1.LLOStreamValueR\x05value\"n\n" +
+	"\x1aLLOStreamHistoryChunkProto\x12\x1a\n" +
+	"\bsequence\x18\x01 \x01(\x04R\bsequence\x124\n" +
+	"\arecords\x18\x02 \x03(\v2\x1a.v1.LLOStreamHistoryRecordR\arecords\"\xb1\x02\n" +
+	"\x1bLLOStreamHistoryHeaderProto\x12$\n" +
+	"\rrequiredCount\x18\x01 \x01(\rR\rrequiredCount\x12$\n" +
+	"\rfirstSequence\x18\x02 \x01(\x04R\rfirstSequence\x12\x16\n" +
+	"\x06counts\x18\x03 \x03(\rR\x06counts\x12\\\n" +
+	")chunkFirstObservationTimestampNanoseconds\x18\x04 \x03(\x04R)chunkFirstObservationTimestampNanoseconds\x12P\n" +
+	"#lastObservationTimestampNanoseconds\x18\x05 \x01(\x04R#lastObservationTimestampNanoseconds\"\xf4\x01\n" +
 	"\x19LLOChannelDefinitionProto\x12\"\n" +
 	"\freportFormat\x18\x01 \x01(\rR\freportFormat\x121\n" +
 	"\astreams\x18\x02 \x03(\v2\x17.v1.LLOStreamDefinitionR\astreams\x12\x12\n" +
@@ -1223,55 +1447,60 @@ func file_plugin_codecs_proto_rawDescGZIP() []byte {
 }
 
 var file_plugin_codecs_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_plugin_codecs_proto_msgTypes = make([]protoimpl.MessageInfo, 18)
+var file_plugin_codecs_proto_msgTypes = make([]protoimpl.MessageInfo, 21)
 var file_plugin_codecs_proto_goTypes = []any{
 	(LLOStreamValue_Type)(0),                          // 0: v1.LLOStreamValue.Type
 	(*LLOObservationProto)(nil),                       // 1: v1.LLOObservationProto
 	(*LLOStreamValue)(nil),                            // 2: v1.LLOStreamValue
 	(*LLOStreamValueQuote)(nil),                       // 3: v1.LLOStreamValueQuote
 	(*LLOTimestampedStreamValue)(nil),                 // 4: v1.LLOTimestampedStreamValue
-	(*LLOChannelDefinitionProto)(nil),                 // 5: v1.LLOChannelDefinitionProto
-	(*LLOStreamDefinition)(nil),                       // 6: v1.LLOStreamDefinition
-	(*LLOStreamObservationProto)(nil),                 // 7: v1.LLOStreamObservationProto
-	(*LLOOutcomeProtoV0)(nil),                         // 8: v1.LLOOutcomeProtoV0
-	(*LLOOutcomeProtoV1)(nil),                         // 9: v1.LLOOutcomeProtoV1
-	(*LLOChannelIDAndDefinitionProto)(nil),            // 10: v1.LLOChannelIDAndDefinitionProto
-	(*LLOChannelIDAndValidAfterSecondsProto)(nil),     // 11: v1.LLOChannelIDAndValidAfterSecondsProto
-	(*LLOChannelIDAndValidAfterNanosecondsProto)(nil), // 12: v1.LLOChannelIDAndValidAfterNanosecondsProto
-	(*LLOStreamAggregate)(nil),                        // 13: v1.LLOStreamAggregate
-	(*LLOChannelStateProto)(nil),                      // 14: v1.LLOChannelStateProto
-	(*LLOHotStateProto)(nil),                          // 15: v1.LLOHotStateProto
-	(*LLOPrecursorProto)(nil),                         // 16: v1.LLOPrecursorProto
-	nil,                                               // 17: v1.LLOObservationProto.UpdateChannelDefinitionsEntry
-	nil,                                               // 18: v1.LLOObservationProto.StreamValuesEntry
+	(*LLOStreamHistoryRecord)(nil),                    // 5: v1.LLOStreamHistoryRecord
+	(*LLOStreamHistoryChunkProto)(nil),                // 6: v1.LLOStreamHistoryChunkProto
+	(*LLOStreamHistoryHeaderProto)(nil),               // 7: v1.LLOStreamHistoryHeaderProto
+	(*LLOChannelDefinitionProto)(nil),                 // 8: v1.LLOChannelDefinitionProto
+	(*LLOStreamDefinition)(nil),                       // 9: v1.LLOStreamDefinition
+	(*LLOStreamObservationProto)(nil),                 // 10: v1.LLOStreamObservationProto
+	(*LLOOutcomeProtoV0)(nil),                         // 11: v1.LLOOutcomeProtoV0
+	(*LLOOutcomeProtoV1)(nil),                         // 12: v1.LLOOutcomeProtoV1
+	(*LLOChannelIDAndDefinitionProto)(nil),            // 13: v1.LLOChannelIDAndDefinitionProto
+	(*LLOChannelIDAndValidAfterSecondsProto)(nil),     // 14: v1.LLOChannelIDAndValidAfterSecondsProto
+	(*LLOChannelIDAndValidAfterNanosecondsProto)(nil), // 15: v1.LLOChannelIDAndValidAfterNanosecondsProto
+	(*LLOStreamAggregate)(nil),                        // 16: v1.LLOStreamAggregate
+	(*LLOChannelStateProto)(nil),                      // 17: v1.LLOChannelStateProto
+	(*LLOHotStateProto)(nil),                          // 18: v1.LLOHotStateProto
+	(*LLOPrecursorProto)(nil),                         // 19: v1.LLOPrecursorProto
+	nil,                                               // 20: v1.LLOObservationProto.UpdateChannelDefinitionsEntry
+	nil,                                               // 21: v1.LLOObservationProto.StreamValuesEntry
 }
 var file_plugin_codecs_proto_depIdxs = []int32{
-	17, // 0: v1.LLOObservationProto.updateChannelDefinitions:type_name -> v1.LLOObservationProto.UpdateChannelDefinitionsEntry
-	18, // 1: v1.LLOObservationProto.streamValues:type_name -> v1.LLOObservationProto.StreamValuesEntry
+	20, // 0: v1.LLOObservationProto.updateChannelDefinitions:type_name -> v1.LLOObservationProto.UpdateChannelDefinitionsEntry
+	21, // 1: v1.LLOObservationProto.streamValues:type_name -> v1.LLOObservationProto.StreamValuesEntry
 	0,  // 2: v1.LLOStreamValue.type:type_name -> v1.LLOStreamValue.Type
 	2,  // 3: v1.LLOTimestampedStreamValue.streamValue:type_name -> v1.LLOStreamValue
-	6,  // 4: v1.LLOChannelDefinitionProto.streams:type_name -> v1.LLOStreamDefinition
-	10, // 5: v1.LLOOutcomeProtoV0.channelDefinitions:type_name -> v1.LLOChannelIDAndDefinitionProto
-	11, // 6: v1.LLOOutcomeProtoV0.validAfterSeconds:type_name -> v1.LLOChannelIDAndValidAfterSecondsProto
-	13, // 7: v1.LLOOutcomeProtoV0.streamAggregates:type_name -> v1.LLOStreamAggregate
-	10, // 8: v1.LLOOutcomeProtoV1.channelDefinitions:type_name -> v1.LLOChannelIDAndDefinitionProto
-	12, // 9: v1.LLOOutcomeProtoV1.validAfterNanoseconds:type_name -> v1.LLOChannelIDAndValidAfterNanosecondsProto
-	13, // 10: v1.LLOOutcomeProtoV1.streamAggregates:type_name -> v1.LLOStreamAggregate
-	5,  // 11: v1.LLOChannelIDAndDefinitionProto.channelDefinition:type_name -> v1.LLOChannelDefinitionProto
-	2,  // 12: v1.LLOStreamAggregate.streamValue:type_name -> v1.LLOStreamValue
-	10, // 13: v1.LLOChannelStateProto.channelDefinitions:type_name -> v1.LLOChannelIDAndDefinitionProto
-	12, // 14: v1.LLOHotStateProto.validAfterNanoseconds:type_name -> v1.LLOChannelIDAndValidAfterNanosecondsProto
-	13, // 15: v1.LLOHotStateProto.streamAggregates:type_name -> v1.LLOStreamAggregate
-	10, // 16: v1.LLOPrecursorProto.channelDefinitions:type_name -> v1.LLOChannelIDAndDefinitionProto
-	12, // 17: v1.LLOPrecursorProto.validAfterNanoseconds:type_name -> v1.LLOChannelIDAndValidAfterNanosecondsProto
-	13, // 18: v1.LLOPrecursorProto.streamAggregates:type_name -> v1.LLOStreamAggregate
-	5,  // 19: v1.LLOObservationProto.UpdateChannelDefinitionsEntry.value:type_name -> v1.LLOChannelDefinitionProto
-	2,  // 20: v1.LLOObservationProto.StreamValuesEntry.value:type_name -> v1.LLOStreamValue
-	21, // [21:21] is the sub-list for method output_type
-	21, // [21:21] is the sub-list for method input_type
-	21, // [21:21] is the sub-list for extension type_name
-	21, // [21:21] is the sub-list for extension extendee
-	0,  // [0:21] is the sub-list for field type_name
+	2,  // 4: v1.LLOStreamHistoryRecord.value:type_name -> v1.LLOStreamValue
+	5,  // 5: v1.LLOStreamHistoryChunkProto.records:type_name -> v1.LLOStreamHistoryRecord
+	9,  // 6: v1.LLOChannelDefinitionProto.streams:type_name -> v1.LLOStreamDefinition
+	13, // 7: v1.LLOOutcomeProtoV0.channelDefinitions:type_name -> v1.LLOChannelIDAndDefinitionProto
+	14, // 8: v1.LLOOutcomeProtoV0.validAfterSeconds:type_name -> v1.LLOChannelIDAndValidAfterSecondsProto
+	16, // 9: v1.LLOOutcomeProtoV0.streamAggregates:type_name -> v1.LLOStreamAggregate
+	13, // 10: v1.LLOOutcomeProtoV1.channelDefinitions:type_name -> v1.LLOChannelIDAndDefinitionProto
+	15, // 11: v1.LLOOutcomeProtoV1.validAfterNanoseconds:type_name -> v1.LLOChannelIDAndValidAfterNanosecondsProto
+	16, // 12: v1.LLOOutcomeProtoV1.streamAggregates:type_name -> v1.LLOStreamAggregate
+	8,  // 13: v1.LLOChannelIDAndDefinitionProto.channelDefinition:type_name -> v1.LLOChannelDefinitionProto
+	2,  // 14: v1.LLOStreamAggregate.streamValue:type_name -> v1.LLOStreamValue
+	13, // 15: v1.LLOChannelStateProto.channelDefinitions:type_name -> v1.LLOChannelIDAndDefinitionProto
+	15, // 16: v1.LLOHotStateProto.validAfterNanoseconds:type_name -> v1.LLOChannelIDAndValidAfterNanosecondsProto
+	16, // 17: v1.LLOHotStateProto.streamAggregates:type_name -> v1.LLOStreamAggregate
+	13, // 18: v1.LLOPrecursorProto.channelDefinitions:type_name -> v1.LLOChannelIDAndDefinitionProto
+	15, // 19: v1.LLOPrecursorProto.validAfterNanoseconds:type_name -> v1.LLOChannelIDAndValidAfterNanosecondsProto
+	16, // 20: v1.LLOPrecursorProto.streamAggregates:type_name -> v1.LLOStreamAggregate
+	8,  // 21: v1.LLOObservationProto.UpdateChannelDefinitionsEntry.value:type_name -> v1.LLOChannelDefinitionProto
+	2,  // 22: v1.LLOObservationProto.StreamValuesEntry.value:type_name -> v1.LLOStreamValue
+	23, // [23:23] is the sub-list for method output_type
+	23, // [23:23] is the sub-list for method input_type
+	23, // [23:23] is the sub-list for extension type_name
+	23, // [23:23] is the sub-list for extension extendee
+	0,  // [0:23] is the sub-list for field type_name
 }
 
 func init() { file_plugin_codecs_proto_init() }
@@ -1285,7 +1514,7 @@ func file_plugin_codecs_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_plugin_codecs_proto_rawDesc), len(file_plugin_codecs_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   18,
+			NumMessages:   21,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

@@ -526,13 +526,13 @@ func Test_DisableNilStreamValues_CalculatedStreams(t *testing.T) {
 	}
 
 	t.Run("evaluation failed -> not reportable", func(t *testing.T) {
-		// ProcessCalculatedStreams bailed before appending the calculated stream
-		// and before writing its aggregate; the definition alone looks complete.
+		// ProcessCalculatedStreams bailed before writing the calculated
+		// aggregate; the definition alone looks complete.
 		o := mkPrec(true, validOpts, baseStreams, baseAggregates())
 		require.Empty(t, o.reportableChannels(0, populatedCache(o), logger.Test(t)))
 	})
 
-	t.Run("calculated stream declared but nil aggregate -> not reportable", func(t *testing.T) {
+	t.Run("inline calculated stream but nil aggregate -> not reportable", func(t *testing.T) {
 		o := mkPrec(true, validOpts, withCalculated, baseAggregates())
 		require.Empty(t, o.reportableChannels(0, populatedCache(o), logger.Test(t)))
 	})
@@ -542,8 +542,18 @@ func Test_DisableNilStreamValues_CalculatedStreams(t *testing.T) {
 		require.Equal(t, []llotypes.ChannelID{1}, o.reportableChannels(0, populatedCache(o), logger.Test(t)))
 	})
 
-	t.Run("DisableNilStreamValues=false, evaluation failed -> still reportable", func(t *testing.T) {
+	t.Run("DisableNilStreamValues=false, evaluation failed -> not reportable", func(t *testing.T) {
+		// The calculated-stream gate is independent of DisableNilStreamValues,
+		// which is about observed values. A missing calculated stream cannot be
+		// reported around: the codec has nothing to encode, so Reports skips the
+		// report. Treating the channel as reportable would advance validAfter
+		// over a round that emitted nothing.
 		o := mkPrec(false, validOpts, baseStreams, baseAggregates())
+		require.Empty(t, o.reportableChannels(0, populatedCache(o), logger.Test(t)))
+	})
+
+	t.Run("DisableNilStreamValues=false, fully evaluated -> reportable", func(t *testing.T) {
+		o := mkPrec(false, validOpts, withCalculated, evaluatedAggregates())
 		require.Equal(t, []llotypes.ChannelID{1}, o.reportableChannels(0, populatedCache(o), logger.Test(t)))
 	})
 
@@ -580,7 +590,8 @@ func Test_TimestampedAggregate_CarryForward(t *testing.T) {
 		out := protocol.StreamAggregates{}
 		obs := map[llotypes.StreamID][]protocol.StreamValue{100: {tsv(ts, v), tsv(ts, v), tsv(ts, v)}}
 		next := map[llotypes.StreamID]map[llotypes.Aggregator]*protocol.TimestampedStreamValue{}
-		require.NoError(t, p.aggregate(carry, next, defs, obs, out))
+		// No history requirements: this test is about carry-forward aggregation.
+		require.NoError(t, p.aggregate(carry, next, defs, obs, out, nil, historyRequirements{}, ts))
 		carry = next
 		res, ok := out[100][llotypes.AggregatorMedian].(*protocol.TimestampedStreamValue)
 		require.True(t, ok, "expected a TimestampedStreamValue aggregate")
@@ -676,7 +687,7 @@ func Test_CalculatedStreams(t *testing.T) {
 		},
 	}
 
-	calculated.ProcessCalculatedStreams(p.Logger, prec.ChannelDefinitions, prec.StreamAggregates, prec.ObservationTimestampNanoseconds, generation.Opts())
+	calculated.ProcessCalculatedStreams(p.Logger, prec.ChannelDefinitions, prec.StreamAggregates, prec.ObservationTimestampNanoseconds, generation.Opts(), nil)
 
 	// The calculated stream (999) should hold Add(s1, s2) = 7.
 	got := prec.StreamAggregates[999][llotypes.AggregatorCalculated]
@@ -685,10 +696,25 @@ func Test_CalculatedStreams(t *testing.T) {
 	require.True(t, ok)
 	require.True(t, d.Decimal().Equal(decimal.NewFromInt(7)), "expected 7, got %s", d.Decimal())
 
-	// The calculated stream should have been appended to the channel definition.
-	require.Len(t, prec.ChannelDefinitions[cid].Streams, 3)
-	require.Equal(t, llotypes.StreamID(999), prec.ChannelDefinitions[cid].Streams[2].StreamID)
-	require.EqualValues(t, llotypes.AggregatorCalculated, prec.ChannelDefinitions[cid].Streams[2].Aggregator)
+	// The channel definition is left untouched: the calculated stream is derived
+	// from the opts, not stored.
+	require.Len(t, prec.ChannelDefinitions[cid].Streams, 2)
+
+	// It shows up in the derived stream list instead, as the trailing entry.
+	streams, err := protocol.EffectiveStreams(generation.Opts(), prec.ChannelDefinitions[cid], cid)
+	require.NoError(t, err)
+	require.Len(t, streams, 3)
+	require.Equal(t, llotypes.StreamID(999), streams[2].StreamID)
+	require.EqualValues(t, llotypes.AggregatorCalculated, streams[2].Aggregator)
+
+	// Deriving twice yields the same list: EffectiveStreams drops any inline
+	// calculated entries before appending the declared ones, so a definition
+	// written by older code derives identically to one that was never mutated.
+	mutated := prec.ChannelDefinitions[cid]
+	mutated.Streams = streams
+	again, err := protocol.EffectiveStreams(generation.Opts(), mutated, cid)
+	require.NoError(t, err)
+	require.Equal(t, streams, again)
 
 	// Dry-run helper should accept a valid expression.
 	require.NoError(t, calculated.ProcessCalculatedStreamsDryRun("Add(s1, s2)"))
@@ -714,17 +740,17 @@ func Test_HistoryBackfill(t *testing.T) {
 	defs := llotypes.ChannelDefinitions{targetCID: targetCD, backfillCID: backfillCD}
 
 	// Candidate selection advances with the watermark, then completes.
-	ts, raw, opts, ok := selectBackfillCandidate(defs, map[llotypes.ChannelID]uint64{backfillCID: 0}, tenSec, backfillCID)
+	ts, raw, opts, ok := selectBackfillCandidate(defs, map[llotypes.ChannelID]uint64{backfillCID: 0}, tenSec, backfillCID, nil)
 	require.True(t, ok)
 	require.Equal(t, fiveSec, ts)
 	require.Equal(t, uint64(5), raw)
 	require.Equal(t, targetCID, opts.TargetChannelID)
 
-	ts2, _, _, ok2 := selectBackfillCandidate(defs, map[llotypes.ChannelID]uint64{backfillCID: fiveSec}, tenSec, backfillCID)
+	ts2, _, _, ok2 := selectBackfillCandidate(defs, map[llotypes.ChannelID]uint64{backfillCID: fiveSec}, tenSec, backfillCID, nil)
 	require.True(t, ok2)
 	require.Equal(t, eightSec, ts2)
 
-	_, _, _, ok3 := selectBackfillCandidate(defs, map[llotypes.ChannelID]uint64{backfillCID: eightSec}, tenSec, backfillCID)
+	_, _, _, ok3 := selectBackfillCandidate(defs, map[llotypes.ChannelID]uint64{backfillCID: eightSec}, tenSec, backfillCID, nil)
 	require.False(t, ok3, "backfill should be complete once watermark passes the last observation")
 
 	// Reports emits the backfill report, encoded with the target channel's format.
@@ -839,4 +865,74 @@ func equalStreamValue(a, b protocol.StreamValue) bool {
 		return false
 	}
 	return string(ba) == string(bb)
+}
+
+// captureCodec records the report it was asked to encode, so a test can assert
+// on the values report assembly produced.
+type captureCodec struct{ got *protocol.Report }
+
+func (c captureCodec) Encode(r protocol.Report, _ llotypes.ChannelDefinition, _ *protocol.OptsCache) ([]byte, error) {
+	*c.got = r
+	return []byte("ok"), nil
+}
+
+func (captureCodec) Verify(llotypes.ChannelDefinition) error { return nil }
+
+var _ protocol.ReportCodec = captureCodec{}
+
+// Test_CalculatedStreams_ReportValues pins the contract report assembly and
+// ReportCodecEVMABIEncodeUnpackedExpr share: a report carries the channel's
+// observed values followed by one calculated value per declared expression, in
+// declaration order, even though the channel definition lists only the observed
+// streams.
+func Test_CalculatedStreams_ReportValues(t *testing.T) {
+	ctx := tests.Context(t)
+	cid := llotypes.ChannelID(5)
+
+	var got protocol.Report
+	p := testPlugin(t)
+	p.ReportCodecs = map[llotypes.ReportFormat]protocol.ReportCodec{
+		llotypes.ReportFormatEVMABIEncodeUnpackedExpr: captureCodec{got: &got},
+	}
+
+	definitions := llotypes.ChannelDefinitions{cid: {
+		ReportFormat: llotypes.ReportFormatEVMABIEncodeUnpackedExpr,
+		Opts: []byte(`{"abi":[
+			{"type":"int256","expression":"Add(s1, s2)","expressionStreamID":998},
+			{"type":"int256","expression":"Sub(s1, s2)","expressionStreamID":999}
+		]}`),
+		Streams: []llotypes.Stream{
+			{StreamID: 1, Aggregator: llotypes.AggregatorMedian},
+			{StreamID: 2, Aggregator: llotypes.AggregatorMedian},
+		},
+	}}
+
+	prec := precursor{
+		LifeCycleStage:                  protocol.LifeCycleStageProduction,
+		ObservationTimestampNanoseconds: 3 * uint64(time.Second),
+		ChannelDefinitions:              definitions,
+		ValidAfterNanoseconds:           map[llotypes.ChannelID]uint64{cid: uint64(time.Second)},
+		StreamAggregates: protocol.StreamAggregates{
+			1: {llotypes.AggregatorMedian: protocol.ToDecimal(decimal.NewFromInt(3))},
+			2: {llotypes.AggregatorMedian: protocol.ToDecimal(decimal.NewFromInt(4))},
+		},
+	}
+
+	cache := protocol.NewOptsCache()
+	cache.ResetTo(definitions)
+	calculated.ProcessCalculatedStreams(p.Logger, prec.ChannelDefinitions, prec.StreamAggregates, prec.ObservationTimestampNanoseconds, cache, nil)
+
+	precBytes, err := encodePrecursor(prec)
+	require.NoError(t, err)
+	reports, err := p.Reports(ctx, 2, precBytes)
+	require.NoError(t, err)
+	require.Len(t, reports, 1)
+
+	require.Len(t, got.Values, 4)
+	want := []int64{3, 4, 7, -1}
+	for i, w := range want {
+		d, ok := got.Values[i].(*protocol.Decimal)
+		require.True(t, ok, "value %d has type %T", i, got.Values[i])
+		require.True(t, d.Decimal().Equal(decimal.NewFromInt(w)), "value %d: expected %d, got %s", i, w, d.Decimal())
+	}
 }

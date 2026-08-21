@@ -22,6 +22,7 @@ import (
 
 var (
 	_ protocol.ReportCodec = ReportCodecEVMStreamlined{}
+	_ protocol.FeedIDer    = ReportCodecEVMStreamlined{}
 )
 
 func NewReportCodecStreamlined(lggr logger.Logger) ReportCodecEVMStreamlined {
@@ -187,4 +188,18 @@ func (r *ReportFormatEVMStreamlinedOpts) Decode(opts []byte) error {
 
 func (r *ReportFormatEVMStreamlinedOpts) Encode() ([]byte, error) {
 	return json.Marshal(r)
+}
+
+// FeedID implements protocol.FeedIDer. The feed ID is optional for this format:
+// a channel that omits it identifies its payload by channel ID instead, so it
+// has no feed ID to check for uniqueness.
+func (rc ReportCodecEVMStreamlined) FeedID(cd llotypes.ChannelDefinition) ([32]byte, bool, error) {
+	opts := new(ReportFormatEVMStreamlinedOpts)
+	if err := opts.Decode(cd.Opts); err != nil {
+		return [32]byte{}, false, fmt.Errorf("invalid Opts, got: %q; %w", cd.Opts, err)
+	}
+	if opts.FeedID == nil {
+		return [32]byte{}, false, nil
+	}
+	return *opts.FeedID, true, nil
 }

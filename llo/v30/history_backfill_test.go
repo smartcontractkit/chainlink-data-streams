@@ -32,19 +32,19 @@ func TestSelectBackfillCandidate_picksSmallestEligible(t *testing.T) {
 		ValidAfterNanoseconds: map[llotypes.ChannelID]uint64{backfillID: 0},
 	}
 
-	ts, raw, _, uerr := SelectBackfillCandidate(&out, backfillID)
+	ts, raw, _, uerr := SelectBackfillCandidate(&out, backfillID, nil)
 	require.Nil(t, uerr)
 	require.Equal(t, uint64(100*time.Second), ts)
 	require.Equal(t, uint64(100), raw)
 
 	out.ValidAfterNanoseconds[backfillID] = uint64(100 * time.Second)
-	ts2, raw2, _, uerr2 := SelectBackfillCandidate(&out, backfillID)
+	ts2, raw2, _, uerr2 := SelectBackfillCandidate(&out, backfillID, nil)
 	require.Nil(t, uerr2)
 	require.Equal(t, uint64(150*time.Second), ts2)
 	require.Equal(t, uint64(150), raw2)
 
 	out.ValidAfterNanoseconds[backfillID] = uint64(200 * time.Second)
-	_, _, _, uerr3 := SelectBackfillCandidate(&out, backfillID)
+	_, _, _, uerr3 := SelectBackfillCandidate(&out, backfillID, nil)
 	require.NotNil(t, uerr3)
 	require.Contains(t, uerr3.Error(), "backfill complete, no remaining timestamps")
 }
@@ -64,7 +64,7 @@ func TestSelectBackfillCandidate_skipsFutureObservations(t *testing.T) {
 		},
 		ValidAfterNanoseconds: map[llotypes.ChannelID]uint64{10: 0},
 	}
-	_, _, _, uerr := SelectBackfillCandidate(&out, 10)
+	_, _, _, uerr := SelectBackfillCandidate(&out, 10, nil)
 	require.NotNil(t, uerr)
 	require.Contains(t, uerr.Error(), "backfill complete, no remaining timestamps")
 }

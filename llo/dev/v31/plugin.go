@@ -175,7 +175,11 @@ func (p *Plugin) voteOnChannels(obs *Observation, state *kvState, seqNr uint64) 
 	obs.RemoveChannelIDs = map[llotypes.ChannelID]struct{}{}
 
 	expectedChannelDefs := p.ChannelDefinitionCache.Definitions(state.channelDefinitions)
-	if err := protocol.VerifyChannelDefinitions(p.ReportCodecs, expectedChannelDefs); err != nil {
+	// Only the channels this node would vote to add or change are held to the
+	// admission-only checks; the ones already committed are not, or a
+	// grandfathered channel would freeze channel voting entirely.
+	admitting := protocol.ChangedChannelIDs(state.channelDefinitions, expectedChannelDefs)
+	if err := protocol.VerifyChannelDefinitionsForAdmission(p.ReportCodecs, expectedChannelDefs, admitting); err != nil {
 		// Don't halt on an invalid channel-definitions file; just don't vote.
 		p.Logger.Errorw("ChannelDefinitionCache.Definitions is invalid", "err", err)
 		return
@@ -229,6 +233,12 @@ func (p *Plugin) ValidateObservation(ctx context.Context, seqNr uint64, _ ocrtyp
 		return fmt.Errorf("RemoveChannelIDs is too long: %v vs %v", len(observation.RemoveChannelIDs), protocol.MaxObservationRemoveChannelIDsLength)
 	}
 
+	// Only the baseline checks run here. A definition is installed on more than
+	// f votes for its exact hash, so at least one honest oracle must have voted
+	// for it, and an honest oracle only votes for what its own admission-time
+	// verification accepted (see voteOnChannels). Repeating the admission-only
+	// checks here would add nothing, and would make oracles running different
+	// versions of those checks disagree on whether an observation is valid.
 	defsForVerify := observation.UpdateChannelDefinitions
 	if len(observation.UpdateChannelDefinitions) > 0 {
 		state, serr := loadColdKVState(kvReader, p.ChannelCache)

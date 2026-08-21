@@ -118,8 +118,7 @@
 //
 // DisableNilStreamValues (a channel with any nil stream aggregate is
 // unreportable; for expression channels the expected calculated streams are
-// taken from the channel's opts rather than from the definition, since the
-// definition only lists them once evaluation succeeded), cross-round
+// taken from the channel's opts, which is where they are declared), cross-round
 // timestamped-aggregate carry-forward (in the r/agg record, newer-wins
 // monotonicity), and best-effort outcome/report telemetry are also implemented.
 // Reportability is persisted per channel each round (also in r/agg) so the next
@@ -127,7 +126,97 @@
 // aggregates that are not otherwise persisted.
 //
 // Calculated streams (EVMABIEncodeUnpackedExpr channels) are supported via the
-// expression engine in calculated.go, run at the end of StateTransition.
+// expression engine in llo/protocol/calculated, run at the end of
+// StateTransition. A channel whose expressions did not produce every calculated
+// stream its opts declare is not reportable, regardless of
+// DisableNilStreamValues: the codec would have nothing to encode, so the report
+// is skipped, and counting the channel as reported would advance validAfter over
+// a round that emitted nothing.
+//
+// Evaluation writes stream aggregates and nothing else. It does not touch the
+// channel definitions, so a persisted definition is exactly what was voted on
+// and no derived state reaches the replicated key-value store. Which streams a
+// channel reports — its observed streams followed by one calculated stream per
+// declared expression, in declaration order — is derived on demand by
+// protocol.EffectiveStreams, which is a pure function of the definition and its
+// opts and therefore identical on every oracle. Report assembly must go through
+// it rather than reading cd.Streams, since the trailing calculated values are
+// what ReportCodecEVMABIEncodeUnpackedExpr encodes as its payload.
+//
+// v3.0 instead appends the calculated streams to the definitions it commits in
+// its outcome (calculated.ProcessCalculatedStreamsWithDefinitionAppend), which
+// EffectiveStreams drops any such inline entries before appending the declared
+// ones, so it reads definitions written by either version identically.
+//
+// # Stream history
+//
+// Expressions can read a window of a stream's past agreed values with
+// History(s<streamID>, <depth>) (see llo/protocol/calculated). Windows are
+// persisted per (streamID, aggregator) pair — the aggregator is part of the
+// identity because the same stream may be aggregated differently by different
+// channels, and interleaving those series would be silently wrong:
+//
+//	hh/<streamID BE uint32><aggregator BE uint32>              -> LLOStreamHistoryHeaderProto
+//	hc/<streamID BE uint32><aggregator BE uint32><slot BE u32> -> LLOStreamHistoryChunkProto
+//	hidx                                                       -> sorted (streamID, aggregator) pairs
+//	hv                                                         -> history layout version
+//
+// A window is a ring of chunks rather than one value: a slot holds
+// MaxHistoryChunkRecords records, and a round rewrites only the newest one.
+// Sealed chunks are immutable for as long as they are retained and eviction is a
+// delete, so a pair's per-round write cost is a function of the chunk size, not
+// of its depth — about 2 KiB rather than 60 KiB for a full quote window at
+// maximum depth. Reads cost depth/chunkSize point reads instead of one, and only
+// the chunks covering what was asked for are read.
+//
+// The header alone says which chunks are retained, how full each is and when
+// each starts, so a round decides whether there is enough depth, which chunks to
+// read, whether a value may be appended and which chunk falls out without
+// opening a chunk at all. A pair still warming up therefore costs one read.
+//
+// The ring is a fixed slot space rather than an unbounded sequence because the
+// in-round reader has no range scan: if a header cannot be decoded there is no
+// way to discover which chunk keys exist, and a bounded space makes recovery a
+// blind delete of every slot. A chunk left by an earlier lap carries a sequence
+// the header no longer retains, which is how slot reuse stays safe.
+//
+// hidx exists for the same no-range-scan reason: it is what lets windows for
+// pairs no channel references any more be found and deleted. hv records the
+// layout; a mismatch drops every stored window and re-warms, which is the whole
+// migration story while v31 is under llo/dev.
+//
+// Per round, in StateTransition:
+//
+//   - computeHistoryRequirements derives the depth each pair needs (the deepest
+//     any live channel's expressions ask for) from the channel definitions and
+//     their opts. Both are replicated and expression analysis is a pure function
+//     of the expression string, so every oracle computes the same depths — they
+//     become persisted state. Pairs beyond MaxHistoryPairs are denied history
+//     entirely, in (streamID, aggregator) order; channels reading them do not
+//     report, rather than silently evaluating over a shorter window. The pair cap
+//     is the only admission rule: per-round cost no longer depends on depth, so
+//     MaxHistoryPairs of them fit the byte budget by construction.
+//   - aggregate appends each required pair's agreed value, timestamped with the
+//     value's own observation time for timestamped aggregates and the round's
+//     consensus observation timestamp otherwise. An append only takes effect if
+//     it is strictly newer than the newest stored record, which is what stops a
+//     carried-forward t/ value from being counted once per round until it
+//     refreshes. A pair with no aggregate this round contributes nothing: a gap
+//     is honest, a repeated value is not.
+//   - ProcessCalculatedStreams reads through the same store. An expression whose
+//     window is still shallower than requested is not evaluated and writes no
+//     aggregate, so the channel is not reportable and validAfter does not
+//     advance. This is the warmup gate, and it means adding a History call to a
+//     live channel stops it reporting for as many rounds as the depth requested.
+//   - flushKV writes each modified window's header and newest chunk, deletes the
+//     chunks that fell out and the pairs no live channel requires, and rewrites
+//     hidx at most once.
+//
+// Each of a pair's keys is read at most once and written at most once per round
+// however many channels or expressions reference it, which is what keeps history
+// inside the per-round key-value budget. A window that cannot be decoded — bad
+// header, missing chunk, or one that does not match the header — is discarded
+// whole and re-warmed rather than failing the round.
 //
 // History-backfill channels are supported: backfill.go selects the next
 // observation to emit (advancing a per-channel watermark stored in validAfter),

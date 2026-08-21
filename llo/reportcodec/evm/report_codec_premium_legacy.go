@@ -26,6 +26,7 @@ import (
 
 var (
 	_            protocol.ReportCodec = ReportCodecPremiumLegacy{}
+	_            protocol.FeedIDer    = ReportCodecPremiumLegacy{}
 	PayloadTypes                      = getPayloadTypes()
 )
 
@@ -273,4 +274,14 @@ func LegacyReportContext(cd ocr2types.ConfigDigest, seqNr uint64, donID uint32) 
 		},
 		ExtraHash: LLOExtraHash(donID), // ExtraHash is always zero for mercury, we use LLOExtraHash here to differentiate from the legacy plugin
 	}, nil
+}
+
+// FeedID implements protocol.FeedIDer: premium legacy reports always carry a
+// feed ID, and Verify has already rejected a zero one.
+func (r ReportCodecPremiumLegacy) FeedID(cd llotypes.ChannelDefinition) ([32]byte, bool, error) {
+	opts := ReportFormatEVMPremiumLegacyOpts{}
+	if err := (&opts).Decode(cd.Opts); err != nil {
+		return [32]byte{}, false, fmt.Errorf("invalid Opts, got: %q; %w", cd.Opts, err)
+	}
+	return opts.FeedID, true, nil
 }

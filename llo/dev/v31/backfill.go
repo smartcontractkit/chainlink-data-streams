@@ -16,12 +16,12 @@ import (
 // watermark and strictly before obsTsNanos. This mirrors the v30
 // SelectBackfillCandidate but operates on plain fields (shared by precursor and
 // kvState) and returns a bool instead of an UnreportableChannelError.
-func selectBackfillCandidate(defs llotypes.ChannelDefinitions, validAfter map[llotypes.ChannelID]uint64, obsTsNanos uint64, backfillCID llotypes.ChannelID) (tsNanos uint64, rawTS uint64, opts protocol.HistoryBackfillOpts, ok bool) {
+func selectBackfillCandidate(defs llotypes.ChannelDefinitions, validAfter map[llotypes.ChannelID]uint64, obsTsNanos uint64, backfillCID llotypes.ChannelID, optsCache *protocol.OptsCache) (tsNanos uint64, rawTS uint64, opts protocol.HistoryBackfillOpts, ok bool) {
 	cd, exists := defs[backfillCID]
 	if !exists || cd.ReportFormat != llotypes.ReportFormatHistoryBackfill {
 		return 0, 0, protocol.HistoryBackfillOpts{}, false
 	}
-	o, err := protocol.ParseHistoryBackfillOpts(cd.Opts)
+	o, err := protocol.GetHistoryBackfillOpts(optsCache, cd, backfillCID)
 	if err != nil {
 		return 0, 0, protocol.HistoryBackfillOpts{}, false
 	}
@@ -41,7 +41,12 @@ func selectBackfillCandidate(defs llotypes.ChannelDefinitions, validAfter map[ll
 	var bestRaw, bestNanos uint64
 	found := false
 	for rawKey := range o.Observations {
-		tsN := protocol.ObservationTimestampKeyToNanoseconds(rawKey, res)
+		tsN, ok := protocol.ObservationTimestampKeyToNanoseconds(rawKey, res)
+		if !ok {
+			// Not expressible in nanoseconds; scaling it would wrap into a
+			// timestamp that looks like a valid past one.
+			continue
+		}
 		if tsN >= obsTsNanos || tsN <= watermark {
 			continue
 		}

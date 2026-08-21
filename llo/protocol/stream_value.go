@@ -173,7 +173,9 @@ func (v *Quote) MarshalBinary() (b []byte, err error) {
 	if err != nil {
 		return nil, err
 	}
-	return proto.Marshal(&q)
+	// Deterministic: these bytes are compared across oracles. See
+	// deterministicMarshal.
+	return deterministicMarshal.Marshal(&q)
 }
 
 func (v *Quote) UnmarshalBinary(data []byte) error {
@@ -305,7 +307,9 @@ func (v *TimestampedStreamValue) MarshalBinary() ([]byte, error) {
 		Type:  v.StreamValue.Type(),
 		Value: sv,
 	}
-	return proto.Marshal(&t)
+	// Deterministic: these bytes are compared across oracles. See
+	// deterministicMarshal.
+	return deterministicMarshal.Marshal(&t)
 }
 
 func (v *TimestampedStreamValue) UnmarshalBinary(data []byte) error {
