@@ -93,8 +93,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: ci-sonarqube
-        uses: smartcontractkit/.github/actions/ci-sonarqube-go@3e11dbc45e4c8b18dd996fb417ccf22056176388 # ci-sonarqube-go@0.1.0
-        with:
-          # sonarqube inputs
-          sonar-token: ${{ secrets.SONAR_TOKEN }}
-          sonar-host-url: ${{ secrets.SONAR_HOST_URL }}
+        uses: sonarsource/sonarqube-scan-action@aecaf43ae57e412bd97d70ef9ce6076e672fe0a9 # v2.3.0
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+          SONAR_SCANNER_OPTS: "-Xms6g -Xmx8g"
