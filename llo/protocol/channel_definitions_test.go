@@ -170,6 +170,16 @@ func (stubReportCodec) Encode(Report, llotypes.ChannelDefinition, *OptsCache) ([
 }
 func (stubReportCodec) Verify(llotypes.ChannelDefinition) error { return nil }
 
+// verifyAdmittingAll verifies channelDefs with every channel treated as being
+// admitted, which is what the admission-only checks are exercised against.
+func verifyAdmittingAll(codecs map[llotypes.ReportFormat]ReportCodec, channelDefs llotypes.ChannelDefinitions) error {
+	admitting := make(map[llotypes.ChannelID]struct{}, len(channelDefs))
+	for id := range channelDefs {
+		admitting[id] = struct{}{}
+	}
+	return VerifyChannelDefinitionsForAdmission(codecs, channelDefs, admitting)
+}
+
 func Test_VerifyChannelDefinitions_CalculatedStreamCollisions(t *testing.T) {
 	codecs := make(map[llotypes.ReportFormat]ReportCodec)
 
@@ -190,21 +200,21 @@ func Test_VerifyChannelDefinitions_CalculatedStreamCollisions(t *testing.T) {
 			1: exprChannel(10, `{"abi":[{"expressionStreamID":100}]}`, 100),
 			2: exprChannel(11, `{"abi":[{"expressionStreamID":101}]}`, 101),
 		}
-		require.NoError(t, VerifyChannelDefinitions(codecs, channelDefs))
+		require.NoError(t, verifyAdmittingAll(codecs, channelDefs))
 	})
 	t.Run("fails when two channels declare the same calculated stream", func(t *testing.T) {
 		channelDefs := llotypes.ChannelDefinitions{
 			1: exprChannel(10, `{"abi":[{"expressionStreamID":100}]}`, 100),
 			2: exprChannel(11, `{"abi":[{"expressionStreamID":100}]}`, 100),
 		}
-		err := VerifyChannelDefinitions(codecs, channelDefs)
+		err := verifyAdmittingAll(codecs, channelDefs)
 		require.EqualError(t, err, "ChannelDefinition with ID 2 declares calculated stream 100 already declared by channel 1")
 	})
 	t.Run("fails when a channel declares the same calculated stream twice", func(t *testing.T) {
 		channelDefs := llotypes.ChannelDefinitions{
 			1: exprChannel(10, `{"abi":[{"expressionStreamID":100},{"expressionStreamID":100}]}`, 100),
 		}
-		err := VerifyChannelDefinitions(codecs, channelDefs)
+		err := verifyAdmittingAll(codecs, channelDefs)
 		require.EqualError(t, err, "ChannelDefinition with ID 1 declares calculated stream 100 already declared by channel 1")
 	})
 	t.Run("fails when a calculated stream collides with an observed stream", func(t *testing.T) {
@@ -214,14 +224,14 @@ func Test_VerifyChannelDefinitions_CalculatedStreamCollisions(t *testing.T) {
 				Streams: []llotypes.Stream{{StreamID: 100, Aggregator: llotypes.AggregatorMedian}},
 			},
 		}
-		err := VerifyChannelDefinitions(codecs, channelDefs)
+		err := verifyAdmittingAll(codecs, channelDefs)
 		require.EqualError(t, err, "ChannelDefinition with ID 1 declares calculated stream 100, which channel 2 observes")
 	})
 	t.Run("fails when a calculated stream collides with its own channel's observed stream", func(t *testing.T) {
 		channelDefs := llotypes.ChannelDefinitions{
 			1: exprChannel(100, `{"abi":[{"expressionStreamID":100}]}`),
 		}
-		err := VerifyChannelDefinitions(codecs, channelDefs)
+		err := verifyAdmittingAll(codecs, channelDefs)
 		require.EqualError(t, err, "ChannelDefinition with ID 1 declares calculated stream 100, which channel 1 observes")
 	})
 	t.Run("fails for undecodable, empty, and zero-ID expression opts", func(t *testing.T) {
@@ -231,7 +241,7 @@ func Test_VerifyChannelDefinitions_CalculatedStreamCollisions(t *testing.T) {
 			`{"abi":[{"expressionStreamID":0}]}`: "invalid ChannelDefinition with ID 1: expression stream ID is 0, abi index: 0",
 		} {
 			channelDefs := llotypes.ChannelDefinitions{1: exprChannel(10, opts)}
-			require.EqualError(t, VerifyChannelDefinitions(codecs, channelDefs), want)
+			require.EqualError(t, verifyAdmittingAll(codecs, channelDefs), want)
 		}
 	})
 	t.Run("ignores tombstoned channels", func(t *testing.T) {
@@ -241,7 +251,7 @@ func Test_VerifyChannelDefinitions_CalculatedStreamCollisions(t *testing.T) {
 			1: exprChannel(10, `{"abi":[{"expressionStreamID":100}]}`, 100),
 			2: tombstoned,
 		}
-		require.NoError(t, VerifyChannelDefinitions(codecs, channelDefs))
+		require.NoError(t, verifyAdmittingAll(codecs, channelDefs))
 	})
 }
 
@@ -272,27 +282,27 @@ func Test_VerifyChannelDefinitions_FeedIDCollisions(t *testing.T) {
 
 	t.Run("accepts a single channel with a feed ID", func(t *testing.T) {
 		channelDefs := llotypes.ChannelDefinitions{1: channel()}
-		require.NoError(t, VerifyChannelDefinitions(codecs(mockFeedIDCodec{feedID: [32]byte{0xab}, ok: true}), channelDefs))
+		require.NoError(t, verifyAdmittingAll(codecs(mockFeedIDCodec{feedID: [32]byte{0xab}, ok: true}), channelDefs))
 	})
 	t.Run("fails when two channels share a feed ID", func(t *testing.T) {
 		channelDefs := llotypes.ChannelDefinitions{1: channel(), 2: channel()}
-		err := VerifyChannelDefinitions(codecs(mockFeedIDCodec{feedID: [32]byte{0xab}, ok: true}), channelDefs)
+		err := verifyAdmittingAll(codecs(mockFeedIDCodec{feedID: [32]byte{0xab}, ok: true}), channelDefs)
 		require.EqualError(t, err, "ChannelDefinition with ID 2 has feed ID 0xab00000000000000000000000000000000000000000000000000000000000000 already used by channel 1")
 	})
 	t.Run("ignores channels that report no feed ID", func(t *testing.T) {
 		channelDefs := llotypes.ChannelDefinitions{1: channel(), 2: channel()}
-		require.NoError(t, VerifyChannelDefinitions(codecs(mockFeedIDCodec{ok: false}), channelDefs))
+		require.NoError(t, verifyAdmittingAll(codecs(mockFeedIDCodec{ok: false}), channelDefs))
 	})
 	t.Run("fails when the feed ID cannot be resolved", func(t *testing.T) {
 		channelDefs := llotypes.ChannelDefinitions{1: channel()}
-		err := VerifyChannelDefinitions(codecs(mockFeedIDCodec{err: errors.New("bad opts")}), channelDefs)
+		err := verifyAdmittingAll(codecs(mockFeedIDCodec{err: errors.New("bad opts")}), channelDefs)
 		require.EqualError(t, err, "invalid ChannelDefinition with ID 1: failed to resolve feed ID: bad opts")
 	})
 	t.Run("does not resolve the feed ID of a channel Verify rejected", func(t *testing.T) {
 		channelDefs := llotypes.ChannelDefinitions{1: channel(), 2: channel()}
 		codec := mockFeedIDCodec{feedID: [32]byte{0xab}, ok: true}
 		codec.mockReportCodec = mockReportCodec{err: errors.New("rejected")}
-		err := VerifyChannelDefinitions(codecs(codec), channelDefs)
+		err := verifyAdmittingAll(codecs(codec), channelDefs)
 		// Only the two Verify errors: no feed ID was collected, so no collision.
 		require.EqualError(t, err, "invalid ChannelDefinition with ID 1: rejected\ninvalid ChannelDefinition with ID 2: rejected")
 	})
@@ -300,6 +310,71 @@ func Test_VerifyChannelDefinitions_FeedIDCollisions(t *testing.T) {
 		tombstoned := channel()
 		tombstoned.Tombstone = true
 		channelDefs := llotypes.ChannelDefinitions{1: channel(), 2: tombstoned}
-		require.NoError(t, VerifyChannelDefinitions(codecs(mockFeedIDCodec{feedID: [32]byte{0xab}, ok: true}), channelDefs))
+		require.NoError(t, verifyAdmittingAll(codecs(mockFeedIDCodec{feedID: [32]byte{0xab}, ok: true}), channelDefs))
 	})
+}
+
+// mockAdmissionCodec rejects every definition on admission, and accepts every
+// definition otherwise.
+type mockAdmissionCodec struct{ mockReportCodec }
+
+func (mockAdmissionCodec) VerifyForAdmission(llotypes.ChannelDefinition) error {
+	return errors.New("admission rejected")
+}
+
+func Test_VerifyChannelDefinitions_AdmissionScope(t *testing.T) {
+	feedIDCodecs := map[llotypes.ReportFormat]ReportCodec{
+		0: mockFeedIDCodec{feedID: [32]byte{0xab}, ok: true},
+	}
+	channel := func() llotypes.ChannelDefinition {
+		return llotypes.ChannelDefinition{Streams: []llotypes.Stream{{StreamID: 1, Aggregator: llotypes.AggregatorMedian}}}
+	}
+	colliding := llotypes.ChannelDefinitions{1: channel(), 2: channel()}
+
+	t.Run("committed definitions are not held to the admission-only checks", func(t *testing.T) {
+		// Both channels share a feed ID, which would be rejected on admission.
+		// Neither is being admitted, so verification passes and the oracles keep
+		// observing rather than halting.
+		require.NoError(t, VerifyChannelDefinitions(feedIDCodecs, colliding))
+		require.NoError(t, VerifyChannelDefinitionsForAdmission(feedIDCodecs, colliding, nil))
+		require.NoError(t, VerifyChannelDefinitionsForAdmission(feedIDCodecs, colliding, map[llotypes.ChannelID]struct{}{}))
+	})
+	t.Run("a cross-definition finding is kept when either channel is admitted", func(t *testing.T) {
+		// The finding is reported against channel 2, the one seen second, so
+		// admitting only channel 1 must still keep it -- otherwise a new channel
+		// could squat the feed ID of a committed one with a higher ID.
+		for _, admitted := range []llotypes.ChannelID{1, 2} {
+			err := VerifyChannelDefinitionsForAdmission(feedIDCodecs, colliding, map[llotypes.ChannelID]struct{}{admitted: {}})
+			require.EqualError(t, err, "ChannelDefinition with ID 2 has feed ID 0xab00000000000000000000000000000000000000000000000000000000000000 already used by channel 1")
+		}
+	})
+	t.Run("AdmissionVerifier is only consulted for admitted channels", func(t *testing.T) {
+		codecs := map[llotypes.ReportFormat]ReportCodec{0: mockAdmissionCodec{}}
+		defs := llotypes.ChannelDefinitions{1: channel(), 2: channel()}
+		require.NoError(t, VerifyChannelDefinitions(codecs, defs))
+		err := VerifyChannelDefinitionsForAdmission(codecs, defs, map[llotypes.ChannelID]struct{}{2: {}})
+		require.EqualError(t, err, "invalid ChannelDefinition with ID 2: admission rejected")
+	})
+	t.Run("baseline checks apply to committed definitions", func(t *testing.T) {
+		defs := llotypes.ChannelDefinitions{1: {}}
+		require.EqualError(t, VerifyChannelDefinitions(feedIDCodecs, defs), "ChannelDefinition with ID 1 has no streams")
+	})
+}
+
+func Test_ChangedChannelIDs(t *testing.T) {
+	streams := []llotypes.Stream{{StreamID: 1, Aggregator: llotypes.AggregatorMedian}}
+	current := llotypes.ChannelDefinitions{
+		1: {Streams: streams},
+		2: {Streams: streams},
+		3: {Streams: streams},
+	}
+	desired := llotypes.ChannelDefinitions{
+		1: {Streams: streams},                                         // unchanged
+		2: {Streams: streams, ReportFormat: llotypes.ReportFormat(7)}, // changed
+		4: {Streams: streams},                                         // added
+	}
+	// Channel 3 is only being removed, so it is not being admitted.
+	require.Equal(t, map[llotypes.ChannelID]struct{}{2: {}, 4: {}}, ChangedChannelIDs(current, desired))
+	require.Empty(t, ChangedChannelIDs(current, current))
+	require.Empty(t, ChangedChannelIDs(current, nil))
 }

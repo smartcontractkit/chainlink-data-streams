@@ -79,7 +79,11 @@ func (p *Plugin) observation(ctx context.Context, outctx ocr3types.OutcomeContex
 			//
 			// ChannelIDs should always be sorted the same way (channel ID ascending).
 			expectedChannelDefs := p.ChannelDefinitionCache.Definitions(previousOutcome.ChannelDefinitions)
-			if err = protocol.VerifyChannelDefinitions(p.ReportCodecs, expectedChannelDefs); err != nil {
+			// Only the channels this node would vote to add or change are held
+			// to the admission-only checks; the ones already committed are not,
+			// or a grandfathered channel would freeze channel voting entirely.
+			admitting := protocol.ChangedChannelIDs(previousOutcome.ChannelDefinitions, expectedChannelDefs)
+			if err = protocol.VerifyChannelDefinitionsForAdmission(p.ReportCodecs, expectedChannelDefs, admitting); err != nil {
 				// If channel definitions is invalid, do not error out but instead
 				// don't vote on any new channels.
 				//

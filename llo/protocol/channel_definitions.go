@@ -8,7 +8,66 @@ import (
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
 )
 
-func VerifyChannelDefinitions(codecs map[llotypes.ReportFormat]ReportCodec, channelDefs llotypes.ChannelDefinitions) (merr error) {
+// VerifyChannelDefinitions applies the checks that any definition set must
+// satisfy, whether it is being admitted or has already been committed.
+func VerifyChannelDefinitions(codecs map[llotypes.ReportFormat]ReportCodec, channelDefs llotypes.ChannelDefinitions) error {
+	return verifyChannelDefinitions(codecs, channelDefs, nil)
+}
+
+// VerifyChannelDefinitionsForAdmission additionally applies the admission-only
+// checks, restricted to admitting -- the channels being added or changed.
+//
+// The admission-only checks are the ones that reject a definition outright
+// rather than merely stopping it from reporting: static expression analysis
+// (ReportCodec implementations of AdmissionVerifier), calculated stream ID
+// collisions, and feed ID uniqueness. Applying them to already-committed
+// definitions would mean one grandfathered channel makes verification fail on
+// every node, every round, which halts the protocol. Restricting them to
+// admitting keeps the gate closed for anything new or changed while leaving
+// what is already installed alone.
+//
+// A cross-definition check involves two channels and is reported against
+// whichever of them is seen second, so such a finding is kept when either
+// channel is in admitting.
+//
+// This is a local decision -- an oracle deciding what it is willing to vote for
+// -- not a consensus-critical one, so oracles running different versions of the
+// admission-only checks disagree only about what they vote for.
+func VerifyChannelDefinitionsForAdmission(codecs map[llotypes.ReportFormat]ReportCodec, channelDefs llotypes.ChannelDefinitions, admitting map[llotypes.ChannelID]struct{}) error {
+	return verifyChannelDefinitions(codecs, channelDefs, admitting)
+}
+
+// ChangedChannelIDs returns the IDs of the channels desired holds that current
+// does not hold identically: the set being added or changed, which is the
+// admitting set to verify against.
+func ChangedChannelIDs(current, desired llotypes.ChannelDefinitions) map[llotypes.ChannelID]struct{} {
+	changed := make(map[llotypes.ChannelID]struct{})
+	for channelID, cd := range desired {
+		if prev, exists := current[channelID]; exists && prev.Equals(cd) {
+			continue
+		}
+		changed[channelID] = struct{}{}
+	}
+	return changed
+}
+
+// admissionFinding is an admission-only check failure, together with every
+// channel it implicates, so that it can be filtered by the admitting set.
+type admissionFinding struct {
+	channels []llotypes.ChannelID
+	err      error
+}
+
+func (f admissionFinding) appliesTo(admitting map[llotypes.ChannelID]struct{}) bool {
+	for _, channelID := range f.channels {
+		if _, ok := admitting[channelID]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+func verifyChannelDefinitions(codecs map[llotypes.ReportFormat]ReportCodec, channelDefs llotypes.ChannelDefinitions, admitting map[llotypes.ChannelID]struct{}) (merr error) {
 	if len(channelDefs) > MaxOutcomeChannelDefinitionsLength {
 		return fmt.Errorf("too many channels, got: %d/%d", len(channelDefs), MaxOutcomeChannelDefinitionsLength)
 	}
@@ -20,6 +79,15 @@ func VerifyChannelDefinitions(codecs map[llotypes.ReportFormat]ReportCodec, chan
 		channelIDs = append(channelIDs, channelID)
 	}
 	sort.Slice(channelIDs, func(i, j int) bool { return channelIDs[i] < channelIDs[j] })
+
+	// Admission-only findings are collected as they are discovered and filtered
+	// against admitting once at the end. The bookkeeping the cross-definition
+	// checks rely on is built for the whole set either way, so that a finding
+	// does not depend on which channels are being admitted.
+	var admissionFindings []admissionFinding
+	admit := func(err error, channels ...llotypes.ChannelID) {
+		admissionFindings = append(admissionFindings, admissionFinding{channels: channels, err: err})
+	}
 
 	uniqueStreamIDs := make(map[llotypes.StreamID]struct{}, len(channelDefs))
 	// Owners of every stream ID that will hold an aggregate: observed streams
@@ -67,11 +135,11 @@ func VerifyChannelDefinitions(codecs map[llotypes.ReportFormat]ReportCodec, chan
 		if HasCalculatedStreams(cd) {
 			ids, err := CalculatedStreamIDs(nil, cd, channelID)
 			if err != nil {
-				merr = errors.Join(merr, fmt.Errorf("invalid ChannelDefinition with ID %d: %w", channelID, err))
+				admit(fmt.Errorf("invalid ChannelDefinition with ID %d: %w", channelID, err), channelID)
 			}
 			for _, streamID := range ids {
 				if owner, ok := calculatedBy[streamID]; ok {
-					merr = errors.Join(merr, fmt.Errorf("ChannelDefinition with ID %d declares calculated stream %d already declared by channel %d", channelID, streamID, owner))
+					admit(fmt.Errorf("ChannelDefinition with ID %d declares calculated stream %d already declared by channel %d", channelID, streamID, owner), channelID, owner)
 					continue
 				}
 				calculatedBy[streamID] = channelID
@@ -83,16 +151,21 @@ func VerifyChannelDefinitions(codecs map[llotypes.ReportFormat]ReportCodec, chan
 			if verifyErr != nil {
 				merr = errors.Join(merr, fmt.Errorf("invalid ChannelDefinition with ID %d: %w", channelID, verifyErr))
 			}
+			if av, ok := codec.(AdmissionVerifier); ok && verifyErr == nil {
+				if err := av.VerifyForAdmission(cd); err != nil {
+					admit(fmt.Errorf("invalid ChannelDefinition with ID %d: %w", channelID, err), channelID)
+				}
+			}
 		}
 		if feedIDer, ok := codecs[cd.ReportFormat].(FeedIDer); ok && verifyErr == nil {
 			feedID, hasFeedID, err := feedIDer.FeedID(cd)
 			switch {
 			case err != nil:
-				merr = errors.Join(merr, fmt.Errorf("invalid ChannelDefinition with ID %d: failed to resolve feed ID: %w", channelID, err))
+				admit(fmt.Errorf("invalid ChannelDefinition with ID %d: failed to resolve feed ID: %w", channelID, err), channelID)
 			case !hasFeedID:
 			default:
 				if owner, ok := feedIDBy[feedID]; ok {
-					merr = errors.Join(merr, fmt.Errorf("ChannelDefinition with ID %d has feed ID 0x%x already used by channel %d", channelID, feedID, owner))
+					admit(fmt.Errorf("ChannelDefinition with ID %d has feed ID 0x%x already used by channel %d", channelID, feedID, owner), channelID, owner)
 				} else {
 					feedIDBy[feedID] = channelID
 				}
@@ -116,7 +189,13 @@ func VerifyChannelDefinitions(codecs map[llotypes.ReportFormat]ReportCodec, chan
 	// pass: calculated collisions are caught as they are collected above.
 	for _, streamID := range sortedStreamIDs(calculatedBy) {
 		if owner, ok := observedBy[streamID]; ok {
-			merr = errors.Join(merr, fmt.Errorf("ChannelDefinition with ID %d declares calculated stream %d, which channel %d observes", calculatedBy[streamID], streamID, owner))
+			admit(fmt.Errorf("ChannelDefinition with ID %d declares calculated stream %d, which channel %d observes", calculatedBy[streamID], streamID, owner), calculatedBy[streamID], owner)
+		}
+	}
+
+	for _, finding := range admissionFindings {
+		if finding.appliesTo(admitting) {
+			merr = errors.Join(merr, finding.err)
 		}
 	}
 

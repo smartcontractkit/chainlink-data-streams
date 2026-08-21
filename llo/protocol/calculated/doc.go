@@ -134,8 +134,10 @@
 // # Validation
 //
 // ValidateExpression and ValidateChannelExpressions apply every static rule
-// without evaluating anything, and are what a report codec's Verify should call
-// so an unusable definition cannot reach consensus.
+// without evaluating anything, and are what a report codec's VerifyForAdmission
+// should call so an unusable definition cannot reach consensus. They belong there
+// rather than in Verify because Verify also runs against already-committed
+// definitions, and rejecting one of those stops an oracle from observing at all.
 // ProcessCalculatedStreamsDryRun goes further, evaluating against synthesized
 // inputs, and is for offline configuration tooling.
 package calculated

@@ -431,7 +431,10 @@ func TestReportCodecEVMABIEncodeUnpackedExpr_Verify(t *testing.T) {
 			},
 			Opts: []byte(`{"ABI":[{"type":"int192"}],"feedID":"0x1111111111111111111111111111111111111111111111111111111111111111"}`),
 		}
-		err := c.Verify(cd)
+		// Grandfathered: Verify still accepts it, so a committed definition
+		// keeps working; only admission rejects it.
+		require.NoError(t, c.Verify(cd))
+		err := c.VerifyForAdmission(cd)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "expression is empty")
 	})
@@ -468,6 +471,7 @@ func TestReportCodecEVMABIEncodeUnpackedExpr_Verify(t *testing.T) {
 			Opts:         []byte(`{"baseUSDFee":"1","feedID":"0x1111111111111111111111111111111111111111111111111111111111111111","ABI":[{"type":"int192","expression":"Avg(History(s3, 10))","expressionStreamID":999}]}`),
 		}
 		require.NoError(t, c.Verify(cd))
+		require.NoError(t, c.VerifyForAdmission(cd))
 	})
 	t.Run("statically invalid expression is rejected", func(t *testing.T) {
 		// A window in a scalar position can never produce a value, so accepting
@@ -481,7 +485,8 @@ func TestReportCodecEVMABIEncodeUnpackedExpr_Verify(t *testing.T) {
 			ReportFormat: llotypes.ReportFormatEVMABIEncodeUnpackedExpr,
 			Opts:         []byte(`{"baseUSDFee":"1","feedID":"0x1111111111111111111111111111111111111111111111111111111111111111","ABI":[{"type":"int192","expression":"Add(History(s3, 10), 1)","expressionStreamID":999}]}`),
 		}
-		err := c.Verify(cd)
+		require.NoError(t, c.Verify(cd))
+		err := c.VerifyForAdmission(cd)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "invalid calculated stream expressions")
 	})
@@ -495,7 +500,8 @@ func TestReportCodecEVMABIEncodeUnpackedExpr_Verify(t *testing.T) {
 			ReportFormat: llotypes.ReportFormatEVMABIEncodeUnpackedExpr,
 			Opts:         []byte(`{"baseUSDFee":"1","feedID":"0x1111111111111111111111111111111111111111111111111111111111111111","ABI":[{"type":"int192","expression":"Add(s1,","expressionStreamID":999}]}`),
 		}
-		require.Error(t, c.Verify(cd))
+		require.NoError(t, c.Verify(cd))
+		require.Error(t, c.VerifyForAdmission(cd))
 	})
 	t.Run("ambiguous stream aggregation is rejected", func(t *testing.T) {
 		// Which aggregation a History call means would be undecidable.
@@ -509,7 +515,8 @@ func TestReportCodecEVMABIEncodeUnpackedExpr_Verify(t *testing.T) {
 			ReportFormat: llotypes.ReportFormatEVMABIEncodeUnpackedExpr,
 			Opts:         []byte(`{"baseUSDFee":"1","feedID":"0x1111111111111111111111111111111111111111111111111111111111111111","ABI":[{"type":"int192","expression":"Avg(History(s3, 10))","expressionStreamID":999}]}`),
 		}
-		err := c.Verify(cd)
+		require.NoError(t, c.Verify(cd))
+		err := c.VerifyForAdmission(cd)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "aggregators")
 	})
