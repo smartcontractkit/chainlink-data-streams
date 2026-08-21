@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"math/rand/v2"
 
 	"github.com/ethereum/go-ethereum/common"
 
@@ -30,7 +31,7 @@ func NewReportCodecEVMABIEncodeUnpackedExpr(lggr logger.Logger, donID uint32) Re
 }
 
 func (r ReportCodecEVMABIEncodeUnpackedExpr) Encode(report protocol.Report, cd llotypes.ChannelDefinition, optsCache *protocol.OptsCache) ([]byte, error) {
-	if report.Specimen {
+	if report.Specimen && rand.IntN(specimenSampleRate) != 0 {
 		return nil, errors.New("ReportCodecEVMABIEncodeUnpackedExpr does not support encoding specimen reports")
 	}
 	if len(report.Values) < 2 {

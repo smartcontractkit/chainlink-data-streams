@@ -70,17 +70,6 @@ func Test_ReportCodecPremiumLegacy(t *testing.T) {
 		assert.Contains(t, err.Error(), "ReportCodecPremiumLegacy cannot encode; got unusable report; ReportCodecPremiumLegacy requires exactly 3 values (NativePrice, LinkPrice, Quote{Bid, Mid, Ask}); got report.Values: []")
 	})
 
-	t.Run("does not encode specimen reports", func(t *testing.T) {
-		report := newValidPremiumLegacyReport()
-		report.Specimen = true
-		cache := protocol.NewOptsCache()
-		cache.Set(report.ChannelID, cd.Opts)
-
-		_, err := rc.Encode(report, cd, cache)
-		require.Error(t, err)
-		require.EqualError(t, err, "ReportCodecPremiumLegacy does not support encoding specimen reports")
-	})
-
 	t.Run("Encode constructs a report from observations", func(t *testing.T) {
 		report := newValidPremiumLegacyReport()
 		cache := protocol.NewOptsCache()

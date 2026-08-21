@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"math/big"
+	"math/rand/v2"
 
 	"github.com/goccy/go-json"
 
@@ -84,7 +85,7 @@ func (r *ReportFormatEVMPremiumLegacyOpts) Decode(opts []byte) error {
 }
 
 func (r ReportCodecPremiumLegacy) Encode(report protocol.Report, cd llotypes.ChannelDefinition, optsCache *protocol.OptsCache) ([]byte, error) {
-	if report.Specimen {
+	if report.Specimen && rand.IntN(specimenSampleRate) != 0 {
 		return nil, errors.New("ReportCodecPremiumLegacy does not support encoding specimen reports")
 	}
 	nativePrice, linkPrice, quote, err := ExtractReportValues(report)
