@@ -136,7 +136,7 @@ func (p *Plugin) StateTransition(ctx context.Context, seqNr uint64, _ ocrtypes.A
 			if cd.ReportFormat == llotypes.ReportFormatHistoryBackfill {
 				// Backfill: the watermark advances to whatever observation the
 				// previous round would have selected (and emitted), or stays put.
-				if tsNanos, _, _, found := selectBackfillCandidate(effective, prev.validAfterNanoseconds, prev.observationTimestampNs, channelID); found {
+				if tsNanos, _, _, found := selectBackfillCandidate(effective, prev.validAfterNanoseconds, prev.observationTimestampNs, channelID, prev.opts); found {
 					out.ValidAfterNanoseconds[channelID] = tsNanos
 				} else {
 					out.ValidAfterNanoseconds[channelID] = prevValidAfter

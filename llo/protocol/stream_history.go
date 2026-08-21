@@ -27,9 +27,16 @@ var (
 	ErrHistoryRecordTooLarge = errors.New("history record too large")
 )
 
-// deterministicHistoryMarshal marshals history deterministically. History is
-// replicated KeyValueState, so a non-deterministic encoding would halt the DON.
-var deterministicHistoryMarshal = proto.MarshalOptions{Deterministic: true}
+// deterministicMarshal is the marshaller for anything whose bytes are compared
+// across oracles: replicated KeyValueState (history headers and chunks), and the
+// serialized stream values ModeAggregator counts to pick a mode. A
+// non-deterministic encoding there would halt the DON.
+//
+// None of the messages marshalled through it has a map field today, and
+// Deterministic only orders map entries, so it is currently a no-op. It is
+// applied anyway so that adding a map field to one of them cannot silently
+// introduce a divergence.
+var deterministicMarshal = proto.MarshalOptions{Deterministic: true}
 
 // StreamHistoryRecord is one agreed aggregate value of a stream together with
 // the timestamp it was observed at.

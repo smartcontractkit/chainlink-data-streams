@@ -18,7 +18,7 @@ import (
 // also replicated state read every round, so a panic here takes the node down.
 func FuzzUnmarshalStreamHistoryHeader(f *testing.F) {
 	seed := func(pb *LLOStreamHistoryHeaderProto) {
-		b, err := deterministicHistoryMarshal.Marshal(pb)
+		b, err := deterministicMarshal.Marshal(pb)
 		require.NoError(f, err)
 		f.Add(b)
 	}
@@ -127,7 +127,7 @@ func FuzzUnmarshalStreamHistoryChunk(f *testing.F) {
 	require.NoError(f, err)
 
 	seed := func(pb *LLOStreamHistoryChunkProto) {
-		b, err := deterministicHistoryMarshal.Marshal(pb)
+		b, err := deterministicMarshal.Marshal(pb)
 		require.NoError(f, err)
 		f.Add(b)
 	}

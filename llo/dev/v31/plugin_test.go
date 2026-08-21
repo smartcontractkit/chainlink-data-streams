@@ -740,17 +740,17 @@ func Test_HistoryBackfill(t *testing.T) {
 	defs := llotypes.ChannelDefinitions{targetCID: targetCD, backfillCID: backfillCD}
 
 	// Candidate selection advances with the watermark, then completes.
-	ts, raw, opts, ok := selectBackfillCandidate(defs, map[llotypes.ChannelID]uint64{backfillCID: 0}, tenSec, backfillCID)
+	ts, raw, opts, ok := selectBackfillCandidate(defs, map[llotypes.ChannelID]uint64{backfillCID: 0}, tenSec, backfillCID, nil)
 	require.True(t, ok)
 	require.Equal(t, fiveSec, ts)
 	require.Equal(t, uint64(5), raw)
 	require.Equal(t, targetCID, opts.TargetChannelID)
 
-	ts2, _, _, ok2 := selectBackfillCandidate(defs, map[llotypes.ChannelID]uint64{backfillCID: fiveSec}, tenSec, backfillCID)
+	ts2, _, _, ok2 := selectBackfillCandidate(defs, map[llotypes.ChannelID]uint64{backfillCID: fiveSec}, tenSec, backfillCID, nil)
 	require.True(t, ok2)
 	require.Equal(t, eightSec, ts2)
 
-	_, _, _, ok3 := selectBackfillCandidate(defs, map[llotypes.ChannelID]uint64{backfillCID: eightSec}, tenSec, backfillCID)
+	_, _, _, ok3 := selectBackfillCandidate(defs, map[llotypes.ChannelID]uint64{backfillCID: eightSec}, tenSec, backfillCID, nil)
 	require.False(t, ok3, "backfill should be complete once watermark passes the last observation")
 
 	// Reports emits the backfill report, encoded with the target channel's format.

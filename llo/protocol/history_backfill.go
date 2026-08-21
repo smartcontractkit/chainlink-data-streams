@@ -3,6 +3,8 @@ package protocol
 import (
 	"errors"
 	"fmt"
+	"math"
+	"sort"
 	"strconv"
 
 	"github.com/goccy/go-json"
@@ -35,26 +37,67 @@ func (o *HistoryBackfillOpts) UnmarshalJSON(data []byte) error {
 	if len(w.Observations) == 0 {
 		return errors.New("observations must be non-empty")
 	}
+	if len(w.Observations) > MaxHistoryBackfillObservations {
+		return fmt.Errorf("backfill definition has too many observations: %d > %d",
+			len(w.Observations), MaxHistoryBackfillObservations)
+	}
+
+	// Keys are visited in sorted order so that a definition with more than one
+	// problem always reports the same one, and a duplicate always names the same
+	// pair. Distinct keys can decode to the same number -- ParseUint accepts
+	// leading zeros, so "01" and "1" are both 1 -- which is what the duplicate
+	// checks below are for.
 	o.Observations = make(map[uint64]map[llotypes.StreamID]string, len(w.Observations))
-	for tsStr, streams := range w.Observations {
+	firstTSKey := make(map[uint64]string, len(w.Observations))
+	for _, tsStr := range sortedKeys(w.Observations) {
+		streams := w.Observations[tsStr]
 		ts, err := strconv.ParseUint(tsStr, 10, 64)
 		if err != nil {
 			return fmt.Errorf("invalid observation timestamp key %q: %w", tsStr, err)
 		}
+
+		if earlier, ok := firstTSKey[ts]; ok {
+			return fmt.Errorf("duplicate timestamp key %q: decodes to %d, same as %q", tsStr, ts, earlier)
+		}
+		firstTSKey[ts] = tsStr
+
 		if len(streams) == 0 {
 			return fmt.Errorf("empty stream map for timestamp %s", tsStr)
 		}
+
+		if len(streams) > MaxStreamsPerChannel {
+			return fmt.Errorf("backfill observation has too many streams: %d > %d", len(streams), MaxStreamsPerChannel)
+		}
+
 		inner := make(map[llotypes.StreamID]string, len(streams))
-		for sidStr, val := range streams {
+		firstStreamKey := make(map[llotypes.StreamID]string, len(streams))
+		for _, sidStr := range sortedKeys(streams) {
 			sid64, err := strconv.ParseUint(sidStr, 10, 32)
 			if err != nil {
 				return fmt.Errorf("invalid stream id key %q at timestamp %s: %w", sidStr, tsStr, err)
 			}
-			inner[llotypes.StreamID(sid64)] = val
+
+			sid := llotypes.StreamID(sid64)
+			if earlier, ok := firstStreamKey[sid]; ok {
+				return fmt.Errorf("duplicate stream id key %q at timestamp %s: decodes to %d, same as %q", sidStr, tsStr, sid, earlier)
+			}
+			firstStreamKey[sid] = sidStr
+			inner[sid] = streams[sidStr]
 		}
 		o.Observations[ts] = inner
 	}
 	return nil
+}
+
+// sortedKeys returns a map's keys in ascending order, so that a loop over them
+// reports the same problem on every oracle.
+func sortedKeys[V any](m map[string]V) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 // ParseHistoryBackfillOpts decodes opts bytes into HistoryBackfillOpts.
@@ -66,13 +109,48 @@ func ParseHistoryBackfillOpts(raw llotypes.ChannelOpts) (HistoryBackfillOpts, er
 	if err := json.Unmarshal(raw, &o); err != nil {
 		return o, err
 	}
-	if o.TargetChannelID == 0 {
-		return o, errors.New("targetChannelId must be non-zero")
-	}
-	if len(o.Observations) == 0 {
-		return o, errors.New("observations must be non-empty")
+	if err := o.validate(); err != nil {
+		return o, err
 	}
 	return o, nil
+}
+
+// GetHistoryBackfillOpts returns a history_backfill channel's parsed opts,
+// preferring the (node-local) decode cache and falling back to parsing the
+// definition's raw opts on a miss. The fallback keeps the result identical
+// across oracles even when the cache has not been populated.
+//
+// Selection runs two or three times per backfill channel per round, and the opts
+// carry up to MaxHistoryBackfillObservations observations of stream values, so
+// parsing them afresh each time is the difference between one allocation of that
+// map per generation and several per round.
+func GetHistoryBackfillOpts(optsCache *OptsCache, cd llotypes.ChannelDefinition, cid llotypes.ChannelID) (HistoryBackfillOpts, error) {
+	if optsCache == nil {
+		return ParseHistoryBackfillOpts(cd.Opts)
+	}
+	o, err := GetOpts[HistoryBackfillOpts](optsCache, cid)
+	if err != nil {
+		return ParseHistoryBackfillOpts(cd.Opts)
+	}
+	// GetOpts decodes but does not apply the rules ParseHistoryBackfillOpts
+	// applies after decoding, including the ones that reject empty opts: a
+	// channel with no raw bytes decodes to the zero value without error.
+	if err := o.validate(); err != nil {
+		return HistoryBackfillOpts{}, err
+	}
+	return o, nil
+}
+
+// validate applies the rules that hold for decoded opts however they were
+// decoded.
+func (o HistoryBackfillOpts) validate() error {
+	if o.TargetChannelID == 0 {
+		return errors.New("targetChannelId must be non-zero")
+	}
+	if len(o.Observations) == 0 {
+		return errors.New("observations must be non-empty")
+	}
+	return nil
 }
 
 // ReportCodecHistoryBackfill validates channel definitions; encoding is delegated to the target channel codec.
@@ -112,20 +190,33 @@ func ReportTimestampResolutionNanos(target llotypes.ChannelDefinition) (uint64, 
 	}
 }
 
-// ObservationTimestampKeyToNanoseconds converts a raw observation timestamp key from opts to nanoseconds.
-func ObservationTimestampKeyToNanoseconds(rawKey uint64, res TimeResolution) uint64 {
+// ObservationTimestampKeyToNanoseconds converts a raw observation timestamp key
+// from opts to nanoseconds, reporting whether the key is representable.
+//
+// The scaling is unsigned multiplication, so it wraps: a key beyond about 1.8e10
+// seconds becomes a small number of nanoseconds. That is the dangerous direction
+// -- every caller compares the result against a bound it must be below (now, the
+// round's observation timestamp) and a wrapped value passes all of them, so an
+// unrepresentable far-future timestamp would read as a valid past one. Keys come
+// from channel definition opts, which makes this reachable from configuration.
+func ObservationTimestampKeyToNanoseconds(rawKey uint64, res TimeResolution) (nanoseconds uint64, ok bool) {
+	var multiplier uint64
 	switch res {
-	case ResolutionSeconds:
-		return rawKey * 1e9
 	case ResolutionMilliseconds:
-		return rawKey * 1e6
+		multiplier = 1e6
 	case ResolutionMicroseconds:
-		return rawKey * 1e3
+		multiplier = 1e3
 	case ResolutionNanoseconds:
-		return rawKey
+		return rawKey, true
+	case ResolutionSeconds:
+		multiplier = 1e9
 	default:
-		return rawKey * 1e9
+		multiplier = 1e9
 	}
+	if rawKey > math.MaxUint64/multiplier {
+		return 0, false
+	}
+	return rawKey * multiplier, true
 }
 
 func TargetChannelTimeResolution(target llotypes.ChannelDefinition) (TimeResolution, error) {
@@ -175,7 +266,10 @@ func ValidateHistoryBackfillAgainstDefinitions(cd llotypes.ChannelDefinition, de
 		return err
 	}
 	for rawTS, streams := range opts.Observations {
-		tsNanos := ObservationTimestampKeyToNanoseconds(rawTS, res)
+		tsNanos, ok := ObservationTimestampKeyToNanoseconds(rawTS, res)
+		if !ok {
+			return fmt.Errorf("observation timestamp raw %d cannot be expressed in nanoseconds at the target channel's time resolution", rawTS)
+		}
 		if nowNanos > 0 && tsNanos >= nowNanos {
 			return fmt.Errorf("observation timestamp %d (raw %d) is not strictly in the past relative to reference time", tsNanos, rawTS)
 		}
@@ -187,6 +281,36 @@ func ValidateHistoryBackfillAgainstDefinitions(cd llotypes.ChannelDefinition, de
 				return fmt.Errorf("timestamp %d: missing stream %d", rawTS, strm.StreamID)
 			}
 		}
+	}
+	return nil
+}
+
+// ValidateHistoryBackfillTarget rejects a backfill channel whose target is
+// itself a backfill channel, which includes a channel targeting itself.
+//
+// Such a definition passes every other rule: the resolution lookup falls through
+// to seconds, the stream lists match trivially when the target is the channel
+// itself, and the target declares no calculated streams. It fails only at the
+// very end, in Report, where the codec resolved from the target's report format
+// is ReportCodecHistoryBackfill, whose Encode always errors. The channel is then
+// selected, logged and skipped every round forever, because the watermark only
+// advances on a report that was actually emitted.
+//
+// This is an admission-only rule (see VerifyChannelDefinitionsForAdmission).
+// Rejecting an already-committed definition here would stop an oracle from
+// observing at all, and a definition like this has never produced a report, so
+// there is nothing to protect but the ability to install a new one.
+func ValidateHistoryBackfillTarget(cd llotypes.ChannelDefinition, defs llotypes.ChannelDefinitions) error {
+	opts, err := ParseHistoryBackfillOpts(cd.Opts)
+	if err != nil {
+		return err
+	}
+	target, ok := defs[opts.TargetChannelID]
+	if !ok {
+		return nil // reported by ValidateHistoryBackfillAgainstDefinitions
+	}
+	if target.ReportFormat == llotypes.ReportFormatHistoryBackfill {
+		return fmt.Errorf("target channel %d is itself a history_backfill channel, whose reports cannot be encoded", opts.TargetChannelID)
 	}
 	return nil
 }

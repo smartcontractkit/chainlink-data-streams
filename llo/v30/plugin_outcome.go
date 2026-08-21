@@ -175,7 +175,7 @@ func (p *Plugin) outcome(outctx ocr3types.OutcomeContext, query types.Query, aos
 		for channelID, previousValidAfterNanoseconds := range previousOutcome.ValidAfterNanoseconds {
 			cd, ok := previousOutcome.ChannelDefinitions[channelID]
 			if ok && cd.ReportFormat == llotypes.ReportFormatHistoryBackfill {
-				tsNanos, _, _, uerr := SelectBackfillCandidate(&previousOutcome, channelID)
+				tsNanos, _, _, uerr := SelectBackfillCandidate(&previousOutcome, channelID, p.OptsCache)
 				if uerr != nil {
 					if p.Config.VerboseLogging {
 						p.Logger.Debugw("Channel is not reportable", "channelID", channelID, "err", uerr, "stage", "Outcome", "seqNr", outctx.SeqNr)
@@ -464,7 +464,7 @@ func (out *Outcome) IsReportable(channelID llotypes.ChannelID, protocolVersion u
 	}
 
 	if cd.ReportFormat == llotypes.ReportFormatHistoryBackfill {
-		_, _, _, uerr := SelectBackfillCandidate(out, channelID)
+		_, _, _, uerr := SelectBackfillCandidate(out, channelID, optsCache)
 		if uerr != nil {
 			return uerr
 		}

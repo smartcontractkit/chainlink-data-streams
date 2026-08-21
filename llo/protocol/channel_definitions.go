@@ -175,6 +175,9 @@ func verifyChannelDefinitions(codecs map[llotypes.ReportFormat]ReportCodec, chan
 			if err := ValidateHistoryBackfillAgainstDefinitions(cd, channelDefs, 0); err != nil {
 				merr = errors.Join(merr, fmt.Errorf("invalid history backfill channel %d: %w", channelID, err))
 			}
+			if err := ValidateHistoryBackfillTarget(cd, channelDefs); err != nil {
+				admit(fmt.Errorf("invalid history backfill channel %d: %w", channelID, err), channelID)
+			}
 		}
 		if verifyErr != nil {
 			continue

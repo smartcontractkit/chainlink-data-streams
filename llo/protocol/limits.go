@@ -159,4 +159,8 @@ const (
 	// to MaxStreamsPerChannel streams each, which lands in the low single-digit
 	// MiB range. 16 MiB leaves generous headroom.
 	MaxDecompressedObservationLength = 16 << 20
+
+	// MaxHistoryBackfillObservations bounds the maximum number of
+	// observations to backfill per definition.
+	MaxHistoryBackfillObservations = 64
 )

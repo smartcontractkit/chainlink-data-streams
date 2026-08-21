@@ -579,7 +579,7 @@ func TestUnmarshalStreamHistoryHeaderCorruption(t *testing.T) {
 			LastObservationTimestampNanoseconds:       400,
 		}
 	}
-	b, err := deterministicHistoryMarshal.Marshal(valid())
+	b, err := deterministicMarshal.Marshal(valid())
 	require.NoError(t, err)
 	header, err := UnmarshalStreamHistoryHeader(b)
 	require.NoError(t, err)
@@ -638,7 +638,7 @@ func TestUnmarshalStreamHistoryHeaderCorruption(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			pb := valid()
 			mutate(pb)
-			b, err := deterministicHistoryMarshal.Marshal(pb)
+			b, err := deterministicMarshal.Marshal(pb)
 			require.NoError(t, err)
 
 			header, err := UnmarshalStreamHistoryHeader(b)
@@ -678,7 +678,7 @@ func TestUnmarshalStreamHistoryChunkCorruption(t *testing.T) {
 			},
 		}
 	}
-	b, err := deterministicHistoryMarshal.Marshal(valid())
+	b, err := deterministicMarshal.Marshal(valid())
 	require.NoError(t, err)
 	chunk, err := UnmarshalStreamHistoryChunk(b)
 	require.NoError(t, err)
@@ -719,7 +719,7 @@ func TestUnmarshalStreamHistoryChunkCorruption(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			pb := valid()
 			mutate(pb)
-			b, err := deterministicHistoryMarshal.Marshal(pb)
+			b, err := deterministicMarshal.Marshal(pb)
 			require.NoError(t, err)
 
 			chunk, err := UnmarshalStreamHistoryChunk(b)

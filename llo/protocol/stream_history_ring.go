@@ -93,7 +93,7 @@ func (c *StreamHistoryChunk) MarshalBinary() ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	return deterministicHistoryMarshal.Marshal(pb)
+	return deterministicMarshal.Marshal(pb)
 }
 
 // StreamHistoryChunkFromProto validates and converts a decoded chunk.
@@ -298,7 +298,7 @@ func (h *StreamHistoryHeader) ToProto() *LLOStreamHistoryHeaderProto {
 
 // MarshalBinary serializes the header deterministically for storage.
 func (h *StreamHistoryHeader) MarshalBinary() ([]byte, error) {
-	return deterministicHistoryMarshal.Marshal(h.ToProto())
+	return deterministicMarshal.Marshal(h.ToProto())
 }
 
 // StreamHistoryHeaderFromProto validates and converts a decoded header.

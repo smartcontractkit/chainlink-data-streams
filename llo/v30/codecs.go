@@ -36,7 +36,7 @@ func GetOutcomeCodec(c protocol.OffchainConfig) OutcomeCodec {
 // SelectBackfillCandidate returns the next observation timestamp in nanoseconds, its raw key, and parsed opts, or an UnreportableChannelError.
 // outcome.ValidAfterNanoseconds[backfillCID] is the progress watermark (last emitted backfill observation time, in nanoseconds).
 // Min report interval and second-resolution overlap rules used for live channels do not apply to history_backfill.
-func SelectBackfillCandidate(out *Outcome, backfillCID llotypes.ChannelID) (tsNanos uint64, rawTS uint64, opts protocol.HistoryBackfillOpts, uerr *UnreportableChannelError) {
+func SelectBackfillCandidate(out *Outcome, backfillCID llotypes.ChannelID, optsCache *protocol.OptsCache) (tsNanos uint64, rawTS uint64, opts protocol.HistoryBackfillOpts, uerr *UnreportableChannelError) {
 	cd, exists := out.ChannelDefinitions[backfillCID]
 	if !exists {
 		return 0, 0, protocol.HistoryBackfillOpts{}, &UnreportableChannelError{Inner: nil, Reason: "IsReportable=false; no channel definition with this ID", ChannelID: backfillCID}
@@ -46,7 +46,7 @@ func SelectBackfillCandidate(out *Outcome, backfillCID llotypes.ChannelID) (tsNa
 	}
 
 	var err error
-	opts, err = protocol.ParseHistoryBackfillOpts(cd.Opts)
+	opts, err = protocol.GetHistoryBackfillOpts(optsCache, cd, backfillCID)
 	if err != nil {
 		return 0, 0, protocol.HistoryBackfillOpts{}, &UnreportableChannelError{Inner: fmt.Errorf("failed to backfill: %w", err), Reason: "failed to parse history_backfill opts", ChannelID: backfillCID}
 	}
@@ -69,7 +69,12 @@ func SelectBackfillCandidate(out *Outcome, backfillCID llotypes.ChannelID) (tsNa
 	var bestNanos uint64
 	found := false
 	for rawKey := range opts.Observations {
-		tsN := protocol.ObservationTimestampKeyToNanoseconds(rawKey, res)
+		tsN, ok := protocol.ObservationTimestampKeyToNanoseconds(rawKey, res)
+		if !ok {
+			// Not expressible in nanoseconds; scaling it would wrap into a
+			// timestamp that looks like a valid past one.
+			continue
+		}
 		if tsN >= obsTSNanos {
 			continue
 		}

@@ -57,7 +57,7 @@ func (p *Plugin) reports(ctx context.Context, seqNr uint64, rawOutcome ocr3types
 		cd := outcome.ChannelDefinitions[cid]
 
 		if cd.ReportFormat == llotypes.ReportFormatHistoryBackfill {
-			tsNanos, rawTS, opts, uerr := SelectBackfillCandidate(&outcome, cid)
+			tsNanos, rawTS, opts, uerr := SelectBackfillCandidate(&outcome, cid, p.OptsCache)
 			if uerr != nil {
 				p.Logger.Warnw("backfill channel was reportable but selection failed", "channelID", cid, "err", uerr, "stage", "Report", "seqNr", seqNr)
 				continue
