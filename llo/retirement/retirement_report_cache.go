@@ -127,6 +127,10 @@ func (r *retirementReportCache) StoreConfig(ctx context.Context, cd ocr2types.Co
 	}
 	r.mu.RUnlock()
 
+	if err := r.orm.StoreConfig(ctx, cd, signers, f); err != nil {
+		return fmt.Errorf("StoreConfig failed; failed to persist to ORM: %w", err)
+	}
+
 	r.mu.Lock()
 	r.configs[cd] = Config{
 		Digest:  cd,
@@ -135,7 +139,7 @@ func (r *retirementReportCache) StoreConfig(ctx context.Context, cd ocr2types.Co
 	}
 	r.mu.Unlock()
 
-	return r.orm.StoreConfig(ctx, cd, signers, f)
+	return nil
 }
 
 func (r *retirementReportCache) AttestedRetirementReport(predecessorConfigDigest ocr2types.ConfigDigest) ([]byte, bool) {
