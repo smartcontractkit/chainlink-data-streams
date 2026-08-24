@@ -95,6 +95,8 @@ func (e *blobFetchError) Error() string { return e.err.Error() }
 func (e *blobFetchError) Unwrap() error { return e.err }
 
 // decodeObservation reverses encodeObservation, fetching any referenced blobs.
+// Observations carrying inline stream values are rejected: v31 disseminates
+// values exclusively via blobs.
 func decodeObservation(ctx context.Context, raw ocrtypes.Observation, bf ocr3_1types.BlobFetcher) (Observation, error) {
 	if len(raw) == 0 {
 		return Observation{}, nil
@@ -193,15 +195,13 @@ func observationFromProto(main *protocol.LLOObservationProto) (Observation, erro
 			obs.UpdateChannelDefinitions[id] = protocol.ChannelDefinitionFromProto(pb)
 		}
 	}
+	// v31 carries stream values exclusively in blobs. A conforming encoder never
+	// populates this field, so its presence means the peer is not speaking v31
+	// framing; reject rather than silently accepting an out-of-band path around
+	// blob dissemination. This is deterministic across oracles (all see the same
+	// bytes), so dropping the observation is safe.
 	if len(main.StreamValues) > 0 {
-		obs.StreamValues = make(protocol.StreamValues, len(main.StreamValues))
-		for id, pbSv := range main.StreamValues {
-			sv, err := streamValueFromProtoAllowNil(pbSv)
-			if err != nil {
-				return Observation{}, err
-			}
-			obs.StreamValues[id] = sv
-		}
+		return Observation{}, fmt.Errorf("observation carries %d inline stream values: v31 requires blob-carried values", len(main.StreamValues))
 	}
 	return obs, nil
 }

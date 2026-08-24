@@ -80,13 +80,13 @@ func Test_Reports_StateTransition_Concurrent_OptsIsolation(t *testing.T) {
 		p.ReportCodecs = map[llotypes.ReportFormat]protocol.ReportCodec{llotypes.ReportFormatJSON: optsEchoCodec{}}
 		kv := newMemKV()
 
-		_, err := p.StateTransition(ctx, 1, ocrtypes.AttributedQuery{}, obsRound(1_000, nil), kv, nil)
+		_, err := p.StateTransition(ctx, 1, ocrtypes.AttributedQuery{}, obsRound(1_000, nil), kv, testBlobs)
 		require.NoError(t, err)
-		_, err = p.StateTransition(ctx, 2, ocrtypes.AttributedQuery{}, obsRound(2_000, llotypes.ChannelDefinitions{1: withOpts(1)}), kv, nil)
+		_, err = p.StateTransition(ctx, 2, ocrtypes.AttributedQuery{}, obsRound(2_000, llotypes.ChannelDefinitions{1: withOpts(1)}), kv, testBlobs)
 		require.NoError(t, err)
-		_, err = p.StateTransition(ctx, 3, ocrtypes.AttributedQuery{}, obsRound(3_000, nil), kv, nil)
+		_, err = p.StateTransition(ctx, 3, ocrtypes.AttributedQuery{}, obsRound(3_000, nil), kv, testBlobs)
 		require.NoError(t, err)
-		prec4, err := p.StateTransition(ctx, 4, ocrtypes.AttributedQuery{}, obsRound(4_000, llotypes.ChannelDefinitions{1: withOpts(2)}), kv, nil)
+		prec4, err := p.StateTransition(ctx, 4, ocrtypes.AttributedQuery{}, obsRound(4_000, llotypes.ChannelDefinitions{1: withOpts(2)}), kv, testBlobs)
 		require.NoError(t, err)
 
 		decoded, err := decodePrecursor(prec4)
@@ -102,7 +102,7 @@ func Test_Reports_StateTransition_Concurrent_OptsIsolation(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, baseline, 1)
 	require.Equal(t, "v=1", string(baseline[0].ReportWithInfo.Report))
-	_, err = p.StateTransition(ctx, 5, ocrtypes.AttributedQuery{}, obsRound(5_000, nil), kv, nil)
+	_, err = p.StateTransition(ctx, 5, ocrtypes.AttributedQuery{}, obsRound(5_000, nil), kv, testBlobs)
 	require.NoError(t, err)
 
 	for i := 0; i < 50; i++ {
@@ -132,7 +132,7 @@ func Test_Reports_StateTransition_Concurrent_OptsIsolation(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			// Round 5 loads the record round 4 wrote (opts v=2).
-			_, errST = p.StateTransition(ctx, 5, ocrtypes.AttributedQuery{}, obsRound(5_000, nil), kv, nil)
+			_, errST = p.StateTransition(ctx, 5, ocrtypes.AttributedQuery{}, obsRound(5_000, nil), kv, testBlobs)
 		}()
 		wg.Wait()
 
