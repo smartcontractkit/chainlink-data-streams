@@ -112,12 +112,23 @@ func (r ReportCodecPremiumLegacy) Encode(report protocol.Report, cd llotypes.Cha
 		return nil, fmt.Errorf("failed to extract timestamps; %w", err)
 	}
 
+	// Compute in uint64 and range-check; uint32 arithmetic here would wrap
+	// silently and produce a report that is already expired on arrival.
+	validFromTimestamp := uint64(validAfterSeconds) + 1
+	if validFromTimestamp > math.MaxUint32 {
+		return nil, fmt.Errorf("validFromTimestamp %d exceeds uint32 range", validFromTimestamp)
+	}
+	expiresAt := uint64(observationTimestampSeconds) + uint64(opts.ExpirationWindow)
+	if expiresAt > math.MaxUint32 {
+		return nil, fmt.Errorf("expiresAt exceeds uint32 range; observationTimestamp: %d, expirationWindow: %d", observationTimestampSeconds, opts.ExpirationWindow)
+	}
+
 	rf := v3.ReportFields{
-		ValidFromTimestamp: validAfterSeconds + 1,
+		ValidFromTimestamp: uint32(validFromTimestamp),
 		Timestamp:          observationTimestampSeconds,
 		NativeFee:          CalculateFee(nativePrice, opts.BaseUSDFee),
 		LinkFee:            CalculateFee(linkPrice, opts.BaseUSDFee),
-		ExpiresAt:          observationTimestampSeconds + opts.ExpirationWindow,
+		ExpiresAt:          uint32(expiresAt),
 		BenchmarkPrice:     quote.Benchmark.Mul(multiplier).BigInt(),
 		Bid:                quote.Bid.Mul(multiplier).BigInt(),
 		Ask:                quote.Ask.Mul(multiplier).BigInt(),
@@ -156,6 +167,9 @@ func (r ReportCodecPremiumLegacy) Pack(digest types.ConfigDigest, seqNr uint64, 
 	var rs [][32]byte
 	var ss [][32]byte
 	var vs [32]byte
+	if len(sigs) > len(vs) {
+		return nil, fmt.Errorf("too many signatures; max: %d, got: %d", len(vs), len(sigs))
+	}
 	for i, as := range sigs {
 		r, s, v, err := evmutil.SplitSignature(as.Signature) //nolint:revive // This has always worked before; no need to change it
 		if err != nil {
