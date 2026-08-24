@@ -21,7 +21,7 @@ func Test_BlobPayload_RoundTrip(t *testing.T) {
 		require.Equal(t, blobCodecZstd, framed[0])
 		assert.Less(t, len(framed), len(raw))
 
-		got, err := decodeBlobPayload(framed)
+		got, err := decodeBlobPayload(framed, maxDecompressedBlobPayloadBytes)
 		require.NoError(t, err)
 		assert.Equal(t, raw, got)
 	})
@@ -35,7 +35,7 @@ func Test_BlobPayload_RoundTrip(t *testing.T) {
 		require.Equal(t, blobCodecRaw, framed[0])
 		assert.Equal(t, len(raw)+1, len(framed))
 
-		got, err := decodeBlobPayload(framed)
+		got, err := decodeBlobPayload(framed, maxDecompressedBlobPayloadBytes)
 		require.NoError(t, err)
 		assert.Equal(t, raw, got)
 	})
@@ -43,7 +43,7 @@ func Test_BlobPayload_RoundTrip(t *testing.T) {
 	t.Run("empty payload", func(t *testing.T) {
 		framed, err := encodeBlobPayload(nil)
 		require.NoError(t, err)
-		got, err := decodeBlobPayload(framed)
+		got, err := decodeBlobPayload(framed, maxDecompressedBlobPayloadBytes)
 		require.NoError(t, err)
 		assert.Empty(t, got)
 	})
@@ -58,7 +58,7 @@ func Test_BlobPayload_MarshalStreamValuesRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, blobCodecZstd, payload[0])
 
-	raw, err := decodeBlobPayload(payload)
+	raw, err := decodeBlobPayload(payload, maxDecompressedBlobPayloadBytes)
 	require.NoError(t, err)
 	chunk := &protocol.LLOObservationProto{}
 	require.NoError(t, proto.Unmarshal(raw, chunk))
@@ -67,18 +67,18 @@ func Test_BlobPayload_MarshalStreamValuesRoundTrip(t *testing.T) {
 
 func Test_decodeBlobPayload_Errors(t *testing.T) {
 	t.Run("empty", func(t *testing.T) {
-		_, err := decodeBlobPayload(nil)
+		_, err := decodeBlobPayload(nil, maxDecompressedBlobPayloadBytes)
 		require.ErrorContains(t, err, "empty blob payload")
 	})
 
 	t.Run("unknown codec", func(t *testing.T) {
-		_, err := decodeBlobPayload([]byte{0x7f, 0x01, 0x02})
+		_, err := decodeBlobPayload([]byte{0x7f, 0x01, 0x02}, maxDecompressedBlobPayloadBytes)
 		require.ErrorContains(t, err, "unknown blob payload codec 127")
 	})
 
 	t.Run("corrupt zstd body", func(t *testing.T) {
-		_, err := decodeBlobPayload([]byte{blobCodecZstd, 0xde, 0xad, 0xbe, 0xef})
-		require.ErrorContains(t, err, "decompress blob payload")
+		_, err := decodeBlobPayload([]byte{blobCodecZstd, 0xde, 0xad, 0xbe, 0xef}, maxDecompressedBlobPayloadBytes)
+		require.ErrorContains(t, err, "blob payload header")
 	})
 
 	t.Run("zstd bomb is rejected without allocating", func(t *testing.T) {
@@ -87,9 +87,24 @@ func Test_decodeBlobPayload_Errors(t *testing.T) {
 		bomb := enc.EncodeAll(make([]byte, maxDecompressedBlobPayloadBytes+1), []byte{blobCodecZstd})
 		require.Less(t, len(bomb), 1<<20, "bomb should be tiny on the wire")
 
-		_, err = decodeBlobPayload(bomb)
+		_, err = decodeBlobPayload(bomb, maxDecompressedBlobPayloadBytes)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "blob payload")
+	})
+
+	t.Run("budget tighter than the per-blob cap is enforced", func(t *testing.T) {
+		framed, err := encodeBlobPayload(make([]byte, 4096))
+		require.NoError(t, err)
+
+		_, err = decodeBlobPayload(framed, 1024)
+		require.ErrorContains(t, err, "blob payload too large")
+
+		_, err = decodeBlobPayload(framed, 0)
+		require.ErrorContains(t, err, "budget exhausted")
+
+		got, err := decodeBlobPayload(framed, 4096)
+		require.NoError(t, err)
+		assert.Len(t, got, 4096)
 	})
 }
 

@@ -30,10 +30,19 @@ type Observation struct {
 const observationWireVersion byte = 1
 
 // maxObservationBlobHandles bounds the number of blob handles a single
-// observation may reference. The encoder emits at most one; this is a generous
-// ceiling that prevents a malicious peer from forcing a huge allocation via a
-// crafted handle count in decodeObservation.
-const maxObservationBlobHandles = 64
+// observation may reference. The encoder emits at most one, so this leaves
+// headroom for chunking a future oversized payload while keeping the count
+// tight: every handle a peer names is decompression work each other oracle
+// performs, and all N-1 attributed observations decode in parallel inside
+// StateTransition. Raising this multiplies the memory a single byzantine peer
+// can force per round; see also maxObservationDecompressedBytes.
+const maxObservationBlobHandles = 4
+
+// maxObservationDecompressedBytes bounds the TOTAL decompressed blob bytes a
+// single observation may cause, across all of its handles. Without it, the
+// per-blob cap alone would let one peer force
+// maxObservationBlobHandles * maxDecompressedBlobPayloadBytes of decompression.
+const maxObservationDecompressedBytes = maxDecompressedBlobPayloadBytes
 
 // encodeObservation serializes an Observation into the v31 wire frame. Stream
 // values are never carried inline: they are broadcast as a blob by the blob pump
@@ -139,7 +148,10 @@ func decodeObservation(ctx context.Context, raw ocrtypes.Observation, bf ocr3_1t
 		return Observation{}, err
 	}
 
-	// Fetch and merge blob-carried stream values.
+	// Fetch and merge blob-carried stream values. The decompression budget is
+	// shared across handles, so a peer cannot multiply the work it imposes by
+	// naming several blobs.
+	budget := maxObservationDecompressedBytes
 	for _, h := range handles {
 		if bf == nil {
 			return Observation{}, &blobFetchError{fmt.Errorf("observation references a blob but no fetcher was provided")}
@@ -151,10 +163,11 @@ func decodeObservation(ctx context.Context, raw ocrtypes.Observation, bf ocr3_1t
 		// Framing/codec faults are deterministic across oracles (every one sees
 		// the same bytes), so they stay plain errors and drop this observation
 		// alone, unlike the fetch failure above.
-		raw, err := decodeBlobPayload(payload)
+		raw, err := decodeBlobPayload(payload, budget)
 		if err != nil {
 			return Observation{}, err
 		}
+		budget -= len(raw)
 		chunk := &protocol.LLOObservationProto{}
 		if err := proto.Unmarshal(raw, chunk); err != nil {
 			return Observation{}, fmt.Errorf("unmarshal blob payload: %w", err)
