@@ -51,6 +51,9 @@ func (rc ReportCodecEVMStreamlined) Encode(r protocol.Report, cd llotypes.Channe
 		payload = opts.FeedID.Bytes()
 	}
 	payload = append(payload, encodePackedUint64(r.ValidAfterNanoseconds)...)
+	if len(opts.ABI) != len(r.Values) {
+		return nil, fmt.Errorf("ABI and values length mismatch; ABI: %d, Values: %d", len(opts.ABI), len(r.Values))
+	}
 	// Pack-encode the rest of the values
 	for i, encoder := range opts.ABI {
 		b, err := encoder.EncodePacked(r.Values[i])
