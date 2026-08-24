@@ -66,6 +66,19 @@ type ReportPacker interface {
 	Pack(digest types.ConfigDigest, seqNr uint64, report ocr2types.Report, sigs []ocr2types.AttributedOnchainSignature) ([]byte, error)
 }
 
+// DefaultTransmitTimeout is used when the configured transmit timeout is
+// non-positive, which would otherwise produce an already-expired context and
+// spin the transmit loop.
+const DefaultTransmitTimeout = 1 * time.Second
+
+func clampTransmitTimeout(lggr logger.SugaredLogger, d time.Duration) time.Duration {
+	if d <= 0 {
+		lggr.Warnw("TransmitTimeout is non-positive; falling back to default", "configured", d, "default", DefaultTransmitTimeout)
+		return DefaultTransmitTimeout
+	}
+	return d
+}
+
 // A server handles the queue for a given mercury server
 
 type server struct {
@@ -116,7 +129,7 @@ func newServer(lggr logger.Logger, verboseLogging bool, cfg QueueConfig, client 
 	s := &server{
 		logger.Sugared(lggr),
 		verboseLogging,
-		cfg.TransmitTimeout(),
+		clampTransmitTimeout(logger.Sugared(lggr), cfg.TransmitTimeout()),
 		client,
 		pm,
 		NewTransmitQueue(lggr, serverURL, int(cfg.TransmitQueueMaxSize()), pm),
