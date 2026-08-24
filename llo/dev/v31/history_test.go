@@ -747,7 +747,8 @@ func TestHistoryIndexCodec(t *testing.T) {
 			{streamID: 1, aggregator: testAggMedian},
 			{streamID: 7, aggregator: testAggMedian},
 		}
-		got := decodeHistoryIndex(encodeHistoryIndex(in))
+		got, err := decodeHistoryIndex(encodeHistoryIndex(in))
+		require.NoError(t, err)
 		assert.Equal(t, []histKey{
 			{streamID: 1, aggregator: testAggMedian},
 			{streamID: 7, aggregator: testAggMedian},
@@ -771,11 +772,30 @@ func TestHistoryIndexCodec(t *testing.T) {
 
 	t.Run("empty and partial input", func(t *testing.T) {
 		t.Parallel()
-		assert.Empty(t, decodeHistoryIndex(nil))
-		assert.Empty(t, decodeHistoryIndex([]byte{}))
-		// A trailing partial entry is ignored rather than failing the round.
-		assert.Empty(t, decodeHistoryIndex([]byte{0, 0, 0, 1}))
-		assert.Len(t, decodeHistoryIndex([]byte{0, 0, 0, 1, 0, 0, 0, 2, 0xff}), 1)
+		for _, b := range [][]byte{nil, {}, {0, 0, 0, 1}} {
+			// A trailing partial entry is ignored rather than failing the round.
+			got, err := decodeHistoryIndex(b)
+			require.NoError(t, err)
+			assert.Empty(t, got)
+		}
+		got, err := decodeHistoryIndex([]byte{0, 0, 0, 1, 0, 0, 0, 2, 0xff})
+		require.NoError(t, err)
+		assert.Len(t, got, 1)
+	})
+
+	t.Run("rejects an index longer than MaxHistoryPairs", func(t *testing.T) {
+		t.Parallel()
+		keys := make([]histKey, 0, protocol.MaxHistoryPairs+1)
+		for i := range protocol.MaxHistoryPairs + 1 {
+			keys = append(keys, histKey{streamID: llotypes.StreamID(i + 1), aggregator: testAggMedian})
+		}
+		_, err := decodeHistoryIndex(encodeHistoryIndex(keys))
+		require.ErrorContains(t, err, "exceeds max")
+
+		// The cap itself still decodes.
+		got, err := decodeHistoryIndex(encodeHistoryIndex(keys[:protocol.MaxHistoryPairs]))
+		require.NoError(t, err)
+		assert.Len(t, got, protocol.MaxHistoryPairs)
 	})
 }
 
