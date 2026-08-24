@@ -19,6 +19,12 @@ var (
 	pruneFrequency        = time.Hour
 )
 
+// DefaultMaxTransmitQueueSize is used when the configured max transmit queue
+// size is unset (0). The in-memory TransmitQueue treats 0 as "unlimited", but
+// PruneTransmitRequests uses the value as an absolute row cap, so 0 would
+// delete every persisted request. Clamp it to a sane default instead.
+const DefaultMaxTransmitQueueSize = 300_000
+
 type PersistenceManager struct {
 	lggr      logger.Logger
 	orm       ORM
@@ -39,6 +45,9 @@ type PersistenceManager struct {
 }
 
 func NewPersistenceManager(lggr logger.Logger, serverURL string, orm ORM, jobID int32, maxTransmitQueueSize int, flushDeletesFrequency, pruneFrequency time.Duration) *PersistenceManager {
+	if maxTransmitQueueSize <= 0 {
+		maxTransmitQueueSize = DefaultMaxTransmitQueueSize
+	}
 	return &PersistenceManager{
 		lggr:                  logger.Sugared(lggr).Named("MercuryPersistenceManager").With("serverURL", serverURL),
 		orm:                   orm,

@@ -36,6 +36,13 @@ const (
 	// one query when pruning the table.
 	PruneBatchSize = 10_000
 
+	// DefaultMaxTransmitQueueSize is used when the configured max transmit
+	// queue size is unset (0). The in-memory TransmitQueue treats 0 as
+	// "unlimited", but the persistence layer uses the value as an absolute row
+	// cap (both for pruning and for loading on startup), so 0 would truncate
+	// the persisted queue to nothing. Clamp it to a sane default instead.
+	DefaultMaxTransmitQueueSize = 300_000
+
 	// OvertimeDeleteTimeout is the maximum time we will spend trying to delete
 	// queued transmissions after exit signal before giving up and logging an
 	// error.
@@ -77,6 +84,9 @@ type persistenceManager struct {
 }
 
 func NewPersistenceManager(lggr logger.Logger, orm ORM, serverURL string, maxTransmitQueueSize int, flushDeletesFrequency, pruneFrequency, maxAge time.Duration) *persistenceManager {
+	if maxTransmitQueueSize <= 0 {
+		maxTransmitQueueSize = DefaultMaxTransmitQueueSize
+	}
 	return &persistenceManager{
 		logger.Sugared(lggr).Named("LLOPersistenceManager"),
 		orm,
