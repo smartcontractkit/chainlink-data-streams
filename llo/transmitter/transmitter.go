@@ -3,6 +3,7 @@ package transmitter
 import (
 	"context"
 	"fmt"
+	"runtime/debug"
 	"sync"
 
 	"github.com/smartcontractkit/libocr/offchainreporting2plus/ocr3types"
@@ -45,6 +46,7 @@ type TransmitterRetirementReportCacheWriter interface {
 }
 
 type onTransmit struct {
+	lggr      logger.Logger
 	mu        sync.RWMutex
 	listeners []func(digest types.ConfigDigest, seqNr uint64)
 }
@@ -59,8 +61,21 @@ func (o *onTransmit) notify(digest types.ConfigDigest, seqNr uint64) {
 	o.mu.RLock()
 	defer o.mu.RUnlock()
 	for _, listener := range o.listeners {
-		go listener(digest, seqNr)
+		go o.notifyOne(listener, digest, seqNr)
 	}
+}
+
+// notifyOne isolates a listener from the rest of the process: listeners run on
+// their own goroutines, so an unrecovered panic in one would crash the plugin.
+func (o *onTransmit) notifyOne(listener func(digest types.ConfigDigest, seqNr uint64), digest types.ConfigDigest, seqNr uint64) {
+	defer func() {
+		if r := recover(); r != nil {
+			if o.lggr != nil {
+				o.lggr.Errorw("Transmit listener panicked", "panic", r, "digest", digest, "seqNr", seqNr, "stacktrace", string(debug.Stack()))
+			}
+		}
+	}()
+	listener(digest, seqNr)
 }
 
 type transmitter struct {
@@ -102,7 +117,7 @@ func NewTransmitter(opts TransmitterOpts) (Transmitter, error) {
 		opts.FromAccount,
 		subTransmitters,
 		opts.RetirementReportCache,
-		&onTransmit{},
+		&onTransmit{lggr: opts.Lggr},
 	}, nil
 }
 

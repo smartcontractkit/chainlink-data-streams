@@ -3,6 +3,7 @@ package llo
 import (
 	"context"
 	"fmt"
+	"runtime/debug"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -222,8 +223,21 @@ func (p *blobPump) run() {
 			return
 		case <-p.trigger:
 		}
-		p.cycle()
+		p.safeCycle()
 	}
+}
+
+// safeCycle isolates a pump cycle from panics. The pump runs on its own
+// goroutine off the OCR critical path, so a panic in the DataSource (for
+// example on a malformed observation input) would otherwise take down the
+// whole process. A panicking cycle parks nothing, exactly like a failed one.
+func (p *blobPump) safeCycle() {
+	defer func() {
+		if r := recover(); r != nil {
+			p.lggr.Errorw("Blob pump cycle panicked; round will observe no stream values", "panic", r, "stacktrace", string(debug.Stack()))
+		}
+	}()
+	p.cycle()
 }
 
 // cycle runs one observation and parks the result. A failed cycle parks nothing:
