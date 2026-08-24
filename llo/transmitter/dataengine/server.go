@@ -253,7 +253,7 @@ func (s *server) spawnTransmitLoop(stopCh services.StopChan, wg *sync.WaitGroup,
 }
 
 func (s *server) rateLimitedLogError(lggr logger.Logger, msg string, err string) {
-	cnt, uniqueErrors := s.incConsecutiveTransmitErrorCount(err)
+	cnt := s.incConsecutiveTransmitErrorCount(err)
 	switch {
 	case cnt < 10:
 		// Log first 10 errors individually
@@ -262,24 +262,38 @@ func (s *server) rateLimitedLogError(lggr logger.Logger, msg string, err string)
 	case cnt < 10_000:
 		// Log errors up to 10k in batches of 100
 		if cnt%100 == 0 {
-			lggr.Errorw(msg+" (100 failures)", "nErrs", 100, "uniqueErrors", uniqueErrors)
+			lggr.Errorw(msg+" (100 failures)", "nErrs", 100, "uniqueErrors", s.uniqueTransmitErrors())
 		}
 		return
 	default:
 		// After that, log every 10k errors
 		if cnt%10_000 == 0 {
-			lggr.Errorw(msg+" (10,000 failures)", "nErrs", 10_000, "uniqueErrors", uniqueErrors)
+			lggr.Errorw(msg+" (10,000 failures)", "nErrs", 10_000, "uniqueErrors", s.uniqueTransmitErrors())
 		}
 		return
 	}
 }
 
-func (s *server) incConsecutiveTransmitErrorCount(errStr string) (int, []string) {
+// maxConsecutiveTransmitUniqueErrors bounds the unique error set tracked between
+// successful transmits. Servers may return errors carrying per-request unique
+// data (request IDs, timestamps), which would otherwise grow the set without
+// bound for as long as transmits keep failing.
+const maxConsecutiveTransmitUniqueErrors = 100
+
+func (s *server) incConsecutiveTransmitErrorCount(errStr string) int {
 	s.consecutiveTransmitErrorMu.Lock()
 	defer s.consecutiveTransmitErrorMu.Unlock()
 	s.consecutiveTransmitErrorCount++
-	s.consecutiveTransmitUniqueErrors[errStr] = struct{}{}
-	return s.consecutiveTransmitErrorCount, slices.Sorted(maps.Keys(s.consecutiveTransmitUniqueErrors))
+	if _, ok := s.consecutiveTransmitUniqueErrors[errStr]; !ok && len(s.consecutiveTransmitUniqueErrors) < maxConsecutiveTransmitUniqueErrors {
+		s.consecutiveTransmitUniqueErrors[errStr] = struct{}{}
+	}
+	return s.consecutiveTransmitErrorCount
+}
+
+func (s *server) uniqueTransmitErrors() []string {
+	s.consecutiveTransmitErrorMu.Lock()
+	defer s.consecutiveTransmitErrorMu.Unlock()
+	return slices.Sorted(maps.Keys(s.consecutiveTransmitUniqueErrors))
 }
 
 func (s *server) resetConsecutiveTransmitFailures() {
