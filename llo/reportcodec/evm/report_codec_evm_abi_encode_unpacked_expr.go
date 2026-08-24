@@ -103,6 +103,9 @@ func (r ReportCodecEVMABIEncodeUnpackedExpr) Verify(cd llotypes.ChannelDefinitio
 	if len(cd.Streams) < 3 {
 		return fmt.Errorf("expected at least 3 streams; got: %d", len(cd.Streams))
 	}
+	if opts.MaxReportRange < 0 {
+		return fmt.Errorf("maxReportRange must be non-negative; got: %s", opts.MaxReportRange)
+	}
 	return nil
 }
 
