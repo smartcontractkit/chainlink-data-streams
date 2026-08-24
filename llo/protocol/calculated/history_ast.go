@@ -180,6 +180,11 @@ type historyPatcher struct {
 	refByNode map[ast.Node]HistoryRef
 
 	fanOut uint64
+
+	// twapCalls counts the expression's TWAP calls. Each one can request a
+	// maximum-length window, so their count is what bounds the bucket work an
+	// expression can ask for every round.
+	twapCalls int
 }
 
 func newHistoryPatcher() *historyPatcher {
@@ -310,6 +315,15 @@ func (p *historyPatcher) rewrite(node *ast.Node, call *ast.CallNode) {
 // left to the runtime validation in functions_twap.go, which is stricter but
 // later.
 func (p *historyPatcher) checkTWAP(call *ast.CallNode) {
+	// Counted first, and counted whatever the call looks like: this is the one
+	// TWAP check that does not depend on the configuration being literal, which
+	// is what makes it a bound rather than a diagnostic.
+	p.twapCalls++
+	if p.twapCalls > protocol.MaxTWAPCallsPerExpression {
+		p.errorf("expression makes more than %d %s calls; each may request a window of up to %d one-second buckets, so their number is capped",
+			protocol.MaxTWAPCallsPerExpression, twapFunctionName, twapMaxWindowSeconds)
+		return
+	}
 	if len(call.Arguments) != 2 {
 		p.errorf("%s takes exactly 2 arguments (history window, configuration), got %d", twapFunctionName, len(call.Arguments))
 		return
