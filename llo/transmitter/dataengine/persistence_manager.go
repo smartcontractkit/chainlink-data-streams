@@ -243,11 +243,14 @@ func (pm *persistenceManager) addToDeleteQueue(hashes ...[32]byte) {
 	pm.deleteMu.Lock()
 	defer pm.deleteMu.Unlock()
 	pm.deleteQueue = append(pm.deleteQueue, hashes...)
-	if len(pm.deleteQueue) > DeleteQueueMaxSize {
+	if n := len(pm.deleteQueue) - DeleteQueueMaxSize; n > 0 {
 		// NOTE: This could only happen if inserts are succeeding while deletes are
-		// failing (or not fast enough) which would be very strange
-		pm.lggr.Errorw("Delete queue is full; dropping transmissions", "hashes", hashes, "n", len(pm.deleteQueue))
-		pm.deleteQueue = pm.deleteQueue[:DeleteQueueMaxSize]
+		// failing (or not fast enough) which would be very strange.
+		// Drop the oldest entries so that newer transmissions still get cleaned
+		// up; the prune loop will eventually reap the corresponding rows by
+		// age/size.
+		pm.lggr.Errorw("Delete queue is full; dropping oldest transmissions", "nDropped", n, "n", len(pm.deleteQueue))
+		pm.deleteQueue = append(pm.deleteQueue[:0], pm.deleteQueue[n:]...)
 	}
 }
 
