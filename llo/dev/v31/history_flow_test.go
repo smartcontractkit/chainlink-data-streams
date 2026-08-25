@@ -52,9 +52,9 @@ func historyPlugin(t *testing.T, expression string) *Plugin {
 func bootstrapHistoryChannel(t *testing.T, p *Plugin, kv *memKV, expression string) {
 	t.Helper()
 	ctx := tests.Context(t)
-	_, err := p.StateTransition(ctx, 1, ocrtypes.AttributedQuery{}, []ocrtypes.AttributedObservation{ao(0, nil), ao(1, nil), ao(2, nil)}, kv, nil)
+	_, err := p.StateTransition(ctx, 1, ocrtypes.AttributedQuery{}, []ocrtypes.AttributedObservation{ao(0, nil), ao(1, nil), ao(2, nil)}, kv, testBlobs)
 	require.NoError(t, err)
-	_, err = p.StateTransition(ctx, 2, ocrtypes.AttributedQuery{}, addChannelRound(t, 1_000, 1, historyExprChannel(expression)), kv, nil)
+	_, err = p.StateTransition(ctx, 2, ocrtypes.AttributedQuery{}, addChannelRound(t, 1_000, 1, historyExprChannel(expression)), kv, testBlobs)
 	require.NoError(t, err)
 	require.Contains(t, storedChannelDefinitions(t, kv), llotypes.ChannelID(1))
 }
@@ -76,7 +76,7 @@ func Test_History_Warmup(t *testing.T) {
 	var validAfterWhileWarming uint64
 	for round := 1; round <= depth; round++ {
 		ts := uint64(round) * 10_000
-		_, err := p.StateTransition(ctx, seqNr, ocrtypes.AttributedQuery{}, valueRound(t, ts, int64(round)), kv, nil)
+		_, err := p.StateTransition(ctx, seqNr, ocrtypes.AttributedQuery{}, valueRound(t, ts, int64(round)), kv, testBlobs)
 		require.NoError(t, err)
 		seqNr++
 
@@ -116,7 +116,7 @@ func Test_History_EvictsAtDepth(t *testing.T) {
 
 	seqNr := uint64(3)
 	for round := 1; round <= 6; round++ {
-		_, err := p.StateTransition(ctx, seqNr, ocrtypes.AttributedQuery{}, valueRound(t, uint64(round)*10_000, int64(round)), kv, nil)
+		_, err := p.StateTransition(ctx, seqNr, ocrtypes.AttributedQuery{}, valueRound(t, uint64(round)*10_000, int64(round)), kv, testBlobs)
 		require.NoError(t, err)
 		seqNr++
 	}
@@ -146,7 +146,7 @@ func Test_History_NoDuplicateOnStalledTimestamp(t *testing.T) {
 	bootstrapHistoryChannel(t, p, kv, expression)
 
 	seqNr := uint64(3)
-	_, err := p.StateTransition(ctx, seqNr, ocrtypes.AttributedQuery{}, valueRound(t, 10_000, 1), kv, nil)
+	_, err := p.StateTransition(ctx, seqNr, ocrtypes.AttributedQuery{}, valueRound(t, 10_000, 1), kv, testBlobs)
 	require.NoError(t, err)
 	seqNr++
 
@@ -154,7 +154,7 @@ func Test_History_NoDuplicateOnStalledTimestamp(t *testing.T) {
 	require.Equal(t, 1, stored.Len())
 
 	// Same observation timestamp, different value: must not be appended.
-	_, err = p.StateTransition(ctx, seqNr, ocrtypes.AttributedQuery{}, valueRound(t, 10_000, 99), kv, nil)
+	_, err = p.StateTransition(ctx, seqNr, ocrtypes.AttributedQuery{}, valueRound(t, 10_000, 99), kv, testBlobs)
 	require.NoError(t, err)
 
 	stored = readHistory(t, kv, 100, llotypes.AggregatorMedian)
@@ -172,7 +172,7 @@ func Test_History_ReclaimedOnChannelRemoval(t *testing.T) {
 	bootstrapHistoryChannel(t, p, kv, expression)
 
 	seqNr := uint64(3)
-	_, err := p.StateTransition(ctx, seqNr, ocrtypes.AttributedQuery{}, valueRound(t, 10_000, 1), kv, nil)
+	_, err := p.StateTransition(ctx, seqNr, ocrtypes.AttributedQuery{}, valueRound(t, 10_000, 1), kv, testBlobs)
 	require.NoError(t, err)
 	seqNr++
 
@@ -186,7 +186,7 @@ func Test_History_ReclaimedOnChannelRemoval(t *testing.T) {
 		removeAOs = append(removeAOs, ao(i, mustEncodeObs(t, removeObs)))
 	}
 	p.ChannelDefinitionCache = &mockChannelDefinitionCache{defs: llotypes.ChannelDefinitions{}}
-	_, err = p.StateTransition(ctx, seqNr, ocrtypes.AttributedQuery{}, removeAOs, kv, nil)
+	_, err = p.StateTransition(ctx, seqNr, ocrtypes.AttributedQuery{}, removeAOs, kv, testBlobs)
 	require.NoError(t, err)
 	seqNr++
 
@@ -197,7 +197,7 @@ func Test_History_ReclaimedOnChannelRemoval(t *testing.T) {
 	require.NotNil(t, readHistory(t, kv, 100, llotypes.AggregatorMedian),
 		"the removal round still evaluates the channel, so its window must survive it")
 
-	_, err = p.StateTransition(ctx, seqNr, ocrtypes.AttributedQuery{}, valueRound(t, 30_000, 2), kv, nil)
+	_, err = p.StateTransition(ctx, seqNr, ocrtypes.AttributedQuery{}, valueRound(t, 30_000, 2), kv, testBlobs)
 	require.NoError(t, err)
 
 	stored := readHistory(t, kv, 100, llotypes.AggregatorMedian)
@@ -221,7 +221,7 @@ func Test_History_DeterministicAcrossOracles(t *testing.T) {
 		bootstrapHistoryChannel(t, p, kv, expression)
 		seqNr := uint64(3)
 		for round := 1; round <= 5; round++ {
-			_, err := p.StateTransition(ctx, seqNr, ocrtypes.AttributedQuery{}, valueRound(t, uint64(round)*10_000, int64(round)), kv, nil)
+			_, err := p.StateTransition(ctx, seqNr, ocrtypes.AttributedQuery{}, valueRound(t, uint64(round)*10_000, int64(round)), kv, testBlobs)
 			require.NoError(t, err)
 			seqNr++
 		}

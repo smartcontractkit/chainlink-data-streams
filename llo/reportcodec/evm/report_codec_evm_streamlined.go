@@ -51,6 +51,9 @@ func (rc ReportCodecEVMStreamlined) Encode(r protocol.Report, cd llotypes.Channe
 		payload = opts.FeedID.Bytes()
 	}
 	payload = append(payload, encodePackedUint64(r.ValidAfterNanoseconds)...)
+	if len(opts.ABI) != len(r.Values) {
+		return nil, fmt.Errorf("ABI and values length mismatch; ABI: %d, Values: %d", len(opts.ABI), len(r.Values))
+	}
 	// Pack-encode the rest of the values
 	for i, encoder := range opts.ABI {
 		b, err := encoder.EncodePacked(r.Values[i])
@@ -88,6 +91,9 @@ func (rc ReportCodecEVMStreamlined) Verify(cd llotypes.ChannelDefinition) error 
 	}
 	if len(opts.ABI) != len(cd.Streams) {
 		return fmt.Errorf("ABI length mismatch; expected: %d, got: %d", len(cd.Streams), len(opts.ABI))
+	}
+	if opts.MaxReportRange < 0 {
+		return fmt.Errorf("maxReportRange must be non-negative; got: %s", opts.MaxReportRange)
 	}
 	return nil
 }

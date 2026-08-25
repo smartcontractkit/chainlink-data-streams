@@ -1,6 +1,7 @@
 package llo
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/binary"
 	"errors"
@@ -124,9 +125,15 @@ func (p *Plugin) outcome(outctx ocr3types.OutcomeContext, query types.Query, aos
 	for channelHash, dfnWithID := range updateChannelDefinitionsByHash {
 		orderedHashes = append(orderedHashes, hashWithID{channelHash, dfnWithID})
 	}
-	// Use predictable order for adding channels (id asc) so that extras that
-	// exceed the max are consistent across all nodes
-	sort.Slice(orderedHashes, func(i, j int) bool { return orderedHashes[i].ChannelID < orderedHashes[j].ChannelID })
+	// Use predictable order for adding channels (id asc, then hash asc) so that
+	// extras that exceed the max, and the winner among competing definitions
+	// for the same channelID, are consistent across all nodes
+	sort.Slice(orderedHashes, func(i, j int) bool {
+		if orderedHashes[i].ChannelID != orderedHashes[j].ChannelID {
+			return orderedHashes[i].ChannelID < orderedHashes[j].ChannelID
+		}
+		return bytes.Compare(orderedHashes[i].ChannelHash[:], orderedHashes[j].ChannelHash[:]) < 0
+	})
 	for _, hwid := range orderedHashes {
 		voteCount := updateChannelVotesByHash[hwid.ChannelHash]
 		if voteCount <= p.F {

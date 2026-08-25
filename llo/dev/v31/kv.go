@@ -447,7 +447,7 @@ func readHistoryIndex(r ocr3_1types.KeyValueStateReader) ([]histKey, error) {
 	if err != nil {
 		return nil, err
 	}
-	return decodeHistoryIndex(b), nil
+	return decodeHistoryIndex(b)
 }
 
 // writeHistoryIndex persists the sorted set of pairs that have history.
@@ -455,8 +455,16 @@ func writeHistoryIndex(w ocr3_1types.KeyValueStateReadWriter, keys []histKey) er
 	return w.Write(keyHistoryIndex, encodeHistoryIndex(keys))
 }
 
-func decodeHistoryIndex(b []byte) []histKey {
+// decodeHistoryIndex parses the packed (streamID, aggregator) pairs. The writer
+// never emits more than MaxHistoryPairs entries — the index is rewritten each
+// round from the required set, which is capped there, with orphans dropped in
+// the same commit — so a longer index is corruption and is rejected instead of
+// sizing an allocation from it.
+func decodeHistoryIndex(b []byte) ([]histKey, error) {
 	n := len(b) / 8
+	if n > protocol.MaxHistoryPairs {
+		return nil, fmt.Errorf("history index holds %d pairs, exceeds max %d", n, protocol.MaxHistoryPairs)
+	}
 	keys := make([]histKey, 0, n)
 	for i := 0; i < n; i++ {
 		keys = append(keys, histKey{
@@ -464,7 +472,7 @@ func decodeHistoryIndex(b []byte) []histKey {
 			aggregator: llotypes.Aggregator(binary.BigEndian.Uint32(b[i*8+4:])),
 		})
 	}
-	return keys
+	return keys, nil
 }
 
 func encodeHistoryIndex(keys []histKey) []byte {

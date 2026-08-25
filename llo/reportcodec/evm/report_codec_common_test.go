@@ -6,12 +6,15 @@ import (
 	"math"
 	"math/big"
 	"testing"
+	"time"
 
 	"github.com/goccy/go-json"
 
 	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/smartcontractkit/chainlink-common/pkg/logger"
 
 	protocol "github.com/smartcontractkit/chainlink-data-streams/llo/protocol"
 	ubig "github.com/smartcontractkit/chainlink-data-streams/llo/reportcodec/evm/utils"
@@ -455,5 +458,34 @@ func Test_ABIEncoder_EncodePadded_EncodePacked(t *testing.T) {
 				}
 			})
 		}
+	})
+}
+
+func Test_ClampReportRange(t *testing.T) {
+	const obsTs = uint64(1_700_000_000_000_000_000)
+
+	t.Run("within range returns validAfter unchanged", func(t *testing.T) {
+		report := protocol.Report{ValidAfterNanoseconds: obsTs - 1e9, ObservationTimestampNanoseconds: obsTs}
+		assert.Equal(t, obsTs-1e9, ClampReportRange(logger.Nop(), report, protocol.Duration(time.Minute)))
+	})
+	t.Run("exceeding range clamps to max range", func(t *testing.T) {
+		report := protocol.Report{ValidAfterNanoseconds: obsTs - uint64(time.Hour), ObservationTimestampNanoseconds: obsTs}
+		assert.Equal(t, obsTs-uint64(time.Minute), ClampReportRange(logger.Nop(), report, protocol.Duration(time.Minute)))
+	})
+	t.Run("zero max range uses default", func(t *testing.T) {
+		report := protocol.Report{ValidAfterNanoseconds: obsTs - uint64(time.Hour), ObservationTimestampNanoseconds: obsTs}
+		assert.Equal(t, obsTs-uint64(protocol.DefaultMaxReportRange), ClampReportRange(logger.Nop(), report, 0))
+	})
+	t.Run("negative max range uses default instead of underflowing", func(t *testing.T) {
+		report := protocol.Report{ValidAfterNanoseconds: obsTs - 1e9, ObservationTimestampNanoseconds: obsTs}
+		assert.Equal(t, obsTs-1e9, ClampReportRange(logger.Nop(), report, protocol.Duration(-time.Hour)))
+	})
+	t.Run("validAfter after observation timestamp yields zero-length range", func(t *testing.T) {
+		report := protocol.Report{ValidAfterNanoseconds: obsTs + 1e9, ObservationTimestampNanoseconds: obsTs}
+		assert.Equal(t, obsTs, ClampReportRange(logger.Nop(), report, protocol.Duration(time.Minute)))
+	})
+	t.Run("observation timestamp smaller than max range clamps to zero", func(t *testing.T) {
+		report := protocol.Report{ValidAfterNanoseconds: 0, ObservationTimestampNanoseconds: 1e9}
+		assert.Equal(t, uint64(0), ClampReportRange(logger.Nop(), report, protocol.Duration(time.Hour)))
 	})
 }

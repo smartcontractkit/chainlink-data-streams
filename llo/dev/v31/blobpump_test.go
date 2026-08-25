@@ -1,7 +1,9 @@
 package llo
 
 import (
+	"context"
 	"errors"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -250,4 +252,30 @@ func Test_blobPump_DisabledIsInert(t *testing.T) {
 		require.Equal(t, "blob pump disabled", reason)
 		require.Zero(t, bc.Broadcasts())
 	})
+}
+
+type panicDataSource struct{ calls atomic.Int64 }
+
+func (p *panicDataSource) Observe(ctx context.Context, sv protocol.StreamValues, opts DSOpts) error {
+	p.calls.Add(1)
+	panic("malformed observation input")
+}
+
+// Test_blobPump_SurvivesDataSourcePanic asserts a panicking DataSource does not
+// take down the pump goroutine (and with it the process); the cycle simply parks
+// nothing and later cycles still run.
+func Test_blobPump_SurvivesDataSourcePanic(t *testing.T) {
+	ds := &panicDataSource{}
+	p := testPump(t, ds, newFakeBroadcaster(), time.Minute)
+
+	p.SetInput(pumpInputFor(2))
+	_, _ = p.Take(2)
+	require.Eventually(t, func() bool { return ds.calls.Load() >= 1 }, tests.WaitTimeout(t), 10*time.Millisecond)
+	require.Zero(t, p.Cycles())
+
+	// Pump goroutine is still alive: a second kick still reaches the DataSource.
+	p.SetInput(pumpInputFor(3))
+	_, _ = p.Take(3)
+	require.Eventually(t, func() bool { return ds.calls.Load() >= 2 }, tests.WaitTimeout(t), 10*time.Millisecond)
+	require.False(t, p.inFlight.Load())
 }

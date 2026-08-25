@@ -131,37 +131,29 @@ func ao(observer int, obsBytes []byte) ocrtypes.AttributedObservation {
 	return ocrtypes.AttributedObservation{Observer: commontypes.OracleID(observer), Observation: obsBytes}
 }
 
+// testBlobs is the shared in-memory blob store used by StateTransition
+// fixtures. It is content-addressed and mutex-guarded, so tests can share it.
+var testBlobs = llotest.NewBlobBroadcastFetcher()
+
 // mustEncodeObs encodes an observation for use as a StateTransition fixture.
-// The production encoder never emits stream values inline (they always travel in
-// a blob), but the decoder still accepts inline values, so tests build fixtures
-// that way to avoid a fetcher on every StateTransition call.
+// Stream values travel the production path: broadcast into testBlobs and
+// referenced by handle. Pass testBlobs as the fetcher to StateTransition.
 func mustEncodeObs(t *testing.T, obs Observation) []byte {
 	t.Helper()
-	b, err := encodeObservation(obs, nil)
-	require.NoError(t, err)
 	if len(obs.StreamValues) == 0 {
+		b, err := encodeObservation(obs, nil)
+		require.NoError(t, err)
 		return b
 	}
-	sv, err := streamValuesToProto(obs.StreamValues)
+	payload, err := marshalStreamValues(obs.StreamValues)
 	require.NoError(t, err)
-	main := &protocol.LLOObservationProto{
-		AttestedPredecessorRetirement: obs.AttestedPredecessorRetirement,
-		ShouldRetire:                  obs.ShouldRetire,
-		UnixTimestampNanoseconds:      obs.UnixTimestampNanoseconds,
-		StreamValues:                  sv,
-	}
-	for id := range obs.RemoveChannelIDs {
-		main.RemoveChannelIDs = append(main.RemoveChannelIDs, id)
-	}
-	if len(obs.UpdateChannelDefinitions) > 0 {
-		main.UpdateChannelDefinitions = make(map[uint32]*protocol.LLOChannelDefinitionProto, len(obs.UpdateChannelDefinitions))
-		for id, cd := range obs.UpdateChannelDefinitions {
-			main.UpdateChannelDefinitions[id] = protocol.ChannelDefinitionToProto(cd)
-		}
-	}
-	mainBytes, err := proto.Marshal(main)
+	handle, err := testBlobs.BroadcastBlob(tests.Context(t), payload, ocr3_1types.BlobExpirationHintSequenceNumber{SeqNr: 0})
 	require.NoError(t, err)
-	return frameObservation(nil, mainBytes)
+	handleBytes, err := handle.MarshalBinary()
+	require.NoError(t, err)
+	b, err := encodeObservation(obs, [][]byte{handleBytes})
+	require.NoError(t, err)
+	return b
 }
 
 // --- tests ---
@@ -245,7 +237,7 @@ func Test_StateTransition_Bootstrap(t *testing.T) {
 	kv := newMemKV()
 
 	aos := []ocrtypes.AttributedObservation{ao(0, nil), ao(1, nil), ao(2, nil)}
-	precBytes, err := p.StateTransition(ctx, 1, ocrtypes.AttributedQuery{}, aos, kv, nil)
+	precBytes, err := p.StateTransition(ctx, 1, ocrtypes.AttributedQuery{}, aos, kv, testBlobs)
 	require.NoError(t, err)
 
 	// Lifecycle should be production (no predecessor).
@@ -267,7 +259,7 @@ func Test_FullRound_AddChannelThenReport(t *testing.T) {
 	kv := newMemKV()
 
 	// Round 1: bootstrap.
-	_, err := p.StateTransition(ctx, 1, ocrtypes.AttributedQuery{}, []ocrtypes.AttributedObservation{ao(0, nil), ao(1, nil), ao(2, nil)}, kv, nil)
+	_, err := p.StateTransition(ctx, 1, ocrtypes.AttributedQuery{}, []ocrtypes.AttributedObservation{ao(0, nil), ao(1, nil), ao(2, nil)}, kv, testBlobs)
 	require.NoError(t, err)
 
 	channelDef := llotypes.ChannelDefinition{
@@ -284,7 +276,7 @@ func Test_FullRound_AddChannelThenReport(t *testing.T) {
 	for i := 0; i < 4; i++ {
 		addAOs = append(addAOs, ao(i, mustEncodeObs(t, addObs)))
 	}
-	prec2, err := p.StateTransition(ctx, 2, ocrtypes.AttributedQuery{}, addAOs, kv, nil)
+	prec2, err := p.StateTransition(ctx, 2, ocrtypes.AttributedQuery{}, addAOs, kv, testBlobs)
 	require.NoError(t, err)
 
 	// The definition is persisted, but the addition is deferred: it is not in
@@ -308,14 +300,14 @@ func Test_FullRound_AddChannelThenReport(t *testing.T) {
 
 	// Round 3: the channel is now in effect and gets its first watermark
 	// (validAfter == obsTs), so it is still not reportable.
-	prec3, err := p.StateTransition(ctx, 3, ocrtypes.AttributedQuery{}, valObs(2_000), kv, nil)
+	prec3, err := p.StateTransition(ctx, 3, ocrtypes.AttributedQuery{}, valObs(2_000), kv, testBlobs)
 	require.NoError(t, err)
 	reports3, err := p.Reports(ctx, 3, prec3)
 	require.NoError(t, err)
 	require.Empty(t, reports3)
 
 	// Round 4: later timestamp + stream observations -> reportable.
-	prec4, err := p.StateTransition(ctx, 4, ocrtypes.AttributedQuery{}, valObs(3_000), kv, nil)
+	prec4, err := p.StateTransition(ctx, 4, ocrtypes.AttributedQuery{}, valObs(3_000), kv, testBlobs)
 	require.NoError(t, err)
 
 	reports4, err := p.Reports(ctx, 4, prec4)
@@ -372,14 +364,14 @@ func Test_StateTransition_Determinism_ShuffledObservations(t *testing.T) {
 	run := func(order []int) (*memKV, []byte) {
 		p := testPlugin(t)
 		kv := newMemKV()
-		_, err := p.StateTransition(ctx, 1, ocrtypes.AttributedQuery{}, []ocrtypes.AttributedObservation{ao(0, nil), ao(1, nil), ao(2, nil)}, kv, nil)
+		_, err := p.StateTransition(ctx, 1, ocrtypes.AttributedQuery{}, []ocrtypes.AttributedObservation{ao(0, nil), ao(1, nil), ao(2, nil)}, kv, testBlobs)
 		require.NoError(t, err)
 		aos := make([]ocrtypes.AttributedObservation, 0, 4)
 		vals := []int64{10, 20, 30, 40}
 		for _, i := range order {
 			aos = append(aos, obs(i, 1_000, vals[i]))
 		}
-		prec, err := p.StateTransition(ctx, 2, ocrtypes.AttributedQuery{}, aos, kv, nil)
+		prec, err := p.StateTransition(ctx, 2, ocrtypes.AttributedQuery{}, aos, kv, testBlobs)
 		require.NoError(t, err)
 		return kv, prec
 	}
@@ -633,17 +625,17 @@ func Test_Telemetry(t *testing.T) {
 		return aos
 	}
 
-	_, err := p.StateTransition(ctx, 1, ocrtypes.AttributedQuery{}, []ocrtypes.AttributedObservation{ao(0, nil), ao(1, nil), ao(2, nil)}, kv, nil)
+	_, err := p.StateTransition(ctx, 1, ocrtypes.AttributedQuery{}, []ocrtypes.AttributedObservation{ao(0, nil), ao(1, nil), ao(2, nil)}, kv, testBlobs)
 	require.NoError(t, err)
 	require.Empty(t, otCh, "no outcome telemetry on the bootstrap round")
 
 	// The channel is added at round 2, takes effect at round 3 (where it gets
 	// its first watermark) and first reports at round 4.
-	_, err = p.StateTransition(ctx, 2, ocrtypes.AttributedQuery{}, obs(1000, false), kv, nil)
+	_, err = p.StateTransition(ctx, 2, ocrtypes.AttributedQuery{}, obs(1000, false), kv, testBlobs)
 	require.NoError(t, err)
-	_, err = p.StateTransition(ctx, 3, ocrtypes.AttributedQuery{}, obs(2000, true), kv, nil)
+	_, err = p.StateTransition(ctx, 3, ocrtypes.AttributedQuery{}, obs(2000, true), kv, testBlobs)
 	require.NoError(t, err)
-	prec4, err := p.StateTransition(ctx, 4, ocrtypes.AttributedQuery{}, obs(3000, true), kv, nil)
+	prec4, err := p.StateTransition(ctx, 4, ocrtypes.AttributedQuery{}, obs(3000, true), kv, testBlobs)
 	require.NoError(t, err)
 
 	require.Len(t, otCh, 3, "one outcome telemetry per non-bootstrap StateTransition")
@@ -837,7 +829,7 @@ func Test_StateTransition_PropagatesBlobFetchFailure(t *testing.T) {
 	kv := newMemKV()
 
 	// Bootstrap.
-	_, err := p.StateTransition(ctx, 1, ocrtypes.AttributedQuery{}, []ocrtypes.AttributedObservation{ao(0, nil), ao(1, nil), ao(2, nil)}, kv, nil)
+	_, err := p.StateTransition(ctx, 1, ocrtypes.AttributedQuery{}, []ocrtypes.AttributedObservation{ao(0, nil), ao(1, nil), ao(2, nil)}, kv, testBlobs)
 	require.NoError(t, err)
 
 	// All four observations reference a blob that cannot be fetched.
@@ -935,4 +927,25 @@ func Test_CalculatedStreams_ReportValues(t *testing.T) {
 		require.True(t, ok, "value %d has type %T", i, got.Values[i])
 		require.True(t, d.Decimal().Equal(decimal.NewFromInt(w)), "value %d: expected %d, got %s", i, w, d.Decimal())
 	}
+}
+
+// Test_Observation_RejectsInlineStreamValues pins the wire contract: a peer that
+// inlines stream values is not speaking v31 framing and its observation is
+// dropped rather than silently accepted.
+func Test_Observation_RejectsInlineStreamValues(t *testing.T) {
+	ctx := tests.Context(t)
+	sv, err := streamValuesToProto(protocol.StreamValues{100: protocol.ToDecimal(decimal.NewFromInt(42))})
+	require.NoError(t, err)
+	mainBytes, err := proto.Marshal(&protocol.LLOObservationProto{
+		UnixTimestampNanoseconds: 1,
+		StreamValues:             sv,
+	})
+	require.NoError(t, err)
+
+	_, err = decodeObservation(ctx, frameObservation(nil, mainBytes), nil)
+	require.ErrorContains(t, err, "inline stream values")
+
+	// Deterministic across oracles, so it must not be a blob-fetch failure.
+	var bfErr *blobFetchError
+	require.NotErrorAs(t, err, &bfErr)
 }

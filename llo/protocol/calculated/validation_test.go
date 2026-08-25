@@ -183,3 +183,46 @@ func TestProcessCalculatedStreamsDryRun_Satisfiability(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "only keeps 10 records")
 }
+
+// TestValidateExpression_TWAPCallCount covers the bucket bound: each TWAP call
+// may request a maximum-length window, so the number of them is what limits the
+// work one expression can ask for every round.
+func TestValidateExpression_TWAPCallCount(t *testing.T) {
+	t.Parallel()
+
+	require.NoError(t, ValidateExpression(twapCalls(protocol.MaxTWAPCallsPerExpression)))
+
+	err := ValidateExpression(twapCalls(protocol.MaxTWAPCallsPerExpression + 1))
+	require.ErrorContains(t, err, "calls")
+
+	// The count is syntactic, so a configuration the other TWAP checks cannot
+	// read is still counted. This is the case a window-based budget would miss.
+	opaque := make([]string, 0, protocol.MaxTWAPCallsPerExpression+1)
+	for i := range protocol.MaxTWAPCallsPerExpression + 1 {
+		opaque = append(opaque, fmt.Sprintf("TWAP(History(s%d, 1), cfg)", i+1))
+	}
+	require.NoError(t, ValidateExpression(sumExpressions(opaque[:protocol.MaxTWAPCallsPerExpression])))
+	require.ErrorContains(t, ValidateExpression(sumExpressions(opaque)), "calls")
+}
+
+// twapCalls builds an expression making count TWAP calls. Each reads its own
+// depth-1 window, so the expression stays far inside the history budget however
+// many calls it makes — which is the point: history depth does not bound TWAP
+// bucket work.
+func twapCalls(count int) string {
+	calls := make([]string, 0, count)
+	for i := range count {
+		calls = append(calls, fmt.Sprintf(
+			`TWAP(History(s%d, 1), {window: Duration("1s"), minSamples: 1, maxHeadGap: 1, maxInteriorGap: 1, maxTailGap: 1})`,
+			i+1))
+	}
+	return sumExpressions(calls)
+}
+
+func sumExpressions(expressions []string) string {
+	summed := expressions[0]
+	for _, expression := range expressions[1:] {
+		summed = fmt.Sprintf("Add(%s, %s)", summed, expression)
+	}
+	return summed
+}

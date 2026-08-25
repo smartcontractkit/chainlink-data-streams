@@ -184,7 +184,9 @@ func (mt *transmitter) Start(ctx context.Context) (err error) {
 				if err != nil {
 					return err
 				}
-				s.q.Init(transmissions)
+				if err := s.q.Init(transmissions); err != nil {
+					return fmt.Errorf("failed to initialize transmit queue for server %q: %w", s.url, err)
+				}
 
 				// Start all associated services
 				//
