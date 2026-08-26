@@ -51,6 +51,9 @@ type BlobBroadcastFetcher struct {
 	broadcastB int
 	fetches    int
 	err        error
+	// changed is closed and replaced on every BroadcastBlob call, so waiters
+	// can block on broadcast progress without polling.
+	changed chan struct{}
 }
 
 var _ ocr3_1types.BlobBroadcastFetcher = &BlobBroadcastFetcher{}
@@ -58,8 +61,9 @@ var _ ocr3_1types.BlobBroadcastFetcher = &BlobBroadcastFetcher{}
 // NewBlobBroadcastFetcher returns an empty in-memory broadcaster/fetcher.
 func NewBlobBroadcastFetcher() *BlobBroadcastFetcher {
 	return &BlobBroadcastFetcher{
-		blobs: map[string][]byte{},
-		hints: map[string]ocr3_1types.BlobExpirationHint{},
+		blobs:   map[string][]byte{},
+		hints:   map[string]ocr3_1types.BlobExpirationHint{},
+		changed: make(chan struct{}),
 	}
 }
 
@@ -78,6 +82,7 @@ func (b *BlobBroadcastFetcher) BroadcastBlob(_ context.Context, payload []byte, 
 	defer b.mu.Unlock()
 
 	b.broadcasts++
+	defer b.signalLocked()
 	if b.err != nil {
 		return ocr3_1types.BlobHandle{}, b.err
 	}
@@ -91,6 +96,41 @@ func (b *BlobBroadcastFetcher) BroadcastBlob(_ context.Context, payload []byte, 
 	b.hintLog = append(b.hintLog, hint)
 	b.broadcastB += len(payload)
 	return handle, nil
+}
+
+// signalLocked wakes every WaitForBroadcast waiter. Caller must hold b.mu (it
+// is invoked as a deferred call from BroadcastBlob, before the mutex is
+// released).
+func (b *BlobBroadcastFetcher) signalLocked() {
+	close(b.changed)
+	b.changed = make(chan struct{})
+}
+
+// WaitForBroadcast blocks until BroadcastBlob has been called more than after
+// times, i.e. until the plugin's blob pump has completed a cycle since the
+// caller sampled Broadcasts().
+//
+// Hosts that drive the plugin outside libocr need this: the pump gathers stream
+// values on its own goroutine, off the round path, so a driver that spins
+// rounds in a tight loop outruns it and every round observes no stream values.
+// Waiting for a broadcast between rounds is the host-side equivalent of the
+// wall-clock gap a real OCR round has.
+//
+// It returns ctx.Err() (wrapped) if the context ends first.
+func (b *BlobBroadcastFetcher) WaitForBroadcast(ctx context.Context, after int) error {
+	for {
+		b.mu.Lock()
+		n, changed := b.broadcasts, b.changed
+		b.mu.Unlock()
+		if n > after {
+			return nil
+		}
+		select {
+		case <-changed:
+		case <-ctx.Done():
+			return fmt.Errorf("llotest: waiting for blob broadcast beyond %d (have %d): %w", after, n, ctx.Err())
+		}
+	}
 }
 
 // FetchBlob returns the payload the handle addresses.
