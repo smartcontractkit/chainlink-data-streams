@@ -109,8 +109,9 @@ func (f *PluginFactory) NewReportingPlugin(ctx context.Context, cfg ocr3types.Re
 		DonID:                               f.DonID,
 		OutcomeTelemetryCh:                  f.OutcomeTelemetryCh,
 		ReportTelemetryCh:                   f.ReportTelemetryCh,
-		ProtocolVersion:                     offchainConfig.ProtocolVersion,
-		DefaultMinReportIntervalNanoseconds: offchainConfig.DefaultMinReportIntervalNanoseconds,
+		ProtocolVersion:                          offchainConfig.ProtocolVersion,
+		DefaultMinReportIntervalNanoseconds:      offchainConfig.DefaultMinReportIntervalNanoseconds,
+		DefaultMinObservationIntervalNanoseconds: offchainConfig.DefaultMinObservationIntervalNanoseconds,
 	}
 
 	// Definitions and the opts decoded from them are cached together, as one

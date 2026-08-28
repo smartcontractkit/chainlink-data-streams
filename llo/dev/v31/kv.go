@@ -242,6 +242,34 @@ func readHotState(r ocr3_1types.KeyValueStateReader, s *kvState) error {
 	return nil
 }
 
+// readValidAfterOnly reads the r/agg record and extracts just the validAfter
+// watermarks, the previous observation timestamp, and the reportability flags,
+// skipping the (potentially large) carry-forward stream aggregates. It is a
+// lightweight alternative to readHotState for the Observation phase, which
+// needs the watermarks to decide whether a channel is due for observation but
+// does not need the aggregates.
+func readValidAfterOnly(r ocr3_1types.KeyValueStateReader, s *kvState) error {
+	b, err := r.Read(keyHotState)
+	if err != nil {
+		return fmt.Errorf("read hot state: %w", err)
+	}
+	if len(b) == 0 {
+		return nil
+	}
+	pb := &protocol.LLOHotStateProto{}
+	if err := proto.Unmarshal(b, pb); err != nil {
+		return fmt.Errorf("unmarshal hot state: %w", err)
+	}
+	s.observationTimestampNs = pb.ObservationTimestampNanoseconds
+	for _, va := range pb.ValidAfterNanoseconds {
+		s.validAfterNanoseconds[va.ChannelID] = va.ValidAfterNanoseconds
+	}
+	for _, cid := range pb.ReportableChannelIDs {
+		s.reportedLastRound[cid] = true
+	}
+	return nil
+}
+
 // writeLifecycle persists the lifecycle stage.
 func writeLifecycle(w ocr3_1types.KeyValueStateReadWriter, stage llotypes.LifeCycleStage) error {
 	return w.Write(keyLifecycle, []byte(stage))

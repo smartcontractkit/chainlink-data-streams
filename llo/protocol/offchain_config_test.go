@@ -47,13 +47,24 @@ func Test_OffchainConfig(t *testing.T) {
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), "default report cadence must be 0 if protocol version is 0")
 		})
+		t.Run("setting DefaultMinObservationIntervalNanoseconds is invalid", func(t *testing.T) {
+			cfg := OffchainConfig{
+				ProtocolVersion:                          0,
+				DefaultMinObservationIntervalNanoseconds: 1,
+			}
+
+			err := cfg.Validate()
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "default observation cadence must be 0 if protocol version is 0")
+		})
 	})
 	t.Run("version 1", func(t *testing.T) {
 		t.Run("encode/decode valid values", func(t *testing.T) {
 			cfg := OffchainConfig{
-				ProtocolVersion:                     1,
-				DefaultMinReportIntervalNanoseconds: 1000,
-				EnableObservationCompression:        true,
+				ProtocolVersion:                          1,
+				DefaultMinReportIntervalNanoseconds:      1000,
+				DefaultMinObservationIntervalNanoseconds: 500,
+				EnableObservationCompression:             true,
 			}
 
 			b, err := cfg.Encode()
@@ -62,6 +73,24 @@ func Test_OffchainConfig(t *testing.T) {
 			cfgDecoded, err := DecodeOffchainConfig(b)
 			require.NoError(t, err)
 			assert.Equal(t, cfg, cfgDecoded)
+		})
+		t.Run("DefaultMinObservationIntervalNanoseconds=0 is valid (disabled)", func(t *testing.T) {
+			cfg := OffchainConfig{
+				ProtocolVersion:                          1,
+				DefaultMinReportIntervalNanoseconds:      1000,
+				DefaultMinObservationIntervalNanoseconds: 0,
+			}
+			require.NoError(t, cfg.Validate())
+		})
+		t.Run("DefaultMinObservationIntervalNanoseconds > DefaultMinReportIntervalNanoseconds is invalid", func(t *testing.T) {
+			cfg := OffchainConfig{
+				ProtocolVersion:                          1,
+				DefaultMinReportIntervalNanoseconds:      1000,
+				DefaultMinObservationIntervalNanoseconds: 1001,
+			}
+			err := cfg.Validate()
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "default observation cadence must not exceed default report cadence")
 		})
 	})
 	t.Run("DefaultMinReportIntervalNanoseconds=0 is invalid", func(t *testing.T) {

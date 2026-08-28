@@ -59,8 +59,9 @@ type Plugin struct {
 	pump *blobPump
 
 	// From offchain config
-	ProtocolVersion                     uint32
-	DefaultMinReportIntervalNanoseconds uint64
+	ProtocolVersion                          uint32
+	DefaultMinReportIntervalNanoseconds      uint64
+	DefaultMinObservationIntervalNanoseconds uint64
 }
 
 // Query is empty: LLO oracles do not coordinate on what to observe.
@@ -84,6 +85,11 @@ func (p *Plugin) Observation(_ context.Context, seqNr uint64, _ ocrtypes.Attribu
 	state, err := loadColdKVState(kvReader, p.ChannelCache)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load KV state: %w", err)
+	}
+
+	obsTSNanos := time.Now().UnixNano()
+	if obsTSNanos < 0 {
+		return nil, fmt.Errorf("negative observation timestamps are not supported, got: %d", obsTSNanos)
 	}
 
 	var obs Observation
@@ -110,7 +116,21 @@ func (p *Plugin) Observation(_ context.Context, seqNr uint64, _ ocrtypes.Attribu
 
 		p.voteOnChannels(&obs, state, seqNr)
 
-		streams = observableStreams(state)
+		if p.DefaultMinObservationIntervalNanoseconds > 0 {
+			if err := readValidAfterOnly(kvReader, state); err != nil {
+				return nil, fmt.Errorf("failed to load validAfter for observation skip: %w", err)
+			}
+			// Advance validAfter for channels that reported last round,
+			// matching what StateTransition computes as out.ValidAfterNanoseconds.
+			// The hot state's watermark lags one round behind the true last-report
+			// timestamp; without this advancement the skip would use a stale value.
+			for cid, reported := range state.reportedLastRound {
+				if reported {
+					state.validAfterNanoseconds[cid] = state.observationTimestampNs
+				}
+			}
+		}
+		streams = observableStreams(state, p.DefaultMinObservationIntervalNanoseconds, uint64(obsTSNanos))
 	}
 
 	// Stream values are gathered asynchronously by the blob pump and are always
@@ -133,26 +153,69 @@ func (p *Plugin) Observation(_ context.Context, seqNr uint64, _ ocrtypes.Attribu
 		}
 	}
 
-	obsTSNanos := time.Now().UnixNano()
-	if obsTSNanos < 0 {
-		return nil, fmt.Errorf("negative observation timestamps are not supported, got: %d", obsTSNanos)
-	}
 	obs.UnixTimestampNanoseconds = uint64(obsTSNanos)
 
 	return encodeObservation(obs, handles)
 }
 
+// isObservationDue reports whether enough time has elapsed since the channel's
+// last report (its validAfter watermark) for the channel to be
+// observed/aggregated. A channel with no validAfter yet (newly effective) is
+// always due so it can build its initial aggregates. When
+// minObservationInterval is 0 the feature is disabled and every channel is due.
+func isObservationDue(validAfterNanoseconds map[llotypes.ChannelID]uint64, channelID llotypes.ChannelID, minObservationInterval, now uint64) bool {
+	if minObservationInterval == 0 {
+		return true
+	}
+	validAfter, ok := validAfterNanoseconds[channelID]
+	if !ok {
+		return true
+	}
+	return now >= validAfter+minObservationInterval && now > validAfter
+}
+
+// observableDefinitions returns the subset of defs that are due for
+// observation/aggregation, excluding tombstoned and backfill channels. When
+// minObservationInterval is 0, defs is returned unchanged.
+func observableDefinitions(defs llotypes.ChannelDefinitions, validAfterNanoseconds map[llotypes.ChannelID]uint64, minObservationInterval, now uint64) llotypes.ChannelDefinitions {
+	if minObservationInterval == 0 {
+		return defs
+	}
+	filtered := make(llotypes.ChannelDefinitions, len(defs))
+	for channelID, cd := range defs {
+		if cd.Tombstone || cd.ReportFormat == llotypes.ReportFormatHistoryBackfill {
+			continue
+		}
+		if isObservationDue(validAfterNanoseconds, channelID, minObservationInterval, now) {
+			filtered[channelID] = cd
+		}
+	}
+	return filtered
+}
+
 // observableStreams lists the streams a round should observe: every stream of
 // every live channel, minus calculated streams (which are derived in
 // StateTransition rather than observed).
-func observableStreams(state *kvState) []llotypes.StreamID {
+//
+// When minObservationInterval is non-zero, channels whose last report (validAfter
+// watermark) is too recent are skipped: their streams are not observed unless
+// another due channel (or a backfill channel, which is always observed) shares
+// them. A channel with no validAfter yet (newly effective) is always considered
+// due so it can build its initial aggregates.
+func observableStreams(state *kvState, minObservationInterval uint64, now uint64) []llotypes.StreamID {
 	if len(state.channelDefinitions) == 0 {
 		return nil
 	}
 	seen := make(map[llotypes.StreamID]struct{})
 	streams := make([]llotypes.StreamID, 0, len(state.channelDefinitions))
-	for _, cd := range state.channelDefinitions {
+	for channelID, cd := range state.channelDefinitions {
 		if cd.Tombstone {
+			continue
+		}
+		if cd.ReportFormat == llotypes.ReportFormatHistoryBackfill {
+			continue
+		}
+		if !isObservationDue(state.validAfterNanoseconds, channelID, minObservationInterval, now) {
 			continue
 		}
 		for _, strm := range cd.Streams {

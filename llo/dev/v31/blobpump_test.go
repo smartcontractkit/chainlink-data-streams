@@ -222,8 +222,8 @@ func Test_observableStreams(t *testing.T) {
 		2: {ReportFormat: llotypes.ReportFormatJSON, Streams: []llotypes.Stream{{StreamID: 100, Aggregator: llotypes.AggregatorMedian}}},
 		3: {ReportFormat: llotypes.ReportFormatJSON, Tombstone: true, Streams: []llotypes.Stream{{StreamID: 102, Aggregator: llotypes.AggregatorMedian}}},
 	}}
-	require.ElementsMatch(t, []llotypes.StreamID{100}, observableStreams(state))
-	require.Empty(t, observableStreams(&kvState{}))
+	require.ElementsMatch(t, []llotypes.StreamID{100}, observableStreams(state, 0, 0))
+	require.Empty(t, observableStreams(&kvState{}, 0, 0))
 }
 
 // Test_blobPump_DisabledIsInert covers hosts that run the plugin without blob

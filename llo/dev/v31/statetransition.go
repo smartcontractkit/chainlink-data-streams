@@ -188,9 +188,13 @@ func (p *Plugin) StateTransition(ctx context.Context, seqNr uint64, _ ocrtypes.A
 	// the r/agg record). carryForward accumulates the values to persist for the
 	// next round. Runs over the effective set, which is what was observed. The
 	// agreed value of every pair history requires is recorded as it is computed.
+	//
+	// When DefaultMinObservationIntervalNanoseconds is configured, only channels
+	// whose last report is old enough are aggregated; the rest are skipped to
+	// save work on channels that will not report this round.
 	carryForward := map[llotypes.StreamID]map[llotypes.Aggregator]*protocol.TimestampedStreamValue{}
-	if err := p.aggregate(prev.carryForward, carryForward, effective, streamObservations, out.StreamAggregates,
-		history, requirements, out.ObservationTimestampNanoseconds); err != nil {
+	if err := p.aggregate(prev.carryForward, carryForward, effective, out.ValidAfterNanoseconds, p.DefaultMinObservationIntervalNanoseconds,
+		streamObservations, out.StreamAggregates, history, requirements, out.ObservationTimestampNanoseconds); err != nil {
 		return nil, err
 	}
 
@@ -204,7 +208,11 @@ func (p *Plugin) StateTransition(ctx context.Context, seqNr uint64, _ ocrtypes.A
 	// channel reports is derived from its opts by protocol.EffectiveStreams, so
 	// nothing about evaluation reaches replicated state and a persisted
 	// definition stays exactly what was voted on.
-	calculated.ProcessCalculatedStreams(p.Logger, effective, out.StreamAggregates, out.ObservationTimestampNanoseconds, prev.opts, history)
+	//
+	// Only due channels are passed, matching the aggregation filter: calculated
+	// streams for not-due channels are not needed (the channel will not report).
+	aggregationDefs := observableDefinitions(effective, out.ValidAfterNanoseconds, p.DefaultMinObservationIntervalNanoseconds, out.ObservationTimestampNanoseconds)
+	calculated.ProcessCalculatedStreams(p.Logger, aggregationDefs, out.StreamAggregates, out.ObservationTimestampNanoseconds, prev.opts, history)
 
 	// Flush KV mutations.
 	if err := p.flushKV(kvRW, seqNr, prev, out, pending, carryForward, history); err != nil {
@@ -366,6 +374,8 @@ func applyChannelVotes(
 func (p *Plugin) aggregate(
 	prevCarry, nextCarry map[llotypes.StreamID]map[llotypes.Aggregator]*protocol.TimestampedStreamValue,
 	defs llotypes.ChannelDefinitions,
+	validAfterNanoseconds map[llotypes.ChannelID]uint64,
+	minObservationInterval uint64,
 	streamObservations map[llotypes.StreamID][]protocol.StreamValue,
 	out protocol.StreamAggregates,
 	history *historyStore,
@@ -379,11 +389,19 @@ func (p *Plugin) aggregate(
 		nextCarry[sid][agg] = tsv
 	}
 
-	for _, cd := range defs {
+	for channelID, cd := range defs {
 		if cd.Tombstone || cd.ReportFormat == llotypes.ReportFormatHistoryBackfill {
 			// Not aggregated, so nothing is carried forward on their behalf. A
 			// pair that some other live channel still aggregates is preserved by
 			// that channel.
+			continue
+		}
+		if !isObservationDue(validAfterNanoseconds, channelID, minObservationInterval, observationTimestampNanoseconds) {
+			// Channel is not due for observation; skip aggregation. Streams
+			// shared with due channels are still aggregated via those channels.
+			// Pairs exclusive to not-due channels are not carried forward, so
+			// their carry-forward value is dropped. When the channel becomes due
+			// again, fresh aggregation resumes.
 			continue
 		}
 		for _, strm := range cd.Streams {

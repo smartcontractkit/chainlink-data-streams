@@ -111,8 +111,9 @@ func testPlugin(t *testing.T) *Plugin {
 		F:                                   1,
 		ReportCodecs:                        map[llotypes.ReportFormat]protocol.ReportCodec{llotypes.ReportFormatJSON: reportcodec.JSONReportCodec{}},
 		ChannelCache:                        protocol.NewChannelCache(),
-		ProtocolVersion:                     0,
-		DefaultMinReportIntervalNanoseconds: 0,
+		ProtocolVersion:                          0,
+		DefaultMinReportIntervalNanoseconds:      0,
+		DefaultMinObservationIntervalNanoseconds: 0,
 	}
 }
 
@@ -583,7 +584,7 @@ func Test_TimestampedAggregate_CarryForward(t *testing.T) {
 		obs := map[llotypes.StreamID][]protocol.StreamValue{100: {tsv(ts, v), tsv(ts, v), tsv(ts, v)}}
 		next := map[llotypes.StreamID]map[llotypes.Aggregator]*protocol.TimestampedStreamValue{}
 		// No history requirements: this test is about carry-forward aggregation.
-		require.NoError(t, p.aggregate(carry, next, defs, obs, out, nil, historyRequirements{}, ts))
+		require.NoError(t, p.aggregate(carry, next, defs, nil, 0, obs, out, nil, historyRequirements{}, ts))
 		carry = next
 		res, ok := out[100][llotypes.AggregatorMedian].(*protocol.TimestampedStreamValue)
 		require.True(t, ok, "expected a TimestampedStreamValue aggregate")
@@ -948,4 +949,195 @@ func Test_Observation_RejectsInlineStreamValues(t *testing.T) {
 	// Deterministic across oracles, so it must not be a blob-fetch failure.
 	var bfErr *blobFetchError
 	require.NotErrorAs(t, err, &bfErr)
+}
+
+func Test_ObservationIntervalSkip_observableStreams(t *testing.T) {
+	state := &kvState{
+		channelDefinitions: llotypes.ChannelDefinitions{
+			1: {ReportFormat: llotypes.ReportFormatJSON, Streams: []llotypes.Stream{{StreamID: 100, Aggregator: llotypes.AggregatorMedian}}},
+			2: {ReportFormat: llotypes.ReportFormatJSON, Streams: []llotypes.Stream{{StreamID: 200, Aggregator: llotypes.AggregatorMedian}}},
+			3: {ReportFormat: llotypes.ReportFormatJSON, Streams: []llotypes.Stream{{StreamID: 300, Aggregator: llotypes.AggregatorMedian}}},
+		},
+		validAfterNanoseconds: map[llotypes.ChannelID]uint64{
+			1: 1000,
+			2: 5000,
+		},
+	}
+	const interval = 3000
+
+	// t=3500: ch1 not due (3500<4000), ch2 not due (3500<8000), ch3 due (no validAfter)
+	require.ElementsMatch(t, []llotypes.StreamID{300}, observableStreams(state, interval, 3500))
+
+	// t=4000: ch1 due (4000>=4000, 4000>1000), ch2 not, ch3 due
+	require.ElementsMatch(t, []llotypes.StreamID{100, 300}, observableStreams(state, interval, 4000))
+
+	// t=8500: all due
+	require.ElementsMatch(t, []llotypes.StreamID{100, 200, 300}, observableStreams(state, interval, 8500))
+
+	// interval=0: all due (disabled)
+	require.ElementsMatch(t, []llotypes.StreamID{100, 200, 300}, observableStreams(state, 0, 3500))
+
+	// Shared stream: not-due channel shares stream with due channel
+	state.channelDefinitions[4] = llotypes.ChannelDefinition{
+		ReportFormat: llotypes.ReportFormatJSON,
+		Streams:      []llotypes.Stream{{StreamID: 100, Aggregator: llotypes.AggregatorMedian}},
+	}
+	state.validAfterNanoseconds[4] = 5000
+	require.ElementsMatch(t, []llotypes.StreamID{100, 300}, observableStreams(state, interval, 4000))
+
+	// Unique stream of not-due channel is NOT observed
+	state.channelDefinitions[5] = llotypes.ChannelDefinition{
+		ReportFormat: llotypes.ReportFormatJSON,
+		Streams:      []llotypes.Stream{{StreamID: 500, Aggregator: llotypes.AggregatorMedian}},
+	}
+	state.validAfterNanoseconds[5] = 5000
+	require.ElementsMatch(t, []llotypes.StreamID{100, 300}, observableStreams(state, interval, 4000))
+
+	// Reported-last-round advancement: validAfter lags one round; the
+	// Observation method advances it to the previous obsTs before calling
+	// observableStreams. Simulate that here.
+	state2 := &kvState{
+		channelDefinitions: llotypes.ChannelDefinitions{
+			1: {ReportFormat: llotypes.ReportFormatJSON, Streams: []llotypes.Stream{{StreamID: 100, Aggregator: llotypes.AggregatorMedian}}},
+		},
+		validAfterNanoseconds:  map[llotypes.ChannelID]uint64{1: 3000},
+		reportedLastRound:      map[llotypes.ChannelID]bool{1: true},
+		observationTimestampNs: 8000,
+	}
+	// Before advancement: validAfter=3000, due at t=8000 (8000>=8000)
+	require.ElementsMatch(t, []llotypes.StreamID{100}, observableStreams(state2, 5000, 8000))
+	// After advancement: validAfter=8000, NOT due at t=10000 (10000<13000)
+	for cid, reported := range state2.reportedLastRound {
+		if reported {
+			state2.validAfterNanoseconds[cid] = state2.observationTimestampNs
+		}
+	}
+	require.Empty(t, observableStreams(state2, 5000, 10000))
+	require.ElementsMatch(t, []llotypes.StreamID{100}, observableStreams(state2, 5000, 14000))
+}
+
+func Test_ObservationIntervalSkip_aggregate(t *testing.T) {
+	p := testPlugin(t)
+	p.DefaultMinObservationIntervalNanoseconds = 5000
+
+	defs := llotypes.ChannelDefinitions{
+		1: {ReportFormat: llotypes.ReportFormatJSON, Streams: []llotypes.Stream{{StreamID: 100, Aggregator: llotypes.AggregatorMedian}}},
+		2: {ReportFormat: llotypes.ReportFormatJSON, Streams: []llotypes.Stream{{StreamID: 200, Aggregator: llotypes.AggregatorMedian}}},
+	}
+	validAfter := map[llotypes.ChannelID]uint64{1: 1000, 2: 10000}
+
+	mkObs := func(sid llotypes.StreamID, v int64) []protocol.StreamValue {
+		return []protocol.StreamValue{
+			protocol.ToDecimal(decimal.NewFromInt(v)),
+			protocol.ToDecimal(decimal.NewFromInt(v)),
+			protocol.ToDecimal(decimal.NewFromInt(v)),
+		}
+	}
+	obs := map[llotypes.StreamID][]protocol.StreamValue{
+		100: mkObs(100, 42),
+		200: mkObs(200, 99),
+	}
+
+	out := protocol.StreamAggregates{}
+	next := map[llotypes.StreamID]map[llotypes.Aggregator]*protocol.TimestampedStreamValue{}
+
+	// t=6000: ch1 due (6000>=1000+5000=6000, 6000>1000), ch2 not (6000<10000+5000=15000)
+	err := p.aggregate(nil, next, defs, validAfter, 5000, obs, out, nil, historyRequirements{}, 6000)
+	require.NoError(t, err)
+
+	require.NotNil(t, out[100][llotypes.AggregatorMedian], "due channel's stream must be aggregated")
+	require.Nil(t, out[200][llotypes.AggregatorMedian], "not-due channel's stream must be skipped")
+
+	// interval=0: all channels aggregated (disabled)
+	out2 := protocol.StreamAggregates{}
+	next2 := map[llotypes.StreamID]map[llotypes.Aggregator]*protocol.TimestampedStreamValue{}
+	err = p.aggregate(nil, next2, defs, validAfter, 0, obs, out2, nil, historyRequirements{}, 6000)
+	require.NoError(t, err)
+	require.NotNil(t, out2[100][llotypes.AggregatorMedian])
+	require.NotNil(t, out2[200][llotypes.AggregatorMedian])
+}
+
+func Test_ObservationIntervalSkip_FullRound(t *testing.T) {
+	ctx := tests.Context(t)
+	p := testPlugin(t)
+	p.DefaultMinReportIntervalNanoseconds = 5000
+	p.DefaultMinObservationIntervalNanoseconds = 5000
+	kv := newMemKV()
+
+	channelDef := llotypes.ChannelDefinition{
+		ReportFormat: llotypes.ReportFormatJSON,
+		Streams:      []llotypes.Stream{{StreamID: 100, Aggregator: llotypes.AggregatorMedian}},
+	}
+
+	obsWithVal := func(ts uint64, v int64) []ocrtypes.AttributedObservation {
+		obs := Observation{
+			UnixTimestampNanoseconds: ts,
+			StreamValues:             protocol.StreamValues{100: protocol.ToDecimal(decimal.NewFromInt(v))},
+		}
+		aos := make([]ocrtypes.AttributedObservation, 0, 4)
+		for i := 0; i < 4; i++ {
+			aos = append(aos, ao(i, mustEncodeObs(t, obs)))
+		}
+		return aos
+	}
+
+	// Round 1: bootstrap
+	_, err := p.StateTransition(ctx, 1, ocrtypes.AttributedQuery{}, []ocrtypes.AttributedObservation{ao(0, nil), ao(1, nil), ao(2, nil)}, kv, testBlobs)
+	require.NoError(t, err)
+
+	// Round 2: add channel 1
+	_, err = p.StateTransition(ctx, 2, ocrtypes.AttributedQuery{}, addChannelRound(t, 1_000, 1, channelDef), kv, testBlobs)
+	require.NoError(t, err)
+	require.Contains(t, kvChannelDefs(t, kv), llotypes.ChannelID(1))
+
+	// Round 3: channel effective, first watermark. Not due (3000 < 3000+5000).
+	prec3, err := p.StateTransition(ctx, 3, ocrtypes.AttributedQuery{}, obsWithVal(3_000, 10), kv, testBlobs)
+	require.NoError(t, err)
+	p3, err := decodePrecursor(prec3)
+	require.NoError(t, err)
+	require.Nil(t, p3.StreamAggregates[100][llotypes.AggregatorMedian],
+		"round 3: channel not due, stream must not be aggregated")
+	reports3, err := p.Reports(ctx, 3, prec3)
+	require.NoError(t, err)
+	require.Empty(t, reports3, "round 3: no reports")
+	assert.Equal(t, uint64(3000), storedValidAfter(t, kv, 1))
+	require.False(t, reportedFlag(t, kv, 1))
+
+	// Round 4: due (8000 >= 3000+5000). Aggregated and reported.
+	prec4, err := p.StateTransition(ctx, 4, ocrtypes.AttributedQuery{}, obsWithVal(8_000, 20), kv, testBlobs)
+	require.NoError(t, err)
+	p4, err := decodePrecursor(prec4)
+	require.NoError(t, err)
+	require.NotNil(t, p4.StreamAggregates[100][llotypes.AggregatorMedian],
+		"round 4: channel due, stream must be aggregated")
+	reports4, err := p.Reports(ctx, 4, prec4)
+	require.NoError(t, err)
+	require.Len(t, reports4, 1, "round 4: one report")
+	assert.Equal(t, uint64(3000), storedValidAfter(t, kv, 1), "validAfter not yet advanced (advances next round)")
+	require.True(t, reportedFlag(t, kv, 1))
+
+	// Round 5: not due. validAfter advanced to 8000 (prev reported), 10000 < 8000+5000.
+	prec5, err := p.StateTransition(ctx, 5, ocrtypes.AttributedQuery{}, obsWithVal(10_000, 30), kv, testBlobs)
+	require.NoError(t, err)
+	p5, err := decodePrecursor(prec5)
+	require.NoError(t, err)
+	require.Nil(t, p5.StreamAggregates[100][llotypes.AggregatorMedian],
+		"round 5: channel not due, stream must not be aggregated")
+	reports5, err := p.Reports(ctx, 5, prec5)
+	require.NoError(t, err)
+	require.Empty(t, reports5, "round 5: no reports")
+	assert.Equal(t, uint64(8000), storedValidAfter(t, kv, 1), "validAfter advanced because prev round reported")
+	require.False(t, reportedFlag(t, kv, 1))
+
+	// Round 6: due again (14000 >= 8000+5000). Aggregated and reported.
+	prec6, err := p.StateTransition(ctx, 6, ocrtypes.AttributedQuery{}, obsWithVal(14_000, 40), kv, testBlobs)
+	require.NoError(t, err)
+	p6, err := decodePrecursor(prec6)
+	require.NoError(t, err)
+	require.NotNil(t, p6.StreamAggregates[100][llotypes.AggregatorMedian],
+		"round 6: channel due, stream must be aggregated")
+	reports6, err := p.Reports(ctx, 6, prec6)
+	require.NoError(t, err)
+	require.Len(t, reports6, 1, "round 6: one report")
+	require.True(t, reportedFlag(t, kv, 1))
 }

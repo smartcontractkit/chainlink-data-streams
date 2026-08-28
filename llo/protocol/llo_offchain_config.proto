@@ -7,4 +7,5 @@ message LLOOffchainConfigProto {
     uint32 protocolVersion = 1;
     uint64 defaultMinReportIntervalNanoseconds = 2;
     bool enableObservationCompression = 3;
+    uint64 defaultMinObservationIntervalNanoseconds = 4;
 }
