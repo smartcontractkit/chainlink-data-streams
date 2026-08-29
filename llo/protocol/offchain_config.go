@@ -26,9 +26,14 @@ type OffchainConfig struct {
 	//
 	// It must be set to 0 for protocol version 0.
 	// For protocol version 1+, 0 means disabled (all channels are always
-	// observed); a non-zero value enables the skip. It should not exceed
+	// observed); a non-zero value enables the skip. It must not exceed
 	// DefaultMinReportIntervalNanoseconds, or a channel could be reportable
 	// but lack the observations needed to produce a report.
+	//
+	// Setting it equal to DefaultMinReportIntervalNanoseconds is safe: a
+	// channel's streams enter the observed set one round before the channel
+	// itself becomes due, so the values are already gathered by the round that
+	// aggregates and reports them.
 	DefaultMinObservationIntervalNanoseconds uint64
 	// EnableObservationCompression enables observation compression.
 	EnableObservationCompression bool

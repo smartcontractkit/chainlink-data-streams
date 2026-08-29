@@ -584,7 +584,7 @@ func Test_TimestampedAggregate_CarryForward(t *testing.T) {
 		obs := map[llotypes.StreamID][]protocol.StreamValue{100: {tsv(ts, v), tsv(ts, v), tsv(ts, v)}}
 		next := map[llotypes.StreamID]map[llotypes.Aggregator]*protocol.TimestampedStreamValue{}
 		// No history requirements: this test is about carry-forward aggregation.
-		require.NoError(t, p.aggregate(carry, next, defs, nil, 0, obs, out, nil, historyRequirements{}, ts))
+		require.NoError(t, p.aggregate(carry, next, defs, obs, out, nil, historyRequirements{}, ts))
 		carry = next
 		res, ok := out[100][llotypes.AggregatorMedian].(*protocol.TimestampedStreamValue)
 		require.True(t, ok, "expected a TimestampedStreamValue aggregate")
@@ -1016,6 +1016,37 @@ func Test_ObservationIntervalSkip_observableStreams(t *testing.T) {
 	require.ElementsMatch(t, []llotypes.StreamID{100}, observableStreams(state2, 5000, 14000))
 }
 
+// The blob pump serves a round from the snapshot gathered under the previous
+// round's stream set, so a channel's streams must be published one round before
+// the channel becomes due for aggregation - otherwise the due round aggregates
+// nothing while still counting as reported.
+func Test_ObservationIntervalSkip_LeadsAggregationByOneRound(t *testing.T) {
+	const interval, roundDuration = 5000, 1000
+
+	defs := llotypes.ChannelDefinitions{
+		1: {ReportFormat: llotypes.ReportFormatJSON, Streams: []llotypes.Stream{{StreamID: 100, Aggregator: llotypes.AggregatorMedian}}},
+	}
+	validAfter := map[llotypes.ChannelID]uint64{1: 1000}
+	state := &kvState{channelDefinitions: defs, validAfterNanoseconds: validAfter}
+
+	// The channel is due for aggregation at t=6000 (1000+5000).
+	require.Empty(t, observableDefinitions(defs, validAfter, interval, 5000), "not yet due at t=5000")
+	require.Len(t, observableDefinitions(defs, validAfter, interval, 6000), 1, "due at t=6000")
+
+	// Observation at t=5000 must already publish stream 100, so the pump has
+	// gathered it by the time the t=6000 round aggregates.
+	lead := observationLead(4000, 5000, interval)
+	require.Equal(t, uint64(roundDuration), lead)
+	require.ElementsMatch(t, []llotypes.StreamID{100}, observableStreams(state, interval, 5000+lead),
+		"streams must be observed one round before the channel is due")
+
+	// Without a previous observation timestamp the lead degrades to observing
+	// everything rather than to observing nothing.
+	require.Equal(t, uint64(interval), observationLead(0, 5000, interval))
+	require.Zero(t, observationLead(4000, 5000, 0), "no lead when the feature is disabled")
+	require.Zero(t, observationLead(6000, 5000, interval), "no lead when the watermark is ahead of now")
+}
+
 func Test_ObservationIntervalSkip_aggregate(t *testing.T) {
 	p := testPlugin(t)
 	p.DefaultMinObservationIntervalNanoseconds = 5000
@@ -1042,7 +1073,7 @@ func Test_ObservationIntervalSkip_aggregate(t *testing.T) {
 	next := map[llotypes.StreamID]map[llotypes.Aggregator]*protocol.TimestampedStreamValue{}
 
 	// t=6000: ch1 due (6000>=1000+5000=6000, 6000>1000), ch2 not (6000<10000+5000=15000)
-	err := p.aggregate(nil, next, defs, validAfter, 5000, obs, out, nil, historyRequirements{}, 6000)
+	err := p.aggregate(nil, next, observableDefinitions(defs, validAfter, 5000, 6000), obs, out, nil, historyRequirements{}, 6000)
 	require.NoError(t, err)
 
 	require.NotNil(t, out[100][llotypes.AggregatorMedian], "due channel's stream must be aggregated")
@@ -1051,7 +1082,7 @@ func Test_ObservationIntervalSkip_aggregate(t *testing.T) {
 	// interval=0: all channels aggregated (disabled)
 	out2 := protocol.StreamAggregates{}
 	next2 := map[llotypes.StreamID]map[llotypes.Aggregator]*protocol.TimestampedStreamValue{}
-	err = p.aggregate(nil, next2, defs, validAfter, 0, obs, out2, nil, historyRequirements{}, 6000)
+	err = p.aggregate(nil, next2, observableDefinitions(defs, validAfter, 0, 6000), obs, out2, nil, historyRequirements{}, 6000)
 	require.NoError(t, err)
 	require.NotNil(t, out2[100][llotypes.AggregatorMedian])
 	require.NotNil(t, out2[200][llotypes.AggregatorMedian])
