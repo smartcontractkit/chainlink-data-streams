@@ -379,15 +379,25 @@ func (p *Plugin) decodeObservations(aos []types.AttributedObservation, outctx oc
 			continue
 		}
 
-		if len(observation.AttestedPredecessorRetirement) != 0 && validPredecessorRetirementReport == nil {
+		if len(observation.AttestedPredecessorRetirement) != 0 && validPredecessorRetirementReport == nil && p.PredecessorConfigDigest != nil {
 			// a single valid retirement report is enough
+			//
+			// NOTE: only the retirement field is dropped on failure, never the
+			// whole observation: its timestamp, channel votes and stream values
+			// are still counted. Dropping the observation would stall the round
+			// entirely whenever every oracle attaches a report that cannot be
+			// verified locally (e.g. the predecessor's ConfigSet row has not
+			// been loaded into the RetirementReportCache yet), since every
+			// honest oracle attaches the same bytes.
 			pcd := *p.PredecessorConfigDigest
 			retirementReport, err3 := p.PredecessorRetirementReportCache.CheckAttestedRetirementReport(pcd, observation.AttestedPredecessorRetirement)
 			if err3 != nil {
-				p.Logger.Warnw("ignoring observation with invalid attested predecessor retirement", "oracleID", ao.Observer, "error", err3, "predecessorConfigDigest", pcd)
-				continue
+				p.Logger.Warnw("ignoring invalid attested predecessor retirement", "oracleID", ao.Observer, "error", err3, "predecessorConfigDigest", pcd)
+			} else if err3 = retirementReport.CheckCompatible(p.ProtocolVersion); err3 != nil {
+				p.Logger.Warnw("ignoring incompatible attested predecessor retirement", "oracleID", ao.Observer, "error", err3, "predecessorConfigDigest", pcd)
+			} else {
+				validPredecessorRetirementReport = &retirementReport
 			}
-			validPredecessorRetirementReport = &retirementReport
 		}
 
 		if observation.ShouldRetire {

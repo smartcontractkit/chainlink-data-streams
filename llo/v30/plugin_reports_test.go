@@ -182,7 +182,9 @@ func testReports(t *testing.T, outcomeCodec OutcomeCodec) {
 			},
 		}
 		outcome := Outcome{
-			LifeCycleStage:                  protocol.LifeCycleStageStaging,
+			// Production: a staging instance does not backfill, so the stage
+			// has to be explicit here rather than incidental.
+			LifeCycleStage:                  protocol.LifeCycleStageProduction,
 			ObservationTimestampNanoseconds: uint64(300 * time.Second),
 			ChannelDefinitions:              chDefs,
 			ValidAfterNanoseconds: map[llotypes.ChannelID]uint64{

@@ -772,6 +772,10 @@ func (p *Plugin) resolvePredecessorRetirement(
 			p.Logger.Warnw("Ignoring invalid attested predecessor retirement", "seqNr", seqNr, "error", verr, "predecessorConfigDigest", *p.PredecessorConfigDigest)
 			continue
 		}
+		if verr = retirementReport.CheckCompatible(p.ProtocolVersion); verr != nil {
+			p.Logger.Warnw("Ignoring incompatible attested predecessor retirement", "seqNr", seqNr, "error", verr, "predecessorConfigDigest", *p.PredecessorConfigDigest)
+			continue
+		}
 		return &retirementReport
 	}
 	return nil
