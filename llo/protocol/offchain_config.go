@@ -40,6 +40,31 @@ type OffchainConfig struct {
 	// fixed rate from its own previous slot rather than from the round that
 	// reported, so a channel configured to report every T keeps reporting every
 	// T, offset once by however long its first cycle took to gather.
+	//
+	// SIZING HISTORY WINDOWS. Enabling this makes a channel's report cadence the
+	// sampling rate for any History(...) window it reads, so a window's depth
+	// buys a different amount of wall-clock coverage than it did at the round
+	// rate. Size depth, and the TWAP window/minSamples/gap thresholds, against
+	// this interval.
+	//
+	// For TWAP specifically, an interval at or below one second changes nothing:
+	// TWAP buckets its window by the second and takes the newest record in each
+	// bucket, so a faster sampling rate was already being discarded. It makes
+	// depth go further, since depth stops being spent on records that collapse
+	// into the same bucket. Above one second, the observed bucket count falls to
+	// about window/interval and every interior gap becomes interval-1 buckets,
+	// which is where minSamples and maxInteriorGap start to bite.
+	//
+	// The other window functions (Avg, Median, EMA, SMA, WMA, Delta, PctChange,
+	// Spread, Variance, Stddev, Last) read the record series directly with no
+	// bucketing, so their wall-clock meaning tracks the sampling rate at any
+	// interval: EMA(History(s, 50), 20) smooths over a very different span at a
+	// 20ms round than at a 1s cadence.
+	//
+	// Getting this wrong costs reports, not correctness. A window that cannot be
+	// satisfied leaves its channel unreportable, which also stops its schedule
+	// advancing, so the channel reverts to observing every round until the window
+	// is satisfied again.
 	DefaultMinObservationIntervalNanoseconds uint64
 	// EnableObservationCompression enables observation compression.
 	EnableObservationCompression bool

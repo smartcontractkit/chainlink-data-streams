@@ -585,7 +585,7 @@ func Test_TimestampedAggregate_CarryForward(t *testing.T) {
 		obs := map[llotypes.StreamID][]protocol.StreamValue{100: {tsv(ts, v), tsv(ts, v), tsv(ts, v)}}
 		next := map[llotypes.StreamID]map[llotypes.Aggregator]*protocol.TimestampedStreamValue{}
 		// No history requirements: this test is about carry-forward aggregation.
-		require.NoError(t, p.aggregate(carry, next, defs, obs, out, nil, historyRequirements{}, ts))
+		require.NoError(t, p.aggregate(carry, next, defs, defs, obs, out, nil, historyRequirements{}, ts))
 		carry = next
 		res, ok := out[100][llotypes.AggregatorMedian].(*protocol.TimestampedStreamValue)
 		require.True(t, ok, "expected a TimestampedStreamValue aggregate")
@@ -1086,6 +1086,44 @@ func Test_ObservationIntervalSkip_WithholdsReportUntilValuesArrive(t *testing.T)
 		"the withholding rule is gated on the observation interval")
 }
 
+// A pair belonging only to a skipped channel keeps its carried value, so the
+// channel does not come out of a skip window worse off than it went in: the
+// last-known-good value is still there as the fallback on the round it returns.
+// A pair whose last live channel has gone is still reclaimed.
+func Test_ObservationIntervalSkip_CarryForwardSurvivesSkip(t *testing.T) {
+	p := testPlugin(t)
+	const interval = 5000
+
+	defs := llotypes.ChannelDefinitions{
+		1: {ReportFormat: llotypes.ReportFormatJSON, Streams: []llotypes.Stream{{StreamID: 100, Aggregator: llotypes.AggregatorMedian}}},
+	}
+	// Not due until 10000.
+	schedule := map[llotypes.ChannelID]uint64{1: 10_000}
+	carried := &protocol.TimestampedStreamValue{ObservedAtNanoseconds: 42, StreamValue: protocol.ToDecimal(decimal.NewFromInt(7))}
+	prevCarry := map[llotypes.StreamID]map[llotypes.Aggregator]*protocol.TimestampedStreamValue{
+		100: {llotypes.AggregatorMedian: carried},
+	}
+
+	// Round where channel 1 is skipped: no observations for stream 100 at all.
+	next := map[llotypes.StreamID]map[llotypes.Aggregator]*protocol.TimestampedStreamValue{}
+	out := protocol.StreamAggregates{}
+	due := observableDefinitions(defs, schedule, interval, 6000)
+	require.Empty(t, due, "channel must be skipped for this test to mean anything")
+
+	require.NoError(t, p.aggregate(prevCarry, next, due, defs, nil, out, nil, historyRequirements{}, 6000))
+
+	require.Same(t, carried, next[100][llotypes.AggregatorMedian],
+		"a skipped channel's carried value must survive the round")
+	require.Nil(t, out[100][llotypes.AggregatorMedian],
+		"but it must not be published as this round's aggregate, which would make the channel reportable")
+
+	// Same round with the channel no longer live: the value is reclaimed.
+	orphaned := map[llotypes.StreamID]map[llotypes.Aggregator]*protocol.TimestampedStreamValue{}
+	require.NoError(t, p.aggregate(prevCarry, orphaned, llotypes.ChannelDefinitions{}, llotypes.ChannelDefinitions{},
+		nil, protocol.StreamAggregates{}, nil, historyRequirements{}, 6000))
+	require.Empty(t, orphaned, "a pair no live channel declares must not be carried forward")
+}
+
 func Test_ObservationIntervalSkip_aggregate(t *testing.T) {
 	p := testPlugin(t)
 	p.DefaultMinObservationIntervalNanoseconds = 5000
@@ -1112,7 +1150,7 @@ func Test_ObservationIntervalSkip_aggregate(t *testing.T) {
 	next := map[llotypes.StreamID]map[llotypes.Aggregator]*protocol.TimestampedStreamValue{}
 
 	// t=6000: ch1 due (6000>=1000+5000=6000, 6000>1000), ch2 not (6000<10000+5000=15000)
-	err := p.aggregate(nil, next, observableDefinitions(defs, validAfter, 5000, 6000), obs, out, nil, historyRequirements{}, 6000)
+	err := p.aggregate(nil, next, observableDefinitions(defs, validAfter, 5000, 6000), defs, obs, out, nil, historyRequirements{}, 6000)
 	require.NoError(t, err)
 
 	require.NotNil(t, out[100][llotypes.AggregatorMedian], "due channel's stream must be aggregated")
@@ -1121,7 +1159,7 @@ func Test_ObservationIntervalSkip_aggregate(t *testing.T) {
 	// interval=0: all channels aggregated (disabled)
 	out2 := protocol.StreamAggregates{}
 	next2 := map[llotypes.StreamID]map[llotypes.Aggregator]*protocol.TimestampedStreamValue{}
-	err = p.aggregate(nil, next2, observableDefinitions(defs, validAfter, 0, 6000), obs, out2, nil, historyRequirements{}, 6000)
+	err = p.aggregate(nil, next2, observableDefinitions(defs, validAfter, 0, 6000), defs, obs, out2, nil, historyRequirements{}, 6000)
 	require.NoError(t, err)
 	require.NotNil(t, out2[100][llotypes.AggregatorMedian])
 	require.NotNil(t, out2[200][llotypes.AggregatorMedian])

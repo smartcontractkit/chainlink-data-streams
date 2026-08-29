@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"golang.org/x/exp/maps"
@@ -57,6 +58,13 @@ type Plugin struct {
 	// pump gathers stream observations and broadcasts them as blobs off the OCR
 	// critical path. Observation only picks up the handle it parked.
 	pump *blobPump
+
+	// loggedHistorySkip remembers which channels have already had their
+	// sampling-rate warning logged, so it is said once per channel per instance
+	// rather than every cycle. Node-local and for logging only: it must never
+	// influence anything StateTransition computes, or nodes would diverge.
+	loggedHistorySkipMu sync.Mutex
+	loggedHistorySkip   map[llotypes.ChannelID]struct{}
 
 	// From offchain config
 	ProtocolVersion                          uint32
@@ -224,20 +232,62 @@ func nextObservationDue(observationDue map[llotypes.ChannelID]uint64, channelID 
 	return prevDue + (missed+1)*minObservationInterval
 }
 
+// exemptFromObservationSkip reports whether a channel must be observed and
+// aggregated every round no matter what its schedule says.
+//
+// Only history_backfill is: its watermark is a history timestamp rather than a
+// report time, so a report cadence means nothing for it.
+//
+// Channels reading History(...) are deliberately NOT exempt. The skip makes a
+// channel's report cadence the sampling rate for its windows, which lowers their
+// resolution but does not make them wrong - records carry their own observation
+// timestamp, and TWAP integrates over real time. Nor can it stall silently: an
+// unreadable window leaves the channel unreportable, which also stops its
+// schedule advancing, so it reverts to observing every round until the window is
+// satisfied. See DefaultMinObservationIntervalNanoseconds for how to size a
+// window against the interval.
+func exemptFromObservationSkip(cd llotypes.ChannelDefinition) bool {
+	return cd.ReportFormat == llotypes.ReportFormatHistoryBackfill
+}
+
+// warnHistorySampledAtReportCadence says once per channel that a channel reading
+// stream history is being skipped, so its windows are now sampled at its report
+// cadence rather than at the round rate. Whether that is fine depends on the
+// depths and thresholds the channel was configured with, which this cannot know,
+// so it reports the fact and the interval and leaves the arithmetic to whoever
+// reads it. See DefaultMinObservationIntervalNanoseconds.
+func (p *Plugin) warnHistorySampledAtReportCadence(channelID llotypes.ChannelID, seqNr uint64) {
+	p.loggedHistorySkipMu.Lock()
+	if p.loggedHistorySkip == nil {
+		p.loggedHistorySkip = map[llotypes.ChannelID]struct{}{}
+	}
+	_, said := p.loggedHistorySkip[channelID]
+	if !said {
+		p.loggedHistorySkip[channelID] = struct{}{}
+	}
+	p.loggedHistorySkipMu.Unlock()
+	if said {
+		return
+	}
+	p.Logger.Infow("Channel reads stream history and is now sampled at its report cadence, not the round rate; check its history depths and any TWAP thresholds against the observation interval",
+		"channelID", channelID,
+		"minObservationIntervalNanoseconds", p.DefaultMinObservationIntervalNanoseconds,
+		"stage", "StateTransition", "seqNr", seqNr)
+}
+
 // observableDefinitions returns the subset of defs whose channels are due for
 // observation/aggregation. Tombstoned and history_backfill channels are always
-// retained: aggregate skips both on its own, a backfill channel's watermark is
-// a history timestamp rather than a report time so the interval check is
-// meaningless for it, and retaining them keeps the set handed to
-// ProcessCalculatedStreams the same whether or not the interval is configured.
-// When minObservationInterval is 0, defs is returned unchanged.
+// retained, as are the channels exemptFromObservationSkip names. That keeps the
+// set handed to aggregate and ProcessCalculatedStreams the same whether or not
+// the interval is configured. When minObservationInterval is 0, defs is returned
+// unchanged.
 func observableDefinitions(defs llotypes.ChannelDefinitions, observationDue map[llotypes.ChannelID]uint64, minObservationInterval, now uint64) llotypes.ChannelDefinitions {
 	if minObservationInterval == 0 {
 		return defs
 	}
 	filtered := make(llotypes.ChannelDefinitions, len(defs))
 	for channelID, cd := range defs {
-		if cd.Tombstone || cd.ReportFormat == llotypes.ReportFormatHistoryBackfill ||
+		if cd.Tombstone || exemptFromObservationSkip(cd) ||
 			isObservationDue(observationDue, channelID, minObservationInterval, now) {
 			filtered[channelID] = cd
 		}
@@ -250,9 +300,9 @@ func observableDefinitions(defs llotypes.ChannelDefinitions, observationDue map[
 // StateTransition rather than observed).
 //
 // When minObservationInterval is non-zero, channels that are not yet due on the
-// observation schedule are skipped: their streams are not observed unless
-// another due channel (or a backfill channel, which is always observed) shares
-// them. A channel with no schedule entry yet is always considered due.
+// observation schedule are skipped: their streams are not observed unless shared
+// with a channel that is due or exempt (see exemptFromObservationSkip). A
+// channel with no schedule entry yet is always considered due.
 func observableStreams(state *kvState, minObservationInterval uint64, now uint64) []llotypes.StreamID {
 	if len(state.channelDefinitions) == 0 {
 		return nil
@@ -263,11 +313,7 @@ func observableStreams(state *kvState, minObservationInterval uint64, now uint64
 		if cd.Tombstone {
 			continue
 		}
-		// Backfill channels are always observed: their watermark is a history
-		// timestamp rather than a report time, so the interval check does not
-		// apply to them. Exempting them also keeps the observed set unchanged
-		// for hosts that have not configured the interval.
-		if cd.ReportFormat != llotypes.ReportFormatHistoryBackfill &&
+		if !exemptFromObservationSkip(cd) &&
 			!isObservationDue(state.observationDueNanoseconds, channelID, minObservationInterval, now) {
 			continue
 		}

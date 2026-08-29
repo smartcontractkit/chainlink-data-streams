@@ -195,8 +195,8 @@ func (p *Plugin) StateTransition(ctx context.Context, seqNr uint64, _ ocrtypes.A
 	observationDue := map[llotypes.ChannelID]uint64{}
 	if p.DefaultMinObservationIntervalNanoseconds > 0 {
 		for channelID, cd := range effective {
-			if cd.Tombstone || cd.ReportFormat == llotypes.ReportFormatHistoryBackfill {
-				// Never aggregated, so never scheduled.
+			if cd.Tombstone || exemptFromObservationSkip(cd) {
+				// Never skipped, so never scheduled.
 				continue
 			}
 			if prevReportable(prev, channelID) {
@@ -219,12 +219,21 @@ func (p *Plugin) StateTransition(ctx context.Context, seqNr uint64, _ ocrtypes.A
 	// the two can never disagree about which channels this round covers.
 	aggregationDefs := observableDefinitions(effective, observationDue, p.DefaultMinObservationIntervalNanoseconds, out.ObservationTimestampNanoseconds)
 
+	// Node-local diagnostic only; nothing below reads it.
+	if p.DefaultMinObservationIntervalNanoseconds > 0 {
+		for channelID, cd := range effective {
+			if _, due := aggregationDefs[channelID]; !due && protocol.HasCalculatedStreams(cd) {
+				p.warnHistorySampledAtReportCadence(channelID, seqNr)
+			}
+		}
+	}
+
 	// Aggregation (regular fresh; timestamped with cross-round carry-forward via
 	// the r/agg record). carryForward accumulates the values to persist for the
 	// next round. Runs over the filtered set, which is what was observed. The
 	// agreed value of every pair history requires is recorded as it is computed.
 	carryForward := map[llotypes.StreamID]map[llotypes.Aggregator]*protocol.TimestampedStreamValue{}
-	if err := p.aggregate(prev.carryForward, carryForward, aggregationDefs, streamObservations, out.StreamAggregates,
+	if err := p.aggregate(prev.carryForward, carryForward, aggregationDefs, effective, streamObservations, out.StreamAggregates,
 		history, requirements, out.ObservationTimestampNanoseconds); err != nil {
 		return nil, err
 	}
@@ -404,6 +413,7 @@ func applyChannelVotes(
 func (p *Plugin) aggregate(
 	prevCarry, nextCarry map[llotypes.StreamID]map[llotypes.Aggregator]*protocol.TimestampedStreamValue,
 	defs llotypes.ChannelDefinitions,
+	liveDefs llotypes.ChannelDefinitions,
 	streamObservations map[llotypes.StreamID][]protocol.StreamValue,
 	out protocol.StreamAggregates,
 	history *historyStore,
@@ -418,9 +428,13 @@ func (p *Plugin) aggregate(
 	}
 
 	// defs has already been narrowed to the channels due this round (see
-	// observableDefinitions). A pair exclusive to a channel that was filtered
-	// out is not carried forward, so its carry-forward value is dropped; fresh
-	// aggregation resumes when the channel is due again.
+	// observableDefinitions). Pairs belonging only to channels that were filtered
+	// out are carried forward untouched by the loop below this one.
+	// Pairs this round actually looked at. A pair that was looked at owns its own
+	// carry-forward outcome, including the deliberate drops below, so the
+	// preservation pass at the end must not second-guess it.
+	visited := map[histKey]struct{}{}
+
 	for _, cd := range defs {
 		if cd.Tombstone || cd.ReportFormat == llotypes.ReportFormatHistoryBackfill {
 			// Not aggregated, so nothing is carried forward on their behalf. A
@@ -436,6 +450,7 @@ func (p *Plugin) aggregate(
 				// are recomputed each round by ProcessCalculatedStreams.
 				continue
 			}
+			visited[histKey{streamID: sid, aggregator: agg}] = struct{}{}
 			if _, exists := out[sid][agg]; exists {
 				continue
 			}
@@ -491,6 +506,42 @@ func (p *Plugin) aggregate(
 
 			if err := appendHistory(history, requirements, sid, agg, m[agg], observationTimestampNanoseconds, p.Logger); err != nil {
 				return err
+			}
+		}
+	}
+
+	// Pairs belonging only to channels the observation schedule skipped were
+	// never looked at above. They keep their carried value, exactly as a pair
+	// keeps it on a round where aggregation failed: skipping a channel must not
+	// cost it the last-known-good value behind timestamped monotonicity, or it
+	// could adopt an older value coming out of a skip window than it held going
+	// in, and would have no fallback on the round it returns.
+	//
+	// Driven from liveDefs, not from prevCarry, so a pair whose last channel has
+	// been removed is still reclaimed by not being written into the new hot
+	// record. Restricted to unvisited pairs, so the deliberate drops above - a
+	// pair that turned non-timestamped, a transient failure with nothing carried
+	// - keep their decision.
+	//
+	// This does not reach history: appendHistory is not called here, and its
+	// strictly-newer guard would reject the value anyway. That is deliberate - a
+	// carried value must not be counted once per round in a window, which is why
+	// history records a gap rather than a repeat. Nor does it make a skipped
+	// channel reportable: the value goes into nextCarry only, never into out.
+	for _, cd := range liveDefs {
+		if cd.Tombstone || cd.ReportFormat == llotypes.ReportFormatHistoryBackfill {
+			continue
+		}
+		for _, strm := range cd.Streams {
+			sid, agg := strm.StreamID, strm.Aggregator
+			if agg == llotypes.AggregatorCalculated {
+				continue
+			}
+			if _, seen := visited[histKey{streamID: sid, aggregator: agg}]; seen {
+				continue
+			}
+			if tsv := prevCarry[sid][agg]; tsv != nil {
+				keep(sid, agg, tsv)
 			}
 		}
 	}
