@@ -58,7 +58,7 @@ func Test_ChannelCache_StaleSeqNrForcesReload(t *testing.T) {
 	kv := newMemKV()
 	defs := llotypes.ChannelDefinitions{1: jsonChannel()}
 	require.NoError(t, writeChannelState(kv, 5, defs))
-	require.NoError(t, writeHotState(kv, 0, nil, nil, nil))
+	require.NoError(t, writeHotState(kv, 0, nil, nil, nil, nil))
 
 	cache := protocol.NewChannelCache()
 	s, err := loadKVState(kv, cache)
@@ -145,7 +145,7 @@ func Test_KVRecords_DeterministicAndRoundTrip(t *testing.T) {
 	for i := 0; i < 8; i++ {
 		kv := newMemKV()
 		require.NoError(t, writeChannelState(kv, 9, defs))
-		require.NoError(t, writeHotState(kv, 1_234, validAfter, reportable, carry))
+		require.NoError(t, writeHotState(kv, 1_234, validAfter, reportable, nil, carry))
 		if i == 0 {
 			channelBytes, hotBytes = kv.m[string(keyChannelState)], kv.m[string(keyHotState)]
 			continue
@@ -156,7 +156,7 @@ func Test_KVRecords_DeterministicAndRoundTrip(t *testing.T) {
 
 	kv := newMemKV()
 	require.NoError(t, writeChannelState(kv, 9, defs))
-	require.NoError(t, writeHotState(kv, 1_234, validAfter, reportable, carry))
+	require.NoError(t, writeHotState(kv, 1_234, validAfter, reportable, nil, carry))
 	require.Equal(t, uint64(9), binary.BigEndian.Uint64(kv.m[string(keyChannelSeqNr)]))
 
 	s, err := loadKVState(kv, nil)

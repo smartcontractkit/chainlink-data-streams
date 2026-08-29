@@ -115,6 +115,11 @@ type kvState struct {
 	// round can advance validAfter faithfully without re-deriving it from
 	// aggregates that are not persisted.
 	reportedLastRound map[llotypes.ChannelID]bool
+	// observationDueNanoseconds is the observation schedule: when each channel
+	// next becomes due for observation and aggregation. A channel with no entry
+	// is due. Distinct from validAfterNanoseconds, which is a report boundary;
+	// see nextObservationDue for why the two must not be conflated.
+	observationDueNanoseconds map[llotypes.ChannelID]uint64
 	// carryForward holds the timestamped aggregates that survive across rounds
 	// (newer-wins monotonicity). Regular aggregates are recomputed fresh every
 	// round and are never persisted.
@@ -148,10 +153,11 @@ func loadKVState(r ocr3_1types.KeyValueStateReader, cache *protocol.ChannelCache
 // StateTransition needs the hot state and must use loadKVState.
 func loadColdKVState(r ocr3_1types.KeyValueStateReader, cache *protocol.ChannelCache) (*kvState, error) {
 	s := &kvState{
-		channelDefinitions:    llotypes.ChannelDefinitions{},
-		validAfterNanoseconds: map[llotypes.ChannelID]uint64{},
-		reportedLastRound:     map[llotypes.ChannelID]bool{},
-		carryForward:          map[llotypes.StreamID]map[llotypes.Aggregator]*protocol.TimestampedStreamValue{},
+		channelDefinitions:        llotypes.ChannelDefinitions{},
+		validAfterNanoseconds:     map[llotypes.ChannelID]uint64{},
+		reportedLastRound:         map[llotypes.ChannelID]bool{},
+		observationDueNanoseconds: map[llotypes.ChannelID]uint64{},
+		carryForward:              map[llotypes.StreamID]map[llotypes.Aggregator]*protocol.TimestampedStreamValue{},
 	}
 
 	lc, err := r.Read(keyLifecycle)
@@ -223,6 +229,9 @@ func readHotState(r ocr3_1types.KeyValueStateReader, s *kvState) error {
 	for _, cid := range pb.ReportableChannelIDs {
 		s.reportedLastRound[cid] = true
 	}
+	for _, d := range pb.ObservationDueNanoseconds {
+		s.observationDueNanoseconds[d.ChannelID] = d.DueAtNanoseconds
+	}
 	for _, sa := range pb.StreamAggregates {
 		sv, err := protocol.UnmarshalProtoStreamValue(sa.StreamValue)
 		if err != nil {
@@ -242,12 +251,11 @@ func readHotState(r ocr3_1types.KeyValueStateReader, s *kvState) error {
 	return nil
 }
 
-// readValidAfterOnly reads the r/agg record and extracts just the validAfter
-// watermarks, the previous observation timestamp, and the reportability flags,
-// skipping the (potentially large) carry-forward stream aggregates. It is a
-// lightweight alternative to readHotState for the Observation phase, which
-// needs the watermarks to decide whether a channel is due for observation but
-// does not need the aggregates.
+// readValidAfterOnly reads the r/agg record and extracts everything the
+// Observation phase needs to decide which channels are due - the observation
+// schedule, the previous observation timestamp, the validAfter watermarks and
+// the reportability flags - while skipping the (potentially large)
+// carry-forward stream aggregates, which only StateTransition uses.
 func readValidAfterOnly(r ocr3_1types.KeyValueStateReader, s *kvState) error {
 	b, err := r.Read(keyHotState)
 	if err != nil {
@@ -266,6 +274,9 @@ func readValidAfterOnly(r ocr3_1types.KeyValueStateReader, s *kvState) error {
 	}
 	for _, cid := range pb.ReportableChannelIDs {
 		s.reportedLastRound[cid] = true
+	}
+	for _, d := range pb.ObservationDueNanoseconds {
+		s.observationDueNanoseconds[d.ChannelID] = d.DueAtNanoseconds
 	}
 	return nil
 }
@@ -309,6 +320,7 @@ func writeHotState(
 	observationTimestampNs uint64,
 	validAfterNanoseconds map[llotypes.ChannelID]uint64,
 	reportable map[llotypes.ChannelID]bool,
+	observationDueNanoseconds map[llotypes.ChannelID]uint64,
 	carryForward map[llotypes.StreamID]map[llotypes.Aggregator]*protocol.TimestampedStreamValue,
 ) error {
 	pb := &protocol.LLOHotStateProto{
@@ -333,6 +345,17 @@ func writeHotState(
 	}
 	sort.Slice(pb.ReportableChannelIDs, func(i, j int) bool {
 		return pb.ReportableChannelIDs[i] < pb.ReportableChannelIDs[j]
+	})
+
+	pb.ObservationDueNanoseconds = make([]*protocol.LLOChannelIDAndObservationDueProto, 0, len(observationDueNanoseconds))
+	for id, dueAt := range observationDueNanoseconds {
+		pb.ObservationDueNanoseconds = append(pb.ObservationDueNanoseconds, &protocol.LLOChannelIDAndObservationDueProto{
+			ChannelID:        id,
+			DueAtNanoseconds: dueAt,
+		})
+	}
+	sort.Slice(pb.ObservationDueNanoseconds, func(i, j int) bool {
+		return pb.ObservationDueNanoseconds[i].ChannelID < pb.ObservationDueNanoseconds[j].ChannelID
 	})
 
 	for sid, aggregates := range carryForward {

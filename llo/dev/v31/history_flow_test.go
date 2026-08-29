@@ -277,9 +277,10 @@ func storedChannelDefinitions(t *testing.T, kv *memKV) llotypes.ChannelDefinitio
 func storedHotState(t *testing.T, kv *memKV) *kvState {
 	t.Helper()
 	s := &kvState{
-		validAfterNanoseconds: map[llotypes.ChannelID]uint64{},
-		reportedLastRound:     map[llotypes.ChannelID]bool{},
-		carryForward:          map[llotypes.StreamID]map[llotypes.Aggregator]*protocol.TimestampedStreamValue{},
+		validAfterNanoseconds:     map[llotypes.ChannelID]uint64{},
+		reportedLastRound:         map[llotypes.ChannelID]bool{},
+		observationDueNanoseconds: map[llotypes.ChannelID]uint64{},
+		carryForward:              map[llotypes.StreamID]map[llotypes.Aggregator]*protocol.TimestampedStreamValue{},
 	}
 	require.NoError(t, readHotState(kv, s))
 	return s
@@ -289,6 +290,13 @@ func storedHotState(t *testing.T, kv *memKV) *kvState {
 func storedValidAfter(t *testing.T, kv *memKV, cid llotypes.ChannelID) uint64 {
 	t.Helper()
 	return storedHotState(t, kv).validAfterNanoseconds[cid]
+}
+
+// storedObservationDue returns the persisted observation schedule slot, or 0 if
+// the channel has none (which means it is due).
+func storedObservationDue(t *testing.T, kv *memKV, cid llotypes.ChannelID) uint64 {
+	t.Helper()
+	return storedHotState(t, kv).observationDueNanoseconds[cid]
 }
 
 // reportedFlag returns the reportability decision the last round persisted.

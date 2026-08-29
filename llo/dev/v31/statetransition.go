@@ -59,7 +59,7 @@ func (p *Plugin) StateTransition(ctx context.Context, seqNr uint64, _ ocrtypes.A
 		if err := writeChannelState(kvRW, seqNr, nil); err != nil {
 			return nil, err
 		}
-		if err := writeHotState(kvRW, 0, nil, nil, nil); err != nil {
+		if err := writeHotState(kvRW, 0, nil, nil, nil, nil); err != nil {
 			return nil, err
 		}
 		return encodePrecursor(precursor{LifeCycleStage: stage})
@@ -184,13 +184,40 @@ func (p *Plugin) StateTransition(ctx context.Context, seqNr uint64, _ ocrtypes.A
 			"streamID", key.streamID, "aggregator", key.aggregator, "seqNr", seqNr)
 	}
 
+	// Observation schedule. A channel's next due time advances from its own
+	// previous due time and only when it actually reported, so a cycle that ran
+	// late (the round a channel withholds while its stream values are still
+	// being gathered, or one where aggregation failed) does not push every later
+	// cycle out with it. See nextObservationDue.
+	//
+	// The hot state lags one round, exactly as validAfter does: this round
+	// advances the schedule of whatever the previous round reported.
+	observationDue := map[llotypes.ChannelID]uint64{}
+	if p.DefaultMinObservationIntervalNanoseconds > 0 {
+		for channelID, cd := range effective {
+			if cd.Tombstone || cd.ReportFormat == llotypes.ReportFormatHistoryBackfill {
+				// Never aggregated, so never scheduled.
+				continue
+			}
+			if prevReportable(prev, channelID) {
+				observationDue[channelID] = nextObservationDue(prev.observationDueNanoseconds, channelID,
+					p.DefaultMinObservationIntervalNanoseconds, prev.observationTimestampNs)
+			} else if dueAt, scheduled := prev.observationDueNanoseconds[channelID]; scheduled {
+				// Did not report: leave the schedule where it is so the channel
+				// stays due and retries.
+				observationDue[channelID] = dueAt
+			}
+			// Otherwise unscheduled, i.e. due: a channel that has never reported
+			// aggregates every round, as it did before this interval existed.
+		}
+	}
+
 	// When DefaultMinObservationIntervalNanoseconds is configured, only channels
-	// whose last report is old enough are aggregated; the rest are skipped to
-	// save work on channels that will not report this round. The filter is
-	// applied once, here, and the result drives both aggregation and calculated
-	// stream evaluation, so the two can never disagree about which channels this
-	// round covers.
-	aggregationDefs := observableDefinitions(effective, out.ValidAfterNanoseconds, p.DefaultMinObservationIntervalNanoseconds, out.ObservationTimestampNanoseconds)
+	// due on that schedule are aggregated; the rest are skipped to save work on
+	// channels that will not report this round. The filter is applied once, here,
+	// and the result drives both aggregation and calculated stream evaluation, so
+	// the two can never disagree about which channels this round covers.
+	aggregationDefs := observableDefinitions(effective, observationDue, p.DefaultMinObservationIntervalNanoseconds, out.ObservationTimestampNanoseconds)
 
 	// Aggregation (regular fresh; timestamped with cross-round carry-forward via
 	// the r/agg record). carryForward accumulates the values to persist for the
@@ -218,7 +245,7 @@ func (p *Plugin) StateTransition(ctx context.Context, seqNr uint64, _ ocrtypes.A
 	calculated.ProcessCalculatedStreams(p.Logger, aggregationDefs, out.StreamAggregates, out.ObservationTimestampNanoseconds, prev.opts, history)
 
 	// Flush KV mutations.
-	if err := p.flushKV(kvRW, seqNr, prev, out, pending, carryForward, history); err != nil {
+	if err := p.flushKV(kvRW, seqNr, prev, out, pending, observationDue, carryForward, history); err != nil {
 		return nil, err
 	}
 
@@ -512,6 +539,7 @@ func (p *Plugin) flushKV(
 	prev *kvState,
 	out precursor,
 	pending llotypes.ChannelDefinitions,
+	observationDue map[llotypes.ChannelID]uint64,
 	carryForward map[llotypes.StreamID]map[llotypes.Aggregator]*protocol.TimestampedStreamValue,
 	history *historyStore,
 ) error {
@@ -537,7 +565,7 @@ func (p *Plugin) flushKV(
 	// round can advance validAfter faithfully (see prevReportable).
 	reportable := make(map[llotypes.ChannelID]bool, len(out.ChannelDefinitions))
 	for id := range out.ChannelDefinitions {
-		reportable[id] = out.isReportable(id, p.DefaultMinReportIntervalNanoseconds, prev.opts, p.Logger)
+		reportable[id] = out.isReportable(id, p.DefaultMinReportIntervalNanoseconds, p.DefaultMinObservationIntervalNanoseconds, prev.opts, p.Logger)
 	}
 
 	// Stream history: write modified windows, delete pairs no live channel
@@ -548,7 +576,7 @@ func (p *Plugin) flushKV(
 		}
 	}
 
-	return writeHotState(kvRW, out.ObservationTimestampNanoseconds, out.ValidAfterNanoseconds, reportable, carryForward)
+	return writeHotState(kvRW, out.ObservationTimestampNanoseconds, out.ValidAfterNanoseconds, reportable, observationDue, carryForward)
 }
 
 // channelDefinitionsChanged reports whether the channel set or any individual

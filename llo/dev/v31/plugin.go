@@ -120,21 +120,19 @@ func (p *Plugin) Observation(_ context.Context, seqNr uint64, _ ocrtypes.Attribu
 			if err := readValidAfterOnly(kvReader, state); err != nil {
 				return nil, fmt.Errorf("failed to load validAfter for observation skip: %w", err)
 			}
-			// Advance validAfter for channels that reported last round,
-			// matching what StateTransition computes as out.ValidAfterNanoseconds.
-			// The hot state's watermark lags one round behind the true last-report
-			// timestamp; without this advancement the skip would use a stale value.
+			// The hot state lags one round: a channel that reported in the round
+			// which wrote it has not had its schedule advanced yet, because that
+			// happens in the next StateTransition. Apply the same advancement
+			// here so Observation and StateTransition agree on what is due.
 			for cid, reported := range state.reportedLastRound {
 				if reported {
-					state.validAfterNanoseconds[cid] = state.observationTimestampNs
+					state.observationDueNanoseconds[cid] = nextObservationDue(
+						state.observationDueNanoseconds, cid,
+						p.DefaultMinObservationIntervalNanoseconds, state.observationTimestampNs)
 				}
 			}
 		}
-		// One round of lead: the streams a channel needs on the round it
-		// becomes due must already be in the pump's input on the round before
-		// (see observationLead).
-		lead := observationLead(state.observationTimestampNs, uint64(obsTSNanos), p.DefaultMinObservationIntervalNanoseconds)
-		streams = observableStreams(state, p.DefaultMinObservationIntervalNanoseconds, uint64(obsTSNanos)+lead)
+		streams = observableStreams(state, p.DefaultMinObservationIntervalNanoseconds, uint64(obsTSNanos))
 	}
 
 	// Stream values are gathered asynchronously by the blob pump and are always
@@ -151,8 +149,8 @@ func (p *Plugin) Observation(_ context.Context, seqNr uint64, _ ocrtypes.Attribu
 	// so a later cycle can never gather a stale stream set (a cycle with no
 	// streams parks nothing and is a no-op). Take is called only when this round
 	// wants values: it consumes and clears the parked snapshot, so calling it on
-	// a round with nothing to observe would discard a snapshot that the next
-	// round - the one the observation lead gathered it for - still needs.
+	// a round with nothing to observe would discard a snapshot a later round
+	// could still use.
 	if p.pump != nil {
 		p.pump.SetInput(pumpInput{streams: streams, seqNr: seqNr, lifeCycleStage: state.lifeCycleStage})
 
@@ -170,50 +168,60 @@ func (p *Plugin) Observation(_ context.Context, seqNr uint64, _ ocrtypes.Attribu
 	return encodeObservation(obs, handles)
 }
 
-// isObservationDue reports whether enough time has elapsed since the channel's
-// last report (its validAfter watermark) for the channel to be
-// observed/aggregated. When minObservationInterval is 0 the feature is disabled
-// and every channel is due.
+// isObservationDue reports whether the channel is due for observation and
+// aggregation this round. When minObservationInterval is 0 the feature is
+// disabled and every channel is due.
 //
-// A channel with no watermark at all is due. That is the Observation-side case
-// only: StateTransition seeds a watermark for every newly effective channel (at
-// the current observation timestamp), so a new channel is not aggregated until
-// the interval has elapsed from that seed. That costs it nothing, because the
-// report interval is at least as long, so it was not reportable in that window
-// either.
-//
-// Callers pass the timestamp appropriate to their side: StateTransition passes
-// the agreed observation timestamp, Observation passes its local timestamp plus
-// observationLead.
-func isObservationDue(validAfterNanoseconds map[llotypes.ChannelID]uint64, channelID llotypes.ChannelID, minObservationInterval, now uint64) bool {
+// A channel with no schedule entry is due. That covers a channel that has never
+// reported, including a newly effective one, which therefore aggregates from its
+// first round and builds its initial aggregates and history exactly as it did
+// before this interval existed. Entries appear once a channel has reported.
+func isObservationDue(observationDue map[llotypes.ChannelID]uint64, channelID llotypes.ChannelID, minObservationInterval, now uint64) bool {
 	if minObservationInterval == 0 {
 		return true
 	}
-	validAfter, ok := validAfterNanoseconds[channelID]
-	if !ok {
+	dueAt, scheduled := observationDue[channelID]
+	if !scheduled {
 		return true
 	}
-	return now >= validAfter+minObservationInterval && now > validAfter
+	return now >= dueAt
 }
 
-// observationLead is how far ahead of the current time Observation applies the
-// due check. The blob pump serves a round from the snapshot gathered under the
-// previous round's stream set, so a channel whose streams first appear in the
-// input on the round it becomes due is aggregated with no values at all.
-// Looking one round ahead puts those streams in the input the round before, so
-// the snapshot the due round consumes already carries them. The lead also
-// absorbs clock skew: a node whose clock trails the agreed median still
-// observes the streams the round aggregated at the median will want.
+// nextObservationDue returns the channel's next due timestamp, given that it
+// reported at reportedAt.
 //
-// A round is estimated as the gap between now and the previous round's agreed
-// observation timestamp, capped at the interval itself. Both the cap and the
-// zero-watermark case (empty hot state) can only widen the observed set, never
-// narrow it, so a missing or bogus watermark degrades to observing everything.
-func observationLead(prevObservationTimestampNs, now, minObservationInterval uint64) uint64 {
-	if minObservationInterval == 0 || now <= prevObservationTimestampNs {
-		return 0
+// The schedule is fixed-rate: it advances from the channel's own previous due
+// timestamp rather than from the round that reported. That distinction is the
+// whole point. A channel's stream values are gathered asynchronously and arrive
+// a round after its streams enter the pump's input, so the first due round after
+// a skip window withholds and the report lands a round late. Advancing from the
+// report would fold that delay into every later cycle and the cadence would
+// creep; advancing from the schedule makes it a one-time phase offset instead.
+//
+// The offset is also what supplies the lead the pump needs: because the schedule
+// runs ahead of the watermark by it, a channel becomes due for observation that
+// far before it is allowed to report, so its values are gathered by the time it
+// reports. The lead is therefore however much the data source actually needs,
+// and is not configured anywhere.
+//
+// This is deliberately not validAfter. That watermark is a report boundary,
+// emitted in the report and defining the window (validAfter, observationTimestamp]
+// that consecutive reports must tile exactly; anchoring it to a schedule would
+// leave gaps between reports.
+func nextObservationDue(observationDue map[llotypes.ChannelID]uint64, channelID llotypes.ChannelID, minObservationInterval, reportedAt uint64) uint64 {
+	prevDue, scheduled := observationDue[channelID]
+	if !scheduled {
+		// First report: start the schedule from it.
+		return reportedAt + minObservationInterval
 	}
-	return min(now-prevObservationTimestampNs, minObservationInterval)
+	if next := prevDue + minObservationInterval; next > reportedAt {
+		return next
+	}
+	// More than one interval behind, so the channel was unable to report for a
+	// while. Skip the missed slots rather than firing every round to catch up,
+	// while staying on the original phase.
+	missed := (reportedAt - prevDue) / minObservationInterval
+	return prevDue + (missed+1)*minObservationInterval
 }
 
 // observableDefinitions returns the subset of defs whose channels are due for
@@ -223,14 +231,14 @@ func observationLead(prevObservationTimestampNs, now, minObservationInterval uin
 // meaningless for it, and retaining them keeps the set handed to
 // ProcessCalculatedStreams the same whether or not the interval is configured.
 // When minObservationInterval is 0, defs is returned unchanged.
-func observableDefinitions(defs llotypes.ChannelDefinitions, validAfterNanoseconds map[llotypes.ChannelID]uint64, minObservationInterval, now uint64) llotypes.ChannelDefinitions {
+func observableDefinitions(defs llotypes.ChannelDefinitions, observationDue map[llotypes.ChannelID]uint64, minObservationInterval, now uint64) llotypes.ChannelDefinitions {
 	if minObservationInterval == 0 {
 		return defs
 	}
 	filtered := make(llotypes.ChannelDefinitions, len(defs))
 	for channelID, cd := range defs {
 		if cd.Tombstone || cd.ReportFormat == llotypes.ReportFormatHistoryBackfill ||
-			isObservationDue(validAfterNanoseconds, channelID, minObservationInterval, now) {
+			isObservationDue(observationDue, channelID, minObservationInterval, now) {
 			filtered[channelID] = cd
 		}
 	}
@@ -241,13 +249,10 @@ func observableDefinitions(defs llotypes.ChannelDefinitions, validAfterNanosecon
 // every live channel, minus calculated streams (which are derived in
 // StateTransition rather than observed).
 //
-// When minObservationInterval is non-zero, channels whose last report (validAfter
-// watermark) is too recent are skipped: their streams are not observed unless
+// When minObservationInterval is non-zero, channels that are not yet due on the
+// observation schedule are skipped: their streams are not observed unless
 // another due channel (or a backfill channel, which is always observed) shares
-// them. A channel with no validAfter watermark yet is always considered due.
-//
-// now is expected to already include the observation lead, so that a channel's
-// streams enter the set one round before the channel itself becomes due.
+// them. A channel with no schedule entry yet is always considered due.
 func observableStreams(state *kvState, minObservationInterval uint64, now uint64) []llotypes.StreamID {
 	if len(state.channelDefinitions) == 0 {
 		return nil
@@ -263,7 +268,7 @@ func observableStreams(state *kvState, minObservationInterval uint64, now uint64
 		// apply to them. Exempting them also keeps the observed set unchanged
 		// for hosts that have not configured the interval.
 		if cd.ReportFormat != llotypes.ReportFormatHistoryBackfill &&
-			!isObservationDue(state.validAfterNanoseconds, channelID, minObservationInterval, now) {
+			!isObservationDue(state.observationDueNanoseconds, channelID, minObservationInterval, now) {
 			continue
 		}
 		for _, strm := range cd.Streams {

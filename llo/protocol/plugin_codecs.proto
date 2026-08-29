@@ -183,15 +183,29 @@ message LLOChannelStateProto {
 // i.e. TimestampedStreamValues. Regular aggregates are recomputed fresh every
 // round and are never persisted.
 //
+// observationDueNanoseconds is the observation schedule: the timestamp at which
+// each channel next becomes due for observation and aggregation. It is distinct
+// from validAfterNanoseconds, which is a report boundary emitted in the report
+// itself. The schedule advances at a fixed rate from its own previous value, so
+// a cycle that runs late does not push every later cycle out with it. A channel
+// with no entry is due; entries appear once a channel has reported.
+//
 // NOTE: must serialize deterministically, hence use of repeated tuple instead
-// of maps. validAfterNanoseconds and reportableChannelIDs MUST be sorted
-// ascending by channelID; streamAggregates MUST be sorted ascending by
-// (streamID, aggregator).
+// of maps. validAfterNanoseconds, reportableChannelIDs and
+// observationDueNanoseconds MUST be sorted ascending by channelID;
+// streamAggregates MUST be sorted ascending by (streamID, aggregator).
 message LLOHotStateProto {
     uint64 observationTimestampNanoseconds = 1;
     repeated LLOChannelIDAndValidAfterNanosecondsProto validAfterNanoseconds = 2;
     repeated uint32 reportableChannelIDs = 3;
     repeated LLOStreamAggregate streamAggregates = 4;
+    repeated LLOChannelIDAndObservationDueProto observationDueNanoseconds = 5;
+}
+
+// LLOChannelIDAndObservationDueProto is one channel's observation schedule slot.
+message LLOChannelIDAndObservationDueProto {
+    uint32 channelID = 1;
+    uint64 dueAtNanoseconds = 2;
 }
 
 // LLOPrecursorProto is the v31 ReportsPlusPrecursor: everything Reports needs,

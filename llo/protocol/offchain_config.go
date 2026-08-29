@@ -20,9 +20,9 @@ type OffchainConfig struct {
 	DefaultMinReportIntervalNanoseconds uint64
 	// DefaultMinObservationIntervalNanoseconds is the default minimum interval
 	// in nanoseconds between the last report of a channel and the next time its
-	// streams are observed/aggregated. When the elapsed time since a channel's
-	// last report (its validAfter watermark) is less than this threshold, the
-	// channel's observation and aggregation are skipped entirely for the round.
+	// streams are observed/aggregated. Each channel carries an observation
+	// schedule advanced by this interval whenever it reports; until its next
+	// slot comes round, its observation and aggregation are skipped entirely.
 	//
 	// It must be set to 0 for protocol version 0.
 	// For protocol version 1+, 0 means disabled (all channels are always
@@ -30,10 +30,16 @@ type OffchainConfig struct {
 	// DefaultMinReportIntervalNanoseconds, or a channel could be reportable
 	// but lack the observations needed to produce a report.
 	//
-	// Setting it equal to DefaultMinReportIntervalNanoseconds is safe: a
-	// channel's streams enter the observed set one round before the channel
-	// itself becomes due, so the values are already gathered by the round that
-	// aggregates and reports them.
+	// Setting it equal to DefaultMinReportIntervalNanoseconds is safe. The first
+	// round after a skip window has no stream values yet (they are gathered
+	// asynchronously, so they arrive a round later), and a channel with no
+	// aggregate withholds its report until they land rather than emitting one
+	// full of nils.
+	//
+	// That delay does not accumulate. The observation schedule advances at a
+	// fixed rate from its own previous slot rather than from the round that
+	// reported, so a channel configured to report every T keeps reporting every
+	// T, offset once by however long its first cycle took to gather.
 	DefaultMinObservationIntervalNanoseconds uint64
 	// EnableObservationCompression enables observation compression.
 	EnableObservationCompression bool
