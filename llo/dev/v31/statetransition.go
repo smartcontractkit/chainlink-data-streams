@@ -192,8 +192,15 @@ func (p *Plugin) StateTransition(ctx context.Context, seqNr uint64, _ ocrtypes.A
 	//
 	// The hot state lags one round, exactly as validAfter does: this round
 	// advances the schedule of whatever the previous round reported.
+	//
+	// Promotion clears the schedule for the same reason it replaces validAfter
+	// wholesale: a slot inherited from staging could leave a channel not due on
+	// the promotion round, and a channel that is not aggregated has no values to
+	// report, which is exactly the gap the handover exists to avoid. An unset
+	// schedule means due, so every channel aggregates immediately and rebuilds
+	// its slot from its first report.
 	observationDue := map[llotypes.ChannelID]uint64{}
-	if p.DefaultMinObservationIntervalNanoseconds > 0 {
+	if p.DefaultMinObservationIntervalNanoseconds > 0 && promotedValidAfter == nil {
 		for channelID, cd := range effective {
 			if cd.Tombstone || exemptFromObservationSkip(cd) {
 				// Never skipped, so never scheduled.
