@@ -82,6 +82,13 @@ const (
 	// arbitrarily expensive evaluation.
 	MaxHistoryRecordsPerExpression = 4 * MaxHistoryRecordsPerPair
 
+	// MaxTWAPCallsPerExpression bounds how many TWAP calls a single expression
+	// may make. Each call may request a maximum-length window of one-second
+	// buckets allocated and filled every round, so the count is what bounds
+	// the work. Consensus-relevant: every oracle must reject the same
+	// expression, so it is never per-node configurable.
+	MaxTWAPCallsPerExpression = 4
+
 	// MaxHistoryRecordBytes is the maximum serialized size of one history
 	// record, enforced on append (StreamHistory.Append) and used as the
 	// per-record size when admitting pairs against MaxHistoryTotalBytes.

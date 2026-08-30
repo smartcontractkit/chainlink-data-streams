@@ -35,6 +35,15 @@ import (
 // integer.
 const HistoryFunctionName = "History"
 
+// twapFunctionName is the DSL name TWAP is registered under, shared with the
+// static analysis that validates its configuration.
+const twapFunctionName = "TWAP"
+
+// twapMaxWindowSeconds bounds the number of one-second buckets a single TWAP
+// evaluation may allocate and fill. 24 hours is far beyond any settlement window
+// while keeping the per-round work bounded.
+const twapMaxWindowSeconds = 24 * 60 * 60
+
 // Field selects which part of a stored stream value a window projects. One
 // stored window serves every field, so History(s1, 10), History(s1_bid, 10) and
 // History(s1_ask, 10) share a single series in state and differ only here.
@@ -143,6 +152,7 @@ var (
 		"SMA":       true,
 		"WMA":       true,
 		"EMA":       true,
+		"TWAP":      true,
 	}
 )
 
@@ -175,6 +185,11 @@ type historyPatcher struct {
 	refByNode map[ast.Node]HistoryRef
 
 	fanOut uint64
+
+	// twapCalls counts the expression's TWAP calls. Each one can request a
+	// maximum-length window, so their count is what bounds the bucket work an
+	// expression can ask for every round.
+	twapCalls int
 }
 
 func newHistoryPatcher() *historyPatcher {
@@ -217,6 +232,9 @@ func (p *historyPatcher) Visit(node *ast.Node) {
 				if p.generated[arg] {
 					p.approved[arg] = true
 				}
+			}
+			if callee.Value == twapFunctionName {
+				p.checkTWAP(n)
 			}
 		}
 	}
@@ -289,6 +307,73 @@ func (p *historyPatcher) rewrite(node *ast.Node, call *ast.CallNode) {
 	ast.Patch(node, generated)
 	p.generated[*node] = true
 	p.refByNode[*node] = ref
+}
+
+// checkTWAP validates a TWAP call at compile time: arity, per-expression call
+// count, and static satisfiability of minSamples against the history depth.
+//
+// Only literal configuration can be checked. A configuration built at runtime
+// is left to runtime validation, which is stricter but later.
+func (p *historyPatcher) checkTWAP(call *ast.CallNode) {
+	// Counted first, and counted whatever the call looks like: this is the one
+	// TWAP check that does not depend on the configuration being literal, which
+	// is what makes it a bound rather than a diagnostic.
+	p.twapCalls++
+	if p.twapCalls > protocol.MaxTWAPCallsPerExpression {
+		p.errorf("expression makes more than %d %s calls; each may request a window of up to %d one-second buckets, so their number is capped",
+			protocol.MaxTWAPCallsPerExpression, twapFunctionName, twapMaxWindowSeconds)
+		return
+	}
+	if len(call.Arguments) != 2 {
+		p.errorf("%s takes exactly 2 arguments (history window, configuration), got %d", twapFunctionName, len(call.Arguments))
+		return
+	}
+	ref, ok := p.refByNode[call.Arguments[0]]
+	if !ok {
+		// Not reading a window at all; the position rule reports that.
+		return
+	}
+	config, ok := call.Arguments[1].(*ast.MapNode)
+	if !ok {
+		return // not a literal configuration
+	}
+
+	minSamples, found := twapConfigLiteral(config, "minSamples")
+	if !found {
+		return
+	}
+	// Compared as int64: minSamples is a literal and can be any integer the
+	// parser accepted, so narrowing it to the width of ref.Count would let a
+	// value above 2^32 wrap into a small one and pass.
+	if minSamples < 1 {
+		p.errorf("%s requires minSamples to be at least 1, got %d", twapFunctionName, minSamples)
+		return
+	}
+	if minSamples > int64(ref.Count) {
+		p.errorf("%s requires at least %d observations but %s only keeps %d records; increase the history depth or lower minSamples",
+			twapFunctionName, minSamples, ref, ref.Count)
+	}
+}
+
+// twapConfigLiteral reads an integer-literal value out of a configuration map
+// literal, reporting whether it was present and literal.
+func twapConfigLiteral(config *ast.MapNode, key string) (int64, bool) {
+	for _, pair := range config.Pairs {
+		kv, ok := pair.(*ast.PairNode)
+		if !ok {
+			continue
+		}
+		name, ok := kv.Key.(*ast.StringNode)
+		if !ok || name.Value != key {
+			continue
+		}
+		value, ok := kv.Value.(*ast.IntegerNode)
+		if !ok {
+			return 0, false
+		}
+		return int64(value.Value), true
+	}
+	return 0, false
 }
 
 // err reports every problem found, including windows left in a position that
