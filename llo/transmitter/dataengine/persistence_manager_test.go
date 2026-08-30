@@ -187,3 +187,30 @@ func Test_PersistenceManager_deleteTransmissions(t *testing.T) {
 		assert.Contains(t, ts, transmissions[i])
 	}
 }
+
+func Test_PersistenceManager_addToDeleteQueue_overflow(t *testing.T) {
+	lggr, observedLogs := logger.TestObservedSugared(t, zapcore.DebugLevel)
+	pm := &persistenceManager{lggr: lggr}
+
+	// Fill the queue to capacity with "old" hashes.
+	old := make([][32]byte, DeleteQueueMaxSize)
+	for i := range old {
+		old[i] = [32]byte{byte(i), byte(i >> 8), byte(i >> 16)}
+	}
+	pm.addToDeleteQueue(old...)
+	require.Len(t, pm.deleteQueue, DeleteQueueMaxSize)
+	require.Empty(t, observedLogs.FilterMessageSnippet("Delete queue is full").All())
+
+	// Overflow it with newer hashes; the newest must survive, the oldest must be dropped.
+	newest := [][32]byte{{'a'}, {'b'}, {'c'}}
+	pm.addToDeleteQueue(newest...)
+
+	require.Len(t, pm.deleteQueue, DeleteQueueMaxSize)
+	assert.Equal(t, newest, pm.deleteQueue[DeleteQueueMaxSize-len(newest):], "newest hashes should be retained")
+	assert.Equal(t, old[len(newest)], pm.deleteQueue[0], "oldest hashes should be dropped")
+	assert.NotContains(t, pm.deleteQueue[:10], old[0])
+
+	logs := observedLogs.FilterMessageSnippet("Delete queue is full; dropping oldest transmissions").All()
+	require.Len(t, logs, 1)
+	assert.Equal(t, int64(len(newest)), logs[0].ContextMap()["nDropped"])
+}

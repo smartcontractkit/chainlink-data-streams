@@ -191,9 +191,9 @@ func Test_Observation_And_Validate_Flow(t *testing.T) {
 	require.True(t, tr)
 
 	// Bootstrap, then add channel 1 via a voting round.
-	_, err = p.StateTransition(ctx, 1, ocrtypes.AttributedQuery{}, []ocrtypes.AttributedObservation{ao(0, nil), ao(1, nil), ao(2, nil)}, kv, nil)
+	_, err = p.StateTransition(ctx, 1, ocrtypes.AttributedQuery{}, []ocrtypes.AttributedObservation{ao(0, nil), ao(1, nil), ao(2, nil)}, kv, testBlobs)
 	require.NoError(t, err)
-	_, err = p.StateTransition(ctx, 2, ocrtypes.AttributedQuery{}, addChannelRound(t, 1000, 1, jsonChannel()), kv, nil)
+	_, err = p.StateTransition(ctx, 2, ocrtypes.AttributedQuery{}, addChannelRound(t, 1000, 1, jsonChannel()), kv, testBlobs)
 	require.NoError(t, err)
 
 	// Observation at seqNr=3: channel 1 is now in KV, so the pump is fed. The
@@ -234,9 +234,9 @@ func Test_StateTransition_ChannelRemoval(t *testing.T) {
 	p := testPlugin(t)
 	kv := newMemKV()
 
-	_, err := p.StateTransition(ctx, 1, ocrtypes.AttributedQuery{}, []ocrtypes.AttributedObservation{ao(0, nil), ao(1, nil), ao(2, nil)}, kv, nil)
+	_, err := p.StateTransition(ctx, 1, ocrtypes.AttributedQuery{}, []ocrtypes.AttributedObservation{ao(0, nil), ao(1, nil), ao(2, nil)}, kv, testBlobs)
 	require.NoError(t, err)
-	_, err = p.StateTransition(ctx, 2, ocrtypes.AttributedQuery{}, addChannelRound(t, 1000, 1, jsonChannel()), kv, nil)
+	_, err = p.StateTransition(ctx, 2, ocrtypes.AttributedQuery{}, addChannelRound(t, 1000, 1, jsonChannel()), kv, testBlobs)
 	require.NoError(t, err)
 	require.Contains(t, kvChannelDefs(t, kv), llotypes.ChannelID(1))
 
@@ -246,7 +246,7 @@ func Test_StateTransition_ChannelRemoval(t *testing.T) {
 	for i := 0; i < 4; i++ {
 		removeAOs = append(removeAOs, ao(i, mustEncodeObs(t, removeObs)))
 	}
-	_, err = p.StateTransition(ctx, 3, ocrtypes.AttributedQuery{}, removeAOs, kv, nil)
+	_, err = p.StateTransition(ctx, 3, ocrtypes.AttributedQuery{}, removeAOs, kv, testBlobs)
 	require.NoError(t, err)
 
 	// The removal is deferred: the definition is already out of the persisted
@@ -261,7 +261,7 @@ func Test_StateTransition_ChannelRemoval(t *testing.T) {
 	for i := 0; i < 4; i++ {
 		nextAOs = append(nextAOs, ao(i, mustEncodeObs(t, nextObs)))
 	}
-	_, err = p.StateTransition(ctx, 4, ocrtypes.AttributedQuery{}, nextAOs, kv, nil)
+	_, err = p.StateTransition(ctx, 4, ocrtypes.AttributedQuery{}, nextAOs, kv, testBlobs)
 	require.NoError(t, err)
 
 	require.Empty(t, kvChannelDefs(t, kv))
@@ -282,7 +282,7 @@ func Test_StateTransition_Promotion(t *testing.T) {
 	boot := []ocrtypes.AttributedObservation{ao(0, nil), ao(1, nil), ao(2, nil)}
 
 	// Bootstrap: staging, because a predecessor is configured.
-	_, err := p.StateTransition(ctx, 1, ocrtypes.AttributedQuery{}, boot, kv, nil)
+	_, err := p.StateTransition(ctx, 1, ocrtypes.AttributedQuery{}, boot, kv, testBlobs)
 	require.NoError(t, err)
 	require.Equal(t, string(protocol.LifeCycleStageStaging), string(kv.m[string(keyLifecycle)]))
 
@@ -292,7 +292,7 @@ func Test_StateTransition_Promotion(t *testing.T) {
 	for i := 0; i < 4; i++ {
 		aos = append(aos, ao(i, mustEncodeObs(t, promoObs)))
 	}
-	_, err = p.StateTransition(ctx, 2, ocrtypes.AttributedQuery{}, aos, kv, nil)
+	_, err = p.StateTransition(ctx, 2, ocrtypes.AttributedQuery{}, aos, kv, testBlobs)
 	require.NoError(t, err)
 
 	require.Equal(t, string(protocol.LifeCycleStageProduction), string(kv.m[string(keyLifecycle)]))
@@ -318,13 +318,13 @@ func Test_StateTransition_Promotion_StagingOnlyChannelTreatedAsNew(t *testing.T)
 	kv := newMemKV()
 
 	// Bootstrap -> staging.
-	_, err := p.StateTransition(ctx, 1, ocrtypes.AttributedQuery{}, []ocrtypes.AttributedObservation{ao(0, nil), ao(1, nil), ao(2, nil)}, kv, nil)
+	_, err := p.StateTransition(ctx, 1, ocrtypes.AttributedQuery{}, []ocrtypes.AttributedObservation{ao(0, nil), ao(1, nil), ao(2, nil)}, kv, testBlobs)
 	require.NoError(t, err)
 
 	// Round 2 (ts=1000): staging adds its own channel 2, which is absent from the
 	// predecessor's retirement report. The addition is deferred, so it has no
 	// watermark yet.
-	_, err = p.StateTransition(ctx, 2, ocrtypes.AttributedQuery{}, addChannelRound(t, 1000, 2, jsonChannel()), kv, nil)
+	_, err = p.StateTransition(ctx, 2, ocrtypes.AttributedQuery{}, addChannelRound(t, 1000, 2, jsonChannel()), kv, testBlobs)
 	require.NoError(t, err)
 	require.NotContains(t, kvHotState(t, kv).validAfterNanoseconds, llotypes.ChannelID(2))
 
@@ -334,7 +334,7 @@ func Test_StateTransition_Promotion_StagingOnlyChannelTreatedAsNew(t *testing.T)
 	for i := 0; i < 4; i++ {
 		seedAOs = append(seedAOs, ao(i, mustEncodeObs(t, seedObs)))
 	}
-	_, err = p.StateTransition(ctx, 3, ocrtypes.AttributedQuery{}, seedAOs, kv, nil)
+	_, err = p.StateTransition(ctx, 3, ocrtypes.AttributedQuery{}, seedAOs, kv, testBlobs)
 	require.NoError(t, err)
 	require.Equal(t, uint64(2000), kvHotState(t, kv).validAfterNanoseconds[2])
 
@@ -345,7 +345,7 @@ func Test_StateTransition_Promotion_StagingOnlyChannelTreatedAsNew(t *testing.T)
 	for i := 0; i < 4; i++ {
 		aos = append(aos, ao(i, mustEncodeObs(t, promoObs)))
 	}
-	_, err = p.StateTransition(ctx, 4, ocrtypes.AttributedQuery{}, aos, kv, nil)
+	_, err = p.StateTransition(ctx, 4, ocrtypes.AttributedQuery{}, aos, kv, testBlobs)
 	require.NoError(t, err)
 	require.Equal(t, string(protocol.LifeCycleStageProduction), string(kv.m[string(keyLifecycle)]))
 
@@ -385,9 +385,9 @@ func Test_StateTransition_Retirement(t *testing.T) {
 	p.RetirementReportCodec = protocol.StandardRetirementReportCodec{}
 	kv := newMemKV()
 
-	_, err := p.StateTransition(ctx, 1, ocrtypes.AttributedQuery{}, []ocrtypes.AttributedObservation{ao(0, nil), ao(1, nil), ao(2, nil)}, kv, nil)
+	_, err := p.StateTransition(ctx, 1, ocrtypes.AttributedQuery{}, []ocrtypes.AttributedObservation{ao(0, nil), ao(1, nil), ao(2, nil)}, kv, testBlobs)
 	require.NoError(t, err)
-	_, err = p.StateTransition(ctx, 2, ocrtypes.AttributedQuery{}, addChannelRound(t, 1000, 1, jsonChannel()), kv, nil)
+	_, err = p.StateTransition(ctx, 2, ocrtypes.AttributedQuery{}, addChannelRound(t, 1000, 1, jsonChannel()), kv, testBlobs)
 	require.NoError(t, err)
 
 	// Round 3: four oracles vote to retire.
@@ -396,7 +396,7 @@ func Test_StateTransition_Retirement(t *testing.T) {
 	for i := 0; i < 4; i++ {
 		retireAOs = append(retireAOs, ao(i, mustEncodeObs(t, retireObs)))
 	}
-	prec, err := p.StateTransition(ctx, 3, ocrtypes.AttributedQuery{}, retireAOs, kv, nil)
+	prec, err := p.StateTransition(ctx, 3, ocrtypes.AttributedQuery{}, retireAOs, kv, testBlobs)
 	require.NoError(t, err)
 	require.Equal(t, string(protocol.LifeCycleStageRetired), string(kv.m[string(keyLifecycle)]))
 

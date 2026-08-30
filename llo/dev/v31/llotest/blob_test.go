@@ -1,6 +1,7 @@
 package llotest
 
 import (
+	"context"
 	"errors"
 	"testing"
 
@@ -68,4 +69,36 @@ func Test_BlobBroadcastFetcher_BroadcastError(t *testing.T) {
 	_, err = b.BroadcastBlob(ctx, []byte("payload"), ocr3_1types.BlobExpirationHintSequenceNumber{SeqNr: 5})
 	require.NoError(t, err)
 	require.Equal(t, 1, b.Blobs())
+}
+
+func Test_BlobBroadcastFetcher_WaitForBroadcast(t *testing.T) {
+	ctx := tests.Context(t)
+	b := NewBlobBroadcastFetcher()
+
+	// Already satisfied: returns without blocking.
+	_, err := b.BroadcastBlob(ctx, []byte("first"), ocr3_1types.BlobExpirationHintSequenceNumber{SeqNr: 5})
+	require.NoError(t, err)
+	require.NoError(t, b.WaitForBroadcast(ctx, 0))
+
+	// Blocks until a concurrent broadcast lands.
+	done := make(chan error, 1)
+	go func() { done <- b.WaitForBroadcast(ctx, 1) }()
+	_, err = b.BroadcastBlob(ctx, []byte("second"), ocr3_1types.BlobExpirationHintSequenceNumber{SeqNr: 6})
+	require.NoError(t, err)
+	require.NoError(t, <-done)
+
+	// Failed broadcasts also count, so a waiter never hangs on a broken
+	// broadcaster.
+	b.SetBroadcastError(errors.New("broadcast unavailable"))
+	go func() {
+		_, bErr := b.BroadcastBlob(ctx, []byte("third"), ocr3_1types.BlobExpirationHintSequenceNumber{SeqNr: 7})
+		done <- bErr
+	}()
+	require.NoError(t, b.WaitForBroadcast(ctx, 2))
+	require.Error(t, <-done)
+
+	// Context expiry is reported, not hidden.
+	expired, cancel := context.WithCancel(ctx)
+	cancel()
+	require.ErrorIs(t, b.WaitForBroadcast(expired, 100), context.Canceled)
 }

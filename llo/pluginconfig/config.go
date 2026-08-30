@@ -95,7 +95,16 @@ type TransmitterConfig struct {
 	Opts json.RawMessage `json:"opts" toml:"opts"`
 }
 
+// MaxPluginConfigSize is a sanity limit on the size of the JSON-encoded
+// plugin config. It is generous enough to hold inline ChannelDefinitions for
+// very large DONs, while preventing unbounded allocations from a malformed or
+// hostile config blob.
+const MaxPluginConfigSize = 8 * 1024 * 1024 // 8 MiB
+
 func (p *PluginConfig) Unmarshal(data []byte) error {
+	if len(data) > MaxPluginConfigSize {
+		return fmt.Errorf("llo: plugin config too large; got %d bytes, max %d bytes", len(data), MaxPluginConfigSize)
+	}
 	return json.Unmarshal(data, p)
 }
 

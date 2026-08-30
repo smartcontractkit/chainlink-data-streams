@@ -21,9 +21,9 @@ func Test_ChannelCache_ReadsDefsOnlyWhenSeqNrChanges(t *testing.T) {
 	kv := newMemKV()
 
 	// Bootstrap + add channel 1 (both write c/defs, bumping c/seqnr).
-	_, err := p.StateTransition(ctx, 1, ocrtypes.AttributedQuery{}, []ocrtypes.AttributedObservation{ao(0, nil), ao(1, nil), ao(2, nil)}, kv, nil)
+	_, err := p.StateTransition(ctx, 1, ocrtypes.AttributedQuery{}, []ocrtypes.AttributedObservation{ao(0, nil), ao(1, nil), ao(2, nil)}, kv, testBlobs)
 	require.NoError(t, err)
-	_, err = p.StateTransition(ctx, 2, ocrtypes.AttributedQuery{}, addChannelRound(t, 1_000, 1, jsonChannel()), kv, nil)
+	_, err = p.StateTransition(ctx, 2, ocrtypes.AttributedQuery{}, addChannelRound(t, 1_000, 1, jsonChannel()), kv, testBlobs)
 	require.NoError(t, err)
 
 	// Round 3 still re-reads once, because round 2 changed the definitions.
@@ -32,23 +32,23 @@ func Test_ChannelCache_ReadsDefsOnlyWhenSeqNrChanges(t *testing.T) {
 	for i := 0; i < 4; i++ {
 		aos = append(aos, ao(i, mustEncodeObs(t, noopObs)))
 	}
-	_, err = p.StateTransition(ctx, 3, ocrtypes.AttributedQuery{}, aos, kv, nil)
+	_, err = p.StateTransition(ctx, 3, ocrtypes.AttributedQuery{}, aos, kv, testBlobs)
 	require.NoError(t, err)
 
 	before := kv.readCount(keyChannelState)
 
 	// Rounds that do not change the definitions must not re-read c/defs.
 	for seqNr := uint64(4); seqNr <= 6; seqNr++ {
-		_, err = p.StateTransition(ctx, seqNr, ocrtypes.AttributedQuery{}, aos, kv, nil)
+		_, err = p.StateTransition(ctx, seqNr, ocrtypes.AttributedQuery{}, aos, kv, testBlobs)
 		require.NoError(t, err)
 	}
 	require.Equal(t, before, kv.readCount(keyChannelState), "c/defs must be served from the cache while c/seqnr is unchanged")
 	require.Contains(t, kvChannelDefs(t, kv), llotypes.ChannelID(1))
 
 	// Adding a channel bumps c/seqnr, so the next round re-reads.
-	_, err = p.StateTransition(ctx, 7, ocrtypes.AttributedQuery{}, addChannelRound(t, 3_000, 2, jsonChannel()), kv, nil)
+	_, err = p.StateTransition(ctx, 7, ocrtypes.AttributedQuery{}, addChannelRound(t, 3_000, 2, jsonChannel()), kv, testBlobs)
 	require.NoError(t, err)
-	_, err = p.StateTransition(ctx, 8, ocrtypes.AttributedQuery{}, aos, kv, nil)
+	_, err = p.StateTransition(ctx, 8, ocrtypes.AttributedQuery{}, aos, kv, testBlobs)
 	require.NoError(t, err)
 	require.Greater(t, kv.readCount(keyChannelState), before, "a c/seqnr change must force a re-read")
 	require.Len(t, kvChannelDefs(t, kv), 2)
@@ -87,9 +87,9 @@ func Test_HotState_DropsOrphanedCarryForward(t *testing.T) {
 	}
 	tsv := &protocol.TimestampedStreamValue{ObservedAtNanoseconds: 42, StreamValue: protocol.ToDecimal(decimal.NewFromInt(7))}
 
-	_, err := p.StateTransition(ctx, 1, ocrtypes.AttributedQuery{}, []ocrtypes.AttributedObservation{ao(0, nil), ao(1, nil), ao(2, nil)}, kv, nil)
+	_, err := p.StateTransition(ctx, 1, ocrtypes.AttributedQuery{}, []ocrtypes.AttributedObservation{ao(0, nil), ao(1, nil), ao(2, nil)}, kv, testBlobs)
 	require.NoError(t, err)
-	_, err = p.StateTransition(ctx, 2, ocrtypes.AttributedQuery{}, addChannelRound(t, 1_000, 1, tsChannel), kv, nil)
+	_, err = p.StateTransition(ctx, 2, ocrtypes.AttributedQuery{}, addChannelRound(t, 1_000, 1, tsChannel), kv, testBlobs)
 	require.NoError(t, err)
 
 	// Round 3: the channel is now in effect; observe a timestamped value so it
@@ -99,7 +99,7 @@ func Test_HotState_DropsOrphanedCarryForward(t *testing.T) {
 	for i := 0; i < 4; i++ {
 		aos = append(aos, ao(i, mustEncodeObs(t, obs)))
 	}
-	_, err = p.StateTransition(ctx, 3, ocrtypes.AttributedQuery{}, aos, kv, nil)
+	_, err = p.StateTransition(ctx, 3, ocrtypes.AttributedQuery{}, aos, kv, testBlobs)
 	require.NoError(t, err)
 	require.NotNil(t, kvHotState(t, kv).carryForward[100][llotypes.AggregatorMedian])
 
@@ -110,7 +110,7 @@ func Test_HotState_DropsOrphanedCarryForward(t *testing.T) {
 	for i := 0; i < 4; i++ {
 		removeAOs = append(removeAOs, ao(i, mustEncodeObs(t, removeObs)))
 	}
-	_, err = p.StateTransition(ctx, 4, ocrtypes.AttributedQuery{}, removeAOs, kv, nil)
+	_, err = p.StateTransition(ctx, 4, ocrtypes.AttributedQuery{}, removeAOs, kv, testBlobs)
 	require.NoError(t, err)
 	require.NotNil(t, kvHotState(t, kv).carryForward[100][llotypes.AggregatorMedian])
 
@@ -121,7 +121,7 @@ func Test_HotState_DropsOrphanedCarryForward(t *testing.T) {
 	for i := 0; i < 4; i++ {
 		nextAOs = append(nextAOs, ao(i, mustEncodeObs(t, nextObs)))
 	}
-	_, err = p.StateTransition(ctx, 5, ocrtypes.AttributedQuery{}, nextAOs, kv, nil)
+	_, err = p.StateTransition(ctx, 5, ocrtypes.AttributedQuery{}, nextAOs, kv, testBlobs)
 	require.NoError(t, err)
 	require.Empty(t, kvHotState(t, kv).carryForward)
 }
@@ -200,14 +200,14 @@ func Test_DeferredDefinitions_TakeEffectNextRound(t *testing.T) {
 		for i := 0; i < 4; i++ {
 			aos = append(aos, ao(i, mustEncodeObs(t, o)))
 		}
-		raw, err := p.StateTransition(ctx, seqNr, ocrtypes.AttributedQuery{}, aos, kv, nil)
+		raw, err := p.StateTransition(ctx, seqNr, ocrtypes.AttributedQuery{}, aos, kv, testBlobs)
 		require.NoError(t, err)
 		prec, err := decodePrecursor(raw)
 		require.NoError(t, err)
 		return prec
 	}
 
-	_, err := p.StateTransition(ctx, 1, ocrtypes.AttributedQuery{}, []ocrtypes.AttributedObservation{ao(0, nil), ao(1, nil), ao(2, nil)}, kv, nil)
+	_, err := p.StateTransition(ctx, 1, ocrtypes.AttributedQuery{}, []ocrtypes.AttributedObservation{ao(0, nil), ao(1, nil), ao(2, nil)}, kv, testBlobs)
 	require.NoError(t, err)
 
 	// Round 2 agrees the addition. Persisted, but not in effect: the precursor
@@ -268,11 +268,11 @@ func Test_ChannelGeneration_BindsOptsToDefinitions(t *testing.T) {
 		for i := 0; i < 4; i++ {
 			aos = append(aos, ao(i, mustEncodeObs(t, o)))
 		}
-		_, err := p.StateTransition(ctx, seqNr, ocrtypes.AttributedQuery{}, aos, kv, nil)
+		_, err := p.StateTransition(ctx, seqNr, ocrtypes.AttributedQuery{}, aos, kv, testBlobs)
 		require.NoError(t, err)
 	}
 
-	_, err := p.StateTransition(ctx, 1, ocrtypes.AttributedQuery{}, []ocrtypes.AttributedObservation{ao(0, nil), ao(1, nil), ao(2, nil)}, kv, nil)
+	_, err := p.StateTransition(ctx, 1, ocrtypes.AttributedQuery{}, []ocrtypes.AttributedObservation{ao(0, nil), ao(1, nil), ao(2, nil)}, kv, testBlobs)
 	require.NoError(t, err)
 
 	// No channels yet: nothing to decode.
@@ -334,7 +334,7 @@ func Test_ChannelCache_GenesisThenChangeIsVisible(t *testing.T) {
 	require.Zero(t, pre.channelStateSeqNr)
 	require.Empty(t, pre.channelDefinitions)
 
-	_, err = p.StateTransition(ctx, 1, ocrtypes.AttributedQuery{}, []ocrtypes.AttributedObservation{ao(0, nil), ao(1, nil), ao(2, nil)}, kv, nil)
+	_, err = p.StateTransition(ctx, 1, ocrtypes.AttributedQuery{}, []ocrtypes.AttributedObservation{ao(0, nil), ao(1, nil), ao(2, nil)}, kv, testBlobs)
 	require.NoError(t, err)
 
 	genesis, err := loadColdKVState(kv, p.ChannelCache)
@@ -342,7 +342,7 @@ func Test_ChannelCache_GenesisThenChangeIsVisible(t *testing.T) {
 	require.Equal(t, uint64(1), genesis.channelStateSeqNr)
 	require.Empty(t, genesis.channelDefinitions)
 
-	_, err = p.StateTransition(ctx, 2, ocrtypes.AttributedQuery{}, addChannelRound(t, 1_000, 1, jsonChannel()), kv, nil)
+	_, err = p.StateTransition(ctx, 2, ocrtypes.AttributedQuery{}, addChannelRound(t, 1_000, 1, jsonChannel()), kv, testBlobs)
 	require.NoError(t, err)
 
 	after, err := loadColdKVState(kv, p.ChannelCache)

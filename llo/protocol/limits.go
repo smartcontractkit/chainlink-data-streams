@@ -81,6 +81,7 @@ const (
 	// one expression could combine many legal per-pair depths into an
 	// arbitrarily expensive evaluation.
 	MaxHistoryRecordsPerExpression = 4 * MaxHistoryRecordsPerPair
+
 	// MaxHistoryRecordBytes is the maximum serialized size of one history
 	// record, enforced on append (StreamHistory.Append) and used as the
 	// per-record size when admitting pairs against MaxHistoryTotalBytes.

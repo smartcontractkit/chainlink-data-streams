@@ -309,17 +309,36 @@ func EncodePackedBigInt(value *big.Int, typeStr string) ([]byte, error) {
 // Returns the clamped valid after nanoseconds.
 // If the report range is within the max range, returns the valid after nanoseconds unchanged.
 // If the max report range is not specified, uses the default max report range.
+// A non-positive maxReportRange falls back to the default; Verify rejects
+// negative values in channel definitions, but a definition committed before
+// that check existed could still carry one.
 func ClampReportRange(r logger.Logger, report protocol.Report, maxReportRange protocol.Duration) uint64 {
-	if maxReportRange == 0 {
+	if maxReportRange <= 0 {
 		maxReportRange = protocol.DefaultMaxReportRange
 	}
+	maxRange := uint64(maxReportRange)
 
-	if report.ObservationTimestampNanoseconds-report.ValidAfterNanoseconds > uint64(maxReportRange) {
+	// ValidAfterNanoseconds < ObservationTimestampNanoseconds is enforced
+	// upstream by IsReportable, but the subtractions below are unsigned so an
+	// inverted range would underflow into a nonsense validity window.
+	if report.ValidAfterNanoseconds > report.ObservationTimestampNanoseconds {
+		r.Errorw("ValidAfterNanoseconds exceeds ObservationTimestampNanoseconds; clamping to zero range",
+			"channelID", report.ChannelID, "seqNr", report.SeqNr,
+			"validAfterNanoseconds", report.ValidAfterNanoseconds,
+			"observationTimestampNanoseconds", report.ObservationTimestampNanoseconds)
+
+		return report.ObservationTimestampNanoseconds
+	}
+
+	if report.ObservationTimestampNanoseconds-report.ValidAfterNanoseconds > maxRange {
 		r.Warnw("Report range exceeds max report range",
 			"channelID", report.ChannelID, "seqNr", report.SeqNr,
 			"maxReportRange", maxReportRange, "clamping to max range", maxReportRange.String())
 
-		return report.ObservationTimestampNanoseconds - uint64(maxReportRange)
+		if report.ObservationTimestampNanoseconds < maxRange {
+			return 0
+		}
+		return report.ObservationTimestampNanoseconds - maxRange
 	}
 
 	return report.ValidAfterNanoseconds

@@ -446,7 +446,13 @@ func Log(x, y any) (decimal.Decimal, error) {
 		return decimal.Decimal{}, err
 	}
 
-	return lnBase.DivRound(lnLog, precision), nil
+	// ln(1) is 0, so base 1 has no logarithm: DivRound would panic with
+	// "decimal division by 0". Bases <= 0 are already rejected by decimalLn.
+	if lnLog.IsZero() {
+		return decimal.Decimal{}, fmt.Errorf("logarithm base 1 is undefined")
+	}
+
+	return divRound(lnBase, lnLog, precision)
 }
 
 // IsZero returns true if x is zero

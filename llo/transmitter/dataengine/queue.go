@@ -102,6 +102,12 @@ func (tq *transmitQueue) Push(t *Transmission) (ok bool) {
 		return false
 	}
 
+	if tq.pq == nil {
+		// Init was never called (or failed); nothing to push into
+		tq.lggr.Criticalw("Transmit queue is not initialized; dropping transmission", "transmission", t)
+		return false
+	}
+
 	if tq.maxlen != 0 {
 		for tq.pq.Len() >= tq.maxlen {
 			// evict oldest entries to make room
@@ -145,7 +151,10 @@ func (tq *transmitQueue) Len() int {
 	tq.cond.L.Lock()
 	defer tq.cond.L.Unlock()
 
-	sz := tq.pq.Len()
+	var sz int
+	if tq.pq != nil {
+		sz = tq.pq.Len()
+	}
 	tq.cond.Signal()
 	return sz
 }
@@ -225,7 +234,7 @@ func (tq *transmitQueue) status() (merr error) {
 // pop latest Transmission from the heap
 // Not thread-safe
 func (tq *transmitQueue) pop() *Transmission {
-	if tq.pq.Len() == 0 {
+	if tq.pq == nil || tq.pq.Len() == 0 {
 		return nil
 	}
 	return heap.Pop(tq.pq).(*Transmission)

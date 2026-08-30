@@ -211,3 +211,28 @@ func Test_PluginConfig_GetServers(t *testing.T) {
 		assert.Equal(t, hex.PlainHexBytes{4, 5, 6}, pc.GetServers()[1].PubKey)
 	})
 }
+
+func Test_PluginConfig_Unmarshal_SizeLimit(t *testing.T) {
+	t.Run("accepts config at the size limit", func(t *testing.T) {
+		// pad with whitespace to exactly hit the limit
+		data := []byte(`{"donID":1}`)
+		data = append(data, make([]byte, MaxPluginConfigSize-len(data))...)
+		for i := len(`{"donID":1}`); i < len(data); i++ {
+			data[i] = ' '
+		}
+		require.Len(t, data, MaxPluginConfigSize)
+
+		var p PluginConfig
+		require.NoError(t, p.Unmarshal(data))
+		assert.Equal(t, uint32(1), p.DonID)
+	})
+
+	t.Run("rejects config over the size limit", func(t *testing.T) {
+		data := make([]byte, MaxPluginConfigSize+1)
+
+		var p PluginConfig
+		err := p.Unmarshal(data)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), fmt.Sprintf("plugin config too large; got %d bytes, max %d bytes", MaxPluginConfigSize+1, MaxPluginConfigSize))
+	})
+}

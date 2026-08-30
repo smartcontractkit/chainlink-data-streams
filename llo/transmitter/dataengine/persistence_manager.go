@@ -36,6 +36,13 @@ const (
 	// one query when pruning the table.
 	PruneBatchSize = 10_000
 
+	// DefaultMaxTransmitQueueSize is used when the configured max transmit
+	// queue size is unset (0). The in-memory TransmitQueue treats 0 as
+	// "unlimited", but the persistence layer uses the value as an absolute row
+	// cap (both for pruning and for loading on startup), so 0 would truncate
+	// the persisted queue to nothing. Clamp it to a sane default instead.
+	DefaultMaxTransmitQueueSize = 300_000
+
 	// OvertimeDeleteTimeout is the maximum time we will spend trying to delete
 	// queued transmissions after exit signal before giving up and logging an
 	// error.
@@ -77,6 +84,9 @@ type persistenceManager struct {
 }
 
 func NewPersistenceManager(lggr logger.Logger, orm ORM, serverURL string, maxTransmitQueueSize int, flushDeletesFrequency, pruneFrequency, maxAge time.Duration) *persistenceManager {
+	if maxTransmitQueueSize <= 0 {
+		maxTransmitQueueSize = DefaultMaxTransmitQueueSize
+	}
 	return &persistenceManager{
 		logger.Sugared(lggr).Named("LLOPersistenceManager"),
 		orm,
@@ -233,11 +243,14 @@ func (pm *persistenceManager) addToDeleteQueue(hashes ...[32]byte) {
 	pm.deleteMu.Lock()
 	defer pm.deleteMu.Unlock()
 	pm.deleteQueue = append(pm.deleteQueue, hashes...)
-	if len(pm.deleteQueue) > DeleteQueueMaxSize {
+	if n := len(pm.deleteQueue) - DeleteQueueMaxSize; n > 0 {
 		// NOTE: This could only happen if inserts are succeeding while deletes are
-		// failing (or not fast enough) which would be very strange
-		pm.lggr.Errorw("Delete queue is full; dropping transmissions", "hashes", hashes, "n", len(pm.deleteQueue))
-		pm.deleteQueue = pm.deleteQueue[:DeleteQueueMaxSize]
+		// failing (or not fast enough) which would be very strange.
+		// Drop the oldest entries so that newer transmissions still get cleaned
+		// up; the prune loop will eventually reap the corresponding rows by
+		// age/size.
+		pm.lggr.Errorw("Delete queue is full; dropping oldest transmissions", "nDropped", n, "n", len(pm.deleteQueue))
+		pm.deleteQueue = append(pm.deleteQueue[:0], pm.deleteQueue[n:]...)
 	}
 }
 

@@ -1,6 +1,7 @@
 package llo
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"errors"
@@ -317,7 +318,15 @@ func applyChannelVotes(
 	for h, d := range updateDefsByHash {
 		ordered = append(ordered, hashWithID{h, d})
 	}
-	sort.Slice(ordered, func(i, j int) bool { return ordered[i].def.ChannelID < ordered[j].def.ChannelID })
+	// Sort by (channelID, hash): the hash tiebreak keeps the order total, so
+	// two competing definitions for the same channelID are applied in the same
+	// sequence on every oracle (last one wins, consistently).
+	sort.Slice(ordered, func(i, j int) bool {
+		if ordered[i].def.ChannelID != ordered[j].def.ChannelID {
+			return ordered[i].def.ChannelID < ordered[j].def.ChannelID
+		}
+		return bytes.Compare(ordered[i].hash[:], ordered[j].hash[:]) < 0
+	})
 	for _, hwid := range ordered {
 		if updateVotesByHash[hwid.hash] <= f {
 			continue

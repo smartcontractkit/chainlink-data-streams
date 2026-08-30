@@ -2,6 +2,7 @@ package evm
 
 import (
 	"fmt"
+	"math"
 	"math/big"
 	"testing"
 
@@ -9,6 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	ocrtypes "github.com/smartcontractkit/libocr/offchainreporting2/types"
 	"github.com/smartcontractkit/libocr/offchainreporting2plus/types"
 
 	"github.com/smartcontractkit/chainlink-common/pkg/logger"
@@ -337,4 +339,42 @@ func Test_ReportCodecPremiumLegacy_Verify(t *testing.T) {
 		err := c.Verify(cd)
 		require.NoError(t, err)
 	})
+}
+
+func Test_ReportCodecPremiumLegacy_Encode_TimestampOverflow(t *testing.T) {
+	rc := ReportCodecPremiumLegacy{logger.Test(t), 2}
+	feedID := [32]uint8{0x1, 0x2, 0x3}
+
+	t.Run("rejects expiresAt that would overflow uint32", func(t *testing.T) {
+		cd := llotypes.ChannelDefinition{Opts: llotypes.ChannelOpts(fmt.Sprintf(`{"baseUSDFee":"10.50","expirationWindow":%d,"feedId":"0x%x","multiplier":10}`, math.MaxUint32, feedID))}
+		report := newValidPremiumLegacyReport()
+		cache := protocol.NewOptsCache()
+		cache.Set(report.ChannelID, cd.Opts)
+
+		_, err := rc.Encode(report, cd, cache)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "expiresAt exceeds uint32 range")
+	})
+
+	t.Run("rejects validFromTimestamp that would overflow uint32", func(t *testing.T) {
+		cd := llotypes.ChannelDefinition{Opts: llotypes.ChannelOpts(fmt.Sprintf(`{"baseUSDFee":"10.50","expirationWindow":0,"feedId":"0x%x","multiplier":10}`, feedID))}
+		report := newValidPremiumLegacyReport()
+		report.ValidAfterNanoseconds = uint64(math.MaxUint32) * 1e9
+		report.ObservationTimestampNanoseconds = uint64(math.MaxUint32) * 1e9
+		cache := protocol.NewOptsCache()
+		cache.Set(report.ChannelID, cd.Opts)
+
+		_, err := rc.Encode(report, cd, cache)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "validFromTimestamp 4294967296 exceeds uint32 range")
+	})
+}
+
+func Test_ReportCodecPremiumLegacy_Pack_TooManySignatures(t *testing.T) {
+	rc := ReportCodecPremiumLegacy{logger.Test(t), 2}
+
+	sigs := make([]ocrtypes.AttributedOnchainSignature, 33)
+	_, err := rc.Pack(ocrtypes.ConfigDigest{1, 2, 3}, 42, []byte("report"), sigs)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "too many signatures; max: 32, got: 33")
 }

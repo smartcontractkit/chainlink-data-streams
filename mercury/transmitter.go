@@ -142,6 +142,19 @@ func getPayloadTypes() abi.Arguments {
 	})
 }
 
+// DefaultTransmitTimeout is used when the configured transmit timeout is
+// non-positive, which would otherwise produce an already-expired context and
+// spin the transmit loop.
+const DefaultTransmitTimeout = 1 * time.Second
+
+func clampTransmitTimeout(lggr logger.SugaredLogger, d time.Duration) time.Duration {
+	if d <= 0 {
+		lggr.Warnw("TransmitTimeout is non-positive; falling back to default", "configured", d, "default", DefaultTransmitTimeout)
+		return DefaultTransmitTimeout
+	}
+	return d
+}
+
 type server struct {
 	lggr logger.SugaredLogger
 
@@ -285,7 +298,7 @@ const TransmitQueueMaxSize = 10_000 // hardcode this for legacy transmitter sinc
 func newServer(lggr logger.Logger, cfg TransmitterConfig, client wsrpc.Client, pm *PersistenceManager, serverURL, feedIDHex string) *server {
 	return &server{
 		logger.Sugared(lggr),
-		cfg.TransmitTimeout(),
+		clampTransmitTimeout(logger.Sugared(lggr), cfg.TransmitTimeout()),
 		client,
 		pm,
 		NewTransmitQueue(lggr, serverURL, feedIDHex, TransmitQueueMaxSize, pm),

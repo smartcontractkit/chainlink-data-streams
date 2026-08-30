@@ -815,6 +815,19 @@ func TestLog(t *testing.T) {
 			x:           "-10.0",
 			expectError: true,
 		},
+		{
+			// ln(1) is 0, so the division would panic rather than error.
+			name:        "base 1",
+			x:           "1",
+			y:           "8",
+			expectError: true,
+		},
+		{
+			name:        "negative base",
+			x:           "-2",
+			y:           "8",
+			expectError: true,
+		},
 	}
 
 	for _, tt := range tests {
