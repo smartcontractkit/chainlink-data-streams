@@ -22,9 +22,8 @@ func TestValidateExpression(t *testing.T) {
 			"Count(History(s1, 10))",
 			"Avg(History(s1_bid, 300))",
 			"Div(Avg(History(s1, 10)), s2)",
-			"EMA(History(s1, 50), 20)",
-			`TWAP(History(s1, 600), {window: Duration("5m"), minSamples: 240, maxHeadGap: 30, maxInteriorGap: 10, maxTailGap: 30})`,
-		} {
+		"EMA(History(s1, 50), 20)",
+	} {
 			assert.NoError(t, ValidateExpression(expression), "expression %q", expression)
 		}
 	})
@@ -44,49 +43,6 @@ func TestValidateExpression(t *testing.T) {
 			assert.Error(t, ValidateExpression(expression), "expression %q", expression)
 		}
 	})
-}
-
-// TestValidateExpression_TWAPSatisfiability covers the static half of TWAP
-// validation: a configuration that can never be satisfied is a deployment
-// mistake, and saying so here beats letting every round reject the window and
-// look like a data problem.
-func TestValidateExpression_TWAPSatisfiability(t *testing.T) {
-	t.Parallel()
-
-	// 600 records can supply 240 observations.
-	require.NoError(t, ValidateExpression(
-		`TWAP(History(s1, 600), {window: Duration("5m"), minSamples: 240, maxHeadGap: 30, maxInteriorGap: 10, maxTailGap: 30})`))
-
-	// 100 records can never supply 240.
-	err := ValidateExpression(
-		`TWAP(History(s1, 100), {window: Duration("5m"), minSamples: 240, maxHeadGap: 30, maxInteriorGap: 10, maxTailGap: 30})`)
-	require.ErrorIs(t, err, ErrHistoryExpression)
-	assert.Contains(t, err.Error(), "only keeps 100 records")
-
-	// Exactly enough is fine.
-	require.NoError(t, ValidateExpression(
-		`TWAP(History(s1, 240), {window: Duration("4m"), minSamples: 240, maxHeadGap: 30, maxInteriorGap: 10, maxTailGap: 30})`))
-
-	// A minSamples above the width of the record count must not wrap into a
-	// small value and pass. 2^32+5 would narrow to 5.
-	err = ValidateExpression(
-		`TWAP(History(s1, 100), {window: Duration("5m"), minSamples: 4294967301, maxHeadGap: 30, maxInteriorGap: 10, maxTailGap: 30})`)
-	require.ErrorIs(t, err, ErrHistoryExpression)
-	assert.Contains(t, err.Error(), "only keeps 100 records")
-
-	// A non-positive minSamples is reported as such rather than as a depth
-	// problem, which would read as "requires at least 0 observations".
-	err = ValidateExpression(
-		`TWAP(History(s1, 100), {window: Duration("5m"), minSamples: 0, maxHeadGap: 30, maxInteriorGap: 10, maxTailGap: 30})`)
-	require.ErrorIs(t, err, ErrHistoryExpression)
-	assert.Contains(t, err.Error(), "requires minSamples to be at least 1")
-
-	// A non-literal configuration cannot be checked statically; runtime
-	// validation still applies.
-	require.NoError(t, ValidateExpression("TWAP(History(s1, 10), cfg)"))
-
-	// Wrong arity is caught.
-	require.Error(t, ValidateExpression("TWAP(History(s1, 10))"))
 }
 
 func TestValidateChannelExpressions(t *testing.T) {
@@ -168,18 +124,4 @@ func TestValidateChannelExpressions(t *testing.T) {
 	err = ValidateChannelExpressions(nil, cd, 1)
 	require.ErrorContains(t, err, "expression is empty")
 	assert.Contains(t, err.Error(), "abi index: 1")
-}
-
-// TestProcessCalculatedStreamsDryRun_Satisfiability checks the offline path
-// rejects the same configurations the static analysis does.
-func TestProcessCalculatedStreamsDryRun_Satisfiability(t *testing.T) {
-	t.Parallel()
-
-	require.NoError(t, ProcessCalculatedStreamsDryRun(
-		`TWAP(History(s1, 300), {window: Duration("5m"), minSamples: 240, maxHeadGap: 30, maxInteriorGap: 10, maxTailGap: 30})`))
-
-	err := ProcessCalculatedStreamsDryRun(
-		`TWAP(History(s1, 10), {window: Duration("5m"), minSamples: 240, maxHeadGap: 30, maxInteriorGap: 10, maxTailGap: 30})`)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "only keeps 10 records")
 }

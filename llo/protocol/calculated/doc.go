@@ -25,8 +25,6 @@
 //
 //	Avg(History(s10001, 10))
 //	EMA(History(s10001, 50), 20)
-//	TWAP(History(s10001, 600), {window: Duration("5m"), minSamples: 240,
-//	                            maxHeadGap: 30, maxInteriorGap: 10, maxTailGap: 30})
 //
 // The call is both the declaration of how much history to persist and the read of
 // it. There is no separate configuration: the depth kept for a stream is the
@@ -67,7 +65,6 @@
 //	SMA(w, n)  simple mean of the newest n
 //	WMA(w, n)  linearly weighted, newest weighted n and the oldest of the n weighted 1
 //	EMA(w, n)  seeded with the mean of the oldest n, then alpha = 2/(n+1) newest-ward
-//	TWAP(w, c) time-weighted average price over c.window, filling gaps by type
 //
 // A window may only be passed directly to one of these. Add(History(s1, 10), 2) is
 // rejected when the expression is validated, not left to fail during evaluation.

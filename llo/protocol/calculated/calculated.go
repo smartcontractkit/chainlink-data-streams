@@ -78,10 +78,6 @@ var defaultEnv = map[string]any{
 	"SMA":       SMA,
 	"WMA":       WMA,
 	"EMA":       EMA,
-	// TWAP needs the round's observation timestamp to anchor its window, so
-	// NewEnv rebinds it per round. This default only reports that it was called
-	// against an environment NewEnv did not build.
-	"TWAP": twapUnbound,
 	// History is rewritten away at compile time (see history_ast.go). It is
 	// registered only so that a call surviving to evaluation fails loudly
 	// instead of resolving to an undefined identifier or, worse, to something
@@ -188,10 +184,6 @@ func (e environment) release() {
 func NewEnv(observationTimestampNanoseconds uint64) environment {
 	env := pool.Get().(environment)
 	env["observations_timestamp"] = observationTimestampNanoseconds
-	// TWAP's window is anchored on the round's consensus observation timestamp,
-	// not on the data, so it is bound per round. release() restores the default
-	// binding, which fails if called.
-	env["TWAP"] = twapFunc(observationTimestampNanoseconds)
 	return env
 }
 

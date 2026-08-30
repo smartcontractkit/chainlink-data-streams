@@ -35,10 +35,6 @@ import (
 // integer.
 const HistoryFunctionName = "History"
 
-// twapFunctionName is the DSL name TWAP is registered under, shared with the
-// static analysis that validates its configuration.
-const twapFunctionName = "TWAP"
-
 // Field selects which part of a stored stream value a window projects. One
 // stored window serves every field, so History(s1, 10), History(s1_bid, 10) and
 // History(s1_ask, 10) share a single series in state and differ only here.
@@ -147,7 +143,6 @@ var (
 		"SMA":       true,
 		"WMA":       true,
 		"EMA":       true,
-		"TWAP":      true,
 	}
 )
 
@@ -223,9 +218,6 @@ func (p *historyPatcher) Visit(node *ast.Node) {
 					p.approved[arg] = true
 				}
 			}
-			if callee.Value == twapFunctionName {
-				p.checkTWAP(n)
-			}
 		}
 	}
 }
@@ -297,71 +289,6 @@ func (p *historyPatcher) rewrite(node *ast.Node, call *ast.CallNode) {
 	ast.Patch(node, generated)
 	p.generated[*node] = true
 	p.refByNode[*node] = ref
-}
-
-// checkTWAP validates a TWAP call against the depth of the window it reads.
-//
-// This is the static half of TWAP validation: whether a configuration can ever be
-// satisfied is a property of the expression, so it belongs here rather than at
-// evaluation time, where the same condition would surface as a per-round
-// rejection and look like a data problem instead of a deployment mistake.
-//
-// Only literal configuration can be checked. A configuration built at runtime is
-// left to the runtime validation in functions_twap.go, which is stricter but
-// later.
-func (p *historyPatcher) checkTWAP(call *ast.CallNode) {
-	if len(call.Arguments) != 2 {
-		p.errorf("%s takes exactly 2 arguments (history window, configuration), got %d", twapFunctionName, len(call.Arguments))
-		return
-	}
-	ref, ok := p.refByNode[call.Arguments[0]]
-	if !ok {
-		// Not reading a window at all; the position rule reports that.
-		return
-	}
-	config, ok := call.Arguments[1].(*ast.MapNode)
-	if !ok {
-		return // not a literal configuration
-	}
-
-	minSamples, found := twapConfigLiteral(config, "minSamples")
-	if !found {
-		return
-	}
-	// Compared as int64: minSamples is a literal and can be any integer the
-	// parser accepted, so narrowing it to the width of ref.Count would let a
-	// value above 2^32 wrap into a small one and pass. The runtime validation
-	// still rejects it, but the diagnostic this check exists to give would be
-	// lost.
-	if minSamples < 1 {
-		p.errorf("%s requires minSamples to be at least 1, got %d", twapFunctionName, minSamples)
-		return
-	}
-	if minSamples > int64(ref.Count) {
-		p.errorf("%s requires at least %d observations but %s only keeps %d records; increase the history depth or lower minSamples",
-			twapFunctionName, minSamples, ref, ref.Count)
-	}
-}
-
-// twapConfigLiteral reads an integer-literal value out of a configuration map
-// literal, reporting whether it was present and literal.
-func twapConfigLiteral(config *ast.MapNode, key string) (int64, bool) {
-	for _, pair := range config.Pairs {
-		kv, ok := pair.(*ast.PairNode)
-		if !ok {
-			continue
-		}
-		name, ok := kv.Key.(*ast.StringNode)
-		if !ok || name.Value != key {
-			continue
-		}
-		value, ok := kv.Value.(*ast.IntegerNode)
-		if !ok {
-			return 0, false
-		}
-		return int64(value.Value), true
-	}
-	return 0, false
 }
 
 // err reports every problem found, including windows left in a position that
