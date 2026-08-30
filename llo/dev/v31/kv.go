@@ -251,12 +251,12 @@ func readHotState(r ocr3_1types.KeyValueStateReader, s *kvState) error {
 	return nil
 }
 
-// readValidAfterOnly reads the r/agg record and extracts everything the
+// readHotStateForObservation reads the r/agg record and extracts everything the
 // Observation phase needs to decide which channels are due - the observation
 // schedule, the previous observation timestamp, the validAfter watermarks and
 // the reportability flags - while skipping the (potentially large)
 // carry-forward stream aggregates, which only StateTransition uses.
-func readValidAfterOnly(r ocr3_1types.KeyValueStateReader, s *kvState) error {
+func readHotStateForObservation(r ocr3_1types.KeyValueStateReader, s *kvState) error {
 	b, err := r.Read(keyHotState)
 	if err != nil {
 		return fmt.Errorf("read hot state: %w", err)

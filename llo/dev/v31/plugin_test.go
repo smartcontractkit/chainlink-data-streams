@@ -1132,7 +1132,8 @@ func Test_ObservationIntervalSkip_aggregate(t *testing.T) {
 		1: {ReportFormat: llotypes.ReportFormatJSON, Streams: []llotypes.Stream{{StreamID: 100, Aggregator: llotypes.AggregatorMedian}}},
 		2: {ReportFormat: llotypes.ReportFormatJSON, Streams: []llotypes.Stream{{StreamID: 200, Aggregator: llotypes.AggregatorMedian}}},
 	}
-	validAfter := map[llotypes.ChannelID]uint64{1: 1000, 2: 10000}
+	// Observation schedule: ch1's slot has already passed, ch2's has not.
+	schedule := map[llotypes.ChannelID]uint64{1: 1000, 2: 10000}
 
 	mkObs := func(sid llotypes.StreamID, v int64) []protocol.StreamValue {
 		return []protocol.StreamValue{
@@ -1149,8 +1150,8 @@ func Test_ObservationIntervalSkip_aggregate(t *testing.T) {
 	out := protocol.StreamAggregates{}
 	next := map[llotypes.StreamID]map[llotypes.Aggregator]*protocol.TimestampedStreamValue{}
 
-	// t=6000: ch1 due (6000>=1000+5000=6000, 6000>1000), ch2 not (6000<10000+5000=15000)
-	err := p.aggregate(nil, next, observableDefinitions(defs, validAfter, 5000, 6000), defs, obs, out, nil, historyRequirements{}, 6000)
+	// t=6000: ch1 due (6000 >= its slot at 1000), ch2 not (6000 < its slot at 10000).
+	err := p.aggregate(nil, next, observableDefinitions(defs, schedule, 5000, 6000), defs, obs, out, nil, historyRequirements{}, 6000)
 	require.NoError(t, err)
 
 	require.NotNil(t, out[100][llotypes.AggregatorMedian], "due channel's stream must be aggregated")
@@ -1159,7 +1160,7 @@ func Test_ObservationIntervalSkip_aggregate(t *testing.T) {
 	// interval=0: all channels aggregated (disabled)
 	out2 := protocol.StreamAggregates{}
 	next2 := map[llotypes.StreamID]map[llotypes.Aggregator]*protocol.TimestampedStreamValue{}
-	err = p.aggregate(nil, next2, observableDefinitions(defs, validAfter, 0, 6000), defs, obs, out2, nil, historyRequirements{}, 6000)
+	err = p.aggregate(nil, next2, observableDefinitions(defs, schedule, 0, 6000), defs, obs, out2, nil, historyRequirements{}, 6000)
 	require.NoError(t, err)
 	require.NotNil(t, out2[100][llotypes.AggregatorMedian])
 	require.NotNil(t, out2[200][llotypes.AggregatorMedian])
@@ -1215,7 +1216,7 @@ func Test_ObservationIntervalSkip_FullRound(t *testing.T) {
 	require.False(t, reportedFlag(t, kv, 1))
 	require.Zero(t, storedObservationDue(t, kv, 1), "round 3: not scheduled until it has reported")
 
-	// Round 4: due (8000 >= 3000+5000). Aggregated and reported.
+	// Round 4: still unscheduled, so still due. Aggregated and reported.
 	prec4, err := p.StateTransition(ctx, 4, ocrtypes.AttributedQuery{}, obsWithVal(8_000, 20), kv, testBlobs)
 	require.NoError(t, err)
 	p4, err := decodePrecursor(prec4)
@@ -1228,7 +1229,8 @@ func Test_ObservationIntervalSkip_FullRound(t *testing.T) {
 	assert.Equal(t, uint64(3000), storedValidAfter(t, kv, 1), "validAfter not yet advanced (advances next round)")
 	require.True(t, reportedFlag(t, kv, 1))
 
-	// Round 5: not due. validAfter advanced to 8000 (prev reported), 10000 < 8000+5000.
+	// Round 5: the previous round reported, so the schedule is seeded to 13000
+	// and validAfter advances to 8000. Not due: 10000 < 13000.
 	prec5, err := p.StateTransition(ctx, 5, ocrtypes.AttributedQuery{}, obsWithVal(10_000, 30), kv, testBlobs)
 	require.NoError(t, err)
 	p5, err := decodePrecursor(prec5)
@@ -1243,7 +1245,7 @@ func Test_ObservationIntervalSkip_FullRound(t *testing.T) {
 	assert.Equal(t, uint64(13_000), storedObservationDue(t, kv, 1),
 		"schedule seeded from the round that reported (8000+5000)")
 
-	// Round 6: due again (14000 >= 8000+5000). Aggregated and reported.
+	// Round 6: due again, 14000 >= its slot at 13000. Aggregated and reported.
 	prec6, err := p.StateTransition(ctx, 6, ocrtypes.AttributedQuery{}, obsWithVal(14_000, 40), kv, testBlobs)
 	require.NoError(t, err)
 	p6, err := decodePrecursor(prec6)

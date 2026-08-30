@@ -125,8 +125,8 @@ func (p *Plugin) Observation(_ context.Context, seqNr uint64, _ ocrtypes.Attribu
 		p.voteOnChannels(&obs, state, seqNr)
 
 		if p.DefaultMinObservationIntervalNanoseconds > 0 {
-			if err := readValidAfterOnly(kvReader, state); err != nil {
-				return nil, fmt.Errorf("failed to load validAfter for observation skip: %w", err)
+			if err := readHotStateForObservation(kvReader, state); err != nil {
+				return nil, fmt.Errorf("failed to load hot state for observation skip: %w", err)
 			}
 			// The hot state lags one round: a channel that reported in the round
 			// which wrote it has not had its schedule advanced yet, because that
