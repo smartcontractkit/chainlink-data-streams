@@ -1257,3 +1257,127 @@ func Test_ObservationIntervalSkip_FullRound(t *testing.T) {
 	require.Len(t, reports6, 1, "round 6: one report")
 	require.True(t, reportedFlag(t, kv, 1))
 }
+
+// Streams shared across channels: a stream must be observed and aggregated if
+// ANY channel needing it is due, and a channel that is due must never be short
+// of an aggregate because a channel it shares a stream with was skipped.
+//
+// The two halves have to agree. observableStreams decides what is gathered from
+// the union of due channels; aggregate runs over the same due set. A stream
+// gathered for one due channel is aggregated once and serves every due channel
+// that declares the same (stream, aggregator) pair.
+func Test_ObservationIntervalSkip_SharedStreams(t *testing.T) {
+	p := testPlugin(t)
+	const interval = 5000
+
+	defs := llotypes.ChannelDefinitions{
+		// Due. Shares stream 100 with ch2, and 150 with nobody.
+		1: {ReportFormat: llotypes.ReportFormatJSON, Streams: []llotypes.Stream{
+			{StreamID: 100, Aggregator: llotypes.AggregatorMedian},
+			{StreamID: 150, Aggregator: llotypes.AggregatorMedian},
+		}},
+		// Not due. Shares stream 100 with ch1, plus its own stream 200.
+		2: {ReportFormat: llotypes.ReportFormatJSON, Streams: []llotypes.Stream{
+			{StreamID: 100, Aggregator: llotypes.AggregatorMedian},
+			{StreamID: 200, Aggregator: llotypes.AggregatorMedian},
+		}},
+		// Not due, and reads stream 100 under a different aggregator.
+		3: {ReportFormat: llotypes.ReportFormatJSON, Streams: []llotypes.Stream{
+			{StreamID: 100, Aggregator: llotypes.AggregatorMode},
+		}},
+	}
+	schedule := map[llotypes.ChannelID]uint64{1: 1000, 2: 90_000, 3: 90_000}
+	const now = 10_000
+
+	// Observation: the union of what due channels need, and nothing else.
+	state := &kvState{channelDefinitions: defs, observationDueNanoseconds: schedule}
+	require.ElementsMatch(t, []llotypes.StreamID{100, 150}, observableStreams(state, interval, now),
+		"stream 100 is shared with skipped channels but ch1 is due, so it is still gathered; "+
+			"200 belongs only to skipped channels")
+
+	due := observableDefinitions(defs, schedule, interval, now)
+	require.Len(t, due, 1)
+	require.Contains(t, due, llotypes.ChannelID(1))
+
+	mkObs := func(v int64) []protocol.StreamValue {
+		return []protocol.StreamValue{
+			protocol.ToDecimal(decimal.NewFromInt(v)),
+			protocol.ToDecimal(decimal.NewFromInt(v)),
+			protocol.ToDecimal(decimal.NewFromInt(v)),
+		}
+	}
+	// Only the gathered streams carry observations, matching what Observation
+	// actually offered for this round.
+	obs := map[llotypes.StreamID][]protocol.StreamValue{100: mkObs(42), 150: mkObs(7)}
+
+	out := protocol.StreamAggregates{}
+	next := map[llotypes.StreamID]map[llotypes.Aggregator]*protocol.TimestampedStreamValue{}
+	require.NoError(t, p.aggregate(nil, next, due, defs, obs, out, nil, historyRequirements{}, now))
+
+	// Every pair the due channel declares has an aggregate, including the one
+	// it shares with skipped channels.
+	require.NotNil(t, out[100][llotypes.AggregatorMedian], "shared stream must be aggregated for the due channel")
+	require.NotNil(t, out[150][llotypes.AggregatorMedian], "the due channel's exclusive stream too")
+
+	// Pairs belonging only to skipped channels are not aggregated, even when
+	// the underlying stream was gathered for someone else.
+	require.Nil(t, out[200][llotypes.AggregatorMedian], "stream of a skipped channel only")
+	require.Nil(t, out[100][llotypes.AggregatorMode],
+		"same stream, different aggregator, wanted only by a skipped channel")
+
+	// When the skipped channels come due, stream 100 has been in the pump's
+	// input all along on ch1's behalf, so its observations are already present
+	// and their pairs aggregate on the round they become due. Sharing a stream
+	// with a more frequently due channel spares a channel the round it would
+	// otherwise withhold waiting for values.
+	//
+	// Stream 200 is exclusive to ch2, so it was never gathered, and ch2 has to
+	// wait a round for it. That is the withholding rule doing its job.
+	allDue := observableDefinitions(defs, map[llotypes.ChannelID]uint64{1: 1000, 2: 2000, 3: 3000}, interval, now)
+	require.Len(t, allDue, 3)
+
+	out2 := protocol.StreamAggregates{}
+	next2 := map[llotypes.StreamID]map[llotypes.Aggregator]*protocol.TimestampedStreamValue{}
+	require.NoError(t, p.aggregate(nil, next2, allDue, defs, obs, out2, nil, historyRequirements{}, now))
+
+	require.NotNil(t, out2[100][llotypes.AggregatorMedian])
+	require.NotNil(t, out2[100][llotypes.AggregatorMode],
+		"the newly due channel's aggregator over an already-gathered stream resolves at once")
+	require.Nil(t, out2[200][llotypes.AggregatorMedian],
+		"a stream never gathered has no values yet, so its channel withholds this round")
+}
+
+// The reverse direction: once the skipped channels come due, the shared stream
+// serves all of them from a single aggregation rather than being recomputed or
+// missed.
+func Test_ObservationIntervalSkip_SharedStreamServesEveryDueChannel(t *testing.T) {
+	p := testPlugin(t)
+	const interval = 5000
+
+	defs := llotypes.ChannelDefinitions{
+		1: {ReportFormat: llotypes.ReportFormatJSON, Streams: []llotypes.Stream{{StreamID: 100, Aggregator: llotypes.AggregatorMedian}}},
+		2: {ReportFormat: llotypes.ReportFormatJSON, Streams: []llotypes.Stream{{StreamID: 100, Aggregator: llotypes.AggregatorMedian}}},
+	}
+	// Both due.
+	schedule := map[llotypes.ChannelID]uint64{1: 1000, 2: 2000}
+	const now = 10_000
+
+	state := &kvState{channelDefinitions: defs, observationDueNanoseconds: schedule}
+	require.ElementsMatch(t, []llotypes.StreamID{100}, observableStreams(state, interval, now),
+		"a stream shared by two due channels is gathered once")
+
+	due := observableDefinitions(defs, schedule, interval, now)
+	require.Len(t, due, 2, "both channels are due")
+
+	obs := map[llotypes.StreamID][]protocol.StreamValue{100: {
+		protocol.ToDecimal(decimal.NewFromInt(42)),
+		protocol.ToDecimal(decimal.NewFromInt(42)),
+		protocol.ToDecimal(decimal.NewFromInt(42)),
+	}}
+	out := protocol.StreamAggregates{}
+	next := map[llotypes.StreamID]map[llotypes.Aggregator]*protocol.TimestampedStreamValue{}
+	require.NoError(t, p.aggregate(nil, next, due, defs, obs, out, nil, historyRequirements{}, now))
+
+	require.NotNil(t, out[100][llotypes.AggregatorMedian],
+		"the shared aggregate is available to both due channels")
+}
