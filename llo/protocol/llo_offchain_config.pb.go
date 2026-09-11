@@ -22,12 +22,13 @@ const (
 )
 
 type LLOOffchainConfigProto struct {
-	state                               protoimpl.MessageState `protogen:"open.v1"`
-	ProtocolVersion                     uint32                 `protobuf:"varint,1,opt,name=protocolVersion,proto3" json:"protocolVersion,omitempty"`
-	DefaultMinReportIntervalNanoseconds uint64                 `protobuf:"varint,2,opt,name=defaultMinReportIntervalNanoseconds,proto3" json:"defaultMinReportIntervalNanoseconds,omitempty"`
-	EnableObservationCompression        bool                   `protobuf:"varint,3,opt,name=enableObservationCompression,proto3" json:"enableObservationCompression,omitempty"`
-	unknownFields                       protoimpl.UnknownFields
-	sizeCache                           protoimpl.SizeCache
+	state                                    protoimpl.MessageState `protogen:"open.v1"`
+	ProtocolVersion                          uint32                 `protobuf:"varint,1,opt,name=protocolVersion,proto3" json:"protocolVersion,omitempty"`
+	DefaultMinReportIntervalNanoseconds      uint64                 `protobuf:"varint,2,opt,name=defaultMinReportIntervalNanoseconds,proto3" json:"defaultMinReportIntervalNanoseconds,omitempty"`
+	EnableObservationCompression             bool                   `protobuf:"varint,3,opt,name=enableObservationCompression,proto3" json:"enableObservationCompression,omitempty"`
+	DefaultMinObservationIntervalNanoseconds uint64                 `protobuf:"varint,4,opt,name=defaultMinObservationIntervalNanoseconds,proto3" json:"defaultMinObservationIntervalNanoseconds,omitempty"`
+	unknownFields                            protoimpl.UnknownFields
+	sizeCache                                protoimpl.SizeCache
 }
 
 func (x *LLOOffchainConfigProto) Reset() {
@@ -81,15 +82,23 @@ func (x *LLOOffchainConfigProto) GetEnableObservationCompression() bool {
 	return false
 }
 
+func (x *LLOOffchainConfigProto) GetDefaultMinObservationIntervalNanoseconds() uint64 {
+	if x != nil {
+		return x.DefaultMinObservationIntervalNanoseconds
+	}
+	return 0
+}
+
 var File_llo_offchain_config_proto protoreflect.FileDescriptor
 
 const file_llo_offchain_config_proto_rawDesc = "" +
 	"\n" +
-	"\x19llo_offchain_config.proto\x12\x02v1\"\xd8\x01\n" +
+	"\x19llo_offchain_config.proto\x12\x02v1\"\xb4\x02\n" +
 	"\x16LLOOffchainConfigProto\x12(\n" +
 	"\x0fprotocolVersion\x18\x01 \x01(\rR\x0fprotocolVersion\x12P\n" +
 	"#defaultMinReportIntervalNanoseconds\x18\x02 \x01(\x04R#defaultMinReportIntervalNanoseconds\x12B\n" +
-	"\x1cenableObservationCompression\x18\x03 \x01(\bR\x1cenableObservationCompressionB\fZ\n" +
+	"\x1cenableObservationCompression\x18\x03 \x01(\bR\x1cenableObservationCompression\x12Z\n" +
+	"(defaultMinObservationIntervalNanoseconds\x18\x04 \x01(\x04R(defaultMinObservationIntervalNanosecondsB\fZ\n" +
 	".;protocolb\x06proto3"
 
 var (

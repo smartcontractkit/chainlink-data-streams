@@ -27,8 +27,9 @@
 // how many channels and streams exist:
 //
 //   - r/agg holds the per-round ("hot") state — observation timestamp,
-//     validAfter watermarks, per-channel reportability, and carry-forward
-//     timestamped aggregates — and is rewritten every round.
+//     validAfter watermarks, per-channel reportability, the observation
+//     schedule, and carry-forward timestamped aggregates — and is rewritten
+//     every round.
 //   - c/defs holds every channel definition and is rewritten only when the
 //     definitions change; c/seqnr records the sequence number of that write.
 //   - c/lifecycle holds the lifecycle stage and is written only on change.

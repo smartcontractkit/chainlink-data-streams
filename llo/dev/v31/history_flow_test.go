@@ -103,6 +103,86 @@ func Test_History_Warmup(t *testing.T) {
 	}
 }
 
+// Test_History_SurvivesObservationSkip covers the interaction between the
+// observation interval and stream history. A channel reading history is not
+// exempt from the skip, so its window is sampled at its report cadence: it must
+// still gain exactly one record per cycle it is aggregated, gain none on the
+// rounds it is skipped, and stay readable across the skip.
+func Test_History_SurvivesObservationSkip(t *testing.T) {
+	ctx := tests.Context(t)
+	const depth = 3
+	const interval = 50_000
+	expression := fmt.Sprintf("Count(History(s100, %d))", depth)
+
+	p := historyPlugin(t, expression)
+	p.DefaultMinReportIntervalNanoseconds = interval
+	p.DefaultMinObservationIntervalNanoseconds = interval
+	kv := newMemKV()
+	bootstrapHistoryChannel(t, p, kv, expression)
+
+	key := histKey{streamID: 100, aggregator: llotypes.AggregatorMedian}
+	seqNr := uint64(3)
+	ts := uint64(10_000)
+
+	// Warm up and run to the first report. The channel has never reported, so it
+	// has no schedule slot and is aggregated - and appends - every round.
+	var reportedAt uint64
+	lastLen := 0
+	for range 20 {
+		_, err := p.StateTransition(ctx, seqNr, ocrtypes.AttributedQuery{}, valueRound(t, ts, 1), kv, testBlobs)
+		require.NoError(t, err)
+		seqNr++
+
+		grown := readHistory(t, kv, key.streamID, key.aggregator).Len()
+		require.Greater(t, grown, lastLen, "an unscheduled channel appends every round")
+		lastLen = grown
+
+		if reportedFlag(t, kv, 1) {
+			reportedAt = ts
+			break
+		}
+		ts += 10_000
+	}
+	require.NotZero(t, reportedAt, "the channel must report before a skip window can be exercised")
+	require.Zero(t, storedObservationDue(t, kv, 1), "not scheduled until it has reported")
+
+	// The next round picks up that report and schedules the channel forward.
+	ts += 10_000
+	_, err := p.StateTransition(ctx, seqNr, ocrtypes.AttributedQuery{}, valueRound(t, ts, 99), kv, testBlobs)
+	require.NoError(t, err)
+	seqNr++
+	dueAt := storedObservationDue(t, kv, 1)
+	require.Equal(t, reportedAt+interval, dueAt, "scheduled one interval on from the round that reported")
+
+	// Rounds inside the skip window append nothing.
+	depthAtSkipStart := readHistory(t, kv, key.streamID, key.aggregator).Len()
+	skipRounds := 0
+	for ts+10_000 < dueAt {
+		ts += 10_000
+		skipRounds++
+		_, err := p.StateTransition(ctx, seqNr, ocrtypes.AttributedQuery{}, valueRound(t, ts, 1), kv, testBlobs)
+		require.NoError(t, err)
+		seqNr++
+		require.Equal(t, depthAtSkipStart, readHistory(t, kv, key.streamID, key.aggregator).Len(),
+			"a skipped round must not append to the window")
+		require.False(t, reportedFlag(t, kv, 1), "a skipped channel does not report")
+	}
+	require.NotZero(t, skipRounds, "the test must actually exercise skipped rounds")
+
+	// The window is still there and still at its required depth: the skip lowers
+	// the sampling rate, it does not tear the window down.
+	stored := readHistory(t, kv, key.streamID, key.aggregator)
+	require.NotNil(t, stored)
+	require.GreaterOrEqual(t, stored.Len(), depth, "the window stays readable across a skip window")
+	require.Equal(t, uint32(depth), stored.RequiredCount())
+
+	// Coming due again appends exactly one more record.
+	_, err = p.StateTransition(ctx, seqNr, ocrtypes.AttributedQuery{}, valueRound(t, dueAt+10_000, 7), kv, testBlobs)
+	require.NoError(t, err)
+	require.Equal(t, depthAtSkipStart+1, readHistory(t, kv, key.streamID, key.aggregator).Len(),
+		"the round the channel is due again appends exactly one record")
+}
+
 // Test_History_EvictsAtDepth checks the window stays bounded across many rounds
 // and keeps the newest values.
 func Test_History_EvictsAtDepth(t *testing.T) {
@@ -277,9 +357,10 @@ func storedChannelDefinitions(t *testing.T, kv *memKV) llotypes.ChannelDefinitio
 func storedHotState(t *testing.T, kv *memKV) *kvState {
 	t.Helper()
 	s := &kvState{
-		validAfterNanoseconds: map[llotypes.ChannelID]uint64{},
-		reportedLastRound:     map[llotypes.ChannelID]bool{},
-		carryForward:          map[llotypes.StreamID]map[llotypes.Aggregator]*protocol.TimestampedStreamValue{},
+		validAfterNanoseconds:     map[llotypes.ChannelID]uint64{},
+		reportedLastRound:         map[llotypes.ChannelID]bool{},
+		observationDueNanoseconds: map[llotypes.ChannelID]uint64{},
+		carryForward:              map[llotypes.StreamID]map[llotypes.Aggregator]*protocol.TimestampedStreamValue{},
 	}
 	require.NoError(t, readHotState(kv, s))
 	return s
@@ -289,6 +370,13 @@ func storedHotState(t *testing.T, kv *memKV) *kvState {
 func storedValidAfter(t *testing.T, kv *memKV, cid llotypes.ChannelID) uint64 {
 	t.Helper()
 	return storedHotState(t, kv).validAfterNanoseconds[cid]
+}
+
+// storedObservationDue returns the persisted observation schedule slot, or 0 if
+// the channel has none (which means it is due).
+func storedObservationDue(t *testing.T, kv *memKV, cid llotypes.ChannelID) uint64 {
+	t.Helper()
+	return storedHotState(t, kv).observationDueNanoseconds[cid]
 }
 
 // reportedFlag returns the reportability decision the last round persisted.

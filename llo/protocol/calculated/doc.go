@@ -84,6 +84,20 @@
 // the change as a NEW channel, wait for its history to be satisfied, then retire
 // the old one. Lowering a depth takes effect the next round with no gap.
 //
+// # Sampling rate
+//
+// A window is appended to on the rounds its channel is aggregated, so the depth
+// needed to cover a given span of wall clock depends on how often that happens.
+// Where DefaultMinObservationIntervalNanoseconds is configured, that is the
+// channel's report cadence rather than the round rate, and depths and thresholds
+// must be sized against it.
+//
+// TWAP is the exception that cares least: it buckets its window by the second
+// and keeps the newest record per bucket, so sampling faster than 1Hz buys it
+// nothing and an interval at or below a second leaves it unchanged. Every other
+// window function reads the record series directly, so its wall-clock meaning
+// follows the sampling rate at any interval.
+//
 // # Limits
 //
 // Depth per (stream, aggregator) pair, the number of such pairs, the per-round

@@ -270,6 +270,90 @@ func Test_StateTransition_ChannelRemoval(t *testing.T) {
 	require.NotContains(t, hot.reportedLastRound, llotypes.ChannelID(1))
 }
 
+// Promotion replaces validAfter wholesale from the predecessor's retirement
+// report so the handover is gapless. The observation schedule must be cleared to
+// match: a schedule carried over from staging can leave a channel not due on the
+// promotion round, and a channel that is not aggregated has no values and so
+// cannot report, reopening the gap promotion exists to avoid.
+func Test_StateTransition_PromotionClearsObservationSchedule(t *testing.T) {
+	ctx := tests.Context(t)
+	p := testPlugin(t)
+	p.DefaultMinReportIntervalNanoseconds = 5000
+	p.DefaultMinObservationIntervalNanoseconds = 5000
+	predecessor := ocrtypes.ConfigDigest{0xAB}
+	p.PredecessorConfigDigest = &predecessor
+	p.PredecessorRetirementReportCache = &mockPredecessorRetirementReportCache{
+		// Old watermark: the channel is immediately report-due on promotion.
+		report: protocol.RetirementReport{ValidAfterNanoseconds: map[llotypes.ChannelID]uint64{1: 1}},
+	}
+	channelDef := llotypes.ChannelDefinition{
+		ReportFormat: llotypes.ReportFormatJSON,
+		Streams:      []llotypes.Stream{{StreamID: 100, Aggregator: llotypes.AggregatorMedian}},
+	}
+	kv := newMemKV()
+
+	_, err := p.StateTransition(ctx, 1, ocrtypes.AttributedQuery{}, []ocrtypes.AttributedObservation{ao(0, nil), ao(1, nil), ao(2, nil)}, kv, testBlobs)
+	require.NoError(t, err)
+	_, err = p.StateTransition(ctx, 2, ocrtypes.AttributedQuery{}, addChannelRound(t, 1_000, 1, channelDef), kv, testBlobs)
+	require.NoError(t, err)
+
+	valued := func(ts uint64, v int64) []ocrtypes.AttributedObservation {
+		obs := Observation{
+			UnixTimestampNanoseconds: ts,
+			StreamValues:             protocol.StreamValues{100: protocol.ToDecimal(decimal.NewFromInt(v))},
+		}
+		aos := make([]ocrtypes.AttributedObservation, 0, 4)
+		for i := 0; i < 4; i++ {
+			aos = append(aos, ao(i, mustEncodeObs(t, obs)))
+		}
+		return aos
+	}
+
+	// Run the staging instance until it has reported and so acquired a schedule
+	// slot some way in the future.
+	seqNr, ts := uint64(3), uint64(3_000)
+	for range 6 {
+		_, err = p.StateTransition(ctx, seqNr, ocrtypes.AttributedQuery{}, valued(ts, 10), kv, testBlobs)
+		require.NoError(t, err)
+		seqNr++
+		ts += 3_000
+		if storedObservationDue(t, kv, 1) != 0 {
+			break
+		}
+	}
+	scheduled := storedObservationDue(t, kv, 1)
+	require.NotZero(t, scheduled, "staging must acquire a schedule slot for this test to mean anything")
+
+	// Promote while that slot is still in the future, which is the case the
+	// carried-over schedule would break.
+	ts = scheduled - 1_000
+	require.Greater(t, scheduled, ts)
+
+	// Promote. validAfter is reseeded from the retirement report, so the channel
+	// is report-due immediately; it must also be aggregated immediately.
+	promo := Observation{UnixTimestampNanoseconds: ts, AttestedPredecessorRetirement: []byte("attested")}
+	promoAOs := make([]ocrtypes.AttributedObservation, 0, 4)
+	for i := 0; i < 4; i++ {
+		promoAOs = append(promoAOs, ao(i, mustEncodeObs(t, promo)))
+	}
+	_, err = p.StateTransition(ctx, seqNr, ocrtypes.AttributedQuery{}, promoAOs, kv, testBlobs)
+	require.NoError(t, err)
+	seqNr++
+	ts += 3_000
+
+	require.Equal(t, string(protocol.LifeCycleStageProduction), string(kv.m[string(keyLifecycle)]))
+	require.Zero(t, storedObservationDue(t, kv, 1),
+		"promotion must clear the schedule so the channel is due immediately")
+
+	// The next round must aggregate it, which is what lets it report.
+	prec, err := p.StateTransition(ctx, seqNr, ocrtypes.AttributedQuery{}, valued(ts, 20), kv, testBlobs)
+	require.NoError(t, err)
+	decoded, err := decodePrecursor(prec)
+	require.NoError(t, err)
+	require.NotNil(t, decoded.StreamAggregates[100][llotypes.AggregatorMedian],
+		"a promoted channel must be aggregated rather than waiting for a staging schedule slot")
+}
+
 func Test_StateTransition_Promotion(t *testing.T) {
 	ctx := tests.Context(t)
 	p := testPlugin(t)

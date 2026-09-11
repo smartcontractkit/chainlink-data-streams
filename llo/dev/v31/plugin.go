@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"golang.org/x/exp/maps"
@@ -58,9 +59,17 @@ type Plugin struct {
 	// critical path. Observation only picks up the handle it parked.
 	pump *blobPump
 
+	// loggedHistorySkip remembers which channels have already had their
+	// sampling-rate warning logged, so it is said once per channel per instance
+	// rather than every cycle. Node-local and for logging only: it must never
+	// influence anything StateTransition computes, or nodes would diverge.
+	loggedHistorySkipMu sync.Mutex
+	loggedHistorySkip   map[llotypes.ChannelID]struct{}
+
 	// From offchain config
-	ProtocolVersion                     uint32
-	DefaultMinReportIntervalNanoseconds uint64
+	ProtocolVersion                          uint32
+	DefaultMinReportIntervalNanoseconds      uint64
+	DefaultMinObservationIntervalNanoseconds uint64
 }
 
 // Query is empty: LLO oracles do not coordinate on what to observe.
@@ -84,6 +93,11 @@ func (p *Plugin) Observation(_ context.Context, seqNr uint64, _ ocrtypes.Attribu
 	state, err := loadColdKVState(kvReader, p.ChannelCache)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load KV state: %w", err)
+	}
+
+	obsTSNanos := time.Now().UnixNano()
+	if obsTSNanos < 0 {
+		return nil, fmt.Errorf("negative observation timestamps are not supported, got: %d", obsTSNanos)
 	}
 
 	var obs Observation
@@ -110,7 +124,23 @@ func (p *Plugin) Observation(_ context.Context, seqNr uint64, _ ocrtypes.Attribu
 
 		p.voteOnChannels(&obs, state, seqNr)
 
-		streams = observableStreams(state)
+		if p.DefaultMinObservationIntervalNanoseconds > 0 {
+			if err := readHotStateForObservation(kvReader, state); err != nil {
+				return nil, fmt.Errorf("failed to load hot state for observation skip: %w", err)
+			}
+			// The hot state lags one round: a channel that reported in the round
+			// which wrote it has not had its schedule advanced yet, because that
+			// happens in the next StateTransition. Apply the same advancement
+			// here so Observation and StateTransition agree on what is due.
+			for cid, reported := range state.reportedLastRound {
+				if reported {
+					state.observationDueNanoseconds[cid] = nextObservationDue(
+						state.observationDueNanoseconds, cid,
+						p.DefaultMinObservationIntervalNanoseconds, state.observationTimestampNs)
+				}
+			}
+		}
+		streams = observableStreams(state, p.DefaultMinObservationIntervalNanoseconds, uint64(obsTSNanos))
 	}
 
 	// Stream values are gathered asynchronously by the blob pump and are always
@@ -121,38 +151,170 @@ func (p *Plugin) Observation(_ context.Context, seqNr uint64, _ ocrtypes.Attribu
 	// round itself.
 	var handles [][]byte
 	// A nil pump means stream values were never wired up (or the plugin was built
-	// without the factory); rounds that observe no streams have nothing for the
-	// pump to gather, so neither publishes input nor consumes a snapshot.
-	if p.pump != nil && len(streams) > 0 {
+	// without the factory).
+	//
+	// The input is published every round, including rounds that observe nothing,
+	// so a later cycle can never gather a stale stream set (a cycle with no
+	// streams parks nothing and is a no-op). Take is called only when this round
+	// wants values: it consumes and clears the parked snapshot, so calling it on
+	// a round with nothing to observe would discard a snapshot a later round
+	// could still use.
+	if p.pump != nil {
 		p.pump.SetInput(pumpInput{streams: streams, seqNr: seqNr, lifeCycleStage: state.lifeCycleStage})
 
-		if snap, reason := p.pump.Take(seqNr); snap != nil {
-			handles = append(handles, snap.handleBytes)
-		} else {
-			p.Logger.Debugw("No usable stream-value snapshot for this round", "stage", "Observation", "seqNr", seqNr, "reason", reason, "misses", p.pump.Misses(), "cycles", p.pump.Cycles())
+		if len(streams) > 0 {
+			if snap, reason := p.pump.Take(seqNr); snap != nil {
+				handles = append(handles, snap.handleBytes)
+			} else {
+				p.Logger.Debugw("No usable stream-value snapshot for this round", "stage", "Observation", "seqNr", seqNr, "reason", reason, "misses", p.pump.Misses(), "cycles", p.pump.Cycles())
+			}
 		}
 	}
 
-	obsTSNanos := time.Now().UnixNano()
-	if obsTSNanos < 0 {
-		return nil, fmt.Errorf("negative observation timestamps are not supported, got: %d", obsTSNanos)
-	}
 	obs.UnixTimestampNanoseconds = uint64(obsTSNanos)
 
 	return encodeObservation(obs, handles)
 }
 
+// isObservationDue reports whether the channel is due for observation and
+// aggregation this round. When minObservationInterval is 0 the feature is
+// disabled and every channel is due.
+//
+// A channel with no schedule entry is due. That covers a channel that has never
+// reported, including a newly effective one, which therefore aggregates from its
+// first round and builds its initial aggregates and history exactly as it did
+// before this interval existed. Entries appear once a channel has reported.
+func isObservationDue(observationDue map[llotypes.ChannelID]uint64, channelID llotypes.ChannelID, minObservationInterval, now uint64) bool {
+	if minObservationInterval == 0 {
+		return true
+	}
+	dueAt, scheduled := observationDue[channelID]
+	if !scheduled {
+		return true
+	}
+	return now >= dueAt
+}
+
+// nextObservationDue returns the channel's next due timestamp, given that it
+// reported at reportedAt.
+//
+// The schedule is fixed-rate: it advances from the channel's own previous due
+// timestamp rather than from the round that reported. That distinction is the
+// whole point. A channel's stream values are gathered asynchronously and arrive
+// a round after its streams enter the pump's input, so the first due round after
+// a skip window withholds and the report lands a round late. Advancing from the
+// report would fold that delay into every later cycle and the cadence would
+// creep; advancing from the schedule makes it a one-time phase offset instead.
+//
+// The offset is also what supplies the lead the pump needs: because the schedule
+// runs ahead of the watermark by it, a channel becomes due for observation that
+// far before it is allowed to report, so its values are gathered by the time it
+// reports. The lead is therefore however much the data source actually needs,
+// and is not configured anywhere.
+//
+// This is deliberately not validAfter. That watermark is a report boundary,
+// emitted in the report and defining the window (validAfter, observationTimestamp]
+// that consecutive reports must tile exactly; anchoring it to a schedule would
+// leave gaps between reports.
+func nextObservationDue(observationDue map[llotypes.ChannelID]uint64, channelID llotypes.ChannelID, minObservationInterval, reportedAt uint64) uint64 {
+	prevDue, scheduled := observationDue[channelID]
+	if !scheduled {
+		// First report: start the schedule from it.
+		return reportedAt + minObservationInterval
+	}
+	if next := prevDue + minObservationInterval; next > reportedAt {
+		return next
+	}
+	// More than one interval behind, so the channel was unable to report for a
+	// while. Skip the missed slots rather than firing every round to catch up,
+	// while staying on the original phase.
+	missed := (reportedAt - prevDue) / minObservationInterval
+	return prevDue + (missed+1)*minObservationInterval
+}
+
+// exemptFromObservationSkip reports whether a channel must be observed and
+// aggregated every round no matter what its schedule says.
+//
+// Only history_backfill is: its watermark is a history timestamp rather than a
+// report time, so a report cadence means nothing for it.
+//
+// Channels reading History(...) are deliberately NOT exempt. The skip makes a
+// channel's report cadence the sampling rate for its windows, which lowers their
+// resolution but does not make them wrong - records carry their own observation
+// timestamp, and TWAP integrates over real time. Nor can it stall silently: an
+// unreadable window leaves the channel unreportable, which also stops its
+// schedule advancing, so it reverts to observing every round until the window is
+// satisfied. See DefaultMinObservationIntervalNanoseconds for how to size a
+// window against the interval.
+func exemptFromObservationSkip(cd llotypes.ChannelDefinition) bool {
+	return cd.ReportFormat == llotypes.ReportFormatHistoryBackfill
+}
+
+// warnHistorySampledAtReportCadence says once per channel that a channel reading
+// stream history is being skipped, so its windows are now sampled at its report
+// cadence rather than at the round rate. Whether that is fine depends on the
+// depths and thresholds the channel was configured with, which this cannot know,
+// so it reports the fact and the interval and leaves the arithmetic to whoever
+// reads it. See DefaultMinObservationIntervalNanoseconds.
+func (p *Plugin) warnHistorySampledAtReportCadence(channelID llotypes.ChannelID, seqNr uint64) {
+	p.loggedHistorySkipMu.Lock()
+	if p.loggedHistorySkip == nil {
+		p.loggedHistorySkip = map[llotypes.ChannelID]struct{}{}
+	}
+	_, said := p.loggedHistorySkip[channelID]
+	if !said {
+		p.loggedHistorySkip[channelID] = struct{}{}
+	}
+	p.loggedHistorySkipMu.Unlock()
+	if said {
+		return
+	}
+	p.Logger.Infow("Channel reads stream history and is now sampled at its report cadence, not the round rate; check its history depths and any TWAP thresholds against the observation interval",
+		"channelID", channelID,
+		"minObservationIntervalNanoseconds", p.DefaultMinObservationIntervalNanoseconds,
+		"stage", "StateTransition", "seqNr", seqNr)
+}
+
+// observableDefinitions returns the subset of defs whose channels are due for
+// observation/aggregation. Tombstoned and history_backfill channels are always
+// retained, as are the channels exemptFromObservationSkip names. That keeps the
+// set handed to aggregate and ProcessCalculatedStreams the same whether or not
+// the interval is configured. When minObservationInterval is 0, defs is returned
+// unchanged.
+func observableDefinitions(defs llotypes.ChannelDefinitions, observationDue map[llotypes.ChannelID]uint64, minObservationInterval, now uint64) llotypes.ChannelDefinitions {
+	if minObservationInterval == 0 {
+		return defs
+	}
+	filtered := make(llotypes.ChannelDefinitions, len(defs))
+	for channelID, cd := range defs {
+		if cd.Tombstone || exemptFromObservationSkip(cd) ||
+			isObservationDue(observationDue, channelID, minObservationInterval, now) {
+			filtered[channelID] = cd
+		}
+	}
+	return filtered
+}
+
 // observableStreams lists the streams a round should observe: every stream of
 // every live channel, minus calculated streams (which are derived in
 // StateTransition rather than observed).
-func observableStreams(state *kvState) []llotypes.StreamID {
+//
+// When minObservationInterval is non-zero, channels that are not yet due on the
+// observation schedule are skipped: their streams are not observed unless shared
+// with a channel that is due or exempt (see exemptFromObservationSkip). A
+// channel with no schedule entry yet is always considered due.
+func observableStreams(state *kvState, minObservationInterval uint64, now uint64) []llotypes.StreamID {
 	if len(state.channelDefinitions) == 0 {
 		return nil
 	}
 	seen := make(map[llotypes.StreamID]struct{})
 	streams := make([]llotypes.StreamID, 0, len(state.channelDefinitions))
-	for _, cd := range state.channelDefinitions {
+	for channelID, cd := range state.channelDefinitions {
 		if cd.Tombstone {
+			continue
+		}
+		if !exemptFromObservationSkip(cd) &&
+			!isObservationDue(state.observationDueNanoseconds, channelID, minObservationInterval, now) {
 			continue
 		}
 		for _, strm := range cd.Streams {

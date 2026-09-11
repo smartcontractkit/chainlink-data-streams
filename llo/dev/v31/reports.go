@@ -62,7 +62,7 @@ func (p *Plugin) Reports(ctx context.Context, seqNr uint64, rawPrecursor ocr3_1t
 		})
 	}
 
-	for _, cid := range out.reportableChannels(p.DefaultMinReportIntervalNanoseconds, channelOpts, p.Logger) {
+	for _, cid := range out.reportableChannels(p.DefaultMinReportIntervalNanoseconds, p.DefaultMinObservationIntervalNanoseconds, channelOpts, p.Logger) {
 		cd := out.ChannelDefinitions[cid]
 
 		if cd.ReportFormat == llotypes.ReportFormatHistoryBackfill {
@@ -179,10 +179,10 @@ func (p *Plugin) Reports(ctx context.Context, seqNr uint64, rawPrecursor ocr3_1t
 
 // reportableChannels returns the sorted set of channels reportable in this
 // (current) round (see isReportable).
-func (o precursor) reportableChannels(minReportInterval uint64, optsCache *protocol.OptsCache, lggr logger.Logger) []llotypes.ChannelID {
+func (o precursor) reportableChannels(minReportInterval, minObservationInterval uint64, optsCache *protocol.OptsCache, lggr logger.Logger) []llotypes.ChannelID {
 	reportable := make([]llotypes.ChannelID, 0, len(o.ChannelDefinitions))
 	for channelID := range o.ChannelDefinitions {
-		if o.isReportable(channelID, minReportInterval, optsCache, lggr) {
+		if o.isReportable(channelID, minReportInterval, minObservationInterval, optsCache, lggr) {
 			reportable = append(reportable, channelID)
 		}
 	}
@@ -190,7 +190,7 @@ func (o precursor) reportableChannels(minReportInterval uint64, optsCache *proto
 	return reportable
 }
 
-func (o precursor) isReportable(channelID llotypes.ChannelID, minReportInterval uint64, optsCache *protocol.OptsCache, lggr logger.Logger) bool {
+func (o precursor) isReportable(channelID llotypes.ChannelID, minReportInterval, minObservationInterval uint64, optsCache *protocol.OptsCache, lggr logger.Logger) bool {
 	if o.LifeCycleStage == protocol.LifeCycleStageRetired {
 		return false
 	}
@@ -201,6 +201,31 @@ func (o precursor) isReportable(channelID llotypes.ChannelID, minReportInterval 
 	if cd.ReportFormat == llotypes.ReportFormatHistoryBackfill {
 		_, _, _, ok := selectBackfillCandidate(o.ChannelDefinitions, o.ValidAfterNanoseconds, o.ObservationTimestampNanoseconds, channelID, optsCache)
 		return ok
+	}
+	// The observation interval skips gathering a not-due channel's streams, and
+	// the blob pump serves a round from the snapshot gathered under the previous
+	// round's stream set. So on the round a channel first becomes due its values
+	// have not arrived yet and it has no aggregates. Reporting anyway would emit
+	// nil values and advance validAfter over a round that carried nothing.
+	//
+	// Withholding instead leaves both the watermark and the observation schedule
+	// where they are, because each only advances on a round that reported: the
+	// channel stays due, its streams are in the pump's input now, and it reports
+	// once they arrive. The schedule then advances from its own slot rather than
+	// from the late report (see nextObservationDue), so the delay settles into a
+	// constant phase offset instead of being added to every later cycle - and
+	// that offset is exactly the lead the pump needs on every later cycle.
+	if minObservationInterval > 0 && !cd.DisableNilStreamValues {
+		for _, strm := range cd.Streams {
+			if strm.Aggregator == llotypes.AggregatorCalculated {
+				continue
+			}
+			if o.StreamAggregates[strm.StreamID][strm.Aggregator] == nil {
+				lggr.Debugw("IsReportable=false; awaiting stream values after observation skip",
+					"channelID", channelID, "streamID", strm.StreamID)
+				return false
+			}
+		}
 	}
 	// When DisableNilStreamValues is set, every stream must have a (non-nil)
 	// aggregate value for the channel to be reportable.
