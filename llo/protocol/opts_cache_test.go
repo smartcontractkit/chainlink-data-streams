@@ -1,6 +1,7 @@
 package protocol
 
 import (
+	"reflect"
 	"testing"
 
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
@@ -288,4 +289,87 @@ func TestOptsCache_ChannelDefinitionWorkflow(t *testing.T) {
 	r1Again, err := GetOpts[testOptsA](cache, 1)
 	require.NoError(t, err)
 	assert.Equal(t, "ch1", r1Again.FeedID)
+}
+
+func TestOptsCache_SyncTo(t *testing.T) {
+	defsFor := func(opts map[llotypes.ChannelID]string) llotypes.ChannelDefinitions {
+		defs := make(llotypes.ChannelDefinitions, len(opts))
+		for cid, o := range opts {
+			defs[cid] = llotypes.ChannelDefinition{Opts: llotypes.ChannelOpts(o)}
+		}
+		return defs
+	}
+
+	t.Run("adds channels that are not yet present", func(t *testing.T) {
+		cache := NewOptsCache()
+		cache.SyncTo(defsFor(map[llotypes.ChannelID]string{
+			1: `{"feedID":"ch1"}`,
+			2: `{"feedID":"ch2"}`,
+		}))
+
+		assert.Equal(t, 2, cache.Len())
+		r1, err := GetOpts[testOptsA](cache, 1)
+		require.NoError(t, err)
+		assert.Equal(t, "ch1", r1.FeedID)
+	})
+
+	t.Run("drops channels that are no longer defined", func(t *testing.T) {
+		cache := NewOptsCache()
+		cache.SyncTo(defsFor(map[llotypes.ChannelID]string{1: `{"feedID":"ch1"}`, 2: `{"feedID":"ch2"}`}))
+		_, err := GetOpts[testOptsA](cache, 2)
+		require.NoError(t, err)
+
+		cache.SyncTo(defsFor(map[llotypes.ChannelID]string{1: `{"feedID":"ch1"}`}))
+
+		assert.Equal(t, 1, cache.Len())
+		_, err = GetOpts[testOptsA](cache, 2)
+		require.Error(t, err, "channel 2 should be gone")
+	})
+
+	t.Run("picks up changed opts for an existing channel", func(t *testing.T) {
+		cache := NewOptsCache()
+		cache.SyncTo(defsFor(map[llotypes.ChannelID]string{1: `{"feedID":"before"}`}))
+		r, err := GetOpts[testOptsA](cache, 1)
+		require.NoError(t, err)
+		require.Equal(t, "before", r.FeedID)
+
+		cache.SyncTo(defsFor(map[llotypes.ChannelID]string{1: `{"feedID":"after"}`}))
+
+		r, err = GetOpts[testOptsA](cache, 1)
+		require.NoError(t, err)
+		assert.Equal(t, "after", r.FeedID, "SyncTo must compare opts by content, not just by channel ID")
+	})
+
+	// The point of SyncTo over ResetTo: syncing to unchanged definitions must
+	// not throw away decoded values, otherwise every round re-decodes.
+	t.Run("preserves decoded values for unchanged opts", func(t *testing.T) {
+		defs := defsFor(map[llotypes.ChannelID]string{1: `{"feedID":"ch1"}`, 2: `{"feedID":"ch2"}`})
+		cache := NewOptsCache()
+		cache.SyncTo(defs)
+		_, err := GetOpts[testOptsA](cache, 1)
+		require.NoError(t, err)
+		_, err = GetOpts[testOptsA](cache, 2)
+		require.NoError(t, err)
+		require.Len(t, cache.decoded, 2)
+
+		cache.SyncTo(defs)
+		assert.Len(t, cache.decoded, 2, "decoded values should survive a sync to identical definitions")
+
+		// A changed channel invalidates only its own decoded values.
+		cache.SyncTo(defsFor(map[llotypes.ChannelID]string{1: `{"feedID":"ch1"}`, 2: `{"feedID":"ch2-new"}`}))
+		assert.Len(t, cache.decoded, 1)
+		_, ok := cache.decoded[optsCacheKey{channelID: 1, optsType: reflect.TypeFor[testOptsA]()}]
+		assert.True(t, ok, "channel 1 was unchanged and should still be decoded")
+	})
+
+	t.Run("syncing to empty definitions clears the cache", func(t *testing.T) {
+		cache := NewOptsCache()
+		cache.SyncTo(defsFor(map[llotypes.ChannelID]string{1: `{"feedID":"ch1"}`}))
+		_, err := GetOpts[testOptsA](cache, 1)
+		require.NoError(t, err)
+
+		cache.SyncTo(nil)
+		assert.Equal(t, 0, cache.Len())
+		assert.Empty(t, cache.decoded)
+	})
 }
