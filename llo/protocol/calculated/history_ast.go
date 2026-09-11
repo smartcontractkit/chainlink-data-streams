@@ -39,6 +39,11 @@ const HistoryFunctionName = "History"
 // static analysis that validates its configuration.
 const twapFunctionName = "TWAP"
 
+// twapMaxWindowSeconds bounds the number of one-second buckets a single TWAP
+// evaluation may allocate and fill. 24 hours is far beyond any settlement window
+// while keeping the per-round work bounded.
+const twapMaxWindowSeconds = 24 * 60 * 60
+
 // Field selects which part of a stored stream value a window projects. One
 // stored window serves every field, so History(s1, 10), History(s1_bid, 10) and
 // History(s1_ask, 10) share a single series in state and differ only here.
@@ -304,16 +309,11 @@ func (p *historyPatcher) rewrite(node *ast.Node, call *ast.CallNode) {
 	p.refByNode[*node] = ref
 }
 
-// checkTWAP validates a TWAP call against the depth of the window it reads.
+// checkTWAP validates a TWAP call at compile time: arity, per-expression call
+// count, and static satisfiability of minSamples against the history depth.
 //
-// This is the static half of TWAP validation: whether a configuration can ever be
-// satisfied is a property of the expression, so it belongs here rather than at
-// evaluation time, where the same condition would surface as a per-round
-// rejection and look like a data problem instead of a deployment mistake.
-//
-// Only literal configuration can be checked. A configuration built at runtime is
-// left to the runtime validation in functions_twap.go, which is stricter but
-// later.
+// Only literal configuration can be checked. A configuration built at runtime
+// is left to runtime validation, which is stricter but later.
 func (p *historyPatcher) checkTWAP(call *ast.CallNode) {
 	// Counted first, and counted whatever the call looks like: this is the one
 	// TWAP check that does not depend on the configuration being literal, which
@@ -344,9 +344,7 @@ func (p *historyPatcher) checkTWAP(call *ast.CallNode) {
 	}
 	// Compared as int64: minSamples is a literal and can be any integer the
 	// parser accepted, so narrowing it to the width of ref.Count would let a
-	// value above 2^32 wrap into a small one and pass. The runtime validation
-	// still rejects it, but the diagnostic this check exists to give would be
-	// lost.
+	// value above 2^32 wrap into a small one and pass.
 	if minSamples < 1 {
 		p.errorf("%s requires minSamples to be at least 1, got %d", twapFunctionName, minSamples)
 		return

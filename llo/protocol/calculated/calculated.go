@@ -78,10 +78,9 @@ var defaultEnv = map[string]any{
 	"SMA":       SMA,
 	"WMA":       WMA,
 	"EMA":       EMA,
-	// TWAP needs the round's observation timestamp to anchor its window, so
-	// NewEnv rebinds it per round. This default only reports that it was called
-	// against an environment NewEnv did not build.
-	"TWAP": twapUnbound,
+	// TWAP is a recognized DSL function that accepts a history window and a
+	// configuration map. The implementation is not provided in this package.
+	"TWAP": twapStub,
 	// History is rewritten away at compile time (see history_ast.go). It is
 	// registered only so that a call surviving to evaluation fails loudly
 	// instead of resolving to an undefined identifier or, worse, to something
@@ -93,6 +92,13 @@ var defaultEnv = map[string]any{
 // historyCallReached is the runtime stub for History. See defaultEnv.
 func historyCallReached(...any) (decimal.Decimal, error) {
 	return decimal.Decimal{}, fmt.Errorf("%s was not resolved at compile time; this is a bug in expression compilation", HistoryFunctionName)
+}
+
+// twapStub is the runtime placeholder for TWAP. The function signature is
+// kept so expressions referencing TWAP parse and compile; evaluation returns
+// an error.
+func twapStub(...any) (decimal.Decimal, error) {
+	return decimal.Decimal{}, errors.New("TWAP is not implemented")
 }
 
 var (
@@ -188,10 +194,6 @@ func (e environment) release() {
 func NewEnv(observationTimestampNanoseconds uint64) environment {
 	env := pool.Get().(environment)
 	env["observations_timestamp"] = observationTimestampNanoseconds
-	// TWAP's window is anchored on the round's consensus observation timestamp,
-	// not on the data, so it is bound per round. release() restores the default
-	// binding, which fails if called.
-	env["TWAP"] = twapFunc(observationTimestampNanoseconds)
 	return env
 }
 
