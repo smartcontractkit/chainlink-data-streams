@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"math/big"
+	"math/rand/v2"
 
 	"github.com/goccy/go-json"
 
@@ -25,6 +26,10 @@ var (
 
 	zero = big.NewInt(0)
 )
+
+// specimenSampleRate controls how often specimen reports are allowed through
+// encoding. Each specimen report has a 1/N chance of being encoded. 
+const specimenSampleRate = 10000
 
 type ReportCodecEVMABIEncodeUnpacked struct {
 	logger.Logger
@@ -88,7 +93,7 @@ type BaseReportFields struct {
 }
 
 func (r ReportCodecEVMABIEncodeUnpacked) Encode(report protocol.Report, cd llotypes.ChannelDefinition, optsCache *protocol.OptsCache) ([]byte, error) {
-	if report.Specimen {
+	if report.Specimen && rand.IntN(specimenSampleRate) != 0 {
 		return nil, errors.New("ReportCodecEVMABIEncodeUnpacked does not support encoding specimen reports")
 	}
 	if len(report.Values) < 2 {
