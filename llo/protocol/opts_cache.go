@@ -44,11 +44,7 @@ func (c *OptsCache) Set(channelID llotypes.ChannelID, raw llotypes.ChannelOpts) 
 		return
 	}
 	c.raw[channelID] = raw
-	for key := range c.decoded {
-		if key.channelID == channelID {
-			delete(c.decoded, key)
-		}
-	}
+	c.invalidateDecoded(channelID)
 }
 
 // Len returns the number of channels in the cache.
@@ -64,9 +60,43 @@ func (c *OptsCache) Remove(channelID llotypes.ChannelID) {
 	defer c.mu.Unlock()
 
 	delete(c.raw, channelID)
+	c.invalidateDecoded(channelID)
+}
+
+// invalidateDecoded drops every decoded value for a channel. Callers must hold c.mu.
+func (c *OptsCache) invalidateDecoded(channelID llotypes.ChannelID) {
 	for key := range c.decoded {
 		if key.channelID == channelID {
 			delete(c.decoded, key)
+		}
+	}
+}
+
+// SyncTo makes the cache's contents match channelDefinitions exactly.
+//
+// Unlike ResetTo it compares raw opts by content, so already decoded values
+// survive for channels whose opts are unchanged. That makes it cheap enough to
+// call on every round in order to guarantee the cache agrees with a given set
+// of channel definitions, rather than relying on incremental Set/Remove calls
+// having kept it in step.
+func (c *OptsCache) SyncTo(channelDefinitions llotypes.ChannelDefinitions) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	for channelID, cd := range channelDefinitions {
+		if existing, ok := c.raw[channelID]; ok && bytes.Equal(existing, cd.Opts) {
+			continue
+		}
+		c.raw[channelID] = cd.Opts
+		c.invalidateDecoded(channelID)
+	}
+
+	// Drop channels that are no longer defined. Deleting during a range over
+	// the same map is safe in Go.
+	for channelID := range c.raw {
+		if _, ok := channelDefinitions[channelID]; !ok {
+			delete(c.raw, channelID)
+			c.invalidateDecoded(channelID)
 		}
 	}
 }

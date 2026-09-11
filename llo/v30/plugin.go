@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"sync"
 	"time"
 
 	"github.com/smartcontractkit/libocr/quorumhelper"
@@ -177,6 +178,8 @@ func (f *PluginFactory) NewReportingPlugin(ctx context.Context, cfg ocr3types.Re
 			f.ReportTelemetryCh,
 			f.DonID,
 			protocol.NewOptsCache(),
+			sync.Mutex{},
+			protocol.NewOptsCache(),
 			cfg.MaxDurationObservation,
 			offchainConfig.ProtocolVersion,
 			offchainConfig.DefaultMinReportIntervalNanoseconds,
@@ -213,6 +216,16 @@ type Plugin struct {
 	ReportTelemetryCh                chan<- *protocol.LLOReportTelemetry
 	DonID                            uint32
 	OptsCache                        *protocol.OptsCache // must be non-nil; set by NewReportingPlugin or by tests that exercise Outcome/Reports
+
+	// reportsOptsCache memoizes opts decoding for Reports() across rounds. It is
+	// deliberately separate from OptsCache, which Outcome() owns and mutates
+	// from its own goroutine, and it is synced to the committed outcome's
+	// channel definitions on every call so that it cannot go stale. reportsMu
+	// guards it and serializes Reports(), which libocr may invoke concurrently
+	// for different sequence numbers. Lazily initialized, so a hand-built
+	// Plugin needs no extra setup.
+	reportsMu        sync.Mutex
+	reportsOptsCache *protocol.OptsCache
 
 	// From ReportingPluginConfig
 	MaxDurationObservation time.Duration

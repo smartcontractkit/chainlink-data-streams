@@ -23,6 +23,28 @@ func (p *Plugin) reports(ctx context.Context, seqNr uint64, rawOutcome ocr3types
 		return nil, fmt.Errorf("error unmarshalling outcome: %w", err)
 	}
 
+	// Decode channel opts from this outcome's channel definitions rather than
+	// from p.OptsCache.
+	//
+	// p.OptsCache is node-local state populated only by Outcome(), but libocr
+	// can call Reports() for a committed outcome this node never computed
+	// itself. p.OptsCache is then empty, opts-dependent report codecs fail, and the
+	// channel is skipped, so it emits a different report set than its peers.
+	//
+	// reportsOptsCache is reserved for Reports() and synced to this outcome's
+	// channel definitions by content, which keeps Reports() a pure function of
+	// (seqNr, outcome) while still memoizing the JSON decoding across rounds.
+	// The lock is held for the remainder of the call: two concurrent Reports()
+	// calls syncing the same cache to different outcomes would otherwise read
+	// each other's channel definitions.
+	p.reportsMu.Lock()
+	defer p.reportsMu.Unlock()
+	if p.reportsOptsCache == nil {
+		p.reportsOptsCache = protocol.NewOptsCache()
+	}
+	optsCache := p.reportsOptsCache
+	optsCache.SyncTo(outcome.ChannelDefinitions)
+
 	rwis := []ocr3types.ReportPlus[llotypes.ReportInfo]{}
 
 	if outcome.LifeCycleStage == protocol.LifeCycleStageRetired {
@@ -48,7 +70,7 @@ func (p *Plugin) reports(ctx context.Context, seqNr uint64, rawOutcome ocr3types
 		})
 	}
 
-	reportableChannels, unreportableChannels := outcome.ReportableChannels(p.ProtocolVersion, p.DefaultMinReportIntervalNanoseconds, p.OptsCache)
+	reportableChannels, unreportableChannels := outcome.ReportableChannels(p.ProtocolVersion, p.DefaultMinReportIntervalNanoseconds, optsCache)
 	if p.Config.VerboseLogging {
 		p.Logger.Debugw("Reportable channels", "lifeCycleStage", outcome.LifeCycleStage, "reportableChannels", reportableChannels, "unreportableChannels", unreportableChannels, "stage", "Report", "seqNr", seqNr)
 	}
@@ -105,7 +127,7 @@ func (p *Plugin) reports(ctx context.Context, seqNr uint64, rawOutcome ocr3types
 				p.Logger.Warnw("Error encoding report", "lifeCycleStage", outcome.LifeCycleStage, "reportFormat", targetCD.ReportFormat, "err", fmt.Errorf("codec missing for ReportFormat=%q", targetCD.ReportFormat), "channelID", cid, "stage", "Report", "seqNr", seqNr)
 				continue
 			}
-			encoded, err := codec.Encode(reportForEncode, targetCD, p.OptsCache)
+			encoded, err := codec.Encode(reportForEncode, targetCD, optsCache)
 			if err != nil {
 				p.Logger.Warnw("Error encoding report", "lifeCycleStage", outcome.LifeCycleStage, "reportFormat", targetCD.ReportFormat, "err", err, "channelID", cid, "stage", "Report", "seqNr", seqNr)
 				continue
@@ -141,7 +163,7 @@ func (p *Plugin) reports(ctx context.Context, seqNr uint64, rawOutcome ocr3types
 			p.Logger.Debugw("Emitting report", "lifeCycleStage", outcome.LifeCycleStage, "channelID", cid, "report", report, "stage", "Report", "seqNr", seqNr)
 		}
 
-		encoded, err := p.encodeReport(report, cd)
+		encoded, err := p.encodeReport(report, cd, optsCache)
 		if err != nil {
 			p.Logger.Warnw("Error encoding report", "lifeCycleStage", outcome.LifeCycleStage, "reportFormat", cd.ReportFormat, "err", err, "channelID", cid, "stage", "Report", "seqNr", seqNr)
 			continue
@@ -164,13 +186,13 @@ func (p *Plugin) reports(ctx context.Context, seqNr uint64, rawOutcome ocr3types
 	return rwis, nil
 }
 
-func (p *Plugin) encodeReport(r protocol.Report, cd llotypes.ChannelDefinition) (types.Report, error) {
+func (p *Plugin) encodeReport(r protocol.Report, cd llotypes.ChannelDefinition, optsCache *protocol.OptsCache) (types.Report, error) {
 	codec, exists := p.ReportCodecs[cd.ReportFormat]
 	if !exists {
 		return nil, fmt.Errorf("codec missing for ReportFormat=%q", cd.ReportFormat)
 	}
 	p.captureReportTelemetry(r, cd)
-	return codec.Encode(r, cd, p.OptsCache)
+	return codec.Encode(r, cd, optsCache)
 }
 
 func (p *Plugin) captureReportTelemetry(r protocol.Report, cd llotypes.ChannelDefinition) {
