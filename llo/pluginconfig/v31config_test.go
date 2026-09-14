@@ -111,6 +111,6 @@ func Test_V31Config_Validate(t *testing.T) {
 		pc.V31.VerboseLogging = true
 		err := pc.Validate()
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), `V31 config is only allowed when PluginVersion is "v31"`)
+		assert.Contains(t, err.Error(), `V31 config is only allowed when a protocol instance runs "v31"`)
 	})
 }
