@@ -150,6 +150,14 @@ func (p *Plugin) StateTransition(ctx context.Context, seqNr uint64, _ ocrtypes.A
 				continue
 			}
 			if cd.ReportFormat == llotypes.ReportFormatHistoryBackfill {
+				if prev.lifeCycleStage != protocol.LifeCycleStageProduction {
+					// The previous round was staging, so it emitted no backfill
+					// report (see isReportable) and the watermark must not move.
+					// Advancing it here would silently consume backfill
+					// observations that were never emitted.
+					out.ValidAfterNanoseconds[channelID] = prevValidAfter
+					continue
+				}
 				// Backfill: prevReportable and selection conditions must be met, or stays put.
 				out.ValidAfterNanoseconds[channelID] = prevValidAfter
 				if prevReportable(prev, channelID) {

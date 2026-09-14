@@ -302,6 +302,27 @@
 //     reports through ocr3types.OnchainKeyring, the one keyring the job already
 //     holds serves both; no version-specific casing is needed.
 //
+// History-backfill channels need no special handling. Both instances share one
+// ChannelDefinitionCache, so a backfill channel is present on the staging
+// instance too, where it would be a NEW channel with a watermark of 0 and would
+// replay the whole backfill from the beginning for the length of the overlap.
+// Both plugins therefore skip backfill entirely while not in the production
+// stage: isReportable returns false and the watermark does not advance.
+//
+// Skipping costs nothing, because promotion seeds ValidAfterNanoseconds
+// wholesale from the predecessor's retirement report: a staging instance's
+// backfill watermark is discarded unread, so the replay could never have
+// counted. The backfill simply pauses for the overlap and resumes at the
+// predecessor's position. A backfill channel the predecessor never reported is
+// absent from the report and starts from the beginning after promotion, which
+// is the correct reading.
+//
+// Nothing else needs to warm up. Only validAfter watermarks are handed over, and
+// that is all a v3.0 predecessor has: v30 passes a nil HistoryReader
+// (v30/stream_calculated.go), so History() and TWAP fail closed there and no
+// live v3.0 channel can be using them. There are no stream history windows to
+// rebuild. Backfill watermarks live in validAfter and so transfer with it.
+//
 // Operator sequence (v30 -> v31), assuming instance 0 is the live v3.0
 // production instance:
 //
@@ -313,12 +334,16 @@
 //     1 (Green) and mark instance 1 as OCR version "3.1"
 //     (pluginconfig.OCRVersionOCR31) while instance 0 stays "3.0". Green
 //     bootstraps into the staging stage.
-//  3. Let it run. A staging instance emits reports with Specimen = true, so the
-//     Mercury server sees roughly 2x transmit volume for the length of the
-//     overlap window — size the overlap against that, and against any history
-//     window the v3.1 channels need to warm up (History() expressions and
-//     history-backfill channels report nothing until their windows are deep
-//     enough, and no history is transferred from the predecessor).
+//  3. Let it run, and verify Green from TELEMETRY, not from the Mercury server.
+//     A staging instance marks its reports Specimen = true and the EVM codecs
+//     refuse to encode those, so nothing it produces is transmitted and transmit
+//     volume does not rise. captureReportTelemetry runs before the encode, so
+//     ReportTelemetryCh and OutcomeTelemetryCh do see what Green would have
+//     emitted. The readiness gate is Green's report telemetry covering the same
+//     channel set as Blue's production output, with sane values, plus the blob
+//     pump's Misses/Cycles low and uncorrelated. There is no warm-up minimum to
+//     wait out (see above), so the overlap is however many rounds of that
+//     evidence you want.
 //  4. Vote to retire v3.0: set shouldRetire for the v3.0 config digest in the
 //     ConfigurationStore. Once more than f oracles observe it, instance 0 moves
 //     to the retired stage in the round it is agreed (retirement is NOT

@@ -226,6 +226,11 @@ func (m *handoverShouldRetireCache) ShouldRetire(ocrtypes.ConfigDigest) (bool, e
 	return m.retire, nil
 }
 
+// handoverPredecessorSigners is the predecessor's ConfigSet signer set, which
+// every staging node reads from its local cache and votes on so the DON can
+// agree on it and verify the attested report against it.
+var handoverPredecessorSigners = [][]byte{{1}, {2}, {3}, {4}}
+
 // handoverRRCReader stands in for the global RetirementReportCache: it holds the
 // predecessor's attested retirement report and its ConfigSet signer set.
 type handoverRRCReader struct {
@@ -274,7 +279,7 @@ func newPredecessorCache(t *testing.T, attested []byte, sigsValid bool) protocol
 	reader := &handoverRRCReader{
 		attested: attested,
 		config: retirement.Config{
-			Signers: pq.ByteaArray{{1}, {2}, {3}, {4}},
+			Signers: pq.ByteaArray(handoverPredecessorSigners),
 			F:       1,
 		},
 	}
@@ -436,6 +441,8 @@ func Test_Handover_V30ToV31(t *testing.T) {
 	newInst.round(Observation{
 		UnixTimestampNanoseconds:      stagingTS,
 		AttestedPredecessorRetirement: attestedBytes,
+		PredecessorSigners:            handoverPredecessorSigners,
+		PredecessorF:                  1,
 		StreamValues:                  handoverStreamValues(),
 	})
 	require.Equal(t, protocol.LifeCycleStageProduction, newInst.lifeCycleStage())
@@ -603,7 +610,7 @@ func Test_Handover_V30ToV31_RejectsBadSignatures(t *testing.T) {
 			newInst.round(Observation{})
 			require.Equal(t, protocol.LifeCycleStageStaging, newInst.lifeCycleStage())
 
-			bad := Observation{UnixTimestampNanoseconds: handoverTickNanos, AttestedPredecessorRetirement: tc.attested}
+			bad := Observation{UnixTimestampNanoseconds: handoverTickNanos, AttestedPredecessorRetirement: tc.attested, PredecessorSigners: handoverPredecessorSigners, PredecessorF: 1}
 			clean := Observation{UnixTimestampNanoseconds: handoverTickNanos}
 			require.NoError(t, newInst.tryRound(bad, bad, clean, clean))
 
@@ -640,6 +647,8 @@ func Test_Handover_BadRetirementDoesNotStallRound(t *testing.T) {
 	bad := Observation{
 		UnixTimestampNanoseconds:      handoverTickNanos,
 		AttestedPredecessorRetirement: attest(t, raw),
+		PredecessorSigners:            handoverPredecessorSigners,
+		PredecessorF:                  1,
 		UpdateChannelDefinitions:      llotypes.ChannelDefinitions{handoverChannelID: handoverChannel()},
 	}
 	require.NoError(t, newInst.tryRound(bad, bad, bad, bad))
@@ -652,6 +661,8 @@ func Test_Handover_BadRetirementDoesNotStallRound(t *testing.T) {
 	newInst.round(Observation{
 		UnixTimestampNanoseconds:      2 * handoverTickNanos,
 		AttestedPredecessorRetirement: attest(t, raw),
+		PredecessorSigners:            handoverPredecessorSigners,
+		PredecessorF:                  1,
 	})
 	require.Equal(t, protocol.LifeCycleStageProduction, newInst.lifeCycleStage())
 	require.Equal(t, uint64(500), newInst.validAfter()[handoverChannelID])
@@ -674,9 +685,227 @@ func Test_Handover_RejectsIncompatibleProtocolVersion(t *testing.T) {
 	newInst.round(Observation{})
 	require.Equal(t, protocol.LifeCycleStageStaging, newInst.lifeCycleStage())
 
-	obs := Observation{UnixTimestampNanoseconds: handoverTickNanos, AttestedPredecessorRetirement: attest(t, raw)}
+	obs := Observation{UnixTimestampNanoseconds: handoverTickNanos, AttestedPredecessorRetirement: attest(t, raw), PredecessorSigners: handoverPredecessorSigners, PredecessorF: 1}
 	require.NoError(t, newInst.tryRound(obs, obs, obs, obs))
 	require.Equal(t, protocol.LifeCycleStageStaging, newInst.lifeCycleStage(),
 		"instance must stay in staging on a retirement report from an unsupported protocol version")
 	require.NotContains(t, newInst.validAfter(), handoverChannelID)
+}
+
+// --- backfill guard ---
+
+const handoverBackfillChannelID = llotypes.ChannelID(10)
+
+// handoverBackfillDefs is the target channel plus a history-backfill channel
+// holding three observations, at 1s, 2s and 3s.
+func handoverBackfillDefs() llotypes.ChannelDefinitions {
+	return llotypes.ChannelDefinitions{
+		handoverChannelID: handoverChannel(),
+		handoverBackfillChannelID: {
+			ReportFormat: llotypes.ReportFormatHistoryBackfill,
+			Streams:      handoverChannel().Streams,
+			Opts: []byte(`{"targetChannelId":1,"observations":{` +
+				`"1":{"100":"1"},"2":{"100":"2"},"3":{"100":"3"}}}`),
+		},
+	}
+}
+
+// backfillReports returns the reports attributed to the backfill's target
+// channel that were emitted by the backfill channel, i.e. those whose interval
+// lies wholly in the past relative to the round that emitted them.
+func backfillReports(reports []emittedReport, roundTS uint64) (out []emittedReport) {
+	for _, r := range reports {
+		if r.channelID == handoverChannelID && r.obsTS < roundTS {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// Test_Handover_StagingSkipsBackfill covers the backfill guard. Both protocol
+// instances of a blue/green job share one ChannelDefinitionCache, so the
+// backfill channel is present on the staging instance too, where it is a new
+// channel with a watermark of 0. Without the guard the staging instance replays
+// the whole backfill from the beginning for the length of the overlap window.
+func Test_Handover_StagingSkipsBackfill(t *testing.T) {
+	v30Digest := ocrtypes.ConfigDigest{0x30}
+
+	run := func(t *testing.T, predecessor *ocrtypes.ConfigDigest) *v31Instance {
+		t.Helper()
+		inst := newV31Instance(t, ocrtypes.ConfigDigest{0x31}, predecessor, newPredecessorCache(t, nil, true))
+
+		inst.round(Observation{}) // bootstrap
+		ts := handoverTickNanos * 10
+		inst.round(Observation{
+			UnixTimestampNanoseconds: ts,
+			UpdateChannelDefinitions: handoverBackfillDefs(),
+			StreamValues:             handoverStreamValues(),
+		})
+		// Definitions are deferred one round, so give it several rounds in
+		// effect: enough for the backfill to emit all three observations.
+		for range 5 {
+			ts += handoverTickNanos
+			inst.round(Observation{UnixTimestampNanoseconds: ts, StreamValues: handoverStreamValues()})
+		}
+		return inst
+	}
+
+	t.Run("staging emits no backfill report and holds its watermark", func(t *testing.T) {
+		inst := run(t, &v30Digest)
+		require.Equal(t, protocol.LifeCycleStageStaging, inst.lifeCycleStage())
+
+		require.Empty(t, backfillReports(inst.reports, handoverTickNanos*10),
+			"a staging instance must not replay the backfill")
+		require.Equal(t, uint64(0), inst.validAfter()[handoverBackfillChannelID],
+			"a staging instance emits no backfill report, so its watermark must not move")
+	})
+
+	t.Run("production backfills as usual", func(t *testing.T) {
+		inst := run(t, nil)
+		require.Equal(t, protocol.LifeCycleStageProduction, inst.lifeCycleStage())
+
+		require.NotEmpty(t, backfillReports(inst.reports, handoverTickNanos*10),
+			"a production instance must replay the backfill")
+		require.NotZero(t, inst.validAfter()[handoverBackfillChannelID],
+			"a production instance must advance the backfill watermark")
+	})
+}
+
+// Test_Handover_PromotionResumesBackfillAtPredecessorWatermark is why skipping is
+// correct rather than merely safe: promotion seeds ValidAfterNanoseconds wholesale
+// from the predecessor's retirement report, so the staging instance's backfill
+// watermark is discarded unread and the backfill resumes exactly where the
+// predecessor left it. Nothing is lost by not replaying it while staging.
+func Test_Handover_PromotionResumesBackfillAtPredecessorWatermark(t *testing.T) {
+	v30Digest := ocrtypes.ConfigDigest{0x30}
+	v31Digest := ocrtypes.ConfigDigest{0x31}
+
+	// --- v3.0 runs as production with the backfill channel, then retires ---
+	old := newV30Instance(t, v30Digest, nil, nil)
+	ts := handoverTickNanos * 10
+	old.round(v30.Observation{UnixTimestampNanoseconds: ts})
+	ts += handoverTickNanos
+	old.round(v30.Observation{
+		UnixTimestampNanoseconds: ts,
+		UpdateChannelDefinitions: handoverBackfillDefs(),
+		StreamValues:             handoverStreamValues(),
+	})
+	for range 2 {
+		ts += handoverTickNanos
+		old.round(v30.Observation{UnixTimestampNanoseconds: ts, StreamValues: handoverStreamValues()})
+	}
+	require.NotZero(t, old.outcome().ValidAfterNanoseconds[handoverBackfillChannelID],
+		"v3.0 must have made backfill progress before retiring")
+
+	ts += handoverTickNanos
+	old.round(v30.Observation{
+		UnixTimestampNanoseconds: ts,
+		ShouldRetire:             true,
+		StreamValues:             handoverStreamValues(),
+	})
+	require.Equal(t, protocol.LifeCycleStageRetired, old.outcome().LifeCycleStage)
+	require.NotEmpty(t, old.retirementRR)
+
+	handedOver, err := protocol.StandardRetirementReportCodec{}.Decode(old.retirementRR)
+	require.NoError(t, err)
+	predecessorWatermark := handedOver.ValidAfterNanoseconds[handoverBackfillChannelID]
+	require.NotZero(t, predecessorWatermark, "the retirement report must carry the backfill watermark")
+
+	// --- v3.1 runs as staging over the same definitions, then promotes ---
+	newInst := newV31Instance(t, v31Digest, &v30Digest, newPredecessorCache(t, nil, true))
+	newInst.round(Observation{}) // bootstrap -> staging
+	require.Equal(t, protocol.LifeCycleStageStaging, newInst.lifeCycleStage())
+
+	stagingTS := ts
+	stagingTS += handoverTickNanos
+	newInst.round(Observation{
+		UnixTimestampNanoseconds: stagingTS,
+		UpdateChannelDefinitions: handoverBackfillDefs(),
+		StreamValues:             handoverStreamValues(),
+	})
+	for range 3 {
+		stagingTS += handoverTickNanos
+		newInst.round(Observation{UnixTimestampNanoseconds: stagingTS, StreamValues: handoverStreamValues()})
+	}
+	require.Equal(t, uint64(0), newInst.validAfter()[handoverBackfillChannelID],
+		"the staging instance must not have advanced the backfill watermark")
+
+	promoted := newPredecessorCache(t, attest(t, old.retirementRR), true)
+	newInst.p.PredecessorRetirementReportCache = promoted
+	attestedBytes, err := promoted.AttestedRetirementReport(v30Digest)
+	require.NoError(t, err)
+
+	stagingTS += handoverTickNanos
+	newInst.round(Observation{
+		UnixTimestampNanoseconds:      stagingTS,
+		AttestedPredecessorRetirement: attestedBytes,
+		PredecessorSigners:            handoverPredecessorSigners,
+		PredecessorF:                  1,
+		StreamValues:                  handoverStreamValues(),
+	})
+
+	require.Equal(t, protocol.LifeCycleStageProduction, newInst.lifeCycleStage())
+	require.Equal(t, predecessorWatermark, newInst.validAfter()[handoverBackfillChannelID],
+		"promotion must resume the backfill at the predecessor's watermark, not at the staging instance's 0")
+}
+
+// Test_Handover_BackfillAbsentFromRetirementReportStartsAtZero pins the existing
+// new-channel semantics, which the guard does not change: a backfill channel the
+// predecessor never reported is absent from its retirement report and falls
+// through to the new-channel path, starting from the beginning. That is the
+// correct reading — the predecessor never backfilled it.
+func Test_Handover_BackfillAbsentFromRetirementReportStartsAtZero(t *testing.T) {
+	v30Digest := ocrtypes.ConfigDigest{0x30}
+
+	// The predecessor ran without the backfill channel, so its retirement report
+	// mentions only the regular one.
+	old := newV30Instance(t, v30Digest, nil, nil)
+	ts := handoverTickNanos * 10
+	old.round(v30.Observation{UnixTimestampNanoseconds: ts})
+	ts += handoverTickNanos
+	old.round(v30.Observation{
+		UnixTimestampNanoseconds: ts,
+		UpdateChannelDefinitions: llotypes.ChannelDefinitions{handoverChannelID: handoverChannel()},
+		StreamValues:             handoverStreamValues(),
+	})
+	ts += handoverTickNanos
+	old.round(v30.Observation{
+		UnixTimestampNanoseconds: ts,
+		ShouldRetire:             true,
+		StreamValues:             handoverStreamValues(),
+	})
+	require.NotEmpty(t, old.retirementRR)
+	handedOver, err := protocol.StandardRetirementReportCodec{}.Decode(old.retirementRR)
+	require.NoError(t, err)
+	require.NotContains(t, handedOver.ValidAfterNanoseconds, handoverBackfillChannelID)
+
+	// The successor adds the backfill channel itself while staging.
+	newInst := newV31Instance(t, ocrtypes.ConfigDigest{0x31}, &v30Digest, newPredecessorCache(t, nil, true))
+	newInst.round(Observation{})
+	stagingTS := ts + handoverTickNanos
+	newInst.round(Observation{
+		UnixTimestampNanoseconds: stagingTS,
+		UpdateChannelDefinitions: handoverBackfillDefs(),
+		StreamValues:             handoverStreamValues(),
+	})
+	stagingTS += handoverTickNanos
+	newInst.round(Observation{UnixTimestampNanoseconds: stagingTS, StreamValues: handoverStreamValues()})
+
+	promoted := newPredecessorCache(t, attest(t, old.retirementRR), true)
+	newInst.p.PredecessorRetirementReportCache = promoted
+	attestedBytes, err := promoted.AttestedRetirementReport(v30Digest)
+	require.NoError(t, err)
+
+	stagingTS += handoverTickNanos
+	newInst.round(Observation{
+		UnixTimestampNanoseconds:      stagingTS,
+		AttestedPredecessorRetirement: attestedBytes,
+		PredecessorSigners:            handoverPredecessorSigners,
+		PredecessorF:                  1,
+		StreamValues:                  handoverStreamValues(),
+	})
+
+	require.Equal(t, protocol.LifeCycleStageProduction, newInst.lifeCycleStage())
+	require.Equal(t, uint64(0), newInst.validAfter()[handoverBackfillChannelID],
+		"a backfill channel the predecessor never reported starts from the beginning")
 }

@@ -3,6 +3,7 @@ package llo
 import (
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -33,6 +34,16 @@ func (c *checkingPredecessorRetirementReportCache) AttestedRetirementReport(ocrt
 
 func (c *checkingPredecessorRetirementReportCache) CheckAttestedRetirementReport(ocrtypes.ConfigDigest, []byte) (protocol.RetirementReport, error) {
 	return c.report, c.err
+}
+
+// The v3.0 plugin verifies against its local cache, so these two are only here
+// to satisfy the interface.
+func (c *checkingPredecessorRetirementReportCache) PredecessorConfig(ocrtypes.ConfigDigest) ([][]byte, uint8, bool) {
+	panic("not implemented")
+}
+
+func (c *checkingPredecessorRetirementReportCache) VerifyAttestedRetirementReport(ocrtypes.ConfigDigest, [][]byte, uint8, []byte) (protocol.RetirementReport, error) {
+	panic("not implemented")
 }
 
 // stagingPlugin builds a v3.0 plugin in the staging stage behind the given
@@ -148,4 +159,165 @@ func Test_Outcome_RejectsIncompatibleProtocolVersion(t *testing.T) {
 	require.Equal(t, protocol.LifeCycleStageStaging, out.LifeCycleStage,
 		"instance must stay in staging on a retirement report from an unsupported protocol version")
 	require.NotContains(t, out.ValidAfterNanoseconds, cid)
+}
+
+// backfillDefs builds a target channel plus a history-backfill channel holding
+// three observations, at 100s, 150s and 200s.
+func backfillDefs(targetID, backfillID llotypes.ChannelID) llotypes.ChannelDefinitions {
+	streams := []llotypes.Stream{{StreamID: 1, Aggregator: llotypes.AggregatorMedian}}
+	return llotypes.ChannelDefinitions{
+		targetID: {ReportFormat: llotypes.ReportFormatJSON, Streams: streams},
+		backfillID: {
+			ReportFormat: llotypes.ReportFormatHistoryBackfill,
+			Streams:      streams,
+			Opts:         []byte(`{"targetChannelId":2,"observations":{"100":{"1":"1"},"150":{"1":"3"},"200":{"1":"2"}}}`),
+		},
+	}
+}
+
+// Test_IsReportable_StagingSkipsBackfill covers the backfill guard. Both
+// protocol instances of a blue/green job share one ChannelDefinitionCache, so a
+// backfill channel is present on the staging instance too, where it is a new
+// channel with a watermark of 0. Without the guard the staging instance replays
+// the whole backfill from the beginning for the length of the overlap window.
+func Test_IsReportable_StagingSkipsBackfill(t *testing.T) {
+	targetID, backfillID := llotypes.ChannelID(2), llotypes.ChannelID(10)
+	out := Outcome{
+		ObservationTimestampNanoseconds: uint64(300 * time.Second),
+		ChannelDefinitions:              backfillDefs(targetID, backfillID),
+		ValidAfterNanoseconds:           map[llotypes.ChannelID]uint64{backfillID: 0},
+	}
+
+	t.Run("staging is not reportable", func(t *testing.T) {
+		out.LifeCycleStage = protocol.LifeCycleStageStaging
+		uerr := out.IsReportable(backfillID, 1, 0, nil)
+		require.NotNil(t, uerr)
+		require.Contains(t, uerr.Error(), "backfill is not performed by a staging instance")
+	})
+
+	t.Run("production is reportable", func(t *testing.T) {
+		out.LifeCycleStage = protocol.LifeCycleStageProduction
+		require.Nil(t, out.IsReportable(backfillID, 1, 0, nil))
+	})
+
+	t.Run("retired is not reportable", func(t *testing.T) {
+		out.LifeCycleStage = protocol.LifeCycleStageRetired
+		uerr := out.IsReportable(backfillID, 1, 0, nil)
+		require.NotNil(t, uerr)
+		require.Contains(t, uerr.Error(), "retired channel")
+	})
+}
+
+// Test_Outcome_StagingDoesNotAdvanceBackfillWatermark is the other half of the
+// guard: skipping the report while still advancing the watermark would silently
+// consume backfill observations that were never emitted, so that by the time the
+// instance is promoted the backfill would look further along than it is.
+func Test_Outcome_StagingDoesNotAdvanceBackfillWatermark(t *testing.T) {
+	targetID, backfillID := llotypes.ChannelID(2), llotypes.ChannelID(10)
+	defs := backfillDefs(targetID, backfillID)
+
+	// A staging instance, several rounds in, with the backfill channel already
+	// established and its watermark still at the start.
+	p := stagingPlugin(t, &checkingPredecessorRetirementReportCache{err: errUnverifiable})
+	prev := Outcome{
+		LifeCycleStage:                  protocol.LifeCycleStageStaging,
+		ObservationTimestampNanoseconds: uint64(300 * time.Second),
+		ChannelDefinitions:              defs,
+		ValidAfterNanoseconds:           map[llotypes.ChannelID]uint64{backfillID: 0},
+	}
+	prevRaw, err := p.OutcomeCodec.Encode(prev)
+	require.NoError(t, err)
+
+	out := handoverRound(t, p, 5, prevRaw, Observation{
+		UnixTimestampNanoseconds: uint64(400 * time.Second),
+	})
+
+	require.Equal(t, protocol.LifeCycleStageStaging, out.LifeCycleStage)
+	require.Equal(t, uint64(0), out.ValidAfterNanoseconds[backfillID],
+		"a staging instance emits no backfill report, so its watermark must not move")
+
+	// The same round on a production instance does advance it, to the first
+	// eligible observation.
+	prev.LifeCycleStage = protocol.LifeCycleStageProduction
+	prevRaw, err = p.OutcomeCodec.Encode(prev)
+	require.NoError(t, err)
+
+	out = handoverRound(t, p, 5, prevRaw, Observation{
+		UnixTimestampNanoseconds: uint64(400 * time.Second),
+	})
+	require.Equal(t, uint64(100*time.Second), out.ValidAfterNanoseconds[backfillID])
+}
+
+// Test_Outcome_PromotionResumesBackfillAtPredecessorWatermark is why skipping is
+// correct rather than merely safe: promotion replaces ValidAfterNanoseconds
+// wholesale with the predecessor's map, so the staging instance's backfill
+// watermark is discarded unread and the backfill resumes exactly where the
+// predecessor left it. Nothing was lost by not replaying it.
+func Test_Outcome_PromotionResumesBackfillAtPredecessorWatermark(t *testing.T) {
+	targetID, backfillID := llotypes.ChannelID(2), llotypes.ChannelID(10)
+	defs := backfillDefs(targetID, backfillID)
+
+	// The predecessor retired having already backfilled up to the 150s
+	// observation.
+	predecessorWatermark := uint64(150 * time.Second)
+	p := stagingPlugin(t, &checkingPredecessorRetirementReportCache{
+		report: protocol.RetirementReport{
+			ProtocolVersion:       1,
+			ValidAfterNanoseconds: map[llotypes.ChannelID]uint64{backfillID: predecessorWatermark},
+		},
+	})
+
+	prev := Outcome{
+		LifeCycleStage:                  protocol.LifeCycleStageStaging,
+		ObservationTimestampNanoseconds: uint64(300 * time.Second),
+		ChannelDefinitions:              defs,
+		ValidAfterNanoseconds:           map[llotypes.ChannelID]uint64{backfillID: 0},
+	}
+	prevRaw, err := p.OutcomeCodec.Encode(prev)
+	require.NoError(t, err)
+
+	out := handoverRound(t, p, 5, prevRaw, Observation{
+		UnixTimestampNanoseconds:      uint64(400 * time.Second),
+		AttestedPredecessorRetirement: []byte("attested"),
+	})
+
+	require.Equal(t, protocol.LifeCycleStageProduction, out.LifeCycleStage)
+	require.Equal(t, predecessorWatermark, out.ValidAfterNanoseconds[backfillID],
+		"promotion must resume the backfill at the predecessor's watermark, not at the staging instance's")
+}
+
+// Test_Outcome_BackfillAbsentFromRetirementReportStartsAtZero pins the existing
+// new-channel semantics, which the guard does not change: a backfill channel the
+// predecessor never reported is absent from its retirement report and falls
+// through to the new-channel path, starting from the beginning. That is the
+// correct reading — the predecessor never backfilled it.
+func Test_Outcome_BackfillAbsentFromRetirementReportStartsAtZero(t *testing.T) {
+	targetID, backfillID := llotypes.ChannelID(2), llotypes.ChannelID(10)
+	otherID := llotypes.ChannelID(3)
+	defs := backfillDefs(targetID, backfillID)
+
+	p := stagingPlugin(t, &checkingPredecessorRetirementReportCache{
+		report: protocol.RetirementReport{
+			ProtocolVersion: 1,
+			// Mentions some other channel, but not the backfill one.
+			ValidAfterNanoseconds: map[llotypes.ChannelID]uint64{otherID: 500},
+		},
+	})
+
+	prev := Outcome{
+		LifeCycleStage:                  protocol.LifeCycleStageStaging,
+		ObservationTimestampNanoseconds: uint64(300 * time.Second),
+		ChannelDefinitions:              defs,
+		ValidAfterNanoseconds:           map[llotypes.ChannelID]uint64{backfillID: 0},
+	}
+	prevRaw, err := p.OutcomeCodec.Encode(prev)
+	require.NoError(t, err)
+
+	out := handoverRound(t, p, 5, prevRaw, Observation{
+		UnixTimestampNanoseconds:      uint64(400 * time.Second),
+		AttestedPredecessorRetirement: []byte("attested"),
+	})
+
+	require.Equal(t, protocol.LifeCycleStageProduction, out.LifeCycleStage)
+	require.Equal(t, uint64(0), out.ValidAfterNanoseconds[backfillID])
 }
