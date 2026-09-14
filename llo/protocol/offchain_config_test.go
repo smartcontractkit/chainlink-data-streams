@@ -64,6 +64,59 @@ func Test_OffchainConfig(t *testing.T) {
 			assert.Equal(t, cfg, cfgDecoded)
 		})
 	})
+	t.Run("version 2", func(t *testing.T) {
+		t.Run("encode/decode valid values", func(t *testing.T) {
+			cfg := OffchainConfig{
+				ProtocolVersion:                     2,
+				DefaultMinReportIntervalNanoseconds: 1000,
+				EnableObservationCompression:        true,
+			}
+
+			b, err := cfg.Encode()
+			require.NoError(t, err)
+
+			cfgDecoded, err := DecodeOffchainConfig(b)
+			require.NoError(t, err)
+			assert.Equal(t, cfg, cfgDecoded)
+		})
+		t.Run("DefaultMinReportIntervalNanoseconds=0 is invalid", func(t *testing.T) {
+			cfg := OffchainConfig{
+				ProtocolVersion:                     2,
+				DefaultMinReportIntervalNanoseconds: 0,
+			}
+
+			err := cfg.Validate()
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "default report cadence must be non-zero if protocol version is 2")
+		})
+	})
+	t.Run("decoding rejects an unknown protocol version", func(t *testing.T) {
+		// Validate used to run on the zero-valued struct before the decoded
+		// fields were assigned, so this always passed and an unknown version was
+		// silently treated as the latest known one. A node that does not
+		// understand the configured version must refuse to run rather than
+		// diverge from the nodes that do.
+		b, err := OffchainConfig{
+			ProtocolVersion:                     99,
+			DefaultMinReportIntervalNanoseconds: 1000,
+		}.Encode()
+		require.NoError(t, err)
+
+		_, err = DecodeOffchainConfig(b)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "unknown protocol version: 99")
+	})
+	t.Run("decoding rejects values that are invalid for their version", func(t *testing.T) {
+		b, err := OffchainConfig{
+			ProtocolVersion:                     0,
+			DefaultMinReportIntervalNanoseconds: 1,
+		}.Encode()
+		require.NoError(t, err)
+
+		_, err = DecodeOffchainConfig(b)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "default report cadence must be 0 if protocol version is 0")
+	})
 	t.Run("DefaultMinReportIntervalNanoseconds=0 is invalid", func(t *testing.T) {
 		cfg := OffchainConfig{
 			ProtocolVersion:                     1,

@@ -37,12 +37,15 @@ func DecodeOffchainConfig(b []byte) (o OffchainConfig, err error) {
 		return o, nil
 		// return o, fmt.Errorf("failed to decode offchain config: expected protobuf (got: 0x%x); %w", b, err)
 	}
-	if err := o.Validate(); err != nil {
-		return o, fmt.Errorf("failed to decode offchain config: %w", err)
-	}
 	o.ProtocolVersion = pbuf.ProtocolVersion
 	o.DefaultMinReportIntervalNanoseconds = pbuf.DefaultMinReportIntervalNanoseconds
 	o.EnableObservationCompression = pbuf.EnableObservationCompression
+	// NOTE: Validate must run on the decoded values. A node that cannot honour the
+	// configured version must refuse to run rather than diverge from the nodes
+	// that can.
+	if err := o.Validate(); err != nil {
+		return o, fmt.Errorf("failed to decode offchain config: %w", err)
+	}
 	return
 }
 
@@ -61,9 +64,12 @@ func (c OffchainConfig) Validate() error {
 		if c.DefaultMinReportIntervalNanoseconds != 0 {
 			return errors.New("default report cadence must be 0 if protocol version is 0")
 		}
-	case 1:
+	case 1, 2:
+		// Version 2 is version 1 with a channel vote hash that commits to every
+		// field of the channel definition (see protocol.ChannelHashV2).
+		// Nothing else differs, so the cadence rules are the same.
 		if c.DefaultMinReportIntervalNanoseconds == 0 {
-			return errors.New("default report cadence must be non-zero if protocol version is 1")
+			return fmt.Errorf("default report cadence must be non-zero if protocol version is %d", c.ProtocolVersion)
 		}
 	default:
 		return fmt.Errorf("unknown protocol version: %d", c.ProtocolVersion)
