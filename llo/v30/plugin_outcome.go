@@ -392,7 +392,7 @@ func (p *Plugin) decodeObservations(aos []types.AttributedObservation, outctx oc
 		// for each channelId count number of votes that mention it and count number of votes that include it.
 		for channelID, channelDefinition := range observation.UpdateChannelDefinitions {
 			defWithID := protocol.ChannelDefinitionWithID{ChannelDefinition: channelDefinition, ChannelID: channelID}
-			channelHash := MakeChannelHash(defWithID)
+			channelHash := p.makeChannelHash(defWithID)
 			updateChannelVotesByHash[channelHash]++
 			updateChannelDefinitionsByHash[channelHash] = defWithID
 		}
@@ -586,7 +586,24 @@ func (e *UnreportableChannelError) Unwrap() error {
 	return e.Inner
 }
 
-// MakeChannelHash is used for mapping ChannelDefinitionWithIDs
+// makeChannelHash selects the channel vote identity for this plugin's protocol
+// version.
+//
+// Protocol versions 0 and 1 use MakeChannelHash, which does not commit to
+// Tombstone, Source or DisableNilStreamValues. Protocol version 2 hashes the whole definition.
+func (p *Plugin) makeChannelHash(cd protocol.ChannelDefinitionWithID) protocol.ChannelHash {
+	if p.ProtocolVersion >= 2 {
+		return protocol.ChannelHashV2(cd)
+	}
+	return MakeChannelHash(cd)
+}
+
+// MakeChannelHash is the protocol version 0 and 1 channel vote identity.
+//
+// Deprecated: it does not commit to Tombstone, Source or
+// DisableNilStreamValues. Retained only so existing protocol version 0 and 1
+// instances keep their state transition. New code wants
+// protocol.ChannelHashV2.
 func MakeChannelHash(cd protocol.ChannelDefinitionWithID) protocol.ChannelHash {
 	h := sha256.New()
 	merr := errors.Join(

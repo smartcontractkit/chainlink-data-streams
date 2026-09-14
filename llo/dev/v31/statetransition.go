@@ -3,7 +3,6 @@ package llo
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
 	"errors"
 	"fmt"
 	"sort"
@@ -565,18 +564,10 @@ func medianTimestamp(timestampsNanoseconds []uint64) uint64 {
 	return timestampsNanoseconds[len(timestampsNanoseconds)/2]
 }
 
+// makeChannelHash delegates to the shared implementation so that v3.0 running
+// protocol version 2 and v3.1 cannot drift apart on channel identity.
 func makeChannelHash(cd protocol.ChannelDefinitionWithID) [32]byte {
-	pb := &protocol.LLOChannelIDAndDefinitionProto{
-		ChannelID:         cd.ChannelID,
-		ChannelDefinition: protocol.ChannelDefinitionToProto(cd.ChannelDefinition),
-	}
-	b, err := deterministicMarshal.Marshal(pb)
-	if err != nil {
-		// Marshaling a well-formed definition cannot fail; hash empty on the
-		// impossible error path rather than panicking.
-		return sha256.Sum256(nil)
-	}
-	return sha256.Sum256(b)
+	return protocol.ChannelHashV2(cd)
 }
 
 func sortChannelIDs(cids []llotypes.ChannelID) {

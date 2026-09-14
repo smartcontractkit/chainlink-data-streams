@@ -50,7 +50,7 @@ type PluginConfig struct {
 	//   "" or "3.0" => OCR3.0 (llo/v30)
 	//   "3.1"       => OCR3.1 (llo/dev/v31)
 	// NOTE: this is the OCR protocol version, distinct from the LLO offchain
-	// ProtocolVersion (0/1) carried in the offchain config.
+	// ProtocolVersion (0/1/2) carried in the offchain config.
 	OCRVersion string `json:"ocrVersion" toml:"ocrVersion"`
 }
 
