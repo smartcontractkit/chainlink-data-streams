@@ -62,6 +62,34 @@ func Test_VerifyChannelDefinitions(t *testing.T) {
 		require.EqualError(t, err, "ChannelDefinition with ID 1 has stream 0 with zero aggregator (this may indicate an uninitialized struct)")
 	})
 
+	t.Run("rejects unknown aggregator at admission but not once committed", func(t *testing.T) {
+		channelDefs := llotypes.ChannelDefinitions{
+			1: llotypes.ChannelDefinition{
+				Streams: []llotypes.Stream{{StreamID: 7, Aggregator: llotypes.Aggregator(99)}},
+			},
+		}
+		err := verifyAdmittingAll(codecs, channelDefs)
+		require.EqualError(t, err, "ChannelDefinition with ID 1 has stream 7 with unknown aggregator 99")
+
+		// Already committed: verification must pass, otherwise every oracle
+		// fails every round and the protocol halts with no recovery path.
+		require.NoError(t, VerifyChannelDefinitions(codecs, channelDefs))
+	})
+
+	t.Run("accepts known and calculated aggregators at admission", func(t *testing.T) {
+		channelDefs := llotypes.ChannelDefinitions{
+			1: llotypes.ChannelDefinition{
+				Streams: []llotypes.Stream{
+					{StreamID: 1, Aggregator: llotypes.AggregatorMedian},
+					{StreamID: 2, Aggregator: llotypes.AggregatorMode},
+					{StreamID: 3, Aggregator: llotypes.AggregatorQuote},
+					{StreamID: 4, Aggregator: llotypes.AggregatorCalculated},
+				},
+			},
+		}
+		require.NoError(t, verifyAdmittingAll(codecs, channelDefs))
+	})
+
 	t.Run("fails if too many total unique stream IDs", func(t *testing.T) {
 		streams := make([]llotypes.Stream, MaxObservationStreamValuesLength)
 		for i := uint32(0); i < MaxObservationStreamValuesLength; i++ {

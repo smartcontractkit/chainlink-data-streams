@@ -406,7 +406,13 @@ func (p *Plugin) aggregate(
 
 			aggF := protocol.GetAggregatorFunc(agg)
 			if aggF == nil {
-				return fmt.Errorf("no aggregator function defined for aggregator of type %v", agg)
+				// Unknown aggregator, e.g. one added by a newer version. Admission
+				// rejects these, but a committed definition must not halt the
+				// protocol: skip the pair and carry forward what it had.
+				if prevTSV != nil {
+					keep(sid, agg, prevTSV)
+				}
+				continue
 			}
 			result, aerr := aggF(streamObservations[sid], p.F)
 
