@@ -328,7 +328,12 @@ func Test_JSONCodec(t *testing.T) {
 
 			_, err := cdc.Pack(digest, seqNr, report, sigs)
 			require.Error(t, err)
-			require.Contains(t, err.Error(), "json: error calling MarshalJSON for type jsontext.Value")
+			// Assert on the cause rather than on the name of the type being
+			// marshaled: since Go 1.26, encoding/json.RawMessage is an alias for
+			// jsontext.Value, so the type name in the message is toolchain
+			// dependent.
+			require.Contains(t, err.Error(), "json: error calling MarshalJSON")
+			require.Contains(t, err.Error(), "invalid character f")
 		})
 		t.Run("report is valid JSON", func(t *testing.T) {
 			digest := types.ConfigDigest([32]byte{1, 2, 3})
