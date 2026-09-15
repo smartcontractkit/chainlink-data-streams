@@ -120,6 +120,14 @@ func verifyChannelDefinitions(codecs map[llotypes.ReportFormat]ReportCodec, chan
 				merr = errors.Join(merr, fmt.Errorf("ChannelDefinition with ID %d has stream %d with zero aggregator (this may indicate an uninitialized struct)", channelID, strm.StreamID))
 				continue
 			}
+			// An aggregator this binary does not know has no aggregator
+			// function, so the pair can never produce an aggregate. Rejected at
+			// admission only: a committed definition carrying one is left alone
+			// (aggregation skips the pair) rather than failing verification on
+			// every oracle, every round.
+			if strm.Aggregator != llotypes.AggregatorCalculated && GetAggregatorFunc(strm.Aggregator) == nil {
+				admit(fmt.Errorf("ChannelDefinition with ID %d has stream %d with unknown aggregator %d", channelID, strm.StreamID, strm.Aggregator), channelID)
+			}
 			uniqueStreamIDs[strm.StreamID] = struct{}{}
 			// Calculated streams are derived from the opts that declare them and
 			// are not stored on the definition, so anything listed here is

@@ -283,7 +283,10 @@ func (p *Plugin) outcome(outctx ocr3types.OutcomeContext, query types.Query, aos
 			// Perform the aggregation
 			aggF := protocol.GetAggregatorFunc(agg)
 			if aggF == nil {
-				return nil, fmt.Errorf("no aggregator function defined for aggregator of type %v", agg)
+				// Unknown aggregator, e.g. one added by a newer version. Admission
+				// rejects these, but a committed definition must not halt the
+				// protocol: skip the pair, keeping any carried-forward value.
+				continue
 			}
 			result, err := aggF(streamObservations[sid], p.F)
 
