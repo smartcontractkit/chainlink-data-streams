@@ -62,7 +62,7 @@ func (p *Plugin) Reports(ctx context.Context, seqNr uint64, rawPrecursor ocr3_1t
 		})
 	}
 
-	for _, cid := range out.reportableChannels(p.DefaultMinReportIntervalNanoseconds, channelOpts, p.Logger) {
+	for _, cid := range out.reportableChannels(p.DefaultMinReportIntervalNanoseconds, p.F, channelOpts, p.Logger) {
 		cd := out.ChannelDefinitions[cid]
 
 		if cd.ReportFormat == llotypes.ReportFormatHistoryBackfill {
@@ -177,12 +177,27 @@ func (p *Plugin) Reports(ctx context.Context, seqNr uint64, rawPrecursor ocr3_1t
 	return rwis, nil
 }
 
+// formatIsEncodable reports whether enough oracles advertised a report codec
+// for format that a report encoded with it would actually be certified.
+//
+// The tally is read from the precursor, not from p.ReportCodecs, so this stays
+// a pure function of replicated state. An oracle that cannot encode still
+// computes reportable=true when enough peers can.
+func (o precursor) formatIsEncodable(format llotypes.ReportFormat, f int, channelID llotypes.ChannelID, lggr logger.Logger) bool {
+	if supporters := o.SupportByFormat[format]; supporters < 2*f+1 {
+		lggr.Warnw("IsReportable=false; too few oracles advertise a report codec for this format",
+			"channelID", channelID, "reportFormat", format, "supporters", supporters, "required", 2*f+1)
+		return false
+	}
+	return true
+}
+
 // reportableChannels returns the sorted set of channels reportable in this
 // (current) round (see isReportable).
-func (o precursor) reportableChannels(minReportInterval uint64, optsCache *protocol.OptsCache, lggr logger.Logger) []llotypes.ChannelID {
+func (o precursor) reportableChannels(minReportInterval uint64, f int, optsCache *protocol.OptsCache, lggr logger.Logger) []llotypes.ChannelID {
 	reportable := make([]llotypes.ChannelID, 0, len(o.ChannelDefinitions))
 	for channelID := range o.ChannelDefinitions {
-		if o.isReportable(channelID, minReportInterval, optsCache, lggr) {
+		if o.isReportable(channelID, minReportInterval, f, optsCache, lggr) {
 			reportable = append(reportable, channelID)
 		}
 	}
@@ -190,7 +205,7 @@ func (o precursor) reportableChannels(minReportInterval uint64, optsCache *proto
 	return reportable
 }
 
-func (o precursor) isReportable(channelID llotypes.ChannelID, minReportInterval uint64, optsCache *protocol.OptsCache, lggr logger.Logger) bool {
+func (o precursor) isReportable(channelID llotypes.ChannelID, minReportInterval uint64, f int, optsCache *protocol.OptsCache, lggr logger.Logger) bool {
 	if o.LifeCycleStage == protocol.LifeCycleStageRetired {
 		return false
 	}
@@ -199,8 +214,14 @@ func (o precursor) isReportable(channelID llotypes.ChannelID, minReportInterval 
 		return false
 	}
 	if cd.ReportFormat == llotypes.ReportFormatHistoryBackfill {
-		_, _, _, ok := selectBackfillCandidate(o.ChannelDefinitions, o.ValidAfterNanoseconds, o.ObservationTimestampNanoseconds, channelID, optsCache)
-		return ok
+		_, _, opts, ok := selectBackfillCandidate(o.ChannelDefinitions, o.ValidAfterNanoseconds, o.ObservationTimestampNanoseconds, channelID, optsCache)
+		if !ok {
+			return false
+		}
+		// Backfill reports are encoded with the target channel's codec, so the
+		// target's format is the one that must be encodable DON-wide. Selection
+		// above already established the target exists.
+		return o.formatIsEncodable(o.ChannelDefinitions[opts.TargetChannelID].ReportFormat, f, channelID, lggr)
 	}
 	// When DisableNilStreamValues is set, every stream must have a (non-nil)
 	// aggregate value for the channel to be reportable.
@@ -239,6 +260,9 @@ func (o precursor) isReportable(channelID llotypes.ChannelID, minReportInterval 
 			lggr.Warnw("IsReportable=false; nil calculated stream value", "channelID", channelID, "streamID", strm.StreamID)
 			return false
 		}
+	}
+	if !o.formatIsEncodable(cd.ReportFormat, f, channelID, lggr) {
+		return false
 	}
 	validAfter, ok := o.ValidAfterNanoseconds[channelID]
 	if !ok {

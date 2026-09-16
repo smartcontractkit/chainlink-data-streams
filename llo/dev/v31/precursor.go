@@ -26,6 +26,14 @@ type precursor struct {
 	// ChannelDefinitions came from. It lets Reports tell whether the decoded-opts
 	// cache already matches these definitions without walking every channel.
 	ChannelStateSeqNr uint64
+	// SupportByFormat is the number of oracles that advertised a report codec
+	// for each report format in the round that produced this precursor.
+	//
+	// Snapshotted rather than recomputed so that reportability and the
+	// validAfter advance for a round read the identical number: Reports runs
+	// against this precursor, and StateTransition persists reportedLastRound
+	// from the same object (see isReportable).
+	SupportByFormat map[llotypes.ReportFormat]int
 }
 
 func encodePrecursor(p precursor) (ocr3_1types.ReportsPlusPrecursor, error) {
@@ -83,6 +91,22 @@ func encodePrecursor(p precursor) (ocr3_1types.ReportsPlusPrecursor, error) {
 		})
 	}
 
+	if len(p.SupportByFormat) > 0 {
+		pb.SupportByFormat = make([]*protocol.LLOReportFormatSupportProto, 0, len(p.SupportByFormat))
+		for format, count := range p.SupportByFormat {
+			if count < 0 {
+				return nil, fmt.Errorf("negative support count for report format %v: %d", format, count)
+			}
+			pb.SupportByFormat = append(pb.SupportByFormat, &protocol.LLOReportFormatSupportProto{
+				ReportFormat: uint32(format),
+				OracleCount:  uint32(count),
+			})
+		}
+		sort.Slice(pb.SupportByFormat, func(i, j int) bool {
+			return pb.SupportByFormat[i].ReportFormat < pb.SupportByFormat[j].ReportFormat
+		})
+	}
+
 	b, err := deterministicMarshal.Marshal(pb)
 	if err != nil {
 		return nil, fmt.Errorf("marshal precursor: %w", err)
@@ -111,6 +135,15 @@ func decodePrecursor(b ocr3_1types.ReportsPlusPrecursor) (precursor, error) {
 	}
 	for _, va := range pb.ValidAfterNanoseconds {
 		p.ValidAfterNanoseconds[va.ChannelID] = va.ValidAfterNanoseconds
+	}
+	if len(pb.SupportByFormat) > protocol.MaxObservationSupportedReportFormatsLength {
+		return precursor{}, fmt.Errorf("precursor carries too many report format support entries: %d (max %d)", len(pb.SupportByFormat), protocol.MaxObservationSupportedReportFormatsLength)
+	}
+	if len(pb.SupportByFormat) > 0 {
+		p.SupportByFormat = make(map[llotypes.ReportFormat]int, len(pb.SupportByFormat))
+		for _, sup := range pb.SupportByFormat {
+			p.SupportByFormat[llotypes.ReportFormat(sup.ReportFormat)] = int(sup.OracleCount)
+		}
 	}
 	for _, sa := range pb.StreamAggregates {
 		sv, err := protocol.UnmarshalProtoStreamValue(sa.StreamValue)
