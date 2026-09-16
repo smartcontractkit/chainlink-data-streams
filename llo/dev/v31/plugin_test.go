@@ -949,3 +949,56 @@ func Test_Observation_RejectsInlineStreamValues(t *testing.T) {
 	var bfErr *blobFetchError
 	require.NotErrorAs(t, err, &bfErr)
 }
+
+func Test_IsReportable_EffectiveStreamsFailure(t *testing.T) {
+	// Reportability and emission share one derivation: isReportable and Reports
+	// both go through protocol.EffectiveStreams. A channel whose opts cannot be
+	// decoded has no derivable stream list, so Reports could not assemble
+	// values for it and reportability must agree, otherwise validAfter advances
+	// over a round that emitted nothing.
+	cd := llotypes.ChannelDefinition{
+		ReportFormat: llotypes.ReportFormatEVMABIEncodeUnpackedExpr,
+		Opts:         []byte(`{"not":`),
+		Streams:      []llotypes.Stream{{StreamID: 100, Aggregator: llotypes.AggregatorMedian}},
+	}
+	prec := precursor{
+		LifeCycleStage:                  protocol.LifeCycleStageProduction,
+		ObservationTimestampNanoseconds: 2_000_000_000,
+		ChannelDefinitions:              llotypes.ChannelDefinitions{1: cd},
+		ValidAfterNanoseconds:           map[llotypes.ChannelID]uint64{1: 1_000_000_000},
+		StreamAggregates: protocol.StreamAggregates{
+			100: {llotypes.AggregatorMedian: protocol.ToDecimal(decimal.NewFromInt(1))},
+		},
+	}
+	require.Empty(t, prec.reportableChannels(0, protocol.NewOptsCache(), logger.Test(t)))
+}
+
+func Test_SelectBackfillCandidate_UnemittableRow(t *testing.T) {
+	const (
+		targetCID   = llotypes.ChannelID(10)
+		backfillCID = llotypes.ChannelID(20)
+		tenSec      = uint64(10_000_000_000)
+	)
+	targetCD := llotypes.ChannelDefinition{ReportFormat: llotypes.ReportFormatJSON, Streams: []llotypes.Stream{{StreamID: 100, Aggregator: llotypes.AggregatorMedian}}}
+
+	// Row carries stream 999, not the target's stream 100, so
+	// BuildBackfillStreamValues would fail in Reports. The candidate must not
+	// be selectable: the watermark would otherwise advance past a row that
+	// never emitted, losing it permanently.
+	missingStream := llotypes.ChannelDefinition{
+		ReportFormat: llotypes.ReportFormatHistoryBackfill,
+		Opts:         []byte(`{"targetChannelId":10,"observations":{"5":{"999":"1.5"}}}`),
+	}
+	defs := llotypes.ChannelDefinitions{targetCID: targetCD, backfillCID: missingStream}
+	_, _, _, ok := selectBackfillCandidate(defs, map[llotypes.ChannelID]uint64{backfillCID: 0}, tenSec, backfillCID, nil)
+	require.False(t, ok, "row missing a target stream must not be selectable")
+
+	// Same row shape, but the value is not parseable as a stream value.
+	badValue := llotypes.ChannelDefinition{
+		ReportFormat: llotypes.ReportFormatHistoryBackfill,
+		Opts:         []byte(`{"targetChannelId":10,"observations":{"5":{"100":"not-a-number"}}}`),
+	}
+	defs[backfillCID] = badValue
+	_, _, _, ok = selectBackfillCandidate(defs, map[llotypes.ChannelID]uint64{backfillCID: 0}, tenSec, backfillCID, nil)
+	require.False(t, ok, "row with an unparseable value must not be selectable")
+}
