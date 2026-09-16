@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"strconv"
+	"sync"
 	"testing"
 	"time"
 
@@ -1210,4 +1212,167 @@ func Test_StateTransition_TalliesReportFormatSupport(t *testing.T) {
 	prec, err := decodePrecursor(precBytes)
 	require.NoError(t, err)
 	require.Equal(t, 2, prec.SupportByFormat[llotypes.ReportFormatJSON])
+}
+
+// strictJSONCodec is reportcodec.JSONReportCodec with an extra Verify rule this
+// build has and the build that admitted the definition did not: the version
+// skew that makes a baseline failure on committed state reachable.
+type strictJSONCodec struct {
+	reportcodec.JSONReportCodec
+	rejectStream llotypes.StreamID
+}
+
+func (c strictJSONCodec) Verify(cd llotypes.ChannelDefinition) error {
+	for _, strm := range cd.Streams {
+		if strm.StreamID == c.rejectStream {
+			return errors.New("this build rejects stream " + strconv.Itoa(int(strm.StreamID)))
+		}
+	}
+	return c.JSONReportCodec.Verify(cd)
+}
+
+// recordingDataSource records the stream IDs it was asked to observe.
+type recordingDataSource struct {
+	mu   sync.Mutex
+	seen map[llotypes.StreamID]struct{}
+}
+
+func (d *recordingDataSource) Observe(_ context.Context, sv protocol.StreamValues, _ DSOpts) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.seen == nil {
+		d.seen = map[llotypes.StreamID]struct{}{}
+	}
+	for streamID := range sv {
+		d.seen[streamID] = struct{}{}
+		sv[streamID] = protocol.ToDecimal(decimal.NewFromInt(1))
+	}
+	return nil
+}
+
+func (d *recordingDataSource) streams() []llotypes.StreamID {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	out := make([]llotypes.StreamID, 0, len(d.seen))
+	for streamID := range d.seen {
+		out = append(out, streamID)
+	}
+	return out
+}
+
+// Test_Observation_UnverifiableCommittedChannelIsNotFatal covers the
+// version-skew case: a channel committed under an older build fails this
+// build's codec.Verify. The node must not halt -- it keeps observing and,
+// crucially, still votes the offending channel out, which is the only way the
+// DON recovers.
+func Test_Observation_UnverifiableCommittedChannelIsNotFatal(t *testing.T) {
+	ctx := tests.Context(t)
+	p := testPlugin(t)
+	kv := newMemKV()
+
+	healthy := llotypes.ChannelDefinition{
+		ReportFormat: llotypes.ReportFormatJSON,
+		Streams:      []llotypes.Stream{{StreamID: 100, Aggregator: llotypes.AggregatorMedian}},
+	}
+	rejected := llotypes.ChannelDefinition{
+		ReportFormat: llotypes.ReportFormatJSON,
+		Streams:      []llotypes.Stream{{StreamID: 999, Aggregator: llotypes.AggregatorMedian}},
+	}
+
+	// Rounds 1-2: both channels are admitted by a build that accepts them.
+	_, err := p.StateTransition(ctx, 1, ocrtypes.AttributedQuery{}, []ocrtypes.AttributedObservation{ao(0, nil), ao(1, nil), ao(2, nil)}, kv, testBlobs)
+	require.NoError(t, err)
+	addObs := Observation{
+		UnixTimestampNanoseconds: 1_000,
+		UpdateChannelDefinitions: llotypes.ChannelDefinitions{1: healthy, 2: rejected},
+	}
+	addAOs := []ocrtypes.AttributedObservation{}
+	for i := 0; i < 4; i++ {
+		addAOs = append(addAOs, ao(i, mustEncodeObs(t, addObs)))
+	}
+	_, err = p.StateTransition(ctx, 2, ocrtypes.AttributedQuery{}, addAOs, kv, testBlobs)
+	require.NoError(t, err)
+	require.Contains(t, kvChannelDefs(t, kv), llotypes.ChannelID(2))
+
+	// Now this node upgrades to a build whose codec rejects channel 2, and the
+	// definitions file drops it so the node has something to vote for.
+	p.ReportCodecs = map[llotypes.ReportFormat]protocol.ReportCodec{
+		llotypes.ReportFormatJSON: strictJSONCodec{rejectStream: 999},
+	}
+	p.ChannelCache = protocol.NewChannelCache()
+	p.ChannelDefinitionCache = &mockChannelDefinitionCache{defs: llotypes.ChannelDefinitions{1: healthy}}
+	p.ShouldRetireCache = &mockShouldRetireCache{}
+	ds := &recordingDataSource{}
+	attachPump(t, p, ds, newFakeBroadcaster())
+
+	obsBytes, err := p.Observation(ctx, 3, ocrtypes.AttributedQuery{}, kv, nil)
+	require.NoError(t, err, "a committed definition this build rejects must not halt the node")
+	obs, err := decodeObservation(ctx, obsBytes, testBlobs)
+	require.NoError(t, err)
+
+	// The removal vote is the recovery path, and it is only cast because the
+	// verification failure above was not fatal.
+	require.Contains(t, obs.RemoveChannelIDs, llotypes.ChannelID(2))
+	require.NotContains(t, obs.UpdateChannelDefinitions, llotypes.ChannelID(2))
+
+	// The rejected channel's streams are still observed: withholding them would
+	// only starve the nodes still on the old build, which considers the channel
+	// valid and reportable.
+	require.Eventually(t, func() bool { return p.pump.Cycles() >= 1 }, tests.WaitTimeout(t), 10*time.Millisecond)
+	require.ElementsMatch(t, []llotypes.StreamID{100, 999}, ds.streams())
+}
+
+// Test_FullRound_RecoverFromUnverifiableChannel is the end-to-end recovery:
+// every node upgrades to a build that rejects a committed channel, and the DON
+// keeps making rounds and votes the channel out.
+func Test_FullRound_RecoverFromUnverifiableChannel(t *testing.T) {
+	ctx := tests.Context(t)
+	p := testPlugin(t)
+	kv := newMemKV()
+
+	healthy := llotypes.ChannelDefinition{
+		ReportFormat: llotypes.ReportFormatJSON,
+		Streams:      []llotypes.Stream{{StreamID: 100, Aggregator: llotypes.AggregatorMedian}},
+	}
+	rejected := llotypes.ChannelDefinition{
+		ReportFormat: llotypes.ReportFormatJSON,
+		Streams:      []llotypes.Stream{{StreamID: 999, Aggregator: llotypes.AggregatorMedian}},
+	}
+
+	_, err := p.StateTransition(ctx, 1, ocrtypes.AttributedQuery{}, []ocrtypes.AttributedObservation{ao(0, nil), ao(1, nil), ao(2, nil)}, kv, testBlobs)
+	require.NoError(t, err)
+	addObs := Observation{
+		UnixTimestampNanoseconds: 1_000,
+		UpdateChannelDefinitions: llotypes.ChannelDefinitions{1: healthy, 2: rejected},
+	}
+	addAOs := []ocrtypes.AttributedObservation{}
+	for i := 0; i < 4; i++ {
+		addAOs = append(addAOs, ao(i, mustEncodeObs(t, addObs)))
+	}
+	_, err = p.StateTransition(ctx, 2, ocrtypes.AttributedQuery{}, addAOs, kv, testBlobs)
+	require.NoError(t, err)
+
+	p.ReportCodecs = map[llotypes.ReportFormat]protocol.ReportCodec{
+		llotypes.ReportFormatJSON: strictJSONCodec{rejectStream: 999},
+	}
+	p.ChannelCache = protocol.NewChannelCache()
+
+	// Every oracle votes the rejected channel out, and the round is accepted:
+	// the same observation must also pass ValidateObservation on the new build.
+	removeObs := Observation{
+		UnixTimestampNanoseconds: 2_000,
+		RemoveChannelIDs:         map[llotypes.ChannelID]struct{}{2: {}},
+		StreamValues:             protocol.StreamValues{100: protocol.ToDecimal(decimal.NewFromInt(42))},
+	}
+	removeAOs := []ocrtypes.AttributedObservation{}
+	for i := 0; i < 4; i++ {
+		removeAOs = append(removeAOs, ao(i, mustEncodeObs(t, removeObs)))
+	}
+	for _, aObs := range removeAOs {
+		require.NoError(t, p.ValidateObservation(ctx, 3, ocrtypes.AttributedQuery{}, aObs, kv, testBlobs))
+	}
+	_, err = p.StateTransition(ctx, 3, ocrtypes.AttributedQuery{}, removeAOs, kv, testBlobs)
+	require.NoError(t, err)
+	require.NotContains(t, kvChannelDefs(t, kv), llotypes.ChannelID(2))
+	require.Contains(t, kvChannelDefs(t, kv), llotypes.ChannelID(1))
 }

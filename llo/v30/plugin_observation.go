@@ -40,13 +40,8 @@ func (p *Plugin) observation(ctx context.Context, outctx ocr3types.OutcomeContex
 	if previousOutcome.LifeCycleStage == protocol.LifeCycleStageRetired {
 		p.Logger.Debugw("Node is retired, will generate empty observation", "stage", "Observation", "seqNr", outctx.SeqNr)
 	} else {
-		if err = protocol.VerifyChannelDefinitions(p.ReportCodecs, previousOutcome.ChannelDefinitions); err != nil {
-			// This is not expected, unless the majority of nodes are using a
-			// different verification method than this one.
-			//
-			// If it does happen, it's an invariant violation and we cannot
-			// generate an observation.
-			return nil, fmt.Errorf("previousOutcome.Definitions is invalid: %w", err)
+		if badChannels, verifyErr := protocol.UnverifiableChannelIDs(p.ReportCodecs, previousOutcome.ChannelDefinitions); len(badChannels) > 0 || verifyErr != nil {
+			p.Logger.Errorw("Agreed channel definitions fail baseline verification on this build", "stage", "Observation", "seqNr", outctx.SeqNr, "channelIDs", sortedChannelIDSet(badChannels), "err", verifyErr)
 		}
 
 		// Only try to fetch this from the cache if this instance if configured
@@ -179,6 +174,16 @@ func (p *Plugin) observation(ctx context.Context, outctx ocr3types.OutcomeContex
 	}
 
 	return serialized, nil
+}
+
+// sortedChannelIDSet renders a channel ID set in ascending order, for logs.
+func sortedChannelIDSet(set map[llotypes.ChannelID]struct{}) []llotypes.ChannelID {
+	ids := make([]llotypes.ChannelID, 0, len(set))
+	for channelID := range set {
+		ids = append(ids, channelID)
+	}
+	sortChannelIDs(ids)
+	return ids
 }
 
 type Observation struct {

@@ -93,8 +93,16 @@ func (p *Plugin) Observation(_ context.Context, seqNr uint64, _ ocrtypes.Attribu
 	if state.lifeCycleStage == protocol.LifeCycleStageRetired {
 		p.Logger.Debugw("Node is retired, will generate empty observation", "stage", "Observation", "seqNr", seqNr)
 	} else {
-		if err = protocol.VerifyChannelDefinitions(p.ReportCodecs, state.channelDefinitions); err != nil {
-			return nil, fmt.Errorf("state.channelDefinitions is invalid: %w", err)
+		// Committed state is replicated, so failing verification here on every
+		// node would halt the DON with no way out, as the nodes would never vote
+		// to remove offending channels.
+		// For a DON where all participants share the same version this is unreachable,
+		// as ValidateObservation runs the same baseline checks over the merged set,
+		// but a version skew can make it reachable.
+		// Report the finding and carry on, which is the same treatment the
+		// admission-only findings get in voteOnChannels.
+		if badChannels, verifyErr := protocol.UnverifiableChannelIDs(p.ReportCodecs, state.channelDefinitions); len(badChannels) > 0 || verifyErr != nil {
+			p.Logger.Errorw("Committed channel definitions fail baseline verification on this build", "stage", "Observation", "seqNr", seqNr, "channelIDs", sortedChannelIDSet(badChannels), "err", verifyErr)
 		}
 
 		if p.PredecessorConfigDigest != nil && state.lifeCycleStage == protocol.LifeCycleStageStaging {
@@ -193,6 +201,16 @@ func observableStreams(state *kvState) []llotypes.StreamID {
 	return streams
 }
 
+// sortedChannelIDSet renders a channel ID set in ascending order, for logs.
+func sortedChannelIDSet(set map[llotypes.ChannelID]struct{}) []llotypes.ChannelID {
+	ids := make([]llotypes.ChannelID, 0, len(set))
+	for channelID := range set {
+		ids = append(ids, channelID)
+	}
+	sortChannelIDs(ids)
+	return ids
+}
+
 // voteOnChannels populates obs.RemoveChannelIDs / obs.UpdateChannelDefinitions
 // by comparing the desired channel definitions against current KV state.
 func (p *Plugin) voteOnChannels(obs *Observation, state *kvState) {
@@ -281,6 +299,13 @@ func (p *Plugin) ValidateObservation(ctx context.Context, seqNr uint64, _ ocrtyp
 		}
 		defsForVerify = merged
 	}
+	// Unlike the committed-state check in Observation, this one stays fatal:
+	// rejecting a peer observation is not a halt, and these checks are the only
+	// thing standing between a proposer and a malformed committed definition.
+	// Under version skew a stricter build rejects observations that carry
+	// updates from a staler one, which costs update-voting liveness only -- an
+	// observation that votes no update has nothing to verify here, so rounds
+	// themselves are unaffected.
 	if err := protocol.VerifyChannelDefinitions(p.ReportCodecs, defsForVerify); err != nil {
 		return fmt.Errorf("UpdateChannelDefinitions is invalid: %w", err)
 	}
