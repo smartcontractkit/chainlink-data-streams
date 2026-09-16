@@ -136,16 +136,15 @@ func (f *PluginFactory) NewReportingPlugin(ctx context.Context, cfg ocr3types.Re
 	//	                              definitions.
 	//	MaxReportsPlusPrecursorBytes  the precursor embeds every definition plus
 	//	                              every stream aggregate. The aggregate count
-	//	                              is bounded by protocol.MaxPersistedAggregates;
-	//	                              the definition set is bounded in channel
-	//	                              count (MaxOutcomeChannelDefinitionsLength)
-	//	                              and per-channel stream count
-	//	                              (MaxStreamsPerChannel) but NOT yet in total
-	//	                              stream entries or channel opts bytes, and a
-	//	                              single stream value is not yet bounded in
-	//	                              decimal coefficient length. Those three
-	//	                              bounds are what make this number true rather
-	//	                              than aspirational.
+	//	                              is bounded by protocol.MaxPersistedAggregates,
+	//	                              and the definition set by channel count
+	//	                              (MaxOutcomeChannelDefinitionsLength), total
+	//	                              stream entries (MaxTotalStreamEntries) and
+	//	                              opts bytes (MaxTotalOptsBytes). A single
+	//	                              stream value is still NOT bounded in decimal
+	//	                              coefficient length, which is the one bound
+	//	                              left before this number is true rather than
+	//	                              aspirational.
 	//	MaxKeyValueModifiedKeys*      the per-round write set is c/defs plus r/agg
 	//	                              plus the history windows, and history is
 	//	                              held to protocol.MaxHistoryTotalBytes so it

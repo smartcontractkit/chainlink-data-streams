@@ -155,26 +155,102 @@ func TestLimits_HotStateTruncatesAboveCap(t *testing.T) {
 	}
 }
 
-// TestLimits_KnownUnboundedInputs documents the bounds that do NOT yet exist,
-// so the gap is visible next to the arithmetic that depends on it rather than
-// only in a review note. Each of these is a real input to the precursor and the
-// c/defs record, and each is bounded only by the checks listed here.
-func TestLimits_KnownUnboundedInputs(t *testing.T) {
-	// Channel opts are raw bytes with no length check on any path.
-	require.NoError(t, protocol.VerifyChannelDefinitions(nil, llotypes.ChannelDefinitions{
+// TestLimits_DefinitionSetBudgetsAreAdmissionOnly pins the shape of the bounds
+// the c/defs and precursor sizes depend on: they are enforced when a channel is
+// admitted and NOT when it is already committed, because the committed path runs
+// on every oracle every round and rejecting there halts the protocol. A
+// grandfathered set therefore stays over budget, which is why these numbers
+// bound what can be added rather than what can exist.
+func TestLimits_DefinitionSetBudgetsAreAdmissionOnly(t *testing.T) {
+	oversizedOpts := llotypes.ChannelDefinitions{
 		1: {
 			ReportFormat: llotypes.ReportFormatJSON,
 			Streams:      []llotypes.Stream{{StreamID: 1, Aggregator: llotypes.AggregatorMedian}},
-			Opts:         []byte(strings.Repeat("x", 1<<20)),
+			Opts:         []byte(strings.Repeat("x", protocol.MaxChannelOptsBytes+1)),
 		},
-	}), "opts length is not yet bounded; see the factory limits derivation")
+	}
 
-	// Total stream entries across the set are bounded only per channel
-	// (MaxStreamsPerChannel) and by unique stream IDs
-	// (MaxObservationStreamValuesLength), so the same stream repeated across
-	// channels multiplies the entry count without tripping either.
+	// Committed: accepted, so the round proceeds.
+	require.NoError(t, protocol.VerifyChannelDefinitions(nil, oversizedOpts))
+
+	// Being admitted: refused, so it never becomes committed in the first place.
+	err := protocol.VerifyChannelDefinitionsForAdmission(nil, oversizedOpts, map[llotypes.ChannelID]struct{}{1: {}})
+	require.ErrorContains(t, err, "opts that are too long")
+
+	// The per-channel caps still do not bound total stream entries between
+	// them; MaxTotalStreamEntries is the bound that does, and it is what the
+	// definitions-record and precursor sizes are derived from.
 	require.Greater(t,
 		protocol.MaxStreamsPerChannel*protocol.MaxOutcomeChannelDefinitionsLength,
-		protocol.MaxObservationStreamValuesLength,
-		"total stream entries are not yet bounded; see the factory limits derivation")
+		protocol.MaxTotalStreamEntries)
+}
+
+// TestLimits_ChannelStateWorstCaseFitsPerKeyLimit builds the largest definition
+// set the admission budgets permit and measures the record it marshals to. The
+// budgets were sized from this number, so measuring it is what keeps them
+// honest: c/defs is a single value under a single key, and libocr rejects a
+// write above the per-key limit.
+func TestLimits_ChannelStateWorstCaseFitsPerKeyLimit(t *testing.T) {
+	const channels = protocol.MaxOutcomeChannelDefinitionsLength
+	const streamsEach = protocol.MaxTotalStreamEntries / channels
+	const optsEach = protocol.MaxTotalOptsBytes / channels
+
+	defs := make(llotypes.ChannelDefinitions, channels)
+	for c := range channels {
+		streams := make([]llotypes.Stream, 0, streamsEach)
+		for i := range streamsEach {
+			streams = append(streams, llotypes.Stream{
+				StreamID:   llotypes.StreamID(i + 1),
+				Aggregator: llotypes.AggregatorMedian,
+			})
+		}
+		defs[llotypes.ChannelID(c+1)] = llotypes.ChannelDefinition{
+			ReportFormat: llotypes.ReportFormatEVMPremiumLegacy,
+			Streams:      streams,
+			Opts:         []byte(strings.Repeat("x", optsEach)),
+		}
+	}
+	// Every budget at its cap, so the record measured below is the worst case
+	// admission permits rather than an arbitrary large set. Spreading the opts
+	// budget evenly loses less than one byte per channel to integer division,
+	// which is why this is a bound rather than an equality.
+	require.Equal(t, protocol.MaxTotalStreamEntries, channels*streamsEach)
+	require.LessOrEqual(t, channels*optsEach, protocol.MaxTotalOptsBytes)
+	require.Greater(t, channels*optsEach, protocol.MaxTotalOptsBytes-channels)
+	require.LessOrEqual(t, optsEach, protocol.MaxChannelOptsBytes)
+
+	kv := newMemKV()
+	require.NoError(t, writeChannelState(kv, 1, defs))
+	record, err := kv.Read(keyChannelState)
+	require.NoError(t, err)
+	require.LessOrEqual(t, len(record), ocr3_1types.MaxMaxKeyValueValueBytes,
+		"worst-case c/defs record (%d bytes) exceeds the per-key limit", len(record))
+	t.Logf("worst-case c/defs record: %d bytes of the %d per-key limit",
+		len(record), ocr3_1types.MaxMaxKeyValueValueBytes)
+}
+
+// TestLimits_KnownUnboundedInputs documents the bound that does NOT yet exist,
+// so the gap stays visible next to the arithmetic that depends on it. A decimal
+// decoded from an untrusted source is bounded in exponent but not in coefficient
+// length, so a single stream value is unbounded in bytes on every path that
+// carries one: r/agg, the precursor, observations and blobs. Only history
+// records are protected, by protocol.MaxHistoryRecordBytes.
+func TestLimits_KnownUnboundedInputs(t *testing.T) {
+	// A 1000-digit coefficient, well inside the permitted exponent range.
+	huge := decimal.New(1, 0)
+	for range 1000 {
+		huge = huge.Mul(decimal.New(10, 0))
+	}
+	require.LessOrEqual(t, huge.Exponent(), int32(protocol.MaxDecimalExponent))
+
+	encoded, err := protocol.ToDecimal(huge).MarshalBinary()
+	require.NoError(t, err)
+	require.Greater(t, len(encoded), protocol.MaxHistoryRecordBytes,
+		"a single stream value already exceeds the per-history-record bound")
+
+	_, err = protocol.UnmarshalProtoStreamValue(&protocol.LLOStreamValue{
+		Type:  protocol.LLOStreamValue_Decimal,
+		Value: encoded,
+	})
+	require.NoError(t, err, "decimal coefficient length is not yet bounded; see the factory limits derivation")
 }

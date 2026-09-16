@@ -39,6 +39,45 @@ const (
 	// can be supported
 	MaxOutcomeChannelDefinitionsLength = MaxReportCount
 
+	// MaxTotalStreamEntries bounds the sum of len(cd.Streams) over the whole
+	// definition set.
+	//
+	// The per-channel and per-set caps do not bound this between them:
+	// MaxStreamsPerChannel times MaxOutcomeChannelDefinitionsLength permits
+	// 20 million entries, and MaxObservationStreamValuesLength counts only
+	// DISTINCT stream IDs, so the same stream listed by many channels costs
+	// nothing against it. Every entry is carried in the channel-definitions
+	// record and again in the precursor, so the total is what those sizes
+	// actually depend on.
+	//
+	// 50_000 is five channels at MaxStreamsPerChannel, or five entries for every
+	// observable stream -- far past any real configuration, while holding the
+	// definitions record itself to well under a MiB.
+	MaxTotalStreamEntries = 50_000
+	// MaxChannelOptsBytes bounds one channel's opts blob. Opts are opaque JSON
+	// decoded per report format, so nothing else constrains their length, and
+	// they travel in the definitions record, the precursor and observations that
+	// vote to add a channel.
+	//
+	// 16 KiB is roughly two orders of magnitude above the largest real opts (an
+	// ABI plus expressions, a few hundred bytes).
+	MaxChannelOptsBytes = 16 << 10
+	// MaxTotalOptsBytes bounds the sum over the whole set, because
+	// MaxChannelOptsBytes alone would still permit MaxOutcomeChannelDefinitionsLength
+	// (2_000) channels times 16 KiB, or 32 MiB.
+	//
+	// 1 MiB is ~512 B per channel at the channel-count limit. A production DON
+	// measured 304 KiB of opts over 705 live channels (431 B each, nearly all
+	// ABI), so this leaves it room to more than double its channel count before
+	// the budget binds -- the bound has to be above where real configurations
+	// grow, or it refuses legitimate admissions rather than abuse.
+	//
+	// Worst case it still leaves the definitions record inside libocr's 2 MiB
+	// per-key limit: 1 MiB of opts plus MaxTotalStreamEntries worth of stream
+	// entries plus per-channel framing measures 1.31 MiB, 66% of the limit
+	// (measured by TestLimits_ChannelStateWorstCaseFitsPerKeyLimit).
+	MaxTotalOptsBytes = 1 << 20
+
 	// Stream history limits.
 	//
 	// A history "pair" is a (streamID, aggregator) tuple: the identity of one
