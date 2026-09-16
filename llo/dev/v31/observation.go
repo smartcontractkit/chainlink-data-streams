@@ -244,5 +244,5 @@ func streamValueFromProtoAllowNil(pb *protocol.LLOStreamValue) (protocol.StreamV
 	if pb == nil {
 		return nil, nil
 	}
-	return protocol.UnmarshalProtoStreamValue(pb)
+	return protocol.UnmarshalObservedProtoStreamValue(pb)
 }
