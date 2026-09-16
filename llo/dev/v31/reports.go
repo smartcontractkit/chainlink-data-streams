@@ -211,28 +211,33 @@ func (o precursor) isReportable(channelID llotypes.ChannelID, minReportInterval 
 			}
 		}
 	}
-	// Calculated streams are derived state, and unlike observed streams a
-	// missing one cannot be reported around: the codec has nothing to encode, so
-	// Reports skips the report. Without this check the channel would still be
-	// counted as reported and validAfter would advance over a round that emitted
-	// nothing — a silent coverage gap. This is independent of
-	// DisableNilStreamValues, which is about observed values.
+	// Reportability and emission must agree on what the report carries. Reports
+	// derives the report's values from protocol.EffectiveStreams, so the same
+	// derivation has to succeed here: if it fails there, the report is skipped
+	// while the channel is still counted as reported and validAfter advances
+	// over a round that emitted nothing — a silent coverage gap.
 	//
-	// The check is against the streams the channel's opts declare, which is also
-	// what protocol.EffectiveStreams derives the report's trailing values from.
-	// A channel whose expressions failed (bad input, undecodable opts, eval
-	// error, or history still warming up) has no aggregate for them.
-	if protocol.HasCalculatedStreams(cd) {
-		calculatedStreamIDs, err := protocol.CalculatedStreamIDs(optsCache, cd, channelID)
-		if err != nil {
-			lggr.Warnw("IsReportable=false; cannot resolve calculated stream IDs", "channelID", channelID, "err", err)
-			return false
+	// EffectiveStreams is a pure function of (definition, opts), so it is safe
+	// in the state transition. Codec lookup and Encode are not: p.ReportCodecs
+	// is node-local, and reading it here would make the state transition
+	// node-dependent. Those failure modes remain outside this predicate.
+	streams, err := protocol.EffectiveStreams(optsCache, cd, channelID)
+	if err != nil {
+		lggr.Warnw("IsReportable=false; cannot derive effective streams", "channelID", channelID, "err", err)
+		return false
+	}
+	// Calculated streams are derived state, and unlike observed streams a
+	// missing one cannot be reported around: the codec has nothing to encode.
+	// A channel whose expressions failed (bad input, eval error, or history
+	// still warming up) has no aggregate for them. Observed streams stay
+	// nil-permitted here; that is what DisableNilStreamValues above governs.
+	for _, strm := range streams {
+		if strm.Aggregator != llotypes.AggregatorCalculated {
+			continue
 		}
-		for _, sid := range calculatedStreamIDs {
-			if o.StreamAggregates[sid][llotypes.AggregatorCalculated] == nil {
-				lggr.Warnw("IsReportable=false; nil calculated stream value", "channelID", channelID, "streamID", sid)
-				return false
-			}
+		if o.StreamAggregates[strm.StreamID][strm.Aggregator] == nil {
+			lggr.Warnw("IsReportable=false; nil calculated stream value", "channelID", channelID, "streamID", strm.StreamID)
+			return false
 		}
 	}
 	validAfter, ok := o.ValidAfterNanoseconds[channelID]
