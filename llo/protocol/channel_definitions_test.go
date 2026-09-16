@@ -507,3 +507,97 @@ func Test_ChangedChannelIDs(t *testing.T) {
 	require.Empty(t, ChangedChannelIDs(current, current))
 	require.Empty(t, ChangedChannelIDs(current, nil))
 }
+
+// rejectingCodec fails Verify for the channels whose IDs are in reject, keyed
+// by the first stream ID of the definition (channel IDs are not passed to
+// Verify).
+type rejectingCodec struct {
+	rejectStream llotypes.StreamID
+}
+
+func (rejectingCodec) Encode(Report, llotypes.ChannelDefinition, *OptsCache) ([]byte, error) {
+	return nil, nil
+}
+
+func (c rejectingCodec) Verify(cd llotypes.ChannelDefinition) error {
+	if len(cd.Streams) > 0 && cd.Streams[0].StreamID == c.rejectStream {
+		return errors.New("codec says no")
+	}
+	return nil
+}
+
+func Test_UnverifiableChannelIDs(t *testing.T) {
+	channel := func(streamID llotypes.StreamID) llotypes.ChannelDefinition {
+		return llotypes.ChannelDefinition{Streams: []llotypes.Stream{{StreamID: streamID, Aggregator: llotypes.AggregatorMedian}}}
+	}
+
+	t.Run("attributes a baseline failure to exactly its channel", func(t *testing.T) {
+		codecs := map[llotypes.ReportFormat]ReportCodec{0: rejectingCodec{rejectStream: 2}}
+		defs := llotypes.ChannelDefinitions{1: channel(1), 2: channel(2), 3: channel(3)}
+
+		ids, err := UnverifiableChannelIDs(codecs, defs)
+		require.NoError(t, err)
+		require.Equal(t, map[llotypes.ChannelID]struct{}{2: {}}, ids)
+
+		// The same set is still a hard error on the admission path.
+		require.EqualError(t, VerifyChannelDefinitions(codecs, defs), "invalid ChannelDefinition with ID 2: codec says no")
+	})
+
+	t.Run("attributes every kind of baseline finding", func(t *testing.T) {
+		codecs := map[llotypes.ReportFormat]ReportCodec{0: stubReportCodec{}}
+		tooManyStreams := llotypes.ChannelDefinition{Streams: make([]llotypes.Stream, MaxStreamsPerChannel+1)}
+		for i := range tooManyStreams.Streams {
+			tooManyStreams.Streams[i] = llotypes.Stream{StreamID: llotypes.StreamID(i + 100), Aggregator: llotypes.AggregatorMedian}
+		}
+		defs := llotypes.ChannelDefinitions{
+			1: channel(1),
+			2: {},                                          // no streams
+			3: {Streams: []llotypes.Stream{{StreamID: 3}}}, // zero aggregator
+			4: tooManyStreams,
+		}
+
+		ids, err := UnverifiableChannelIDs(codecs, defs)
+		require.NoError(t, err)
+		require.Equal(t, map[llotypes.ChannelID]struct{}{2: {}, 3: {}, 4: {}}, ids)
+	})
+
+	t.Run("admission-only findings are not attributed", func(t *testing.T) {
+		// Two channels sharing a feed ID is admission-only: a committed set
+		// carrying it keeps reporting, so neither channel is skipped.
+		codecs := map[llotypes.ReportFormat]ReportCodec{0: mockFeedIDCodec{feedID: [32]byte{0xab}, ok: true}}
+		defs := llotypes.ChannelDefinitions{1: channel(1), 2: channel(2)}
+
+		ids, err := UnverifiableChannelIDs(codecs, defs)
+		require.NoError(t, err)
+		require.Empty(t, ids)
+		require.Error(t, verifyAdmittingAll(codecs, defs))
+	})
+
+	t.Run("a tombstone is never unverifiable", func(t *testing.T) {
+		codecs := map[llotypes.ReportFormat]ReportCodec{0: rejectingCodec{rejectStream: 2}}
+		defs := llotypes.ChannelDefinitions{1: channel(1), 2: {Tombstone: true}}
+
+		ids, err := UnverifiableChannelIDs(codecs, defs)
+		require.NoError(t, err)
+		require.Empty(t, ids)
+	})
+
+	t.Run("a whole-set finding is returned as an error with no channels to skip", func(t *testing.T) {
+		codecs := map[llotypes.ReportFormat]ReportCodec{0: stubReportCodec{}}
+		defs := make(llotypes.ChannelDefinitions, MaxOutcomeChannelDefinitionsLength+1)
+		for i := range MaxOutcomeChannelDefinitionsLength + 1 {
+			defs[llotypes.ChannelID(i+1)] = channel(llotypes.StreamID(i + 1))
+		}
+
+		ids, err := UnverifiableChannelIDs(codecs, defs)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "too many channels")
+		require.Empty(t, ids)
+	})
+
+	t.Run("an empty definition set is clean", func(t *testing.T) {
+		ids, err := UnverifiableChannelIDs(map[llotypes.ReportFormat]ReportCodec{}, llotypes.ChannelDefinitions{})
+		require.NoError(t, err)
+		require.Empty(t, ids)
+	})
+}
