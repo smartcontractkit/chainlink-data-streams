@@ -53,12 +53,23 @@ func ChangedChannelIDs(current, desired llotypes.ChannelDefinitions) map[llotype
 
 // admissionFinding is an admission-only check failure, together with every
 // channel it implicates, so that it can be filtered by the admitting set.
+//
+// A whole-set finding (a budget summed over every channel) implicates no
+// particular channel: it is a property of the set as a whole, and the channels
+// that made it exceed the budget are not distinguishable from the ones that did
+// not. Such a finding sets wholeSet and applies whenever anything is being
+// admitted, which is what stops a set already over budget from growing while
+// leaving a set that is merely already over it alone.
 type admissionFinding struct {
 	channels []llotypes.ChannelID
+	wholeSet bool
 	err      error
 }
 
 func (f admissionFinding) appliesTo(admitting map[llotypes.ChannelID]struct{}) bool {
+	if f.wholeSet {
+		return len(admitting) > 0
+	}
 	for _, channelID := range f.channels {
 		if _, ok := admitting[channelID]; ok {
 			return true
@@ -88,6 +99,14 @@ func verifyChannelDefinitions(codecs map[llotypes.ReportFormat]ReportCodec, chan
 	admit := func(err error, channels ...llotypes.ChannelID) {
 		admissionFindings = append(admissionFindings, admissionFinding{channels: channels, err: err})
 	}
+	admitSet := func(err error) {
+		admissionFindings = append(admissionFindings, admissionFinding{wholeSet: true, err: err})
+	}
+
+	// Whole-set budgets, accumulated over the channels the loop below visits
+	// (tombstones excluded: they carry neither streams nor opts that anything
+	// reads) and checked once at the end.
+	var totalStreamEntries, totalOptsBytes int
 
 	uniqueStreamIDs := make(map[llotypes.StreamID]struct{}, len(channelDefs))
 	// Owners of every stream ID that will hold an aggregate: observed streams
@@ -115,6 +134,15 @@ func verifyChannelDefinitions(codecs map[llotypes.ReportFormat]ReportCodec, chan
 			merr = errors.Join(merr, fmt.Errorf("ChannelDefinition with ID %d has too many streams, got: %d/%d", channelID, len(cd.Streams), MaxStreamsPerChannel))
 			continue
 		}
+		totalStreamEntries += len(cd.Streams)
+		// Opts are opaque bytes, so length is the only thing that can be
+		// checked here. Admission-only: a committed definition carrying an
+		// oversized blob is left alone rather than failing verification on every
+		// oracle, every round.
+		if len(cd.Opts) > MaxChannelOptsBytes {
+			admit(fmt.Errorf("ChannelDefinition with ID %d has opts that are too long, got: %d/%d", channelID, len(cd.Opts), MaxChannelOptsBytes), channelID)
+		}
+		totalOptsBytes += len(cd.Opts)
 		for _, strm := range cd.Streams {
 			if strm.Aggregator == 0 {
 				merr = errors.Join(merr, fmt.Errorf("ChannelDefinition with ID %d has stream %d with zero aggregator (this may indicate an uninitialized struct)", channelID, strm.StreamID))
@@ -202,6 +230,15 @@ func verifyChannelDefinitions(codecs map[llotypes.ReportFormat]ReportCodec, chan
 		if owner, ok := observedBy[streamID]; ok {
 			admit(fmt.Errorf("ChannelDefinition with ID %d declares calculated stream %d, which channel %d observes", calculatedBy[streamID], streamID, owner), calculatedBy[streamID], owner)
 		}
+	}
+
+	// Whole-set budgets. Both are what the sizes of the channel-definitions
+	// record and the precursor actually depend on; see the limits they name.
+	if totalStreamEntries > MaxTotalStreamEntries {
+		admitSet(fmt.Errorf("too many stream entries across all channels, got: %d/%d", totalStreamEntries, MaxTotalStreamEntries))
+	}
+	if totalOptsBytes > MaxTotalOptsBytes {
+		admitSet(fmt.Errorf("too many opts bytes across all channels, got: %d/%d", totalOptsBytes, MaxTotalOptsBytes))
 	}
 
 	for _, finding := range admissionFindings {
