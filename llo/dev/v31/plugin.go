@@ -108,7 +108,7 @@ func (p *Plugin) Observation(_ context.Context, seqNr uint64, _ ocrtypes.Attribu
 			return nil, fmt.Errorf("error fetching shouldRetire from cache: %w", err)
 		}
 
-		p.voteOnChannels(&obs, state, seqNr)
+		p.voteOnChannels(&obs, state)
 
 		streams = observableStreams(state)
 	}
@@ -171,7 +171,7 @@ func observableStreams(state *kvState) []llotypes.StreamID {
 
 // voteOnChannels populates obs.RemoveChannelIDs / obs.UpdateChannelDefinitions
 // by comparing the desired channel definitions against current KV state.
-func (p *Plugin) voteOnChannels(obs *Observation, state *kvState, seqNr uint64) {
+func (p *Plugin) voteOnChannels(obs *Observation, state *kvState) {
 	obs.RemoveChannelIDs = map[llotypes.ChannelID]struct{}{}
 
 	expectedChannelDefs := p.ChannelDefinitionCache.Definitions(state.channelDefinitions)

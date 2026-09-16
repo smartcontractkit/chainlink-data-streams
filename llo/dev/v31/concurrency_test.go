@@ -30,7 +30,7 @@ func (optsEchoCodec) Encode(r protocol.Report, _ llotypes.ChannelDefinition, opt
 	if err != nil {
 		return nil, err
 	}
-	return []byte(fmt.Sprintf("v=%d", o.V)), nil
+	return fmt.Appendf(nil, "v=%d", o.V), nil
 }
 
 func (optsEchoCodec) Verify(llotypes.ChannelDefinition) error { return nil }

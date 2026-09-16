@@ -6,6 +6,8 @@ import (
 
 	"github.com/klauspost/compress/zstd"
 
+	"github.com/smartcontractkit/libocr/offchainreporting2plus/ocr3_1types"
+
 	protocol "github.com/smartcontractkit/chainlink-data-streams/llo/protocol"
 )
 
@@ -23,6 +25,15 @@ const (
 // honest payload while keeping a malicious peer from turning a small blob into
 // a huge allocation (zstd bomb).
 const maxDecompressedBlobPayloadBytes = protocol.MaxDecompressedObservationLength
+
+// MaxBlobPayloadBytes is the size of a broadcast blob payload libocr accepts,
+// and is the value the factory declares as MaxBlobPayloadBytes. It bounds the
+// payload as framed for broadcast (codec byte plus body), which is a different
+// quantity from maxDecompressedBlobPayloadBytes: the latter is the anti-bomb
+// bound applied to the decompressed bytes on the read side, and is deliberately
+// looser. Enforcing this one on the write side is what stops the pump from
+// broadcasting a blob every peer's libocr would reject.
+const MaxBlobPayloadBytes = ocr3_1types.MaxMaxBlobPayloadBytes
 
 // zstd Encoder/Decoder are safe for concurrent use via EncodeAll/DecodeAll and
 // are expensive to build, so a single pair is shared process-wide. Built lazily
@@ -74,12 +85,19 @@ func encodeBlobPayload(raw []byte) ([]byte, error) {
 		return nil, err
 	}
 	compressed := c.encoder.EncodeAll(raw, []byte{blobCodecZstd})
-	if len(compressed) < len(raw)+1 {
-		return compressed, nil
+	out := compressed
+	if len(compressed) >= len(raw)+1 {
+		out = make([]byte, 0, len(raw)+1)
+		out = append(out, blobCodecRaw)
+		out = append(out, raw...)
 	}
-	out := make([]byte, 0, len(raw)+1)
-	out = append(out, blobCodecRaw)
-	return append(out, raw...), nil
+	// The framed payload is what is broadcast, so it -- not the raw bytes -- is
+	// what has to fit the declared limit. A payload that compresses poorly can
+	// pass the check above and still land over it.
+	if len(out) > MaxBlobPayloadBytes {
+		return nil, fmt.Errorf("framed blob payload too large: %d > %d bytes", len(out), MaxBlobPayloadBytes)
+	}
+	return out, nil
 }
 
 // decodeBlobPayload reverses encodeBlobPayload. The payload is untrusted, so
