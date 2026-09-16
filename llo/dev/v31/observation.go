@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
+	"sort"
 
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
 
@@ -24,6 +25,11 @@ type Observation struct {
 	RemoveChannelIDs              map[llotypes.ChannelID]struct{}
 	UpdateChannelDefinitions      llotypes.ChannelDefinitions
 	StreamValues                  protocol.StreamValues
+	// SupportedReportFormats are the report formats this oracle has a report
+	// codec for. Encoding is node-local state that the state transition cannot
+	// read without forking; advertising it here turns it into a replicated fact
+	// that reportability can gate on (see isReportable).
+	SupportedReportFormats []llotypes.ReportFormat
 }
 
 // observationWireVersion is the leading byte of the v31 observation framing.
@@ -63,6 +69,10 @@ func encodeObservation(obs Observation, handles [][]byte) (ocrtypes.Observation,
 			main.UpdateChannelDefinitions[id] = protocol.ChannelDefinitionToProto(cd)
 		}
 	}
+
+	// Sorted and deduped: the wire bytes need not be deterministic, but a
+	// canonical list keeps goldens stable and matches what decode enforces.
+	main.SupportedReportFormats = sortedUniqueFormats(obs.SupportedReportFormats)
 
 	mainBytes, err := proto.Marshal(main)
 	if err != nil {
@@ -216,7 +226,51 @@ func observationFromProto(main *protocol.LLOObservationProto) (Observation, erro
 	if len(main.StreamValues) > 0 {
 		return Observation{}, fmt.Errorf("observation carries %d inline stream values: v31 requires blob-carried values", len(main.StreamValues))
 	}
+	if len(main.SupportedReportFormats) > protocol.MaxObservationSupportedReportFormatsLength {
+		return Observation{}, fmt.Errorf("observation advertises too many report formats: %d (max %d)", len(main.SupportedReportFormats), protocol.MaxObservationSupportedReportFormatsLength)
+	}
+
+	obs.SupportedReportFormats = sortedUniqueFormatsFromWire(main.SupportedReportFormats)
 	return obs, nil
+}
+
+// sortedUniqueFormats returns the formats sorted ascending with duplicates
+// removed. nil in, nil out, so an oracle advertising nothing stays absent from
+// the wire rather than carrying an empty list.
+func sortedUniqueFormats(in []llotypes.ReportFormat) []uint32 {
+	if len(in) == 0 {
+		return nil
+	}
+	seen := make(map[llotypes.ReportFormat]struct{}, len(in))
+	out := make([]uint32, 0, len(in))
+	for _, f := range in {
+		if _, dup := seen[f]; dup {
+			continue
+		}
+		seen[f] = struct{}{}
+		out = append(out, uint32(f))
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+	return out
+}
+
+// sortedUniqueFormatsFromWire is sortedUniqueFormats for the wire
+// representation: sorted ascending, duplicates removed.
+func sortedUniqueFormatsFromWire(in []uint32) []llotypes.ReportFormat {
+	if len(in) == 0 {
+		return nil
+	}
+	seen := make(map[uint32]struct{}, len(in))
+	out := make([]llotypes.ReportFormat, 0, len(in))
+	for _, f := range in {
+		if _, dup := seen[f]; dup {
+			continue
+		}
+		seen[f] = struct{}{}
+		out = append(out, llotypes.ReportFormat(f))
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+	return out
 }
 
 func streamValuesToProto(in protocol.StreamValues) (map[uint32]*protocol.LLOStreamValue, error) {

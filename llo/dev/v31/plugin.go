@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"time"
 
 	"golang.org/x/exp/maps"
@@ -139,7 +140,30 @@ func (p *Plugin) Observation(_ context.Context, seqNr uint64, _ ocrtypes.Attribu
 	}
 	obs.UnixTimestampNanoseconds = uint64(obsTSNanos)
 
+	// Advertised every round, including when retired: a statement about this
+	// binary, not about the round or about what this node wants admitted.
+	// voteOnChannels above is deliberately unaware of p.ReportCodecs -- whether
+	// a channel can be encoded DON-wide is decided from these advertisements in
+	// the state transition, not locally per voter.
+	obs.SupportedReportFormats = supportedReportFormats(p.ReportCodecs)
+
 	return encodeObservation(obs, handles)
+}
+
+// supportedReportFormats lists the report formats this node can encode, taken
+// from the codecs it was constructed with. Truncated to the advertisable bound
+// so the observation stays within its size budget; a real codec map is far
+// smaller than the bound, so this never fires in practice.
+func supportedReportFormats(codecs map[llotypes.ReportFormat]protocol.ReportCodec) []llotypes.ReportFormat {
+	out := make([]llotypes.ReportFormat, 0, len(codecs))
+	for format := range codecs {
+		out = append(out, format)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+	if len(out) > protocol.MaxObservationSupportedReportFormatsLength {
+		out = out[:protocol.MaxObservationSupportedReportFormatsLength]
+	}
+	return out
 }
 
 // observableStreams lists the streams a round should observe: every stream of
@@ -231,6 +255,9 @@ func (p *Plugin) ValidateObservation(ctx context.Context, seqNr uint64, _ ocrtyp
 	}
 	if len(observation.RemoveChannelIDs) > protocol.MaxObservationRemoveChannelIDsLength {
 		return fmt.Errorf("RemoveChannelIDs is too long: %v vs %v", len(observation.RemoveChannelIDs), protocol.MaxObservationRemoveChannelIDsLength)
+	}
+	if len(observation.SupportedReportFormats) > protocol.MaxObservationSupportedReportFormatsLength {
+		return fmt.Errorf("SupportedReportFormats is too long: %v vs %v", len(observation.SupportedReportFormats), protocol.MaxObservationSupportedReportFormatsLength)
 	}
 
 	// Only the baseline checks run here. A definition is installed on more than

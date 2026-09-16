@@ -69,7 +69,7 @@ func (p *Plugin) StateTransition(ctx context.Context, seqNr uint64, _ ocrtypes.A
 		return nil, fmt.Errorf("failed to load KV state: %w", err)
 	}
 
-	timestamps, validPredecessorRetirementReport, shouldRetireVotes, removeChannelVotesByID, updateDefsByHash, updateVotesByHash, streamObservations, err := p.decodeObservations(ctx, aos, bf)
+	timestamps, validPredecessorRetirementReport, shouldRetireVotes, removeChannelVotesByID, updateDefsByHash, updateVotesByHash, supportByFormat, streamObservations, err := p.decodeObservations(ctx, aos, bf)
 	if err != nil {
 		return nil, err
 	}
@@ -88,6 +88,7 @@ func (p *Plugin) StateTransition(ctx context.Context, seqNr uint64, _ ocrtypes.A
 		ChannelStateSeqNr:               prev.channelStateSeqNr,
 		ValidAfterNanoseconds:           map[llotypes.ChannelID]uint64{},
 		StreamAggregates:                protocol.StreamAggregates{},
+		SupportByFormat:                 supportByFormat,
 	}
 
 	// Lifecycle stage & promotion.
@@ -228,10 +229,12 @@ func (p *Plugin) decodeObservations(ctx context.Context, aos []ocrtypes.Attribut
 	removeChannelVotesByID map[llotypes.ChannelID]int,
 	updateChannelDefinitionsByHash map[[32]byte]protocol.ChannelDefinitionWithID,
 	updateChannelVotesByHash map[[32]byte]int,
+	supportVotesByFormat map[llotypes.ReportFormat]int,
 	streamObservations map[llotypes.StreamID][]protocol.StreamValue,
 	err error,
 ) {
 	removeChannelVotesByID = make(map[llotypes.ChannelID]int)
+	supportVotesByFormat = make(map[llotypes.ReportFormat]int)
 	updateChannelDefinitionsByHash = make(map[[32]byte]protocol.ChannelDefinitionWithID)
 	updateChannelVotesByHash = make(map[[32]byte]int)
 	streamObservations = make(map[llotypes.StreamID][]protocol.StreamValue)
@@ -270,6 +273,11 @@ func (p *Plugin) decodeObservations(ctx context.Context, aos []ocrtypes.Attribut
 		}
 		timestampsNanoseconds = append(timestampsNanoseconds, observation.UnixTimestampNanoseconds)
 
+		// Deduped by decodeObservation, so one oracle contributes at most one
+		// vote per format.
+		for _, format := range observation.SupportedReportFormats {
+			supportVotesByFormat[format]++
+		}
 		for channelID := range observation.RemoveChannelIDs {
 			removeChannelVotesByID[channelID]++
 		}
@@ -527,7 +535,7 @@ func (p *Plugin) flushKV(
 	// round can advance validAfter faithfully (see prevReportable).
 	reportable := make(map[llotypes.ChannelID]bool, len(out.ChannelDefinitions))
 	for id := range out.ChannelDefinitions {
-		reportable[id] = out.isReportable(id, p.DefaultMinReportIntervalNanoseconds, prev.opts, p.Logger)
+		reportable[id] = out.isReportable(id, p.DefaultMinReportIntervalNanoseconds, p.F, prev.opts, p.Logger)
 	}
 
 	// Stream history: write modified windows, delete pairs no live channel

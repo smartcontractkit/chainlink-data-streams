@@ -27,6 +27,11 @@ const (
 	MaxObservationUpdateChannelDefinitionsLength = 5
 	// Maximum number of streams that can be observed per round
 	MaxObservationStreamValuesLength = 10_000
+	// MaxObservationSupportedReportFormatsLength bounds the report formats an
+	// observation may advertise support for. A real codec map holds a handful
+	// of entries; the headroom keeps the bound from needing revision while
+	// still stopping a peer from padding its observation.
+	MaxObservationSupportedReportFormatsLength = 32
 	// Maximum allowed number of streams per channel
 	MaxStreamsPerChannel = 10_000
 	// MaxDecimalExponent bounds the absolute value of the base-10 exponent of
