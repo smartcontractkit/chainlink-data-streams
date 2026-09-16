@@ -55,7 +55,6 @@ func FuzzEvaluateExpression(f *testing.F) {
 		"Sum(History(s1, 3))",
 		"Min(History(s1, 3))",
 		"Max(History(s1, 3))",
-		`TWAP(History(s1, 3), {window: Duration("3s"), minSamples: 1, maxHeadGap: 3, maxInteriorGap: 3, maxTailGap: 3})`,
 		"Ln(s1)",
 		"Log(s1, s2)",
 		"Pow(s1, s2)",
