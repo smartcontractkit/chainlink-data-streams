@@ -229,12 +229,9 @@ func TestLimits_ChannelStateWorstCaseFitsPerKeyLimit(t *testing.T) {
 		len(record), ocr3_1types.MaxMaxKeyValueValueBytes)
 }
 
-// TestLimits_KnownUnboundedInputs documents the bound that does NOT yet exist,
-// so the gap stays visible next to the arithmetic that depends on it. A decimal
-// decoded from an untrusted source is bounded in exponent but not in coefficient
-// length, so a single stream value is unbounded in bytes on every path that
-// carries one: r/agg, the precursor, observations and blobs. Only history
-// records are protected, by protocol.MaxHistoryRecordBytes.
+// Observation decode rejects an oversized coefficient (see
+// protocol.UnmarshalObservedProtoStreamValue), which bounds everything written
+// from an observation going forward.
 func TestLimits_KnownUnboundedInputs(t *testing.T) {
 	// A 1000-digit coefficient, well inside the permitted exponent range.
 	huge := decimal.New(1, 0)
@@ -242,15 +239,16 @@ func TestLimits_KnownUnboundedInputs(t *testing.T) {
 		huge = huge.Mul(decimal.New(10, 0))
 	}
 	require.LessOrEqual(t, huge.Exponent(), int32(protocol.MaxDecimalExponent))
+	require.Greater(t, huge.Coefficient().BitLen(), protocol.MaxDecimalCoefficientBits)
 
 	encoded, err := protocol.ToDecimal(huge).MarshalBinary()
 	require.NoError(t, err)
 	require.Greater(t, len(encoded), protocol.MaxHistoryRecordBytes,
 		"a single stream value already exceeds the per-history-record bound")
 
-	_, err = protocol.UnmarshalProtoStreamValue(&protocol.LLOStreamValue{
-		Type:  protocol.LLOStreamValue_Decimal,
-		Value: encoded,
-	})
-	require.NoError(t, err, "decimal coefficient length is not yet bounded; see the factory limits derivation")
+	pb := &protocol.LLOStreamValue{Type: protocol.LLOStreamValue_Decimal, Value: encoded}
+
+	// Phase 1: an observation carrying it is rejected.
+	_, err = protocol.UnmarshalObservedProtoStreamValue(pb)
+	require.ErrorIs(t, err, protocol.ErrDecimalCoefficientOutOfRange)
 }

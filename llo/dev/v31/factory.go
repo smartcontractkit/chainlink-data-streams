@@ -140,11 +140,9 @@ func (f *PluginFactory) NewReportingPlugin(ctx context.Context, cfg ocr3types.Re
 	//	                              and the definition set by channel count
 	//	                              (MaxOutcomeChannelDefinitionsLength), total
 	//	                              stream entries (MaxTotalStreamEntries) and
-	//	                              opts bytes (MaxTotalOptsBytes). A single
-	//	                              stream value is still NOT bounded in decimal
-	//	                              coefficient length, which is the one bound
-	//	                              left before this number is true rather than
-	//	                              aspirational.
+	//	                              opts bytes (MaxTotalOptsBytes) at admission.
+	//                                A stream value's decimal coefficient is bounded
+	//	                              on observation decode.
 	//	MaxKeyValueModifiedKeys*      the per-round write set is c/defs plus r/agg
 	//	                              plus the history windows, and history is
 	//	                              held to protocol.MaxHistoryTotalBytes so it

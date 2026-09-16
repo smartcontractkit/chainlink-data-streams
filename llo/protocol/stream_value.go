@@ -35,7 +35,84 @@ var (
 	// well-behaved node never encodes such a value; accepting one would let a
 	// single byzantine node force unbounded rescale work on every honest node.
 	ErrDecimalExponentOutOfRange = errors.New("decimal exponent out of range")
+	// ErrDecimalCoefficientOutOfRange is returned when a decimal carried by an
+	// observation has a coefficient longer than MaxDecimalCoefficientBits. The
+	// exponent bound says nothing about coefficient length, so without this a
+	// single stream value is unbounded in bytes.
+	ErrDecimalCoefficientOutOfRange = errors.New("decimal coefficient out of range")
+	// ErrStreamValueNestingTooDeep is returned when a stream value nests deeper
+	// than MaxStreamValueNesting.
+	ErrStreamValueNestingTooDeep = errors.New("stream value nesting too deep")
 )
+
+// UnmarshalObservedProtoStreamValue decodes a stream value that arrived in a
+// peer's observation, and additionally enforces the bounds that only observed
+// values are held to today.
+//
+// Observation decode is the one untrusted entry point where a rejection is
+// cheap: it is a pure function of the observation bytes, so every oracle reaches
+// the same verdict, and both callers already discard an individual observation
+// that fails to decode rather than failing the round (see
+// decodeObservations). The same bound applied to values decoded from stored
+// state -- a v3.0 outcome, a v3.1 r/agg record -- would instead reject what is
+// already persisted and fail decode on every upgraded oracle at once, so those
+// paths keep using UnmarshalProtoStreamValue until that change can be
+// coordinated across versions.
+//
+// Bounding observations bounds everything written from them going forward.
+func UnmarshalObservedProtoStreamValue(enc *LLOStreamValue) (StreamValue, error) {
+	sv, err := UnmarshalProtoStreamValue(enc)
+	if err != nil {
+		return nil, err
+	}
+	if err := checkObservedStreamValue(sv, 0); err != nil {
+		return nil, err
+	}
+	return sv, nil
+}
+
+// checkObservedStreamValue applies the observation-only bounds to every decimal
+// a stream value carries, at any nesting depth.
+func checkObservedStreamValue(sv StreamValue, depth int) error {
+	if depth > MaxStreamValueNesting {
+		return fmt.Errorf("%w: got more than %d levels", ErrStreamValueNestingTooDeep, MaxStreamValueNesting)
+	}
+	switch v := sv.(type) {
+	case nil:
+		return nil
+	case *Decimal:
+		return checkDecimalCoefficient(v.Decimal())
+	case *Quote:
+		if v == nil {
+			return nil
+		}
+		for _, d := range []decimal.Decimal{v.Bid, v.Benchmark, v.Ask} {
+			if err := checkDecimalCoefficient(d); err != nil {
+				return err
+			}
+		}
+		return nil
+	case *TimestampedStreamValue:
+		if v == nil {
+			return nil
+		}
+		return checkObservedStreamValue(v.StreamValue, depth+1)
+	default:
+		// An unknown type carries no decimal this function knows how to reach.
+		// UnmarshalProtoStreamValue rejects types it does not recognize, so this
+		// is unreachable rather than a silent pass.
+		return nil
+	}
+}
+
+// checkDecimalCoefficient bounds the coefficient length of a decimal carried by
+// an observation. See MaxDecimalCoefficientBits.
+func checkDecimalCoefficient(d decimal.Decimal) error {
+	if bits := d.Coefficient().BitLen(); bits > MaxDecimalCoefficientBits {
+		return fmt.Errorf("%w: got %d bits, expected <= %d", ErrDecimalCoefficientOutOfRange, bits, MaxDecimalCoefficientBits)
+	}
+	return nil
+}
 
 // checkDecimalExponent bounds the exponent of a decimal decoded from an
 // untrusted source. See MaxDecimalExponent.

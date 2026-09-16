@@ -35,6 +35,32 @@ const (
 	// Stream values need only a couple of dozen decimal places, so this
 	// leaves enough headroom.
 	MaxDecimalExponent = 1_000
+	// MaxDecimalCoefficientBits bounds the coefficient of a decimal carried by
+	// an observation, which MaxDecimalExponent does not: the exponent says where
+	// the point sits, not how many digits precede it, so a value with a legal
+	// exponent can still carry an arbitrarily long coefficient and be
+	// arbitrarily large on the wire.
+	//
+	// 192 bits is 58 decimal digits, derived from MaxHistoryRecordBytes
+	// A timestamped quote, the largest shape a stream value takes carrying
+	// three coefficients at this bound measures 125B as a history record,
+	// the most that fits the 128B per-record limit.
+	// One step up (224 bits) measures 137 B, which observation decode would accept
+	// and history would then refuse, leaving a gap in the series for a value the round agreed on.
+	// Asserted by TestDecimalCoefficientBoundFitsHistoryRecord.
+	//
+	// For scale, the fixtures in the size table below are 57 bits (an 18-digit
+	// price) and 124 bits (38 digits), so this is ~3x and ~1.5x those.
+	// Increasing this limit needs to move this constant and MaxHistoryRecordBytes together.
+	//
+	// Enforced at observation decode (see UnmarshalObservedProtoStreamValue).
+	MaxDecimalCoefficientBits = 192
+	// MaxStreamValueNesting bounds how deeply a stream value may nest another.
+	// Only TimestampedStreamValue nests, and only one level is meaningful, so
+	// this exists to keep the bounds check over untrusted bytes from recursing
+	// on a value crafted to nest.
+	MaxStreamValueNesting = 4
+
 	// MaxOutcomeChannelDefinitionsLength is the maximum number of channels that
 	// can be supported
 	MaxOutcomeChannelDefinitionsLength = MaxReportCount
