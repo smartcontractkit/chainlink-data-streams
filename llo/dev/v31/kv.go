@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sort"
 
+	"github.com/smartcontractkit/chainlink-common/pkg/logger"
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
 
 	protocol "github.com/smartcontractkit/chainlink-data-streams/llo/protocol"
@@ -282,6 +283,7 @@ func writeHotState(
 	validAfterNanoseconds map[llotypes.ChannelID]uint64,
 	reportable map[llotypes.ChannelID]bool,
 	carryForward map[llotypes.StreamID]map[llotypes.Aggregator]*protocol.TimestampedStreamValue,
+	lggr logger.Logger,
 ) error {
 	pb := &protocol.LLOHotStateProto{
 		ObservationTimestampNanoseconds: observationTimestampNs,
@@ -329,6 +331,16 @@ func writeHotState(
 		}
 		return pb.StreamAggregates[i].StreamID < pb.StreamAggregates[j].StreamID
 	})
+	// Truncation happens here, after the sort, so that every oracle keeps the
+	// same pairs: (streamID, aggregator) order is total, and the write is the
+	// only place the whole set is known. See MaxPersistedAggregates.
+	if dropped := len(pb.StreamAggregates) - protocol.MaxPersistedAggregates; dropped > 0 {
+		pb.StreamAggregates = pb.StreamAggregates[:protocol.MaxPersistedAggregates]
+		lggr.Errorw("Too many carry-forward aggregates to persist; dropping the highest (streamID, aggregator) pairs",
+			"dropped", dropped,
+			"maxPersistedAggregates", protocol.MaxPersistedAggregates,
+		)
+	}
 
 	b, err := deterministicMarshal.Marshal(pb)
 	if err != nil {

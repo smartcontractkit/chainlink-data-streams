@@ -122,6 +122,36 @@ func (f *PluginFactory) NewReportingPlugin(ctx context.Context, cfg ocr3types.Re
 	p.pump.Start()
 
 	unexpiredBlobCount := perOracleUnexpiredBlobCount(blobLifetimeRounds)
+	// Declared limits. Each is the libocr maximum, which is only honest if the
+	// plugin's own admission rules keep what it produces underneath it -- libocr
+	// rejects an oversized message or write set, which fails the round for every
+	// oracle. The derivations, and which of them are currently enforced, are:
+	//
+	//	MaxObservationBytes           bounded post-decompression by
+	//	                              protocol.MaxDecompressedObservationLength,
+	//	                              itself derived from
+	//	                              MaxObservationStreamValuesLength stream
+	//	                              values plus
+	//	                              MaxObservationUpdateChannelDefinitionsLength
+	//	                              definitions.
+	//	MaxReportsPlusPrecursorBytes  the precursor embeds every definition plus
+	//	                              every stream aggregate. The aggregate count
+	//	                              is bounded by protocol.MaxPersistedAggregates;
+	//	                              the definition set is bounded in channel
+	//	                              count (MaxOutcomeChannelDefinitionsLength)
+	//	                              and per-channel stream count
+	//	                              (MaxStreamsPerChannel) but NOT yet in total
+	//	                              stream entries or channel opts bytes, and a
+	//	                              single stream value is not yet bounded in
+	//	                              decimal coefficient length. Those three
+	//	                              bounds are what make this number true rather
+	//	                              than aspirational.
+	//	MaxKeyValueModifiedKeys*      the per-round write set is c/defs plus r/agg
+	//	                              plus the history windows, and history is
+	//	                              held to protocol.MaxHistoryTotalBytes so it
+	//	                              cannot consume the whole budget on its own.
+	//	MaxBlobPayloadBytes           enforced on the write side by
+	//	                              encodeBlobPayload.
 	info := ocr3_1types.ReportingPluginInfo1{
 		Name: "LLO-3.1",
 		Limits: ocr3_1types.ReportingPluginLimits{
@@ -134,13 +164,13 @@ func (f *PluginFactory) NewReportingPlugin(ctx context.Context, cfg ocr3types.Re
 			MaxKeyValueModifiedKeys:                ocr3_1types.MaxMaxKeyValueModifiedKeys,
 			MaxKeyValueModifiedKeysPlusValuesBytes: ocr3_1types.MaxMaxKeyValueModifiedKeysPlusValuesBytes,
 
-			MaxBlobPayloadBytes: ocr3_1types.MaxMaxBlobPayloadBytes,
+			MaxBlobPayloadBytes: MaxBlobPayloadBytes,
 			// Blobs live for blobLifetimeRounds sequence numbers and the pump
 			// broadcasts about one per round, so both budgets are derived from
 			// the configured lifetime plus a margin for asynchronous reaping
 			// (see the libocr docs).
 			MaxPerOracleUnexpiredBlobCount:                  unexpiredBlobCount,
-			MaxPerOracleUnexpiredBlobCumulativePayloadBytes: unexpiredBlobCount * ocr3_1types.MaxMaxBlobPayloadBytes,
+			MaxPerOracleUnexpiredBlobCumulativePayloadBytes: unexpiredBlobCount * MaxBlobPayloadBytes,
 		},
 	}
 	if err := info.Validate(); err != nil {

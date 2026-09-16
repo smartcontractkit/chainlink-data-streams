@@ -58,7 +58,7 @@ func (p *Plugin) StateTransition(ctx context.Context, seqNr uint64, _ ocrtypes.A
 		if err := writeChannelState(kvRW, seqNr, nil); err != nil {
 			return nil, err
 		}
-		if err := writeHotState(kvRW, 0, nil, nil, nil); err != nil {
+		if err := writeHotState(kvRW, 0, nil, nil, nil, p.Logger); err != nil {
 			return nil, err
 		}
 		return encodePrecursor(precursor{LifeCycleStage: stage})
@@ -69,7 +69,7 @@ func (p *Plugin) StateTransition(ctx context.Context, seqNr uint64, _ ocrtypes.A
 		return nil, fmt.Errorf("failed to load KV state: %w", err)
 	}
 
-	timestamps, validPredecessorRetirementReport, shouldRetireVotes, removeChannelVotesByID, updateDefsByHash, updateVotesByHash, streamObservations, err := p.decodeObservations(ctx, aos, seqNr, bf)
+	timestamps, validPredecessorRetirementReport, shouldRetireVotes, removeChannelVotesByID, updateDefsByHash, updateVotesByHash, streamObservations, err := p.decodeObservations(ctx, aos, bf)
 	if err != nil {
 		return nil, err
 	}
@@ -221,7 +221,7 @@ func (p *Plugin) StateTransition(ctx context.Context, seqNr uint64, _ ocrtypes.A
 	return encodePrecursor(out)
 }
 
-func (p *Plugin) decodeObservations(ctx context.Context, aos []ocrtypes.AttributedObservation, seqNr uint64, bf ocr3_1types.BlobFetcher) (
+func (p *Plugin) decodeObservations(ctx context.Context, aos []ocrtypes.AttributedObservation, bf ocr3_1types.BlobFetcher) (
 	timestampsNanoseconds []uint64,
 	validPredecessorRetirementReport *protocol.RetirementReport,
 	shouldRetireVotes int,
@@ -538,7 +538,7 @@ func (p *Plugin) flushKV(
 		}
 	}
 
-	return writeHotState(kvRW, out.ObservationTimestampNanoseconds, out.ValidAfterNanoseconds, reportable, carryForward)
+	return writeHotState(kvRW, out.ObservationTimestampNanoseconds, out.ValidAfterNanoseconds, reportable, carryForward, p.Logger)
 }
 
 // channelDefinitionsChanged reports whether the channel set or any individual
