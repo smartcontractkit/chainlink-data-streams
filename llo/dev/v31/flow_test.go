@@ -107,10 +107,13 @@ func (m *blockingDataSource) concurrent() int {
 	return m.maxSeen
 }
 
-type mockShouldRetireCache struct{ retire bool }
+type mockShouldRetireCache struct {
+	retire bool
+	err    error
+}
 
 func (m *mockShouldRetireCache) ShouldRetire(ocrtypes.ConfigDigest) (bool, error) {
-	return m.retire, nil
+	return m.retire, m.err
 }
 
 type mockOnchainConfigCodec struct{}
@@ -120,9 +123,15 @@ func (mockOnchainConfigCodec) Decode([]byte) (protocol.OnchainConfig, error) {
 }
 func (mockOnchainConfigCodec) Encode(protocol.OnchainConfig) ([]byte, error) { return nil, nil }
 
-type mockPredecessorRetirementReportCache struct{ report protocol.RetirementReport }
+type mockPredecessorRetirementReportCache struct {
+	report protocol.RetirementReport
+	err    error
+}
 
 func (m *mockPredecessorRetirementReportCache) AttestedRetirementReport(ocrtypes.ConfigDigest) ([]byte, error) {
+	if m.err != nil {
+		return nil, m.err
+	}
 	return []byte("attested"), nil
 }
 func (m *mockPredecessorRetirementReportCache) CheckAttestedRetirementReport(ocrtypes.ConfigDigest, []byte) (protocol.RetirementReport, error) {

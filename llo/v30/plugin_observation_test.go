@@ -516,7 +516,7 @@ func testObservation(t *testing.T, outcomeCodec OutcomeCodec) {
 
 			assert.Equal(t, []byte("foo"), decoded.AttestedPredecessorRetirement)
 		})
-		t.Run("if predecessor retirement report cache returns error, returns error", func(t *testing.T) {
+		t.Run("if predecessor retirement report cache returns error, omits it from the observation", func(t *testing.T) {
 			prrc := &mockPredecessorRetirementReportCache{
 				err: errors.New("retirement report not found error"),
 			}
@@ -532,8 +532,32 @@ func testObservation(t *testing.T, outcomeCodec OutcomeCodec) {
 			require.NoError(t, err)
 
 			outctx := ocr3types.OutcomeContext{SeqNr: 2, PreviousOutcome: encodedPreviousOutcome}
-			_, err = p.Observation(context.Background(), outctx, query)
-			require.EqualError(t, err, "error fetching attested retirement report from cache: retirement report not found error")
+			obs, err := p.Observation(context.Background(), outctx, query)
+			require.NoError(t, err)
+			decoded, err := p.ObservationCodec.Decode(obs)
+			require.NoError(t, err)
+
+			assert.Empty(t, decoded.AttestedPredecessorRetirement)
+		})
+		t.Run("if shouldRetire cache returns error, does not vote to retire", func(t *testing.T) {
+			p.PredecessorRetirementReportCache = &mockPredecessorRetirementReportCache{}
+			p.ShouldRetireCache = &mockShouldRetireCache{shouldRetire: true, err: errors.New("should retire check failed")}
+			defer func() { p.ShouldRetireCache = &mockShouldRetireCache{} }()
+			previousOutcome := Outcome{
+				LifeCycleStage:                  protocol.LifeCycleStageStaging,
+				ObservationTimestampNanoseconds: testStartTSNanos,
+				ChannelDefinitions:              cdc.definitions,
+			}
+			encodedPreviousOutcome, err := p.OutcomeCodec.Encode(previousOutcome)
+			require.NoError(t, err)
+
+			outctx := ocr3types.OutcomeContext{SeqNr: 2, PreviousOutcome: encodedPreviousOutcome}
+			obs, err := p.Observation(context.Background(), outctx, query)
+			require.NoError(t, err)
+			decoded, err := p.ObservationCodec.Decode(obs)
+			require.NoError(t, err)
+
+			assert.False(t, decoded.ShouldRetire)
 		})
 		t.Run("in production lifecycle stage, does not add attestedRetirementReport to observation", func(t *testing.T) {
 			prrc := &mockPredecessorRetirementReportCache{
