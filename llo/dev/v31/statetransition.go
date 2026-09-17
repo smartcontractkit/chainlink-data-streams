@@ -364,8 +364,8 @@ func applyChannelVotes(
 // reclaimed.
 //
 // The agreed value of each pair is also recorded into stream history for the
-// pairs that require it. History records what the round actually agreed on --
-// the same value written into StreamAggregates -- so a window is always a series
+// pairs that require it. History records what the round actually agreed on,
+// the same value written into StreamAggregates, so a window is always a series
 // of values that reached consensus. A pair with no aggregate this round
 // (aggregation failed, stream absent) contributes nothing: a gap in the series
 // is honest, whereas repeating the previous value would silently weight it

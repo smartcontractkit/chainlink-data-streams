@@ -123,7 +123,16 @@ func testPlugin(t *testing.T) *Plugin {
 func attachPump(t *testing.T, p *Plugin, ds DataSource, bbf ocr3_1types.BlobBroadcastFetcher) *blobPump {
 	t.Helper()
 	p.DataSource = ds
-	p.pump = newBlobPump(bbf, ds, logger.Test(t), p.ConfigDigest, true, tests.WaitTimeout(t), time.Minute, DefaultBlobLifetimeRounds)
+	p.pump = newBlobPump(logger.Test(t), blobPumpParams{
+		bbf:                bbf,
+		ds:                 ds,
+		configDigest:       p.ConfigDigest,
+		verboseLogging:     true,
+		observationTimeout: tests.WaitTimeout(t),
+		maxSnapshotAge:     time.Minute,
+		maxSnapshotRounds:  DefaultMaxSnapshotRounds,
+		blobLifetimeRounds: DefaultBlobLifetimeRounds,
+	})
 	p.pump.Start()
 	t.Cleanup(func() { require.NoError(t, p.Close()) })
 	return p.pump
@@ -1262,7 +1271,7 @@ func (d *recordingDataSource) streams() []llotypes.StreamID {
 
 // Test_Observation_UnverifiableCommittedChannelIsNotFatal covers the
 // version-skew case: a channel committed under an older build fails this
-// build's codec.Verify. The node must not halt -- it keeps observing and,
+// build's codec.Verify. The node must not halt. It keeps observing and,
 // crucially, still votes the offending channel out, which is the only way the
 // DON recovers.
 func Test_Observation_UnverifiableCommittedChannelIsNotFatal(t *testing.T) {

@@ -173,6 +173,7 @@ func Test_Factory_NewReportingPlugin(t *testing.T) {
 	require.Equal(t, 1, pl.F)
 	require.NotNil(t, pl.ChannelCache)
 	require.NotNil(t, pl.pump)
+	require.Equal(t, uint64(DefaultMaxSnapshotRounds), pl.pump.maxSnapshotRounds)
 	require.Equal(t, uint64(DefaultBlobLifetimeRounds), pl.pump.blobLifetimeRounds)
 	require.NoError(t, pl.Close())
 }

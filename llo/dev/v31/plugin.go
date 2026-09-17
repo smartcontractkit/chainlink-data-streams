@@ -136,20 +136,31 @@ func (p *Plugin) Observation(_ context.Context, seqNr uint64, _ ocrtypes.Attribu
 	// affected streams that round's aggregate (which needs >F values), not the
 	// round itself.
 	var handles [][]byte
+	var snap *blobSnapshot
 	// A nil pump means stream values were never wired up (or the plugin was built
 	// without the factory); rounds that observe no streams have nothing for the
 	// pump to gather, so neither publishes input nor consumes a snapshot.
 	if p.pump != nil && len(streams) > 0 {
 		p.pump.SetInput(pumpInput{streams: streams, seqNr: seqNr, lifeCycleStage: state.lifeCycleStage})
 
-		if snap, reason := p.pump.Take(seqNr); snap != nil {
+		var reason string
+		if snap, reason = p.pump.Take(seqNr); snap != nil {
 			handles = append(handles, snap.handleBytes)
 		} else {
 			p.Logger.Debugw("No usable stream-value snapshot for this round", "stage", "Observation", "seqNr", seqNr, "reason", reason, "misses", p.pump.Misses(), "cycles", p.pump.Cycles())
 		}
 	}
 
-	obsTSNanos := time.Now().UnixNano()
+	// Timestamp the data, not the round. The pump gathers stream values off the
+	// critical path, so they were read before this round started; stamping
+	// time.Now() would have the report claim the values are newer than they are
+	// for every aggregate that does not carry its own timestamp. A round with no
+	// snapshot carries only votes, for which the round time is the right stamp.
+	obsTime := time.Now()
+	if snap != nil {
+		obsTime = snap.observedAt
+	}
+	obsTSNanos := obsTime.UnixNano()
 	if obsTSNanos < 0 {
 		return nil, fmt.Errorf("negative observation timestamps are not supported, got: %d", obsTSNanos)
 	}
@@ -157,8 +168,8 @@ func (p *Plugin) Observation(_ context.Context, seqNr uint64, _ ocrtypes.Attribu
 
 	// Advertised every round, including when retired: a statement about this
 	// binary, not about the round or about what this node wants admitted.
-	// voteOnChannels above is deliberately unaware of p.ReportCodecs -- whether
-	// a channel can be encoded DON-wide is decided from these advertisements in
+	// voteOnChannels above is deliberately unaware of p.ReportCodecs: whether a
+	// channel can be encoded DON-wide is decided from these advertisements in
 	// the state transition, not locally per voter.
 	obs.SupportedReportFormats = supportedReportFormats(p.ReportCodecs)
 
@@ -310,7 +321,7 @@ func (p *Plugin) ValidateObservation(ctx context.Context, seqNr uint64, _ ocrtyp
 	// rejecting a peer observation is not a halt, and these checks are the only
 	// thing standing between a proposer and a malformed committed definition.
 	// Under version skew a stricter build rejects observations that carry
-	// updates from a staler one, which costs update-voting liveness only -- an
+	// updates from a staler one, which costs update-voting liveness only. An
 	// observation that votes no update has nothing to verify here, so rounds
 	// themselves are unaffected.
 	if err := protocol.VerifyChannelDefinitions(p.ReportCodecs, defsForVerify); err != nil {
