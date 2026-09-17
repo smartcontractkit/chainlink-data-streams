@@ -94,9 +94,15 @@
 // discards a snapshot, so the pump rate tracks the round rate without knowing
 // deltaRound, and cycles are serial so only one Observe is ever in flight.
 //
-// A snapshot is therefore gathered one round before it is used, and its
-// usability is bounded by the blob expiration hint (forSeqNr +
-// BlobLifetimeRounds) plus a generous wall-clock age check. A round that finds
+// A snapshot is therefore gathered one round before it is used. Two separate
+// bounds apply to it. MaxSnapshotRounds is local: it decides how stale the
+// values may be when this node references them (forSeqNr + MaxSnapshotRounds),
+// and is what a report format's staleness budget should be tuned against.
+// BlobLifetimeRounds is remote: it is the expiration hint given to the blob
+// transport (forSeqNr + BlobLifetimeRounds), deciding how long peers can still
+// fetch the blob, and sits BlobFetchMarginRounds beyond the last seqNr at which
+// the handle can be referenced. A wall-clock age check derived from the
+// measured round period guards against jitter on top. A round that finds
 // nothing usable — cold start, a failed cycle, or a stale snapshot — emits an
 // observation with no stream values. That is not a halt: quorum counts
 // observations, not values. The cost lands in aggregation, which needs >F values

@@ -91,9 +91,8 @@ func encodeBlobPayload(raw []byte) ([]byte, error) {
 		out = append(out, blobCodecRaw)
 		out = append(out, raw...)
 	}
-	// The framed payload is what is broadcast, so it -- not the raw bytes -- is
-	// what has to fit the declared limit. A payload that compresses poorly can
-	// pass the check above and still land over it.
+	// The framed payload is what is broadcast, has to fit the declared limit.
+	// A payload that compresses poorly can pass the check above and still land over it.
 	if len(out) > MaxBlobPayloadBytes {
 		return nil, fmt.Errorf("framed blob payload too large: %d > %d bytes", len(out), MaxBlobPayloadBytes)
 	}

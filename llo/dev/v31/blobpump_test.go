@@ -23,7 +23,16 @@ import (
 
 func testPump(t *testing.T, ds DataSource, bbf ocr3_1types.BlobBroadcastFetcher, maxAge time.Duration) *blobPump {
 	t.Helper()
-	p := newBlobPump(bbf, ds, logger.Test(t), ocrtypes.ConfigDigest{1}, true, tests.WaitTimeout(t), maxAge, DefaultBlobLifetimeRounds)
+	p := newBlobPump(logger.Test(t), blobPumpParams{
+		bbf:                bbf,
+		ds:                 ds,
+		configDigest:       ocrtypes.ConfigDigest{1},
+		verboseLogging:     true,
+		observationTimeout: tests.WaitTimeout(t),
+		maxSnapshotAge:     maxAge,
+		maxSnapshotRounds:  DefaultMaxSnapshotRounds,
+		blobLifetimeRounds: DefaultBlobLifetimeRounds,
+	})
 	p.Start()
 	t.Cleanup(p.Close)
 	return p
@@ -56,6 +65,7 @@ func Test_blobPump_TakeKicksNextCycle(t *testing.T) {
 	snap, reason = p.Take(3)
 	require.NotNil(t, snap, "reason: %s", reason)
 	require.Equal(t, uint64(2), snap.forSeqNr)
+	require.Equal(t, uint64(2+DefaultMaxSnapshotRounds), snap.usableBefore)
 	require.Equal(t, uint64(2+DefaultBlobLifetimeRounds), snap.expiresAt)
 	require.NotEmpty(t, snap.handleBytes)
 	require.Equal(t, uint64(1), p.Misses())
@@ -105,22 +115,25 @@ func Test_blobPump_TakeIsSingleUse(t *testing.T) {
 }
 
 func Test_blobPump_RejectsStaleSnapshots(t *testing.T) {
-	t.Run("expired by sequence number", func(t *testing.T) {
+	// The local freshness gate is usableBefore, which falls well short of the
+	// blob's own expiry: the snapshot stops being referenceable while the blob
+	// is still fetchable by peers.
+	t.Run("too stale by sequence number", func(t *testing.T) {
 		p := testPump(t, mockDS(), newFakeBroadcaster(), time.Minute)
 		p.mu.Lock()
-		p.ready = &blobSnapshot{handleBytes: []byte{1}, observedAt: time.Now(), forSeqNr: 2, expiresAt: 5}
+		p.ready = &blobSnapshot{handleBytes: []byte{1}, observedAt: time.Now(), forSeqNr: 2, usableBefore: 4, expiresAt: 6}
 		p.mu.Unlock()
 
-		snap, reason := p.Take(5)
+		snap, reason := p.Take(4)
 		require.Nil(t, snap)
-		require.Contains(t, reason, "blob expired")
+		require.Contains(t, reason, "too stale")
 		require.Equal(t, uint64(1), p.Misses())
 	})
 
 	t.Run("expired by wall clock", func(t *testing.T) {
 		p := testPump(t, mockDS(), newFakeBroadcaster(), time.Nanosecond)
 		p.mu.Lock()
-		p.ready = &blobSnapshot{handleBytes: []byte{1}, observedAt: time.Now().Add(-time.Hour), forSeqNr: 2, expiresAt: 100}
+		p.ready = &blobSnapshot{handleBytes: []byte{1}, observedAt: time.Now().Add(-time.Hour), forSeqNr: 2, usableBefore: 100, expiresAt: 100}
 		p.mu.Unlock()
 
 		snap, reason := p.Take(3)
@@ -129,13 +142,38 @@ func Test_blobPump_RejectsStaleSnapshots(t *testing.T) {
 	})
 
 	t.Run("age check disabled", func(t *testing.T) {
-		p := testPump(t, mockDS(), newFakeBroadcaster(), 0)
+		p := testPump(t, mockDS(), newFakeBroadcaster(), -1)
 		p.mu.Lock()
-		p.ready = &blobSnapshot{handleBytes: []byte{1}, observedAt: time.Now().Add(-time.Hour), forSeqNr: 2, expiresAt: 100}
+		p.ready = &blobSnapshot{handleBytes: []byte{1}, observedAt: time.Now().Add(-time.Hour), forSeqNr: 2, usableBefore: 100, expiresAt: 100}
 		p.mu.Unlock()
 
 		snap, _ := p.Take(3)
-		require.NotNil(t, snap, "with the age check disabled only blob expiry bounds staleness")
+		require.NotNil(t, snap, "with the age check disabled only maxSnapshotRounds bounds staleness")
+	})
+
+	// With no explicit age the bound is derived from the measured round period,
+	// so a pump that has seen no rounds yet must not reject on age: guessing a
+	// cadence would silently stop the node contributing stream values.
+	t.Run("derived age check is inert until a round period is measured", func(t *testing.T) {
+		p := testPump(t, mockDS(), newFakeBroadcaster(), 0)
+		p.mu.Lock()
+		p.ready = &blobSnapshot{handleBytes: []byte{1}, observedAt: time.Now().Add(-time.Hour), forSeqNr: 2, usableBefore: 100, expiresAt: 100}
+		p.mu.Unlock()
+
+		snap, reason := p.Take(3)
+		require.NotNil(t, snap, "reason: %s", reason)
+	})
+
+	t.Run("derived age check rejects once the round period is known", func(t *testing.T) {
+		p := testPump(t, mockDS(), newFakeBroadcaster(), 0)
+		p.mu.Lock()
+		p.roundPeriod = time.Millisecond
+		p.ready = &blobSnapshot{handleBytes: []byte{1}, observedAt: time.Now().Add(-time.Hour), forSeqNr: 2, usableBefore: 100, expiresAt: 100}
+		p.mu.Unlock()
+
+		snap, reason := p.Take(3)
+		require.Nil(t, snap)
+		require.Contains(t, reason, "too old")
 	})
 }
 

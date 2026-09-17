@@ -6,7 +6,7 @@ import (
 
 // FuzzDecodeBlobPayload feeds arbitrary bytes through the blob payload decoder.
 // Blob payloads are attacker-controlled, so the contract is that any input
-// either returns bytes within the caller's budget or errors -- never a panic,
+// either returns bytes within the caller's budget or errors. Never a panic,
 // and never more bytes than the budget allows (a zstd bomb).
 func FuzzDecodeBlobPayload(f *testing.F) {
 	raw := []byte("stream values would go here")
