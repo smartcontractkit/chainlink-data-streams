@@ -422,7 +422,7 @@ func (p *Plugin) aggregate(
 				}
 				continue
 			}
-			result, aerr := aggF(streamObservations[sid], p.F)
+			result, aerr := aggF(streamObservations[sid], p.minContributions())
 
 			switch v := result.(type) {
 			case *protocol.TimestampedStreamValue:

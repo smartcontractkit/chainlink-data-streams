@@ -62,7 +62,20 @@ type Plugin struct {
 	// From offchain config
 	ProtocolVersion                     uint32
 	DefaultMinReportIntervalNanoseconds uint64
+	// AggregationFaultTolerance is how many Byzantine contributors per-stream
+	// aggregation tolerates. It sets the contribution floor, see
+	// minContributions.
+	AggregationFaultTolerance int
 }
+
+// minContributions is the contribution floor: the fewest contributions a stream
+// aggregate may be built from. 2*AggregationFaultTolerance+1 keeps the result
+// inside the honest value range when up to AggregationFaultTolerance
+// contributors are Byzantine.
+//
+// Distinct from the consensus quorum, which counts attributed observations, not
+// the per-stream contributions inside them.
+func (p *Plugin) minContributions() int { return 2*p.AggregationFaultTolerance + 1 }
 
 // Query is empty: LLO oracles do not coordinate on what to observe.
 func (p *Plugin) Query(ctx context.Context, seqNr uint64, _ ocr3_1types.KeyValueStateReader, _ ocr3_1types.BlobBroadcastFetcher) (ocrtypes.Query, error) {

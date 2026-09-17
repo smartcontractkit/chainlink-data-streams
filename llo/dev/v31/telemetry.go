@@ -18,7 +18,7 @@ func (p *Plugin) captureOutcomeTelemetry(out precursor, seqNr uint64) {
 	if p.OutcomeTelemetryCh == nil {
 		return
 	}
-	ot, err := makeOutcomeTelemetry(out, p.ConfigDigest, seqNr, p.DonID)
+	ot, err := makeOutcomeTelemetry(out, p.ConfigDigest, seqNr, p.DonID, p.minContributions())
 	if err != nil {
 		p.Logger.Warnw("Error making outcome telemetry", "err", err)
 		return
@@ -30,7 +30,7 @@ func (p *Plugin) captureOutcomeTelemetry(out precursor, seqNr uint64) {
 	}
 }
 
-func makeOutcomeTelemetry(out precursor, configDigest ocrtypes.ConfigDigest, seqNr uint64, donID uint32) (*protocol.LLOOutcomeTelemetry, error) {
+func makeOutcomeTelemetry(out precursor, configDigest ocrtypes.ConfigDigest, seqNr uint64, donID uint32, minContributions int) (*protocol.LLOOutcomeTelemetry, error) {
 	ot := &protocol.LLOOutcomeTelemetry{
 		LifeCycleStage:                  string(out.LifeCycleStage),
 		ObservationTimestampNanoseconds: out.ObservationTimestampNanoseconds,
@@ -40,6 +40,7 @@ func makeOutcomeTelemetry(out precursor, configDigest ocrtypes.ConfigDigest, seq
 		SeqNr:                           seqNr,
 		ConfigDigest:                    configDigest[:],
 		DonId:                           donID,
+		MinContributions:                uint32(minContributions),
 	}
 	for id, cd := range out.ChannelDefinitions {
 		ot.ChannelDefinitions[id] = protocol.ChannelDefinitionToProto(cd)

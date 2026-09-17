@@ -115,6 +115,8 @@ func testPlugin(t *testing.T) *Plugin {
 		ChannelCache:                        protocol.NewChannelCache(),
 		ProtocolVersion:                     0,
 		DefaultMinReportIntervalNanoseconds: 0,
+		// Floor of 3 contributions, which is what N=4, F=1 can sustain.
+		AggregationFaultTolerance: 1,
 	}
 }
 
@@ -342,6 +344,64 @@ func Test_FullRound_AddChannelThenReport(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, reports4, 1)
 	assert.Equal(t, llotypes.ReportFormatJSON, reports4[0].ReportWithInfo.Info.ReportFormat)
+}
+
+func Test_StateTransition_ContributionFloor(t *testing.T) {
+	ctx := tests.Context(t)
+	p := testPlugin(t) // F=1, AggregationFaultTolerance=1, floor 3
+	require.Equal(t, 3, p.minContributions())
+	kv := newMemKV()
+
+	channelDef := llotypes.ChannelDefinition{
+		ReportFormat: llotypes.ReportFormatJSON,
+		Streams:      []llotypes.Stream{{StreamID: 100, Aggregator: llotypes.AggregatorMedian}},
+	}
+	_, err := p.StateTransition(ctx, 1, ocrtypes.AttributedQuery{}, []ocrtypes.AttributedObservation{ao(0, nil), ao(1, nil), ao(2, nil)}, kv, testBlobs)
+	require.NoError(t, err)
+	addAOs := []ocrtypes.AttributedObservation{}
+	for i := 0; i < 4; i++ {
+		addAOs = append(addAOs, ao(i, mustEncodeObs(t, Observation{
+			UnixTimestampNanoseconds: 1_000,
+			UpdateChannelDefinitions: llotypes.ChannelDefinitions{1: channelDef},
+		})))
+	}
+	_, err = p.StateTransition(ctx, 2, ocrtypes.AttributedQuery{}, addAOs, kv, testBlobs)
+	require.NoError(t, err)
+
+	// contributors oracles carry stream 100; the rest take part in the round
+	// without contributing a value for it, which is exactly the population
+	// collapse the floor guards against.
+	valObs := func(ts uint64, contributors int) []ocrtypes.AttributedObservation {
+		aos := []ocrtypes.AttributedObservation{}
+		for i := 0; i < 4; i++ {
+			obs := Observation{UnixTimestampNanoseconds: ts}
+			if i < contributors {
+				obs.StreamValues = protocol.StreamValues{100: protocol.ToDecimal(decimal.NewFromInt(42))}
+			}
+			aos = append(aos, ao(i, mustEncodeObs(t, obs)))
+		}
+		return aos
+	}
+
+	// Three contributions meet the floor, so the stream aggregates.
+	prec, err := p.StateTransition(ctx, 3, ocrtypes.AttributedQuery{}, valObs(2_000, 3), kv, testBlobs)
+	require.NoError(t, err)
+	out, err := decodePrecursor(prec)
+	require.NoError(t, err)
+	require.Contains(t, out.StreamAggregates, llotypes.StreamID(100))
+
+	// Two do not: no aggregate, so no report. The channel itself stays
+	// reportable, since nil observed stream values are permitted unless the
+	// definition sets DisableNilStreamValues; the report is then dropped at
+	// encode time, exactly as for any other missing observed value.
+	prec, err = p.StateTransition(ctx, 4, ocrtypes.AttributedQuery{}, valObs(3_000, 2), kv, testBlobs)
+	require.NoError(t, err)
+	out, err = decodePrecursor(prec)
+	require.NoError(t, err)
+	require.NotContains(t, out.StreamAggregates, llotypes.StreamID(100))
+	reports, err := p.Reports(ctx, 4, prec)
+	require.NoError(t, err)
+	require.Empty(t, reports)
 }
 
 func Test_Precursor_RoundTrip_And_Determinism(t *testing.T) {

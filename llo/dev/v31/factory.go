@@ -2,6 +2,7 @@ package llo
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -77,7 +78,7 @@ func (f *PluginFactory) NewReportingPlugin(ctx context.Context, cfg ocr3types.Re
 	}
 
 	l := logger.Sugared(f.Logger).With("lloProtocolVersion", offchainConfig.ProtocolVersion, "configDigest", cfg.ConfigDigest, "lloOCRVersion", "3.1")
-	l.Infow("llo/dev/v31.NewReportingPlugin", "onchainConfig", onchainConfig, "offchainConfig", offchainConfig)
+	l.Infow("llo/dev/v31.NewReportingPlugin", "onchainConfig", onchainConfig, "offchainConfig", offchainConfig, "f", cfg.F, "n", cfg.N)
 
 	// Initialize the memory ballast
 	protocol.InitMemoryBallast()
@@ -98,6 +99,17 @@ func (f *PluginFactory) NewReportingPlugin(ctx context.Context, cfg ocr3types.Re
 	if blobLifetimeRounds+1 < maxSnapshotRounds+BlobFetchMarginRounds {
 		return nil, nil, fmt.Errorf("BlobLifetimeRounds (%d) leaves less than %d rounds of fetch margin past MaxSnapshotRounds (%d)", blobLifetimeRounds, BlobFetchMarginRounds, maxSnapshotRounds)
 	}
+	// The contribution floor is a replicated state transition parameter, it
+	// must come from the offchainConfig and set explicitly.
+	if offchainConfig.AggregationFaultTolerance == nil {
+		return nil, nil, errors.New("NewReportingPlugin: offchain config must set aggregationFaultTolerance explicitly")
+	}
+	aggregationFaultTolerance := int(*offchainConfig.AggregationFaultTolerance)
+	if aggregationFaultTolerance > cfg.F {
+		return nil, nil, fmt.Errorf("aggregationFaultTolerance (%d) must not exceed consensus F (%d): a floor of %d contributions can never be met from %d observations",
+			aggregationFaultTolerance, cfg.F, 2*aggregationFaultTolerance+1, 2*cfg.F+1)
+	}
+
 	blobObservationTimeout := f.MaxDurationBlobObservation
 	if blobObservationTimeout <= 0 {
 		blobObservationTimeout = DefaultBlobObservationDurationMultiplier * cfg.MaxDurationObservation
@@ -121,6 +133,7 @@ func (f *PluginFactory) NewReportingPlugin(ctx context.Context, cfg ocr3types.Re
 		ReportTelemetryCh:                   f.ReportTelemetryCh,
 		ProtocolVersion:                     offchainConfig.ProtocolVersion,
 		DefaultMinReportIntervalNanoseconds: offchainConfig.DefaultMinReportIntervalNanoseconds,
+		AggregationFaultTolerance:           aggregationFaultTolerance,
 	}
 
 	// Definitions and the opts decoded from them are cached together, as one

@@ -280,7 +280,15 @@ func (p *Plugin) outcome(outctx ocr3types.OutcomeContext, query types.Query, aos
 				}
 			}
 
-			// Perform the aggregation
+			// Perform the aggregation.
+			//
+			// The contribution floor is F+1 values per (streamID, aggregator)
+			// pair, which is the intended behavior for v30. The rationale is
+			// liveness: stream values are sparse, since a data source is
+			// contractually allowed to leave a stream unset, and
+			// ObservationQuorum lets the round proceed on with 2F+1
+			// attributed observations, so a stream aggregate rests on a
+			// subset of oracles than the round itself requires.
 			aggF := protocol.GetAggregatorFunc(agg)
 			if aggF == nil {
 				// Unknown aggregator, e.g. one added by a newer version. Admission
@@ -288,7 +296,7 @@ func (p *Plugin) outcome(outctx ocr3types.OutcomeContext, query types.Query, aos
 				// protocol: skip the pair, keeping any carried-forward value.
 				continue
 			}
-			result, err := aggF(streamObservations[sid], p.F)
+			result, err := aggF(streamObservations[sid], p.F+1)
 
 			// Handle aggregation results
 			switch v := result.(type) {
