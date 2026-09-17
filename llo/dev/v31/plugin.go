@@ -108,13 +108,20 @@ func (p *Plugin) Observation(_ context.Context, seqNr uint64, _ ocrtypes.Attribu
 		if p.PredecessorConfigDigest != nil && state.lifeCycleStage == protocol.LifeCycleStageStaging {
 			obs.AttestedPredecessorRetirement, err = p.PredecessorRetirementReportCache.AttestedRetirementReport(*p.PredecessorConfigDigest)
 			if err != nil {
-				return nil, fmt.Errorf("error fetching attested retirement report from cache: %w", err)
+				// Best-effort: the state transition only needs one node to
+				// supply a valid retirement report, so omit it rather than
+				// failing the round.
+				obs.AttestedPredecessorRetirement = nil
+				p.Logger.Errorw("Failed to fetch attested retirement report from cache, omitting it from this observation", "stage", "Observation", "seqNr", seqNr, "err", err)
 			}
 		}
 
 		obs.ShouldRetire, err = p.ShouldRetireCache.ShouldRetire(p.ConfigDigest)
 		if err != nil {
-			return nil, fmt.Errorf("error fetching shouldRetire from cache: %w", err)
+			// Best-effort: retirement is decided by a quorum of votes, so
+			// abstain rather than failing the round.
+			obs.ShouldRetire = false
+			p.Logger.Errorw("Failed to fetch shouldRetire from cache, not voting to retire this round", "stage", "Observation", "seqNr", seqNr, "err", err)
 		}
 
 		p.voteOnChannels(&obs, state)

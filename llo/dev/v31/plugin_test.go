@@ -1376,3 +1376,32 @@ func Test_FullRound_RecoverFromUnverifiableChannel(t *testing.T) {
 	require.NotContains(t, kvChannelDefs(t, kv), llotypes.ChannelID(2))
 	require.Contains(t, kvChannelDefs(t, kv), llotypes.ChannelID(1))
 }
+
+// Test_Observation_RetirementCacheErrorsAreNotFatal guards the liveness fix:
+// both retirement caches read from node-local, asynchronously populated state,
+// so a transient failure must not fail the round. The vote is best-effort — a
+// single node supplying a valid retirement report is enough, and retirement
+// needs a quorum of votes — so the node abstains and carries on.
+func Test_Observation_RetirementCacheErrorsAreNotFatal(t *testing.T) {
+	ctx := tests.Context(t)
+	p := testPlugin(t)
+	predecessor := ocrtypes.ConfigDigest{0xAB}
+	p.PredecessorConfigDigest = &predecessor
+	p.PredecessorRetirementReportCache = &mockPredecessorRetirementReportCache{err: errors.New("rpc failure")}
+	p.ShouldRetireCache = &mockShouldRetireCache{retire: true, err: errors.New("rpc failure")}
+	p.ChannelDefinitionCache = &mockChannelDefinitionCache{defs: llotypes.ChannelDefinitions{}}
+	kv := newMemKV()
+
+	// Bootstrap -> staging, which is the only stage that reads the predecessor
+	// retirement report cache.
+	_, err := p.StateTransition(ctx, 1, ocrtypes.AttributedQuery{}, []ocrtypes.AttributedObservation{ao(0, nil), ao(1, nil), ao(2, nil)}, kv, testBlobs)
+	require.NoError(t, err)
+
+	obsBytes, err := p.Observation(ctx, 2, ocrtypes.AttributedQuery{}, kv, nil)
+	require.NoError(t, err, "a failing retirement cache must not halt the node")
+	obs, err := decodeObservation(ctx, obsBytes, testBlobs)
+	require.NoError(t, err)
+
+	require.Empty(t, obs.AttestedPredecessorRetirement)
+	require.False(t, obs.ShouldRetire)
+}

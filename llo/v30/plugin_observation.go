@@ -50,13 +50,19 @@ func (p *Plugin) observation(ctx context.Context, outctx ocr3types.OutcomeContex
 			var err2 error
 			obs.AttestedPredecessorRetirement, err2 = p.PredecessorRetirementReportCache.AttestedRetirementReport(*p.PredecessorConfigDigest)
 			if err2 != nil {
-				return nil, fmt.Errorf("error fetching attested retirement report from cache: %w", err2)
+				// Best-effort: Outcome only needs one node to supply a valid
+				// retirement report, so omit it rather than failing the round.
+				obs.AttestedPredecessorRetirement = nil
+				p.Logger.Errorw("Failed to fetch attested retirement report from cache, omitting it from this observation", "stage", "Observation", "seqNr", outctx.SeqNr, "err", err2)
 			}
 		}
 
 		obs.ShouldRetire, err = p.ShouldRetireCache.ShouldRetire(p.ConfigDigest)
 		if err != nil {
-			return nil, fmt.Errorf("error fetching shouldRetire from cache: %w", err)
+			// Best-effort: retirement is decided by a quorum of votes, so
+			// abstain rather than failing the round.
+			obs.ShouldRetire = false
+			p.Logger.Errorw("Failed to fetch shouldRetire from cache, not voting to retire this round", "stage", "Observation", "seqNr", outctx.SeqNr, "err", err)
 		}
 		if obs.ShouldRetire && p.Config.VerboseLogging {
 			p.Logger.Debugw("Voting to retire", "seqNr", outctx.SeqNr, "stage", "Observation")
