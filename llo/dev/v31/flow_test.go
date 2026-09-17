@@ -154,13 +154,47 @@ func addChannelRound(t *testing.T, ts uint64, cid llotypes.ChannelID, cd llotype
 
 // --- tests ---
 
+// mustEncodeOffchainConfig encodes a v0 offchain config with an explicit
+// aggregation fault tolerance, which LLO v31 requires.
+func mustEncodeOffchainConfig(t *testing.T, aggregationFaultTolerance uint32) []byte {
+	t.Helper()
+	b, err := protocol.OffchainConfig{AggregationFaultTolerance: &aggregationFaultTolerance}.Encode()
+	require.NoError(t, err)
+	return b
+}
+
+func Test_Factory_NewReportingPlugin_aggregationFaultTolerance(t *testing.T) {
+	ctx := tests.Context(t)
+	f := NewPluginFactory(PluginFactoryParams{
+		OnchainConfigCodec: mockOnchainConfigCodec{},
+		Logger:             logger.Test(t),
+	})
+
+	t.Run("refuses to start when unset", func(t *testing.T) {
+		_, _, err := f.NewReportingPlugin(ctx, ocr3types.ReportingPluginConfig{N: 4, F: 1, ConfigDigest: ocrtypes.ConfigDigest{9}}, nil)
+		require.EqualError(t, err, "NewReportingPlugin: offchain config must set aggregationFaultTolerance explicitly")
+	})
+	t.Run("refuses to start when it exceeds consensus F", func(t *testing.T) {
+		_, _, err := f.NewReportingPlugin(ctx, ocr3types.ReportingPluginConfig{N: 4, F: 1, ConfigDigest: ocrtypes.ConfigDigest{9}, OffchainConfig: mustEncodeOffchainConfig(t, 2)}, nil)
+		require.EqualError(t, err, "aggregationFaultTolerance (2) must not exceed consensus F (1): a floor of 5 contributions can never be met from 3 observations")
+	})
+	t.Run("accepts zero", func(t *testing.T) {
+		p, _, err := f.NewReportingPlugin(ctx, ocr3types.ReportingPluginConfig{N: 4, F: 1, ConfigDigest: ocrtypes.ConfigDigest{9}, OffchainConfig: mustEncodeOffchainConfig(t, 0)}, nil)
+		require.NoError(t, err)
+		pl, ok := p.(*Plugin)
+		require.True(t, ok)
+		require.Equal(t, 1, pl.minContributions())
+		require.NoError(t, pl.Close())
+	})
+}
+
 func Test_Factory_NewReportingPlugin(t *testing.T) {
 	ctx := tests.Context(t)
 	f := NewPluginFactory(PluginFactoryParams{
 		OnchainConfigCodec: mockOnchainConfigCodec{},
 		Logger:             logger.Test(t),
 	})
-	p, info, err := f.NewReportingPlugin(ctx, ocr3types.ReportingPluginConfig{N: 4, F: 1, ConfigDigest: ocrtypes.ConfigDigest{9}}, nil)
+	p, info, err := f.NewReportingPlugin(ctx, ocr3types.ReportingPluginConfig{N: 4, F: 1, ConfigDigest: ocrtypes.ConfigDigest{9}, OffchainConfig: mustEncodeOffchainConfig(t, 1)}, nil)
 	require.NoError(t, err)
 
 	info1, ok := info.(interface{ Validate() error })
@@ -171,6 +205,8 @@ func Test_Factory_NewReportingPlugin(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, 4, pl.N)
 	require.Equal(t, 1, pl.F)
+	require.Equal(t, 1, pl.AggregationFaultTolerance)
+	require.Equal(t, 3, pl.minContributions())
 	require.NotNil(t, pl.ChannelCache)
 	require.NotNil(t, pl.pump)
 	require.Equal(t, uint64(DefaultMaxSnapshotRounds), pl.pump.maxSnapshotRounds)

@@ -8,6 +8,50 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func Test_OffchainConfig_AggregationFaultTolerance(t *testing.T) {
+	t.Run("unset and zero are distinct configs", func(t *testing.T) {
+		unset, err := OffchainConfig{ProtocolVersion: 1, DefaultMinReportIntervalNanoseconds: 1}.Encode()
+		require.NoError(t, err)
+		zero := uint32(0)
+		explicitZero, err := OffchainConfig{ProtocolVersion: 1, DefaultMinReportIntervalNanoseconds: 1, AggregationFaultTolerance: &zero}.Encode()
+		require.NoError(t, err)
+		assert.NotEqual(t, unset, explicitZero)
+
+		decodedUnset, err := DecodeOffchainConfig(unset)
+		require.NoError(t, err)
+		assert.Nil(t, decodedUnset.AggregationFaultTolerance)
+
+		decodedZero, err := DecodeOffchainConfig(explicitZero)
+		require.NoError(t, err)
+		require.NotNil(t, decodedZero.AggregationFaultTolerance)
+		assert.Equal(t, uint32(0), *decodedZero.AggregationFaultTolerance)
+	})
+	t.Run("round-trips a set value", func(t *testing.T) {
+		aft := uint32(5)
+		b, err := OffchainConfig{ProtocolVersion: 2, DefaultMinReportIntervalNanoseconds: 1, AggregationFaultTolerance: &aft}.Encode()
+		require.NoError(t, err)
+		decoded, err := DecodeOffchainConfig(b)
+		require.NoError(t, err)
+		require.NotNil(t, decoded.AggregationFaultTolerance)
+		assert.Equal(t, uint32(5), *decoded.AggregationFaultTolerance)
+	})
+	t.Run("invalid onchain bytes decode to unset", func(t *testing.T) {
+		b, err := hex.DecodeString("7b2265787069726174696f6e57696e646f77223a38363430302c2262617365555344466565223a22302e3332227d")
+		require.NoError(t, err)
+		decoded, err := DecodeOffchainConfig(b)
+		require.NoError(t, err)
+		assert.Nil(t, decoded.AggregationFaultTolerance)
+	})
+	t.Run("out of range is rejected", func(t *testing.T) {
+		aft := uint32(1 << 20)
+		err := OffchainConfig{ProtocolVersion: 1, DefaultMinReportIntervalNanoseconds: 1, AggregationFaultTolerance: &aft}.Validate()
+		require.EqualError(t, err, "aggregationFaultTolerance out of range: 1048576")
+	})
+	t.Run("is not required by Validate, since v3.0 ignores it", func(t *testing.T) {
+		require.NoError(t, OffchainConfig{ProtocolVersion: 1, DefaultMinReportIntervalNanoseconds: 1}.Validate())
+	})
+}
+
 func Test_OffchainConfig(t *testing.T) {
 	t.Run("decoding invalid bytes", func(t *testing.T) {
 		b, err := hex.DecodeString("7b2265787069726174696f6e57696e646f77223a38363430302c2262617365555344466565223a22302e3332227d")

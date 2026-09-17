@@ -20,6 +20,10 @@ message LLOOutcomeTelemetry {
   uint64 seq_nr = 9;
   bytes config_digest = 10;
   uint32 don_id = 11;
+  // Contribution floor the round's stream aggregates were produced under:
+  // 2*aggregationFaultTolerance+1. Zero in LLO v30, which derives the floor
+  // from the consensus F instead.
+  uint32 min_contributions = 12;
 }
 
 message LLOAggregatorStreamValue {

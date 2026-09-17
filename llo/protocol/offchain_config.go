@@ -3,6 +3,7 @@ package protocol
 import (
 	"errors"
 	"fmt"
+	"math"
 
 	"google.golang.org/protobuf/proto"
 )
@@ -20,6 +21,15 @@ type OffchainConfig struct {
 	DefaultMinReportIntervalNanoseconds uint64
 	// EnableObservationCompression enables observation compression.
 	EnableObservationCompression bool
+	// AggregationFaultTolerance is how many Byzantine contributors per-stream
+	// aggregation tolerates in LLO v31: it sets the contribution floor to
+	// 2*AggregationFaultTolerance+1. nil means unset: LLO v30 ignores it, LLO
+	// v3.1 refuses to construct a plugin.
+	//
+	// There is no default. The right value depends on the DON's observed
+	// per-stream omission rate, so a default would either silently weaken
+	// safety or silently stall reporting.
+	AggregationFaultTolerance *uint32
 }
 
 func DecodeOffchainConfig(b []byte) (o OffchainConfig, err error) {
@@ -40,6 +50,7 @@ func DecodeOffchainConfig(b []byte) (o OffchainConfig, err error) {
 	o.ProtocolVersion = pbuf.ProtocolVersion
 	o.DefaultMinReportIntervalNanoseconds = pbuf.DefaultMinReportIntervalNanoseconds
 	o.EnableObservationCompression = pbuf.EnableObservationCompression
+	o.AggregationFaultTolerance = pbuf.AggregationFaultTolerance
 	// NOTE: Validate must run on the decoded values. A node that cannot honour the
 	// configured version must refuse to run rather than diverge from the nodes
 	// that can.
@@ -54,6 +65,7 @@ func (c OffchainConfig) Encode() ([]byte, error) {
 		ProtocolVersion:                     c.ProtocolVersion,
 		DefaultMinReportIntervalNanoseconds: c.DefaultMinReportIntervalNanoseconds,
 		EnableObservationCompression:        c.EnableObservationCompression,
+		AggregationFaultTolerance:           c.AggregationFaultTolerance,
 	}
 	return proto.Marshal(pbuf)
 }
@@ -73,6 +85,13 @@ func (c OffchainConfig) Validate() error {
 		}
 	default:
 		return fmt.Errorf("unknown protocol version: %d", c.ProtocolVersion)
+	}
+	// AggregationFaultTolerance is validated where it is used: LLO v30 ignores
+	// it, LLO v31 requires it (see llo/dev/v31.NewReportingPlugin). Nothing here
+	// can tell which plugin will consume this config. The bound below only
+	// keeps the int conversion and the 2x+1 arithmetic safe.
+	if c.AggregationFaultTolerance != nil && *c.AggregationFaultTolerance > math.MaxInt8 {
+		return fmt.Errorf("aggregationFaultTolerance out of range: %d", *c.AggregationFaultTolerance)
 	}
 	return nil
 }
