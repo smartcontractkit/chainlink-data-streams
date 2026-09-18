@@ -60,6 +60,12 @@ type Plugin struct {
 	// decoded. May be nil, in which case nothing is memoized.
 	ChannelAnalysisCache *protocol.ChannelAnalysisCache
 
+	// BlobPayloads memoizes blob payloads decoded within one round, so a handle
+	// referenced by an observation is fetched and decompressed once for
+	// ValidateObservation and StateTransition together. May be nil, in which
+	// case nothing is memoized.
+	BlobPayloads *blobPayloadCache
+
 	// Optional telemetry sinks; best-effort, non-blocking.
 	OutcomeTelemetryCh chan<- *protocol.LLOOutcomeTelemetry
 	ReportTelemetryCh  chan<- *protocol.LLOReportTelemetry
@@ -303,7 +309,7 @@ func (p *Plugin) ValidateObservation(ctx context.Context, seqNr uint64, _ ocrtyp
 		return nil
 	}
 
-	observation, err := decodeObservation(ctx, ao.Observation, bf)
+	observation, err := decodeObservation(ctx, ao.Observation, bf, p.BlobPayloads.round(seqNr))
 	if err != nil {
 		return fmt.Errorf("observation decode error: %w", err)
 	}

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"sync"
 
 	"github.com/smartcontractkit/chainlink-common/pkg/logger"
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
@@ -69,7 +70,7 @@ func (p *Plugin) StateTransition(ctx context.Context, seqNr uint64, _ ocrtypes.A
 		return nil, fmt.Errorf("failed to load KV state: %w", err)
 	}
 
-	timestamps, validPredecessorRetirementReport, shouldRetireVotes, removeChannelVotesByID, updateDefsByHash, updateVotesByHash, supportByFormat, streamObservations, err := p.decodeObservations(ctx, aos, bf)
+	timestamps, validPredecessorRetirementReport, shouldRetireVotes, removeChannelVotesByID, updateDefsByHash, updateVotesByHash, supportByFormat, streamObservations, err := p.decodeObservations(ctx, aos, bf, p.BlobPayloads.round(seqNr))
 	if err != nil {
 		return nil, err
 	}
@@ -222,7 +223,7 @@ func (p *Plugin) StateTransition(ctx context.Context, seqNr uint64, _ ocrtypes.A
 	return encodePrecursor(out)
 }
 
-func (p *Plugin) decodeObservations(ctx context.Context, aos []ocrtypes.AttributedObservation, bf ocr3_1types.BlobFetcher) (
+func (p *Plugin) decodeObservations(ctx context.Context, aos []ocrtypes.AttributedObservation, bf ocr3_1types.BlobFetcher, memo *roundBlobPayloads) (
 	timestampsNanoseconds []uint64,
 	validPredecessorRetirementReport *protocol.RetirementReport,
 	shouldRetireVotes int,
@@ -239,8 +240,24 @@ func (p *Plugin) decodeObservations(ctx context.Context, aos []ocrtypes.Attribut
 	updateChannelVotesByHash = make(map[[32]byte]int)
 	streamObservations = make(map[llotypes.StreamID][]protocol.StreamValue)
 
-	for _, ao := range aos {
-		observation, derr := decodeObservation(ctx, ao.Observation, bf)
+	// Decode concurrently: each observation may reference blobs that are not yet
+	// assembled locally, and waiting for one serially delays every other. The
+	// tally below still runs in aos order, so the outcome does not depend on
+	// which decode finished first.
+	decoded := make([]Observation, len(aos))
+	decodeErrs := make([]error, len(aos))
+	var wg sync.WaitGroup
+	wg.Add(len(aos))
+	for i, ao := range aos {
+		go func() {
+			defer wg.Done()
+			decoded[i], decodeErrs[i] = decodeObservation(ctx, ao.Observation, bf, memo)
+		}()
+	}
+	wg.Wait()
+
+	for i, ao := range aos {
+		observation, derr := decoded[i], decodeErrs[i]
 		if derr != nil {
 			var bfErr *blobFetchError
 			if errors.As(derr, &bfErr) {

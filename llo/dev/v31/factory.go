@@ -140,6 +140,7 @@ func (f *PluginFactory) NewReportingPlugin(ctx context.Context, cfg ocr3types.Re
 	// immutable generation per c/seqnr, so a round can never mix the two.
 	p.ChannelCache = protocol.NewChannelCache()
 	p.ChannelAnalysisCache = protocol.NewChannelAnalysisCache()
+	p.BlobPayloads = newBlobPayloadCache()
 
 	// Setup the blobpump
 	p.pump = newBlobPump(l, blobPumpParams{

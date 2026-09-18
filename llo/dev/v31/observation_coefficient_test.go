@@ -35,11 +35,11 @@ func Test_decodeObservation_CoefficientBound(t *testing.T) {
 		})
 	}
 
-	obs, err := decodeObservation(ctx, encode(t, atLimit), testBlobs)
+	obs, err := decodeObservation(ctx, encode(t, atLimit), testBlobs, nil)
 	require.NoError(t, err)
 	require.Len(t, obs.StreamValues, 1)
 
-	_, err = decodeObservation(ctx, encode(t, overSized), testBlobs)
+	_, err = decodeObservation(ctx, encode(t, overSized), testBlobs, nil)
 	require.ErrorIs(t, err, protocol.ErrDecimalCoefficientOutOfRange)
 
 	var bfErr *blobFetchError

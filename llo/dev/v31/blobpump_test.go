@@ -371,3 +371,93 @@ func Test_blobPump_CloseDoesNotHangOnStuckDataSource(t *testing.T) {
 		t.Fatal("Close hung on a DataSource that ignores context")
 	}
 }
+
+// flakyBroadcaster fails the first failures broadcasts and then delegates. It
+// also runs onAttempt before each call, so a test can move the round forward
+// between attempts.
+type flakyBroadcaster struct {
+	*llotest.BlobBroadcastFetcher
+	failures  atomic.Int64
+	onAttempt func(attempt int)
+	attempts  atomic.Int64
+}
+
+func (f *flakyBroadcaster) BroadcastBlob(ctx context.Context, payload []byte, hint ocr3_1types.BlobExpirationHint) (ocr3_1types.BlobHandle, error) {
+	attempt := int(f.attempts.Add(1))
+	if f.onAttempt != nil {
+		f.onAttempt(attempt)
+	}
+	if f.failures.Add(-1) >= 0 {
+		return ocr3_1types.BlobHandle{}, errors.New("broadcast unavailable")
+	}
+	return f.BlobBroadcastFetcher.BroadcastBlob(ctx, payload, hint)
+}
+
+// Test_blobPump_RetriesFailedBroadcast covers the recovery this retry exists
+// for: values gathered fine are not thrown away because the transport refused
+// the first broadcast.
+func Test_blobPump_RetriesFailedBroadcast(t *testing.T) {
+	ds := mockDS()
+	bc := &flakyBroadcaster{BlobBroadcastFetcher: newFakeBroadcaster()}
+	bc.failures.Store(1)
+
+	p := testPump(t, ds, bc, time.Minute)
+	p.SetInput(pumpInputFor(2))
+	_, _ = p.Take(2)
+
+	require.Eventually(t, func() bool { return p.Cycles() >= 1 }, tests.WaitTimeout(t), 10*time.Millisecond)
+	require.EqualValues(t, 2, bc.attempts.Load(), "the failed attempt must be retried, once")
+
+	snap, reason := p.Take(3)
+	require.NotNil(t, snap, reason)
+	require.EqualValues(t, 2, snap.forSeqNr, "the retry does not change the round the values were gathered for")
+}
+
+// Test_blobPump_BroadcastRetryRefreshesExpiry asserts a retry that lands after
+// the round moved on hands peers a hint derived from the current round, not
+// from the round the values were gathered for.
+func Test_blobPump_BroadcastRetryRefreshesExpiry(t *testing.T) {
+	ds := mockDS()
+	inner := newFakeBroadcaster()
+	bc := &flakyBroadcaster{BlobBroadcastFetcher: inner}
+	bc.failures.Store(1)
+
+	var p *blobPump
+	bc.onAttempt = func(attempt int) {
+		if attempt == 1 {
+			// Rounds advanced while the first attempt was failing.
+			p.SetInput(pumpInputFor(5))
+		}
+	}
+	p = testPump(t, ds, bc, time.Minute)
+	p.SetInput(pumpInputFor(2))
+	_, _ = p.Take(2)
+
+	require.Eventually(t, func() bool { return p.Cycles() >= 1 }, tests.WaitTimeout(t), 10*time.Millisecond)
+	hints := inner.Hints()
+	require.Len(t, hints, 1)
+	require.Equal(t, ocr3_1types.BlobExpirationHintSequenceNumber{SeqNr: 5 + DefaultBlobLifetimeRounds}, hints[0])
+
+	// Fetchability moved forward; local freshness did not.
+	snap, reason := p.Take(3)
+	require.NotNil(t, snap, reason)
+	require.EqualValues(t, 2+DefaultMaxSnapshotRounds, snap.usableBefore)
+	require.EqualValues(t, 5+DefaultBlobLifetimeRounds, snap.expiresAt)
+}
+
+// Test_blobPump_BroadcastRetriesAreBounded asserts a transport that stays down
+// costs a bounded number of attempts and parks nothing.
+func Test_blobPump_BroadcastRetriesAreBounded(t *testing.T) {
+	ds := mockDS()
+	bc := &flakyBroadcaster{BlobBroadcastFetcher: newFakeBroadcaster()}
+	bc.failures.Store(1 << 30)
+
+	p := testPump(t, ds, bc, time.Minute)
+	p.SetInput(pumpInputFor(2))
+	_, _ = p.Take(2)
+
+	require.Eventually(t, func() bool { return bc.attempts.Load() >= BlobBroadcastAttempts }, tests.WaitTimeout(t), 10*time.Millisecond)
+	require.Zero(t, p.Cycles())
+	snap, _ := p.Take(3)
+	require.Nil(t, snap)
+}
