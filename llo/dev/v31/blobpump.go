@@ -59,6 +59,13 @@ const (
 	// roughly one blob per round, so the unexpired-blob budget declared to
 	// libocr grows with the lifetime; this keeps that budget sane.
 	MaxBlobLifetimeRounds = 64
+	// BlobBroadcastAttempts is how many times one cycle tries to broadcast the
+	// payload it gathered.
+	BlobBroadcastAttempts = 3
+	// BlobBroadcastRetryBackoff is the wait before the second broadcast attempt,
+	// doubled for each attempt after it. All attempts share the cycle's
+	// observation timeout, so this cannot extend how long a cycle runs.
+	BlobBroadcastRetryBackoff = 50 * time.Millisecond
 	// MissStreakLogThreshold is how many consecutive rounds may find no usable
 	// snapshot before the pump escalates from debug to error logging. A node
 	// that never contributes stream values is a silent failure otherwise.
@@ -413,10 +420,9 @@ func (p *blobPump) observe(in pumpInput) (*blobSnapshot, error) {
 	}
 
 	usableBefore := in.seqNr + p.maxSnapshotRounds
-	expiresAt := in.seqNr + p.blobLifetimeRounds
-	handle, err := p.bbf.BroadcastBlob(ctx, payload, ocr3_1types.BlobExpirationHintSequenceNumber{SeqNr: expiresAt})
+	handle, expiresAt, err := p.broadcast(ctx, payload, in.seqNr)
 	if err != nil {
-		return nil, fmt.Errorf("BroadcastBlob error: %w", err)
+		return nil, err
 	}
 	handleBytes, err := handle.MarshalBinary()
 	if err != nil {
@@ -431,6 +437,50 @@ func (p *blobPump) observe(in pumpInput) (*blobSnapshot, error) {
 		expiresAt:    expiresAt,
 		streamCount:  len(sv),
 	}, nil
+}
+
+// broadcast hands the payload to the blob transport, retrying a failed
+// broadcast within the cycle's own timeout, and returns the handle together
+// with the expiration hint it was broadcast under.
+//
+// forSeqNr is the round the values were gathered for. The expiration hint is
+// recomputed per attempt from the latest round published by Observation, so a
+// retry that lands rounds later does not hand peers a blob that expires as of
+// a sequence number already behind them. The hint only moves forward, and it
+// bounds fetchability, not staleness: how stale the values themselves may be is
+// still decided locally by usableBefore.
+func (p *blobPump) broadcast(ctx context.Context, payload []byte, forSeqNr uint64) (ocr3_1types.BlobHandle, uint64, error) {
+	var lastErr error
+	for attempt := 1; attempt <= BlobBroadcastAttempts; attempt++ {
+		expiresAt := max(forSeqNr, p.latestSeqNr()) + p.blobLifetimeRounds
+		handle, err := p.bbf.BroadcastBlob(ctx, payload, ocr3_1types.BlobExpirationHintSequenceNumber{SeqNr: expiresAt})
+		if err == nil {
+			if attempt > 1 {
+				p.lggr.Infow("Blob broadcast succeeded after retry", "attempt", attempt, "forSeqNr", forSeqNr, "expiresAt", expiresAt)
+			}
+			return handle, expiresAt, nil
+		}
+		lastErr = err
+		if attempt == BlobBroadcastAttempts {
+			break
+		}
+		backoff := BlobBroadcastRetryBackoff << (attempt - 1)
+		p.lggr.Warnw("Blob broadcast failed; retrying within this cycle", "attempt", attempt, "attempts", BlobBroadcastAttempts, "backoff", backoff, "forSeqNr", forSeqNr, "err", err)
+		select {
+		case <-ctx.Done():
+			return ocr3_1types.BlobHandle{}, 0, fmt.Errorf("BroadcastBlob error: %w (last attempt: %w)", ctx.Err(), lastErr)
+		case <-time.After(backoff):
+		}
+	}
+	return ocr3_1types.BlobHandle{}, 0, fmt.Errorf("BroadcastBlob error after %d attempts: %w", BlobBroadcastAttempts, lastErr)
+}
+
+// latestSeqNr is the most recent round Observation published, which may be
+// ahead of the round a cycle started for.
+func (p *blobPump) latestSeqNr() uint64 {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.input.seqNr
 }
 
 // marshalStreamValues serializes stream values into the stream-values-only

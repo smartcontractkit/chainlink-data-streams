@@ -201,7 +201,7 @@ func Test_Observation_WireRoundTrip(t *testing.T) {
 	enc, err := encodeObservation(obs, nil)
 	require.NoError(t, err)
 
-	got, err := decodeObservation(ctx, enc, nil)
+	got, err := decodeObservation(ctx, enc, nil, nil)
 	require.NoError(t, err)
 
 	assert.Equal(t, obs.ShouldRetire, got.ShouldRetire)
@@ -223,7 +223,7 @@ func Test_Observation_StreamValuesNeverInline(t *testing.T) {
 	enc, err := encodeObservation(obs, nil)
 	require.NoError(t, err)
 
-	got, err := decodeObservation(ctx, enc, nil)
+	got, err := decodeObservation(ctx, enc, nil, nil)
 	require.NoError(t, err)
 	require.Empty(t, got.StreamValues, "stream values must travel in a blob, never inline")
 }
@@ -249,14 +249,14 @@ func Test_Observation_BlobRoundTrip(t *testing.T) {
 	enc, err := encodeObservation(Observation{UnixTimestampNanoseconds: 1}, [][]byte{handleBytes})
 	require.NoError(t, err)
 
-	got, err := decodeObservation(ctx, enc, bc)
+	got, err := decodeObservation(ctx, enc, bc, nil)
 	require.NoError(t, err)
 	require.Len(t, got.StreamValues, len(sv))
 	require.True(t, equalStreamValue(sv[100], got.StreamValues[100]))
 
 	// Without a fetcher the reference is unusable, and that must be classified
 	// as a node-local blob-fetch failure rather than a malformed observation.
-	_, err = decodeObservation(ctx, enc, nil)
+	_, err = decodeObservation(ctx, enc, nil, nil)
 	var bfErr *blobFetchError
 	require.ErrorAs(t, err, &bfErr)
 }
@@ -478,7 +478,7 @@ func Test_decodeObservation_RejectsHugeHandleCount(t *testing.T) {
 	var tmp [binary.MaxVarintLen64]byte
 	n := binary.PutUvarint(tmp[:], ^uint64(0)) // max uint64
 	buf = append(buf, tmp[:n]...)
-	_, err := decodeObservation(ctx, buf, nil)
+	_, err := decodeObservation(ctx, buf, nil, nil)
 	require.Error(t, err, "must reject an oversized handle count instead of allocating")
 	require.Contains(t, err.Error(), "too many blobs")
 }
@@ -878,12 +878,12 @@ func Test_decodeObservation_BlobFetchErrorIsClassified(t *testing.T) {
 	var bfErr *blobFetchError
 
 	// A failing fetcher -> node-local error, must be a *blobFetchError.
-	_, err = decodeObservation(ctx, frame, &errBroadcaster{})
+	_, err = decodeObservation(ctx, frame, &errBroadcaster{}, nil)
 	require.Error(t, err)
 	require.True(t, errors.As(err, &bfErr), "fetch failure must be a blobFetchError so StateTransition propagates it")
 
 	// A nil fetcher (blob referenced but unfetchable) -> also a *blobFetchError.
-	_, err = decodeObservation(ctx, frame, nil)
+	_, err = decodeObservation(ctx, frame, nil, nil)
 	require.Error(t, err)
 	require.True(t, errors.As(err, &bfErr))
 }
@@ -897,13 +897,13 @@ func Test_decodeObservation_MalformedIsNotBlobFetchError(t *testing.T) {
 	var bfErr *blobFetchError
 
 	// Unknown wire version.
-	_, err := decodeObservation(ctx, []byte{0x02, 0x00}, &errBroadcaster{})
+	_, err := decodeObservation(ctx, []byte{0x02, 0x00}, &errBroadcaster{}, nil)
 	require.Error(t, err)
 	require.False(t, errors.As(err, &bfErr), "malformed framing must stay droppable, not a blobFetchError")
 
 	// Well-framed but garbage handle bytes: UnmarshalBinary fails deterministically.
 	frame := frameObservation([][]byte{{0xFF}}, nil)
-	_, err = decodeObservation(ctx, frame, &errBroadcaster{})
+	_, err = decodeObservation(ctx, frame, &errBroadcaster{}, nil)
 	require.Error(t, err)
 	require.False(t, errors.As(err, &bfErr))
 }
@@ -1030,7 +1030,7 @@ func Test_Observation_RejectsInlineStreamValues(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	_, err = decodeObservation(ctx, frameObservation(nil, mainBytes), nil)
+	_, err = decodeObservation(ctx, frameObservation(nil, mainBytes), nil, nil)
 	require.ErrorContains(t, err, "inline stream values")
 
 	// Deterministic across oracles, so it must not be a blob-fetch failure.
@@ -1218,7 +1218,7 @@ func Test_Observation_SupportedReportFormats_RoundTrip(t *testing.T) {
 	}
 	b, err := encodeObservation(obs, nil)
 	require.NoError(t, err)
-	got, err := decodeObservation(ctx, b, nil)
+	got, err := decodeObservation(ctx, b, nil, nil)
 	require.NoError(t, err)
 	require.Equal(t, []llotypes.ReportFormat{llotypes.ReportFormatEVMPremiumLegacy, llotypes.ReportFormatJSON}, got.SupportedReportFormats)
 
@@ -1226,7 +1226,7 @@ func Test_Observation_SupportedReportFormats_RoundTrip(t *testing.T) {
 	// as an empty-but-present list.
 	b, err = encodeObservation(Observation{UnixTimestampNanoseconds: 1}, nil)
 	require.NoError(t, err)
-	got, err = decodeObservation(ctx, b, nil)
+	got, err = decodeObservation(ctx, b, nil, nil)
 	require.NoError(t, err)
 	require.Nil(t, got.SupportedReportFormats)
 
@@ -1237,7 +1237,7 @@ func Test_Observation_SupportedReportFormats_RoundTrip(t *testing.T) {
 	}
 	raw, err := proto.Marshal(&protocol.LLOObservationProto{UnixTimestampNanoseconds: 1, SupportedReportFormats: tooMany})
 	require.NoError(t, err)
-	_, err = decodeObservation(ctx, frameObservation(nil, raw), nil)
+	_, err = decodeObservation(ctx, frameObservation(nil, raw), nil, nil)
 	require.ErrorContains(t, err, "advertises too many report formats")
 }
 
@@ -1376,7 +1376,7 @@ func Test_Observation_UnverifiableCommittedChannelIsNotFatal(t *testing.T) {
 
 	obsBytes, err := p.Observation(ctx, 3, ocrtypes.AttributedQuery{}, kv, nil)
 	require.NoError(t, err, "a committed definition this build rejects must not halt the node")
-	obs, err := decodeObservation(ctx, obsBytes, testBlobs)
+	obs, err := decodeObservation(ctx, obsBytes, testBlobs, nil)
 	require.NoError(t, err)
 
 	// The removal vote is the recovery path, and it is only cast because the
@@ -1468,7 +1468,7 @@ func Test_Observation_RetirementCacheErrorsAreNotFatal(t *testing.T) {
 
 	obsBytes, err := p.Observation(ctx, 2, ocrtypes.AttributedQuery{}, kv, nil)
 	require.NoError(t, err, "a failing retirement cache must not halt the node")
-	obs, err := decodeObservation(ctx, obsBytes, testBlobs)
+	obs, err := decodeObservation(ctx, obsBytes, testBlobs, nil)
 	require.NoError(t, err)
 
 	require.Empty(t, obs.AttestedPredecessorRetirement)

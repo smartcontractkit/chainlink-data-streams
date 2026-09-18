@@ -249,7 +249,7 @@ func Test_Observation_And_Validate_Flow(t *testing.T) {
 	first, err := p.Observation(ctx, 3, ocrtypes.AttributedQuery{}, kv, nil)
 	require.NoError(t, err)
 	require.NotEmpty(t, first)
-	decodedFirst, err := decodeObservation(ctx, first, bc)
+	decodedFirst, err := decodeObservation(ctx, first, bc, nil)
 	require.NoError(t, err)
 	require.Empty(t, decodedFirst.StreamValues)
 
@@ -260,7 +260,7 @@ func Test_Observation_And_Validate_Flow(t *testing.T) {
 	obsBytes, err := p.Observation(ctx, 4, ocrtypes.AttributedQuery{}, kv, nil)
 	require.NoError(t, err)
 	require.NotEmpty(t, obsBytes)
-	decoded, err := decodeObservation(ctx, obsBytes, bc)
+	decoded, err := decodeObservation(ctx, obsBytes, bc, nil)
 	require.NoError(t, err)
 	require.Contains(t, decoded.StreamValues, llotypes.StreamID(100))
 

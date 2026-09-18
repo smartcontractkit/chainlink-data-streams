@@ -101,7 +101,11 @@
 // BlobLifetimeRounds is remote: it is the expiration hint given to the blob
 // transport (forSeqNr + BlobLifetimeRounds), deciding how long peers can still
 // fetch the blob, and sits BlobFetchMarginRounds beyond the last seqNr at which
-// the handle can be referenced. A wall-clock age check derived from the
+// the handle can be referenced. A broadcast that the transport refuses is
+// retried inside the cycle (BlobBroadcastAttempts), which is what keeps the
+// round trip off the OCR critical path; a retry recomputes the hint from the
+// round current at that attempt, so the values stay bounded by MaxSnapshotRounds
+// while the blob stays fetchable for the round that will reference it. A wall-clock age check derived from the
 // measured round period guards against jitter on top. A round that finds
 // nothing usable — cold start, a failed cycle, or a stale snapshot — emits an
 // observation with no stream values. That is not a halt: quorum counts
