@@ -453,3 +453,48 @@ func Test_StateTransition_Retirement(t *testing.T) {
 	require.Equal(t, llotypes.ReportFormatRetirement, reports[0].ReportWithInfo.Info.ReportFormat)
 	require.Equal(t, protocol.LifeCycleStageRetired, reports[0].ReportWithInfo.Info.LifeCycleStage)
 }
+
+// Test_ValidateObservation_RemoveAddSwapAtBudget pins that the set verified is
+// the one the observation advocates: a swap that keeps the definition set
+// inside a whole-set budget must validate, even though the committed set plus
+// the update alone exceeds it. Ignoring the removals would reject every honest
+// observation voting the swap, and with it the round's observation quorum.
+func Test_ValidateObservation_RemoveAddSwapAtBudget(t *testing.T) {
+	ctx := tests.Context(t)
+	p := testPlugin(t)
+	kv := newMemKV()
+
+	// streamRangeChannel builds a channel holding n distinct stream IDs starting
+	// at first, so the unique-stream-ID budget can be sat exactly on.
+	streamRangeChannel := func(first llotypes.StreamID, n int) llotypes.ChannelDefinition {
+		streams := make([]llotypes.Stream, 0, n)
+		for i := 0; i < n; i++ {
+			streams = append(streams, llotypes.Stream{StreamID: first + llotypes.StreamID(i), Aggregator: llotypes.AggregatorMedian})
+		}
+		return llotypes.ChannelDefinition{ReportFormat: llotypes.ReportFormatJSON, Streams: streams}
+	}
+
+	half := protocol.MaxObservationStreamValuesLength / 2
+	committed := llotypes.ChannelDefinitions{
+		1: streamRangeChannel(1, half),
+		2: streamRangeChannel(llotypes.StreamID(half)+1, half),
+	}
+	require.NoError(t, protocol.VerifyChannelDefinitions(p.ReportCodecs, committed), "committed set must sit exactly on the budget")
+	require.NoError(t, writeChannelState(kv, 1, committed))
+
+	// Swap channel 2 out for channel 3, which holds as many streams as the one
+	// it replaces, so the resulting set is back on the budget, not over it.
+	replacement := llotypes.ChannelDefinitions{3: streamRangeChannel(llotypes.StreamID(2*half)+1, half)}
+	swap := Observation{
+		UnixTimestampNanoseconds: 1_000,
+		RemoveChannelIDs:         map[llotypes.ChannelID]struct{}{2: {}},
+		UpdateChannelDefinitions: replacement,
+	}
+	require.NoError(t, p.ValidateObservation(ctx, 2, ocrtypes.AttributedQuery{}, ao(0, mustEncodeObs(t, swap)), kv, testBlobs))
+
+	// The same update without the removal vote does exceed the budget, which is
+	// what makes the assertion above about the removals and not about slack in
+	// the limit.
+	addOnly := Observation{UnixTimestampNanoseconds: 1_000, UpdateChannelDefinitions: replacement}
+	require.Error(t, p.ValidateObservation(ctx, 2, ocrtypes.AttributedQuery{}, ao(0, mustEncodeObs(t, addOnly)), kv, testBlobs))
+}

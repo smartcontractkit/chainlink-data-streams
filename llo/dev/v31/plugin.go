@@ -315,6 +315,12 @@ func (p *Plugin) ValidateObservation(ctx context.Context, seqNr uint64, _ ocrtyp
 	// verification accepted (see voteOnChannels). Repeating the admission-only
 	// checks here would add nothing, and would make oracles running different
 	// versions of those checks disagree on whether an observation is valid.
+	// The set verified is the one this observation advocates: committed state
+	// with its updates applied and its removals taken out.
+	//
+	// Whole-set budgets cannot be enforced per observation anyway, votes from
+	// different oracles combine, and what gets committed is decided by the
+	// per-hash threshold, not by any single observation.
 	defsForVerify := observation.UpdateChannelDefinitions
 	if len(observation.UpdateChannelDefinitions) > 0 {
 		state, serr := loadColdKVState(kvReader, p.ChannelCache)
@@ -323,6 +329,9 @@ func (p *Plugin) ValidateObservation(ctx context.Context, seqNr uint64, _ ocrtyp
 		}
 		merged := make(llotypes.ChannelDefinitions, len(state.channelDefinitions)+len(observation.UpdateChannelDefinitions))
 		for id, def := range state.channelDefinitions {
+			if _, removed := observation.RemoveChannelIDs[id]; removed {
+				continue
+			}
 			merged[id] = def
 		}
 		for id, def := range observation.UpdateChannelDefinitions {
