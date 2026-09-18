@@ -16,7 +16,6 @@ import (
 
 	"github.com/smartcontractkit/libocr/offchainreporting2plus/ocr3_1types"
 	ocrtypes "github.com/smartcontractkit/libocr/offchainreporting2plus/types"
-	"google.golang.org/protobuf/proto"
 )
 
 // Defaults for the blob pump. See PluginFactoryParams for the overrides.
@@ -495,7 +494,8 @@ func marshalStreamValues(sv protocol.StreamValues) ([]byte, error) {
 	if len(pb) == 0 {
 		return nil, nil
 	}
-	raw, err := proto.Marshal(&protocol.LLOObservationProto{StreamValues: pb})
+
+	raw, err := deterministicMarshal.Marshal(&protocol.LLOObservationProto{StreamValues: pb})
 	if err != nil {
 		return nil, fmt.Errorf("marshal stream values: %w", err)
 	}

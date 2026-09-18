@@ -747,3 +747,48 @@ func Test_Observation_PredecessorConfigVote(t *testing.T) {
 		require.Empty(t, obs.PredecessorSigners)
 	})
 }
+
+// Test_EncodeObservation_IsDeterministic covers the encoder builds repeated fields
+// and proto maps from Go maps, so without deterministic marshaling two oracles could
+// produce different bytes for the same logical observation.
+// Nothing compares observation bytes today and this keeps a future path that does from being silently wrong.
+func Test_EncodeObservation_IsDeterministic(t *testing.T) {
+	obs := Observation{
+		UnixTimestampNanoseconds:      1234,
+		AttestedPredecessorRetirement: []byte("attested"),
+		PredecessorSigners:            testPredecessorSigners,
+		PredecessorF:                  1,
+		RemoveChannelIDs:              map[llotypes.ChannelID]struct{}{7: {}, 1: {}, 4: {}, 2: {}, 9: {}},
+		UpdateChannelDefinitions: llotypes.ChannelDefinitions{
+			5: jsonChannel(), 3: jsonChannel(), 8: jsonChannel(), 1: jsonChannel(),
+		},
+		SupportedReportFormats: testSupportedReportFormats,
+	}
+
+	want, err := encodeObservation(obs, [][]byte{[]byte("handle")})
+	require.NoError(t, err)
+	for range 64 {
+		got, err := encodeObservation(obs, [][]byte{[]byte("handle")})
+		require.NoError(t, err)
+		require.Equal(t, want, got, "the same logical observation must encode to the same bytes")
+	}
+}
+
+// Test_MarshalStreamValues_IsDeterministic pins the same property for the blob
+// payload, which is content-addressed: the same values must hash to the same
+// handle on every oracle, or the round's fetch memo cannot dedupe.
+func Test_MarshalStreamValues_IsDeterministic(t *testing.T) {
+	sv := protocol.StreamValues{}
+	for id := llotypes.StreamID(1); id <= 32; id++ {
+		sv[id] = protocol.ToDecimal(decimal.NewFromInt(int64(id)))
+	}
+
+	want, err := marshalStreamValues(sv)
+	require.NoError(t, err)
+	require.NotEmpty(t, want)
+	for range 64 {
+		got, err := marshalStreamValues(sv)
+		require.NoError(t, err)
+		require.Equal(t, want, got, "the same stream values must marshal to the same payload")
+	}
+}
