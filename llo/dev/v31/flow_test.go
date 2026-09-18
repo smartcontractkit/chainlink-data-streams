@@ -792,3 +792,85 @@ func Test_MarshalStreamValues_IsDeterministic(t *testing.T) {
 		require.Equal(t, want, got, "the same stream values must marshal to the same payload")
 	}
 }
+
+// Test_Observation_EmptyDesiredSetRemovesOnlyTombstones covers that
+// the onchain cache reaps a tombstone by having the owner omit it,
+// so an all-tombstoned committed set legitimately merges to empty,
+// and abstaining there would strand those channels forever.
+func Test_Observation_EmptyDesiredSetRemovesOnlyTombstones(t *testing.T) {
+	ctx := tests.Context(t)
+
+	live := jsonChannel()
+	tombstoned := jsonChannel()
+	tombstoned.Tombstone = true
+
+	// observeRemovals commits defs, then asks what the node votes to remove
+	// once the definitions source has gone empty.
+	observeRemovals := func(t *testing.T, defs llotypes.ChannelDefinitions) map[llotypes.ChannelID]struct{} {
+		t.Helper()
+		p := testPlugin(t)
+		p.ShouldRetireCache = &mockShouldRetireCache{}
+		cdc := &mockChannelDefinitionCache{defs: defs}
+		p.ChannelDefinitionCache = cdc
+		kv := newMemKV()
+
+		_, err := p.StateTransition(ctx, 1, ocrtypes.AttributedQuery{}, []ocrtypes.AttributedObservation{ao(0, nil), ao(1, nil), ao(2, nil)}, kv, testBlobs)
+		require.NoError(t, err)
+		agree := make([]ocrtypes.AttributedObservation, 0, 4)
+		for i := 0; i < 4; i++ {
+			agree = append(agree, ao(i, mustEncodeObs(t, Observation{UnixTimestampNanoseconds: 1000, UpdateChannelDefinitions: defs})))
+		}
+		_, err = p.StateTransition(ctx, 2, ocrtypes.AttributedQuery{}, agree, kv, testBlobs)
+		require.NoError(t, err)
+		require.Len(t, kvChannelDefs(t, kv), len(defs))
+
+		cdc.defs = llotypes.ChannelDefinitions{}
+		obsBytes, err := p.Observation(ctx, 3, ocrtypes.AttributedQuery{}, kv, nil)
+		require.NoError(t, err)
+		obs, err := decodeObservation(ctx, obsBytes, testBlobs, nil)
+		require.NoError(t, err)
+		return obs.RemoveChannelIDs
+	}
+
+	t.Run("live channels are never removed by an empty set", func(t *testing.T) {
+		require.Empty(t, observeRemovals(t, llotypes.ChannelDefinitions{1: live, 2: live}))
+	})
+
+	t.Run("tombstoned channels still are", func(t *testing.T) {
+		require.Equal(t,
+			map[llotypes.ChannelID]struct{}{2: {}},
+			observeRemovals(t, llotypes.ChannelDefinitions{1: live, 2: tombstoned}))
+	})
+
+	t.Run("an all-tombstoned set can be reaped to empty", func(t *testing.T) {
+		require.Equal(t,
+			map[llotypes.ChannelID]struct{}{1: {}, 2: {}},
+			observeRemovals(t, llotypes.ChannelDefinitions{1: tombstoned, 2: tombstoned}))
+	})
+
+	t.Run("a non-empty desired set is still a genuine opinion", func(t *testing.T) {
+		p := testPlugin(t)
+		p.ShouldRetireCache = &mockShouldRetireCache{}
+		cdc := &mockChannelDefinitionCache{defs: llotypes.ChannelDefinitions{1: live, 2: live}}
+		p.ChannelDefinitionCache = cdc
+		kv := newMemKV()
+
+		_, err := p.StateTransition(ctx, 1, ocrtypes.AttributedQuery{}, []ocrtypes.AttributedObservation{ao(0, nil), ao(1, nil), ao(2, nil)}, kv, testBlobs)
+		require.NoError(t, err)
+		agree := make([]ocrtypes.AttributedObservation, 0, 4)
+		for i := 0; i < 4; i++ {
+			agree = append(agree, ao(i, mustEncodeObs(t, Observation{UnixTimestampNanoseconds: 1000, UpdateChannelDefinitions: cdc.defs})))
+		}
+		_, err = p.StateTransition(ctx, 2, ocrtypes.AttributedQuery{}, agree, kv, testBlobs)
+		require.NoError(t, err)
+
+		// Dropping one channel while still reporting the other is an opinion,
+		// so the dropped one is voted off even though it is live.
+		cdc.defs = llotypes.ChannelDefinitions{1: live}
+		obsBytes, err := p.Observation(ctx, 3, ocrtypes.AttributedQuery{}, kv, nil)
+		require.NoError(t, err)
+		obs, err := decodeObservation(ctx, obsBytes, testBlobs, nil)
+		require.NoError(t, err)
+		require.Equal(t, map[llotypes.ChannelID]struct{}{2: {}}, obs.RemoveChannelIDs)
+	})
+}
