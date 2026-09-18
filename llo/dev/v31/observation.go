@@ -30,6 +30,15 @@ type Observation struct {
 	// read without forking; advertising it here turns it into a replicated fact
 	// that reportability can gate on (see isReportable).
 	SupportedReportFormats []llotypes.ReportFormat
+	// PredecessorSigners and PredecessorF are the predecessor instance's signer
+	// set and f, read from the node-local retirement report cache. A staging
+	// instance carries them until c/pred is agreed, which turns them into a
+	// replicated fact the state transition can verify retirement reports
+	// against; see readPredecessorConfig.
+	//
+	// Signer order is significant: a signature names its signer by index.
+	PredecessorSigners [][]byte
+	PredecessorF       uint8
 }
 
 // observationWireVersion is the leading byte of the v31 observation framing.
@@ -59,6 +68,8 @@ func encodeObservation(obs Observation, handles [][]byte) (ocrtypes.Observation,
 		AttestedPredecessorRetirement: obs.AttestedPredecessorRetirement,
 		ShouldRetire:                  obs.ShouldRetire,
 		UnixTimestampNanoseconds:      obs.UnixTimestampNanoseconds,
+		PredecessorSigners:            obs.PredecessorSigners,
+		PredecessorF:                  uint32(obs.PredecessorF),
 	}
 	for id := range obs.RemoveChannelIDs {
 		main.RemoveChannelIDs = append(main.RemoveChannelIDs, id)
@@ -258,6 +269,23 @@ func observationFromProto(main *protocol.LLOObservationProto) (Observation, erro
 	if len(main.SupportedReportFormats) > protocol.MaxObservationSupportedReportFormatsLength {
 		return Observation{}, fmt.Errorf("observation advertises too many report formats: %d (max %d)", len(main.SupportedReportFormats), protocol.MaxObservationSupportedReportFormatsLength)
 	}
+
+	if len(main.PredecessorSigners) > protocol.MaxObservationPredecessorSignersLength {
+		return Observation{}, fmt.Errorf("observation carries too many predecessor signers: %d (max %d)", len(main.PredecessorSigners), protocol.MaxObservationPredecessorSignersLength)
+	}
+	for i, signer := range main.PredecessorSigners {
+		if len(signer) == 0 || len(signer) > protocol.MaxPredecessorSignerBytes {
+			return Observation{}, fmt.Errorf("observation carries predecessor signer %d of invalid length %d (max %d)", i, len(signer), protocol.MaxPredecessorSignerBytes)
+		}
+	}
+	// f indexes nothing, but a set that cannot reach f+1 valid signatures could
+	// never verify a report, so treat it as malformed rather than carrying it
+	// into the vote.
+	if main.PredecessorF > 0 && int(main.PredecessorF) >= len(main.PredecessorSigners) {
+		return Observation{}, fmt.Errorf("observation carries predecessor f=%d for a signer set of %d", main.PredecessorF, len(main.PredecessorSigners))
+	}
+	obs.PredecessorSigners = main.PredecessorSigners
+	obs.PredecessorF = uint8(main.PredecessorF)
 
 	obs.SupportedReportFormats = sortedUniqueFormatsFromWire(main.SupportedReportFormats)
 	return obs, nil

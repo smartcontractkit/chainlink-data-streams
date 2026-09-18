@@ -32,6 +32,14 @@ const (
 	// of entries; the headroom keeps the bound from needing revision while
 	// still stopping a peer from padding its observation.
 	MaxObservationSupportedReportFormatsLength = 32
+	// MaxObservationPredecessorSignersLength bounds the predecessor signer set
+	// an observation may carry. libocr allows at most types.MaxOracles signers
+	// in a config, so anything longer cannot be a real predecessor config.
+	MaxObservationPredecessorSignersLength = 31
+	// MaxPredecessorSignerBytes bounds one onchain public key in that set. The
+	// largest key any supported chain uses is well under this; the headroom
+	// stops a peer from padding its observation with oversized entries.
+	MaxPredecessorSignerBytes = 128
 	// Maximum allowed number of streams per channel
 	MaxStreamsPerChannel = 10_000
 	// MaxDecimalExponent bounds the absolute value of the base-10 exponent of
