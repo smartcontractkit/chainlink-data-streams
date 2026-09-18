@@ -3,11 +3,13 @@ package llo
 import (
 	"context"
 	"errors"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/shopspring/decimal"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/smartcontractkit/chainlink-common/pkg/logger"
@@ -34,7 +36,7 @@ func testPump(t *testing.T, ds DataSource, bbf ocr3_1types.BlobBroadcastFetcher,
 		blobLifetimeRounds: DefaultBlobLifetimeRounds,
 	})
 	p.Start()
-	t.Cleanup(p.Close)
+	t.Cleanup(func() { assert.True(t, p.Close(), "pump did not stop cleanly") })
 	return p
 }
 
@@ -316,4 +318,56 @@ func Test_blobPump_SurvivesDataSourcePanic(t *testing.T) {
 	_, _ = p.Take(3)
 	require.Eventually(t, func() bool { return ds.calls.Load() >= 2 }, tests.WaitTimeout(t), 10*time.Millisecond)
 	require.False(t, p.inFlight.Load())
+}
+
+// stuckDataSource ignores its context and blocks until released, modelling a
+// host DataSource that does not honor cancellation.
+type stuckDataSource struct {
+	entered chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (s *stuckDataSource) Observe(ctx context.Context, sv protocol.StreamValues, opts DSOpts) error {
+	s.once.Do(func() { close(s.entered) })
+	<-s.release
+	return errors.New("released")
+}
+
+// Test_blobPump_CloseDoesNotHangOnStuckDataSource asserts Close gives up after
+// closeTimeout rather than waiting forever on a DataSource that ignores its
+// context. The DataSource is shared between the blue and green instances, so a
+// Close that never returns would also keep the other instance and the source
+// itself from closing.
+func Test_blobPump_CloseDoesNotHangOnStuckDataSource(t *testing.T) {
+	ds := &stuckDataSource{entered: make(chan struct{}), release: make(chan struct{})}
+	defer close(ds.release)
+
+	p := newBlobPump(logger.Test(t), blobPumpParams{
+		bbf:                newFakeBroadcaster(),
+		ds:                 ds,
+		observationTimeout: time.Minute,
+		maxSnapshotRounds:  DefaultMaxSnapshotRounds,
+		blobLifetimeRounds: DefaultBlobLifetimeRounds,
+	})
+	require.Equal(t, closeTimeoutSlackMultiplier*time.Minute, p.closeTimeout, "closeTimeout must derive from the observation timeout")
+	p.closeTimeout = 100 * time.Millisecond
+	p.Start()
+
+	p.SetInput(pumpInputFor(2))
+	p.Take(2)
+	select {
+	case <-ds.entered:
+	case <-time.After(tests.WaitTimeout(t)):
+		t.Fatal("DataSource.Observe was never called")
+	}
+
+	done := make(chan bool, 1)
+	go func() { done <- p.Close() }()
+	select {
+	case ok := <-done:
+		require.False(t, ok, "Close must report the cycle did not unwind")
+	case <-time.After(tests.WaitTimeout(t)):
+		t.Fatal("Close hung on a DataSource that ignores context")
+	}
 }
