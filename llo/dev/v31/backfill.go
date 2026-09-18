@@ -59,5 +59,17 @@ func selectBackfillCandidate(defs llotypes.ChannelDefinitions, validAfter map[ll
 	if !found {
 		return 0, 0, protocol.HistoryBackfillOpts{}, false
 	}
+	// The candidate must also be emittable, not merely selectable. Reports
+	// needs the target's report-timestamp resolution and the row's stream
+	// values; if either fails there, the report is skipped while the watermark
+	// has already advanced past the row in the state transition, losing it
+	// permanently. Both are pure functions of (target definition, row), so
+	// checking them here keeps selection and emission on one path.
+	if _, err := protocol.ReportTimestampResolutionNanos(target); err != nil {
+		return 0, 0, protocol.HistoryBackfillOpts{}, false
+	}
+	if _, err := protocol.BuildBackfillStreamValues(target, o.Observations[bestRaw]); err != nil {
+		return 0, 0, protocol.HistoryBackfillOpts{}, false
+	}
 	return bestNanos, bestRaw, o, true
 }

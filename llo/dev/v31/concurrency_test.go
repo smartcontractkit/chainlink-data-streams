@@ -1,6 +1,7 @@
 package llo
 
 import (
+	"errors"
 	"fmt"
 	"sync"
 	"testing"
@@ -30,7 +31,7 @@ func (optsEchoCodec) Encode(r protocol.Report, _ llotypes.ChannelDefinition, opt
 	if err != nil {
 		return nil, err
 	}
-	return []byte(fmt.Sprintf("v=%d", o.V)), nil
+	return fmt.Appendf(nil, "v=%d", o.V), nil
 }
 
 func (optsEchoCodec) Verify(llotypes.ChannelDefinition) error { return nil }
@@ -140,4 +141,86 @@ func Test_Reports_StateTransition_Concurrent_OptsIsolation(t *testing.T) {
 		require.NoError(t, errST)
 		require.Equal(t, "v=1", got, "Reports must encode with the opts of the record its precursor was built from, whatever a concurrent StateTransition loads")
 	}
+}
+
+// Test_Reports_RebuildsEvictedGeneration covers ChannelCache retains
+// only channelGenerationsRetained generations, so a precursor whose record has
+// since been evicted must be reported from the definitions the precursor
+// carries. The rebuild path is only reachable once enough newer records exist,
+// which the overlap test above never produces.
+//
+// The report must be identical either way: a generation is a pure function of
+// its sequence number, so rebuilding one is not a degraded path.
+func Test_Reports_RebuildsEvictedGeneration(t *testing.T) {
+	ctx := tests.Context(t)
+
+	withOpts := func(v int) llotypes.ChannelDefinitions {
+		return llotypes.ChannelDefinitions{1: {
+			ReportFormat: llotypes.ReportFormatJSON,
+			Streams:      []llotypes.Stream{{StreamID: 100, Aggregator: llotypes.AggregatorMedian}},
+			Opts:         llotypes.ChannelOpts(fmt.Sprintf(`{"v":%d}`, v)),
+		}}
+	}
+	obsRound := func(ts uint64, defs llotypes.ChannelDefinitions) []ocrtypes.AttributedObservation {
+		obs := Observation{
+			UnixTimestampNanoseconds: ts,
+			UpdateChannelDefinitions: defs,
+			StreamValues:             protocol.StreamValues{100: protocol.ToDecimal(decimal.NewFromInt(5))},
+		}
+		aos := make([]ocrtypes.AttributedObservation, 0, 4)
+		for i := 0; i < 4; i++ {
+			aos = append(aos, ao(i, mustEncodeObs(t, obs)))
+		}
+		return aos
+	}
+
+	p := testPlugin(t)
+	p.ReportCodecs = map[llotypes.ReportFormat]protocol.ReportCodec{llotypes.ReportFormatJSON: optsEchoCodec{}}
+	kv := newMemKV()
+
+	_, err := p.StateTransition(ctx, 1, ocrtypes.AttributedQuery{}, obsRound(1_000, nil), kv, testBlobs)
+	require.NoError(t, err)
+	// Round 2 agrees the channel; it takes effect in round 3, which seeds its
+	// watermark, and round 4 is the first that reports it. No round after 2
+	// changes the definitions, so round 4's precursor is still built from the
+	// record round 2 wrote (opts v=1).
+	_, err = p.StateTransition(ctx, 2, ocrtypes.AttributedQuery{}, obsRound(2_000, withOpts(1)), kv, testBlobs)
+	require.NoError(t, err)
+	_, err = p.StateTransition(ctx, 3, ocrtypes.AttributedQuery{}, obsRound(3_000, nil), kv, testBlobs)
+	require.NoError(t, err)
+	prec4, err := p.StateTransition(ctx, 4, ocrtypes.AttributedQuery{}, obsRound(4_000, nil), kv, testBlobs)
+	require.NoError(t, err)
+
+	decoded, err := decodePrecursor(prec4)
+	require.NoError(t, err)
+	require.Equal(t, uint64(2), decoded.ChannelStateSeqNr)
+
+	// The generation is cached at this point, so this is the un-evicted baseline.
+	baseline, err := p.Reports(ctx, 4, prec4)
+	require.NoError(t, err)
+	require.Len(t, baseline, 1)
+	require.Equal(t, "v=1", string(baseline[0].ReportWithInfo.Report))
+
+	// Write a new record every round until the round-2 record is evicted. Each
+	// round changes the opts, so each one writes a record of its own.
+	for seqNr, v := uint64(5), 2; seqNr < 20 && cachedGeneration(p.ChannelCache, 2); seqNr, v = seqNr+1, v+1 {
+		_, err = p.StateTransition(ctx, seqNr, ocrtypes.AttributedQuery{}, obsRound(seqNr*1_000, withOpts(v)), kv, testBlobs)
+		require.NoError(t, err)
+	}
+	require.False(t, cachedGeneration(p.ChannelCache, 2), "the round-2 record must be evicted for this test to mean anything")
+
+	// Same precursor, same reports, now off the rebuild path.
+	rebuilt, err := p.Reports(ctx, 4, prec4)
+	require.NoError(t, err)
+	require.Equal(t, baseline, rebuilt, "a rebuilt generation must report exactly what the cached one did")
+}
+
+// cachedGeneration reports whether the cache still holds the generation for
+// seqNr, without inserting one: Load only calls build on a miss, and a build
+// that fails stores nothing.
+func cachedGeneration(c *protocol.ChannelCache, seqNr uint64) bool {
+	_, err := c.Load(seqNr, func() (llotypes.ChannelDefinitions, error) {
+		return nil, errors.New("not cached")
+	})
+	return err == nil
 }

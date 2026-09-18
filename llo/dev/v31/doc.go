@@ -31,6 +31,11 @@
 //     timestamped aggregates — and is rewritten every round.
 //   - c/defs holds every channel definition and is rewritten only when the
 //     definitions change; c/seqnr records the sequence number of that write.
+//   - c/pred holds the predecessor instance's signer set and f, agreed by vote
+//     while staging and written at most once. Verifying an attested predecessor
+//     retirement report against it keeps the state transition reading only
+//     replicated state: the node-local retirement report cache is filled
+//     asynchronously, so reading it here would fork.
 //   - c/lifecycle holds the lifecycle stage and is written only on change.
 //
 // Because c/defs is a pure function of c/seqnr, the plugin keeps the decoded
@@ -94,9 +99,19 @@
 // discards a snapshot, so the pump rate tracks the round rate without knowing
 // deltaRound, and cycles are serial so only one Observe is ever in flight.
 //
-// A snapshot is therefore gathered one round before it is used, and its
-// usability is bounded by the blob expiration hint (forSeqNr +
-// BlobLifetimeRounds) plus a generous wall-clock age check. A round that finds
+// A snapshot is therefore gathered one round before it is used. Two separate
+// bounds apply to it. MaxSnapshotRounds is local: it decides how stale the
+// values may be when this node references them (forSeqNr + MaxSnapshotRounds),
+// and is what a report format's staleness budget should be tuned against.
+// BlobLifetimeRounds is remote: it is the expiration hint given to the blob
+// transport (forSeqNr + BlobLifetimeRounds), deciding how long peers can still
+// fetch the blob, and sits BlobFetchMarginRounds beyond the last seqNr at which
+// the handle can be referenced. A broadcast that the transport refuses is
+// retried inside the cycle (BlobBroadcastAttempts), which is what keeps the
+// round trip off the OCR critical path; a retry recomputes the hint from the
+// round current at that attempt, so the values stay bounded by MaxSnapshotRounds
+// while the blob stays fetchable for the round that will reference it. A wall-clock age check derived from the
+// measured round period guards against jitter on top. A round that finds
 // nothing usable — cold start, a failed cycle, or a stale snapshot — emits an
 // observation with no stream values. That is not a halt: quorum counts
 // observations, not values. The cost lands in aggregation, which needs >F values

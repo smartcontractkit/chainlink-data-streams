@@ -328,7 +328,10 @@ func Test_JSONCodec(t *testing.T) {
 
 			_, err := cdc.Pack(digest, seqNr, report, sigs)
 			require.Error(t, err)
-			require.Contains(t, err.Error(), "json: error calling MarshalJSON for type json.RawMessage")
+			// The concrete type named in the message differs between the
+			// stdlib encoding/json v1 and v2 (jsonv2) implementations, so only
+			// assert on the stable part.
+			require.Contains(t, err.Error(), "json: error calling MarshalJSON")
 		})
 		t.Run("report is valid JSON", func(t *testing.T) {
 			digest := types.ConfigDigest([32]byte{1, 2, 3})

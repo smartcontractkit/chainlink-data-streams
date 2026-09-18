@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sort"
 
+	"github.com/smartcontractkit/chainlink-common/pkg/logger"
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
 
 	protocol "github.com/smartcontractkit/chainlink-data-streams/llo/protocol"
@@ -21,6 +22,9 @@ import (
 //	c/defs      -> LLOChannelStateProto: every live channel definition
 //	               (written only when the definitions change)
 //	c/seqnr     -> uint64 BE seqNr of the last c/defs write
+//	c/pred      -> LLOPredecessorConfigProto: the predecessor's signer set and
+//	               f, agreed by vote while staging (written at most once, and
+//	               only by an instance that has a predecessor)
 //	r/agg       -> LLOHotStateProto: observation timestamp, validAfter
 //	               watermarks, per-channel reportability, and carry-forward
 //	               timestamped aggregates (written every round)
@@ -41,10 +45,11 @@ import (
 // a read cost of depth/chunkSize point reads instead of one. See
 // protocol.RingWindow.
 var (
-	keyLifecycle    = []byte("c/lifecycle")
-	keyChannelState = []byte("c/defs")
-	keyChannelSeqNr = []byte("c/seqnr")
-	keyHotState     = []byte("r/agg")
+	keyLifecycle         = []byte("c/lifecycle")
+	keyChannelState      = []byte("c/defs")
+	keyChannelSeqNr      = []byte("c/seqnr")
+	keyPredecessorConfig = []byte("c/pred")
+	keyHotState          = []byte("r/agg")
 
 	keyHistoryIndex   = []byte("hidx")
 	keyHistoryVersion = []byte("hv")
@@ -203,6 +208,47 @@ func readChannelState(r ocr3_1types.KeyValueStateReader) (llotypes.ChannelDefini
 	return defs, nil
 }
 
+// predecessorConfig is the decoded c/pred record: the signer set and f of the
+// predecessor instance, which is what verifying an attested predecessor
+// retirement report needs.
+type predecessorConfig struct {
+	signers [][]byte
+	f       uint8
+}
+
+// readPredecessorConfig reads and decodes the c/pred record, returning nil when
+// it has not been agreed yet.
+//
+// Only a staging instance that has a predecessor ever reads or writes this key,
+// so every other instance pays nothing for it.
+func readPredecessorConfig(r ocr3_1types.KeyValueStateReader) (*predecessorConfig, error) {
+	b, err := r.Read(keyPredecessorConfig)
+	if err != nil {
+		return nil, fmt.Errorf("read predecessor config: %w", err)
+	}
+	if len(b) == 0 {
+		return nil, nil
+	}
+	pb := &protocol.LLOPredecessorConfigProto{}
+	if err := proto.Unmarshal(b, pb); err != nil {
+		return nil, fmt.Errorf("unmarshal predecessor config: %w", err)
+	}
+	if pb.F > 255 {
+		return nil, fmt.Errorf("predecessor config has f out of range: %d", pb.F)
+	}
+	return &predecessorConfig{signers: pb.Signers, f: uint8(pb.F)}, nil
+}
+
+// writePredecessorConfig persists the agreed c/pred record. Signer order is
+// preserved: a signature names its signer by index into the set.
+func writePredecessorConfig(w ocr3_1types.KeyValueStateReadWriter, pc predecessorConfig) error {
+	b, err := deterministicMarshal.Marshal(&protocol.LLOPredecessorConfigProto{Signers: pc.signers, F: uint32(pc.f)})
+	if err != nil {
+		return fmt.Errorf("marshal predecessor config: %w", err)
+	}
+	return w.Write(keyPredecessorConfig, b)
+}
+
 // readHotState reads and decodes the r/agg record into s.
 func readHotState(r ocr3_1types.KeyValueStateReader, s *kvState) error {
 	b, err := r.Read(keyHotState)
@@ -282,6 +328,7 @@ func writeHotState(
 	validAfterNanoseconds map[llotypes.ChannelID]uint64,
 	reportable map[llotypes.ChannelID]bool,
 	carryForward map[llotypes.StreamID]map[llotypes.Aggregator]*protocol.TimestampedStreamValue,
+	lggr logger.Logger,
 ) error {
 	pb := &protocol.LLOHotStateProto{
 		ObservationTimestampNanoseconds: observationTimestampNs,
@@ -329,6 +376,16 @@ func writeHotState(
 		}
 		return pb.StreamAggregates[i].StreamID < pb.StreamAggregates[j].StreamID
 	})
+	// Truncation happens here, after the sort, so that every oracle keeps the
+	// same pairs: (streamID, aggregator) order is total, and the write is the
+	// only place the whole set is known. See MaxPersistedAggregates.
+	if dropped := len(pb.StreamAggregates) - protocol.MaxPersistedAggregates; dropped > 0 {
+		pb.StreamAggregates = pb.StreamAggregates[:protocol.MaxPersistedAggregates]
+		lggr.Errorw("Too many carry-forward aggregates to persist; dropping the highest (streamID, aggregator) pairs",
+			"dropped", dropped,
+			"maxPersistedAggregates", protocol.MaxPersistedAggregates,
+		)
+	}
 
 	b, err := deterministicMarshal.Marshal(pb)
 	if err != nil {

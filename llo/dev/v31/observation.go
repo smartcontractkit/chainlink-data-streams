@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
+	"sort"
 
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
 
@@ -24,6 +25,20 @@ type Observation struct {
 	RemoveChannelIDs              map[llotypes.ChannelID]struct{}
 	UpdateChannelDefinitions      llotypes.ChannelDefinitions
 	StreamValues                  protocol.StreamValues
+	// SupportedReportFormats are the report formats this oracle has a report
+	// codec for. Encoding is node-local state that the state transition cannot
+	// read without forking; advertising it here turns it into a replicated fact
+	// that reportability can gate on (see isReportable).
+	SupportedReportFormats []llotypes.ReportFormat
+	// PredecessorSigners and PredecessorF are the predecessor instance's signer
+	// set and f, read from the node-local retirement report cache. A staging
+	// instance carries them until c/pred is agreed, which turns them into a
+	// replicated fact the state transition can verify retirement reports
+	// against; see readPredecessorConfig.
+	//
+	// Signer order is significant: a signature names its signer by index.
+	PredecessorSigners [][]byte
+	PredecessorF       uint8
 }
 
 // observationWireVersion is the leading byte of the v31 observation framing.
@@ -53,10 +68,15 @@ func encodeObservation(obs Observation, handles [][]byte) (ocrtypes.Observation,
 		AttestedPredecessorRetirement: obs.AttestedPredecessorRetirement,
 		ShouldRetire:                  obs.ShouldRetire,
 		UnixTimestampNanoseconds:      obs.UnixTimestampNanoseconds,
+		PredecessorSigners:            obs.PredecessorSigners,
+		PredecessorF:                  uint32(obs.PredecessorF),
 	}
 	for id := range obs.RemoveChannelIDs {
 		main.RemoveChannelIDs = append(main.RemoveChannelIDs, id)
 	}
+	// Map iteration order, so sort: Deterministic marshaling canonicalizes
+	// proto map fields, not a repeated field built from a Go map.
+	sortChannelIDs(main.RemoveChannelIDs)
 	if len(obs.UpdateChannelDefinitions) > 0 {
 		main.UpdateChannelDefinitions = make(map[uint32]*protocol.LLOChannelDefinitionProto, len(obs.UpdateChannelDefinitions))
 		for id, cd := range obs.UpdateChannelDefinitions {
@@ -64,7 +84,13 @@ func encodeObservation(obs Observation, handles [][]byte) (ocrtypes.Observation,
 		}
 	}
 
-	mainBytes, err := proto.Marshal(main)
+	// Sorted and deduped, matching what decode enforces.
+	main.SupportedReportFormats = sortedUniqueFormats(obs.SupportedReportFormats)
+
+	// Deterministic even though nothing compares observation bytes today
+	// A future path which does compare or hash the value cannot be
+	// silently wrong.
+	mainBytes, err := deterministicMarshal.Marshal(main)
 	if err != nil {
 		return nil, fmt.Errorf("marshal observation: %w", err)
 	}
@@ -106,7 +132,11 @@ func (e *blobFetchError) Unwrap() error { return e.err }
 // decodeObservation reverses encodeObservation, fetching any referenced blobs.
 // Observations carrying inline stream values are rejected: v31 disseminates
 // values exclusively via blobs.
-func decodeObservation(ctx context.Context, raw ocrtypes.Observation, bf ocr3_1types.BlobFetcher) (Observation, error) {
+//
+// memo, when non-nil, memoizes decoded blob payloads for the round so the same
+// handle is fetched and decompressed once instead of once per plugin phase. It
+// changes cost only: an observation decodes identically on a hit and on a miss.
+func decodeObservation(ctx context.Context, raw ocrtypes.Observation, bf ocr3_1types.BlobFetcher, memo *roundBlobPayloads) (Observation, error) {
 	if len(raw) == 0 {
 		return Observation{}, nil
 	}
@@ -123,7 +153,13 @@ func decodeObservation(ctx context.Context, raw ocrtypes.Observation, bf ocr3_1t
 	}
 	rest = rest[k:]
 
-	handles := make([]ocr3_1types.BlobHandle, 0, nHandles)
+	// The marshaled bytes are kept alongside the decoded handle: they are the
+	// memo key, and re-marshaling to obtain it would be wasted work.
+	type blobRef struct {
+		handle ocr3_1types.BlobHandle
+		key    []byte
+	}
+	handles := make([]blobRef, 0, nHandles)
 	for i := uint64(0); i < nHandles; i++ {
 		l, k2 := binary.Uvarint(rest)
 		if k2 <= 0 || uint64(len(rest[k2:])) < l {
@@ -134,7 +170,7 @@ func decodeObservation(ctx context.Context, raw ocrtypes.Observation, bf ocr3_1t
 		if err := h.UnmarshalBinary(rest[:l]); err != nil {
 			return Observation{}, fmt.Errorf("unmarshal blob handle: %w", err)
 		}
-		handles = append(handles, h)
+		handles = append(handles, blobRef{handle: h, key: rest[:l]})
 		rest = rest[l:]
 	}
 
@@ -153,33 +189,52 @@ func decodeObservation(ctx context.Context, raw ocrtypes.Observation, bf ocr3_1t
 	// naming several blobs.
 	budget := maxObservationDecompressedBytes
 	for _, h := range handles {
-		if bf == nil {
-			return Observation{}, &blobFetchError{fmt.Errorf("observation references a blob but no fetcher was provided")}
-		}
-		payload, ferr := bf.FetchBlob(ctx, h)
-		if ferr != nil {
-			return Observation{}, &blobFetchError{fmt.Errorf("fetch blob: %w", ferr)}
-		}
-		// Framing/codec faults are deterministic across oracles (every one sees
-		// the same bytes), so they stay plain errors and drop this observation
-		// alone, unlike the fetch failure above.
-		raw, err := decodeBlobPayload(payload, budget)
-		if err != nil {
-			return Observation{}, err
-		}
-		budget -= len(raw)
-		chunk := &protocol.LLOObservationProto{}
-		if err := proto.Unmarshal(raw, chunk); err != nil {
-			return Observation{}, fmt.Errorf("unmarshal blob payload: %w", err)
-		}
-		if obs.StreamValues == nil {
-			obs.StreamValues = make(protocol.StreamValues, len(chunk.StreamValues))
-		}
-		for id, pbSv := range chunk.StreamValues {
-			sv, err := streamValueFromProtoAllowNil(pbSv)
+		entry, ok := memo.get(h.key)
+		if ok {
+			// A hit is charged the same decompressed size the miss was, so a
+			// handle named twice exhausts the budget exactly as before.
+			if entry.size > budget {
+				return Observation{}, fmt.Errorf("decompressed blob payload too large: %d > %d bytes", entry.size, budget)
+			}
+		} else {
+			if bf == nil {
+				return Observation{}, &blobFetchError{fmt.Errorf("observation references a blob but no fetcher was provided")}
+			}
+			payload, ferr := bf.FetchBlob(ctx, h.handle)
+			if ferr != nil {
+				return Observation{}, &blobFetchError{fmt.Errorf("fetch blob: %w", ferr)}
+			}
+			// Framing/codec faults are deterministic across oracles (every one sees
+			// the same bytes), so they stay plain errors and drop this observation
+			// alone, unlike the fetch failure above.
+			raw, err := decodeBlobPayload(payload, budget)
 			if err != nil {
 				return Observation{}, err
 			}
+			chunk := &protocol.LLOObservationProto{}
+			if err := proto.Unmarshal(raw, chunk); err != nil {
+				return Observation{}, fmt.Errorf("unmarshal blob payload: %w", err)
+			}
+			values := make(protocol.StreamValues, len(chunk.StreamValues))
+			for id, pbSv := range chunk.StreamValues {
+				sv, err := streamValueFromProtoAllowNil(pbSv)
+				if err != nil {
+					return Observation{}, err
+				}
+				values[id] = sv
+			}
+			// Only a payload that decoded cleanly is memoized. A fetch failure is
+			// node-local and transient, and a decode failure is deterministic and
+			// recomputed for free, so neither is worth remembering.
+			entry = blobPayloadEntry{values: values, size: len(raw)}
+			memo.put(h.key, entry)
+		}
+
+		budget -= entry.size
+		if obs.StreamValues == nil {
+			obs.StreamValues = make(protocol.StreamValues, len(entry.values))
+		}
+		for id, sv := range entry.values {
 			obs.StreamValues[id] = sv
 		}
 	}
@@ -216,7 +271,68 @@ func observationFromProto(main *protocol.LLOObservationProto) (Observation, erro
 	if len(main.StreamValues) > 0 {
 		return Observation{}, fmt.Errorf("observation carries %d inline stream values: v31 requires blob-carried values", len(main.StreamValues))
 	}
+	if len(main.SupportedReportFormats) > protocol.MaxObservationSupportedReportFormatsLength {
+		return Observation{}, fmt.Errorf("observation advertises too many report formats: %d (max %d)", len(main.SupportedReportFormats), protocol.MaxObservationSupportedReportFormatsLength)
+	}
+
+	if len(main.PredecessorSigners) > protocol.MaxObservationPredecessorSignersLength {
+		return Observation{}, fmt.Errorf("observation carries too many predecessor signers: %d (max %d)", len(main.PredecessorSigners), protocol.MaxObservationPredecessorSignersLength)
+	}
+	for i, signer := range main.PredecessorSigners {
+		if len(signer) == 0 || len(signer) > protocol.MaxPredecessorSignerBytes {
+			return Observation{}, fmt.Errorf("observation carries predecessor signer %d of invalid length %d (max %d)", i, len(signer), protocol.MaxPredecessorSignerBytes)
+		}
+	}
+	// f indexes nothing, but a set that cannot reach f+1 valid signatures could
+	// never verify a report, so treat it as malformed rather than carrying it
+	// into the vote.
+	if main.PredecessorF > 0 && int(main.PredecessorF) >= len(main.PredecessorSigners) {
+		return Observation{}, fmt.Errorf("observation carries predecessor f=%d for a signer set of %d", main.PredecessorF, len(main.PredecessorSigners))
+	}
+	obs.PredecessorSigners = main.PredecessorSigners
+	obs.PredecessorF = uint8(main.PredecessorF)
+
+	obs.SupportedReportFormats = sortedUniqueFormatsFromWire(main.SupportedReportFormats)
 	return obs, nil
+}
+
+// sortedUniqueFormats returns the formats sorted ascending with duplicates
+// removed. nil in, nil out, so an oracle advertising nothing stays absent from
+// the wire rather than carrying an empty list.
+func sortedUniqueFormats(in []llotypes.ReportFormat) []uint32 {
+	if len(in) == 0 {
+		return nil
+	}
+	seen := make(map[llotypes.ReportFormat]struct{}, len(in))
+	out := make([]uint32, 0, len(in))
+	for _, f := range in {
+		if _, dup := seen[f]; dup {
+			continue
+		}
+		seen[f] = struct{}{}
+		out = append(out, uint32(f))
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+	return out
+}
+
+// sortedUniqueFormatsFromWire is sortedUniqueFormats for the wire
+// representation: sorted ascending, duplicates removed.
+func sortedUniqueFormatsFromWire(in []uint32) []llotypes.ReportFormat {
+	if len(in) == 0 {
+		return nil
+	}
+	seen := make(map[uint32]struct{}, len(in))
+	out := make([]llotypes.ReportFormat, 0, len(in))
+	for _, f := range in {
+		if _, dup := seen[f]; dup {
+			continue
+		}
+		seen[f] = struct{}{}
+		out = append(out, llotypes.ReportFormat(f))
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+	return out
 }
 
 func streamValuesToProto(in protocol.StreamValues) (map[uint32]*protocol.LLOStreamValue, error) {
@@ -244,5 +360,5 @@ func streamValueFromProtoAllowNil(pb *protocol.LLOStreamValue) (protocol.StreamV
 	if pb == nil {
 		return nil, nil
 	}
-	return protocol.UnmarshalProtoStreamValue(pb)
+	return protocol.UnmarshalObservedProtoStreamValue(pb)
 }

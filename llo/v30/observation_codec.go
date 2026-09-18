@@ -123,7 +123,7 @@ func (c protoObservationCodec) Decode(b types.Observation) (Observation, error) 
 	if len(pbuf.StreamValues) > 0 {
 		streamValues = make(protocol.StreamValues, len(pbuf.StreamValues))
 		for id, enc := range pbuf.StreamValues {
-			sv, err := protocol.UnmarshalProtoStreamValue(enc)
+			sv, err := protocol.UnmarshalObservedProtoStreamValue(enc)
 			if err != nil {
 				// Byzantine behavior makes this observation invalid; a
 				// well-behaved node should never encode invalid or nil values

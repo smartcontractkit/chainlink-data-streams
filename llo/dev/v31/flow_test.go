@@ -2,6 +2,8 @@ package llo
 
 import (
 	"context"
+	"errors"
+	"math"
 	"sync"
 	"testing"
 	"time"
@@ -107,10 +109,13 @@ func (m *blockingDataSource) concurrent() int {
 	return m.maxSeen
 }
 
-type mockShouldRetireCache struct{ retire bool }
+type mockShouldRetireCache struct {
+	retire bool
+	err    error
+}
 
 func (m *mockShouldRetireCache) ShouldRetire(ocrtypes.ConfigDigest) (bool, error) {
-	return m.retire, nil
+	return m.retire, m.err
 }
 
 type mockOnchainConfigCodec struct{}
@@ -120,13 +125,65 @@ func (mockOnchainConfigCodec) Decode([]byte) (protocol.OnchainConfig, error) {
 }
 func (mockOnchainConfigCodec) Encode(protocol.OnchainConfig) ([]byte, error) { return nil, nil }
 
-type mockPredecessorRetirementReportCache struct{ report protocol.RetirementReport }
+// testPredecessorSigners is the signer set a fixture node reads from its local
+// retirement report cache and votes into c/pred.
+var testPredecessorSigners = [][]byte{{0x01}, {0x02}, {0x03}, {0x04}}
+
+type mockPredecessorRetirementReportCache struct {
+	report protocol.RetirementReport
+	err    error
+	// noLocalConfig models a node whose config poller has not stored the
+	// predecessor config yet, so it cannot vote on c/pred.
+	noLocalConfig bool
+	// signers overrides testPredecessorSigners; f is the predecessor's f.
+	signers [][]byte
+	f       uint8
+	// verifyErr makes VerifyAttestedRetirementReport fail deterministically.
+	verifyErr error
+}
+
+func (m *mockPredecessorRetirementReportCache) localSigners() [][]byte {
+	if m.signers != nil {
+		return m.signers
+	}
+	return testPredecessorSigners
+}
 
 func (m *mockPredecessorRetirementReportCache) AttestedRetirementReport(ocrtypes.ConfigDigest) ([]byte, error) {
+	if m.err != nil {
+		return nil, m.err
+	}
 	return []byte("attested"), nil
 }
 func (m *mockPredecessorRetirementReportCache) CheckAttestedRetirementReport(ocrtypes.ConfigDigest, []byte) (protocol.RetirementReport, error) {
 	return m.report, nil
+}
+func (m *mockPredecessorRetirementReportCache) PredecessorConfig(ocrtypes.ConfigDigest) ([][]byte, uint8, bool) {
+	if m.noLocalConfig {
+		return nil, 0, false
+	}
+	return m.localSigners(), m.f, true
+}
+func (m *mockPredecessorRetirementReportCache) VerifyAttestedRetirementReport(_ ocrtypes.ConfigDigest, signers [][]byte, f uint8, _ []byte) (protocol.RetirementReport, error) {
+	if m.verifyErr != nil {
+		return protocol.RetirementReport{}, m.verifyErr
+	}
+	// Verification must run against the agreed set, never the local one.
+	if len(signers) == 0 {
+		return protocol.RetirementReport{}, errors.New("verify called with an empty signer set")
+	}
+	return m.report, nil
+}
+
+// promotionObs is what a staging node observes once its predecessor has
+// retired: the attested retirement report, plus a vote for the predecessor's
+// signer set so the DON can agree on c/pred and verify the report against it.
+func promotionObs(tsNanoseconds uint64) Observation {
+	return Observation{
+		UnixTimestampNanoseconds:      tsNanoseconds,
+		AttestedPredecessorRetirement: []byte("attested"),
+		PredecessorSigners:            testPredecessorSigners,
+	}
 }
 
 func jsonChannel() llotypes.ChannelDefinition {
@@ -145,13 +202,47 @@ func addChannelRound(t *testing.T, ts uint64, cid llotypes.ChannelID, cd llotype
 
 // --- tests ---
 
+// mustEncodeOffchainConfig encodes a v0 offchain config with an explicit
+// aggregation fault tolerance, which LLO v31 requires.
+func mustEncodeOffchainConfig(t *testing.T, aggregationFaultTolerance uint32) []byte {
+	t.Helper()
+	b, err := protocol.OffchainConfig{AggregationFaultTolerance: &aggregationFaultTolerance}.Encode()
+	require.NoError(t, err)
+	return b
+}
+
+func Test_Factory_NewReportingPlugin_aggregationFaultTolerance(t *testing.T) {
+	ctx := tests.Context(t)
+	f := NewPluginFactory(PluginFactoryParams{
+		OnchainConfigCodec: mockOnchainConfigCodec{},
+		Logger:             logger.Test(t),
+	})
+
+	t.Run("refuses to start when unset", func(t *testing.T) {
+		_, _, err := f.NewReportingPlugin(ctx, ocr3types.ReportingPluginConfig{N: 4, F: 1, ConfigDigest: ocrtypes.ConfigDigest{9}}, nil)
+		require.EqualError(t, err, "NewReportingPlugin: offchain config must set aggregationFaultTolerance explicitly")
+	})
+	t.Run("refuses to start when it exceeds consensus F", func(t *testing.T) {
+		_, _, err := f.NewReportingPlugin(ctx, ocr3types.ReportingPluginConfig{N: 4, F: 1, ConfigDigest: ocrtypes.ConfigDigest{9}, OffchainConfig: mustEncodeOffchainConfig(t, 2)}, nil)
+		require.EqualError(t, err, "aggregationFaultTolerance (2) must not exceed consensus F (1): a floor of 5 contributions can never be met from 3 observations")
+	})
+	t.Run("accepts zero", func(t *testing.T) {
+		p, _, err := f.NewReportingPlugin(ctx, ocr3types.ReportingPluginConfig{N: 4, F: 1, ConfigDigest: ocrtypes.ConfigDigest{9}, OffchainConfig: mustEncodeOffchainConfig(t, 0)}, nil)
+		require.NoError(t, err)
+		pl, ok := p.(*Plugin)
+		require.True(t, ok)
+		require.Equal(t, 1, pl.minContributions())
+		require.NoError(t, pl.Close())
+	})
+}
+
 func Test_Factory_NewReportingPlugin(t *testing.T) {
 	ctx := tests.Context(t)
 	f := NewPluginFactory(PluginFactoryParams{
 		OnchainConfigCodec: mockOnchainConfigCodec{},
 		Logger:             logger.Test(t),
 	})
-	p, info, err := f.NewReportingPlugin(ctx, ocr3types.ReportingPluginConfig{N: 4, F: 1, ConfigDigest: ocrtypes.ConfigDigest{9}}, nil)
+	p, info, err := f.NewReportingPlugin(ctx, ocr3types.ReportingPluginConfig{N: 4, F: 1, ConfigDigest: ocrtypes.ConfigDigest{9}, OffchainConfig: mustEncodeOffchainConfig(t, 1)}, nil)
 	require.NoError(t, err)
 
 	info1, ok := info.(interface{ Validate() error })
@@ -162,8 +253,11 @@ func Test_Factory_NewReportingPlugin(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, 4, pl.N)
 	require.Equal(t, 1, pl.F)
+	require.Equal(t, 1, pl.AggregationFaultTolerance)
+	require.Equal(t, 3, pl.minContributions())
 	require.NotNil(t, pl.ChannelCache)
 	require.NotNil(t, pl.pump)
+	require.Equal(t, uint64(DefaultMaxSnapshotRounds), pl.pump.maxSnapshotRounds)
 	require.Equal(t, uint64(DefaultBlobLifetimeRounds), pl.pump.blobLifetimeRounds)
 	require.NoError(t, pl.Close())
 }
@@ -203,7 +297,7 @@ func Test_Observation_And_Validate_Flow(t *testing.T) {
 	first, err := p.Observation(ctx, 3, ocrtypes.AttributedQuery{}, kv, nil)
 	require.NoError(t, err)
 	require.NotEmpty(t, first)
-	decodedFirst, err := decodeObservation(ctx, first, bc)
+	decodedFirst, err := decodeObservation(ctx, first, bc, nil)
 	require.NoError(t, err)
 	require.Empty(t, decodedFirst.StreamValues)
 
@@ -214,7 +308,7 @@ func Test_Observation_And_Validate_Flow(t *testing.T) {
 	obsBytes, err := p.Observation(ctx, 4, ocrtypes.AttributedQuery{}, kv, nil)
 	require.NoError(t, err)
 	require.NotEmpty(t, obsBytes)
-	decoded, err := decodeObservation(ctx, obsBytes, bc)
+	decoded, err := decodeObservation(ctx, obsBytes, bc, nil)
 	require.NoError(t, err)
 	require.Contains(t, decoded.StreamValues, llotypes.StreamID(100))
 
@@ -287,7 +381,7 @@ func Test_StateTransition_Promotion(t *testing.T) {
 	require.Equal(t, string(protocol.LifeCycleStageStaging), string(kv.m[string(keyLifecycle)]))
 
 	// A round carrying a valid attested predecessor retirement report promotes to production.
-	promoObs := Observation{UnixTimestampNanoseconds: 1000, AttestedPredecessorRetirement: []byte("attested")}
+	promoObs := promotionObs(1000)
 	aos := make([]ocrtypes.AttributedObservation, 0, 4)
 	for i := 0; i < 4; i++ {
 		aos = append(aos, ao(i, mustEncodeObs(t, promoObs)))
@@ -340,7 +434,7 @@ func Test_StateTransition_Promotion_StagingOnlyChannelTreatedAsNew(t *testing.T)
 
 	// Round 4 (ts=3000): a valid attested predecessor retirement report promotes
 	// this instance to production.
-	promoObs := Observation{UnixTimestampNanoseconds: 3000, AttestedPredecessorRetirement: []byte("attested")}
+	promoObs := promotionObs(3000)
 	aos := make([]ocrtypes.AttributedObservation, 0, 4)
 	for i := 0; i < 4; i++ {
 		aos = append(aos, ao(i, mustEncodeObs(t, promoObs)))
@@ -406,4 +500,417 @@ func Test_StateTransition_Retirement(t *testing.T) {
 	require.Len(t, reports, 1)
 	require.Equal(t, llotypes.ReportFormatRetirement, reports[0].ReportWithInfo.Info.ReportFormat)
 	require.Equal(t, protocol.LifeCycleStageRetired, reports[0].ReportWithInfo.Info.LifeCycleStage)
+}
+
+// Test_ValidateObservation_RemoveAddSwapAtBudget pins that the set verified is
+// the one the observation advocates: a swap that keeps the definition set
+// inside a whole-set budget must validate, even though the committed set plus
+// the update alone exceeds it. Ignoring the removals would reject every honest
+// observation voting the swap, and with it the round's observation quorum.
+func Test_ValidateObservation_RemoveAddSwapAtBudget(t *testing.T) {
+	ctx := tests.Context(t)
+	p := testPlugin(t)
+	kv := newMemKV()
+
+	// streamRangeChannel builds a channel holding n distinct stream IDs starting
+	// at first, so the unique-stream-ID budget can be sat exactly on.
+	streamRangeChannel := func(first llotypes.StreamID, n int) llotypes.ChannelDefinition {
+		streams := make([]llotypes.Stream, 0, n)
+		for i := 0; i < n; i++ {
+			streams = append(streams, llotypes.Stream{StreamID: first + llotypes.StreamID(i), Aggregator: llotypes.AggregatorMedian})
+		}
+		return llotypes.ChannelDefinition{ReportFormat: llotypes.ReportFormatJSON, Streams: streams}
+	}
+
+	half := protocol.MaxObservationStreamValuesLength / 2
+	committed := llotypes.ChannelDefinitions{
+		1: streamRangeChannel(1, half),
+		2: streamRangeChannel(llotypes.StreamID(half)+1, half),
+	}
+	require.NoError(t, protocol.VerifyChannelDefinitions(p.ReportCodecs, committed), "committed set must sit exactly on the budget")
+	require.NoError(t, writeChannelState(kv, 1, committed))
+
+	// Swap channel 2 out for channel 3, which holds as many streams as the one
+	// it replaces, so the resulting set is back on the budget, not over it.
+	replacement := llotypes.ChannelDefinitions{3: streamRangeChannel(llotypes.StreamID(2*half)+1, half)}
+	swap := Observation{
+		UnixTimestampNanoseconds: 1_000,
+		RemoveChannelIDs:         map[llotypes.ChannelID]struct{}{2: {}},
+		UpdateChannelDefinitions: replacement,
+	}
+	require.NoError(t, p.ValidateObservation(ctx, 2, ocrtypes.AttributedQuery{}, ao(0, mustEncodeObs(t, swap)), kv, testBlobs))
+
+	// The same update without the removal vote does exceed the budget, which is
+	// what makes the assertion above about the removals and not about slack in
+	// the limit.
+	addOnly := Observation{UnixTimestampNanoseconds: 1_000, UpdateChannelDefinitions: replacement}
+	require.Error(t, p.ValidateObservation(ctx, 2, ocrtypes.AttributedQuery{}, ao(0, mustEncodeObs(t, addOnly)), kv, testBlobs))
+}
+
+// stagedPlugin returns a staging plugin with a predecessor configured, plus its
+// bootstrapped KV.
+func stagedPlugin(t *testing.T, prrc *mockPredecessorRetirementReportCache) (*Plugin, *memKV) {
+	t.Helper()
+	ctx := tests.Context(t)
+	p := testPlugin(t)
+	predecessor := ocrtypes.ConfigDigest{0xAB}
+	p.PredecessorConfigDigest = &predecessor
+	p.PredecessorRetirementReportCache = prrc
+	kv := newMemKV()
+	_, err := p.StateTransition(ctx, 1, ocrtypes.AttributedQuery{}, []ocrtypes.AttributedObservation{ao(0, nil), ao(1, nil), ao(2, nil)}, kv, testBlobs)
+	require.NoError(t, err)
+	require.Equal(t, string(protocol.LifeCycleStageStaging), string(kv.m[string(keyLifecycle)]))
+	return p, kv
+}
+
+// promotionRoundAOs builds a round of four observations with distinct
+// timestamps, all carrying an attested retirement report, of which the first
+// voters many vote for the predecessor's signer set. The timestamps are chosen
+// so the median moves if the last observation is dropped: kept gives 3000,
+// dropped gives 2000.
+func promotionRoundAOs(t *testing.T, voters int) []ocrtypes.AttributedObservation {
+	t.Helper()
+	aos := make([]ocrtypes.AttributedObservation, 0, 4)
+	for i := 0; i < 4; i++ {
+		obs := promotionObs(uint64(1000 * (i + 1))) //nolint:gosec // small test constant
+		if i >= voters {
+			// This node's config poller has not caught up, so it abstains from
+			// the signer-set vote but observes everything else as usual.
+			obs.PredecessorSigners = nil
+		}
+		aos = append(aos, ao(i, mustEncodeObs(t, obs)))
+	}
+	return aos
+}
+
+// Test_StateTransition_PredecessorConfigAgreedAndUsedSameRound covers
+// the signer set needed to verify an attested retirement report is agreed by
+// vote into c/pred rather than read from the node-local cache, and a set agreed
+// this round is usable this round, so the handover costs no extra round.
+func Test_StateTransition_PredecessorConfigAgreedAndUsedSameRound(t *testing.T) {
+	ctx := tests.Context(t)
+	p, kv := stagedPlugin(t, &mockPredecessorRetirementReportCache{
+		report: protocol.RetirementReport{ValidAfterNanoseconds: map[llotypes.ChannelID]uint64{1: 500}},
+	})
+
+	_, err := p.StateTransition(ctx, 2, ocrtypes.AttributedQuery{}, promotionRoundAOs(t, 4), kv, testBlobs)
+	require.NoError(t, err)
+
+	require.Equal(t, string(protocol.LifeCycleStageProduction), string(kv.m[string(keyLifecycle)]))
+	stored, err := readPredecessorConfig(kv)
+	require.NoError(t, err)
+	require.NotNil(t, stored, "the agreed signer set must be replicated in c/pred")
+	require.Equal(t, testPredecessorSigners, stored.signers)
+}
+
+// Test_StateTransition_LaggingPollersDoNotFork is the finding itself: nodes
+// whose config poller has not stored the predecessor config cannot verify
+// locally. Their observations must still count in full, and the round must
+// produce the same state as one where every node was caught up, since f+1
+// voters are enough to agree on c/pred.
+func Test_StateTransition_LaggingPollersDoNotFork(t *testing.T) {
+	ctx := tests.Context(t)
+	report := protocol.RetirementReport{ValidAfterNanoseconds: map[llotypes.ChannelID]uint64{1: 500}}
+
+	pAll, kvAll := stagedPlugin(t, &mockPredecessorRetirementReportCache{report: report})
+	precursorAll, err := pAll.StateTransition(ctx, 2, ocrtypes.AttributedQuery{}, promotionRoundAOs(t, 4), kvAll, testBlobs)
+	require.NoError(t, err)
+
+	// Only f+1 = 2 of the 4 nodes had the config; the other two abstained.
+	pLagging, kvLagging := stagedPlugin(t, &mockPredecessorRetirementReportCache{report: report})
+	precursorLagging, err := pLagging.StateTransition(ctx, 2, ocrtypes.AttributedQuery{}, promotionRoundAOs(t, 2), kvLagging, testBlobs)
+	require.NoError(t, err)
+
+	require.Equal(t, precursorAll, precursorLagging, "a lagging poller must not change the state transition")
+	require.Equal(t, string(protocol.LifeCycleStageProduction), string(kvLagging.m[string(keyLifecycle)]))
+	require.Equal(t, kvAll.m[string(keyPredecessorConfig)], kvLagging.m[string(keyPredecessorConfig)])
+
+	// The abstaining nodes' observations still counted: the median timestamp is
+	// over all four, not just the two that voted.
+	out, err := decodePrecursor(precursorLagging)
+	require.NoError(t, err)
+	require.Equal(t, uint64(3000), out.ObservationTimestampNanoseconds)
+}
+
+// Test_StateTransition_PredecessorConfigNeedsQuorum checks the vote threshold:
+// a single voter is not enough to install a signer set, so nothing is written
+// and no report is verified. The round itself still completes.
+func Test_StateTransition_PredecessorConfigNeedsQuorum(t *testing.T) {
+	ctx := tests.Context(t)
+	p, kv := stagedPlugin(t, &mockPredecessorRetirementReportCache{
+		report: protocol.RetirementReport{ValidAfterNanoseconds: map[llotypes.ChannelID]uint64{1: 500}},
+	})
+
+	precursor, err := p.StateTransition(ctx, 2, ocrtypes.AttributedQuery{}, promotionRoundAOs(t, 1), kv, testBlobs)
+	require.NoError(t, err)
+
+	require.Equal(t, string(protocol.LifeCycleStageStaging), string(kv.m[string(keyLifecycle)]))
+	stored, err := readPredecessorConfig(kv)
+	require.NoError(t, err)
+	require.Nil(t, stored, "one vote is not more than f")
+
+	out, err := decodePrecursor(precursor)
+	require.NoError(t, err)
+	require.Equal(t, uint64(3000), out.ObservationTimestampNanoseconds)
+}
+
+// Test_StateTransition_PredecessorConfigIsWriteOnce guards the forgery path: if
+// the agreed signer set could be revoted, a coalition that later reaches f+1
+// could install its own signers and attest a handover that never happened.
+func Test_StateTransition_PredecessorConfigIsWriteOnce(t *testing.T) {
+	ctx := tests.Context(t)
+	prrc := &mockPredecessorRetirementReportCache{report: protocol.RetirementReport{}}
+	p, kv := stagedPlugin(t, prrc)
+
+	// Round 2 agrees on the signer set but carries no retirement report, so the
+	// instance stays in staging and keeps voting.
+	noReport := make([]ocrtypes.AttributedObservation, 0, 4)
+	for i := 0; i < 4; i++ {
+		noReport = append(noReport, ao(i, mustEncodeObs(t, Observation{UnixTimestampNanoseconds: 1000, PredecessorSigners: testPredecessorSigners})))
+	}
+	_, err := p.StateTransition(ctx, 2, ocrtypes.AttributedQuery{}, noReport, kv, testBlobs)
+	require.NoError(t, err)
+	agreed := kv.m[string(keyPredecessorConfig)]
+	require.NotEmpty(t, agreed)
+
+	// Round 3: every node votes for a different signer set.
+	attacker := [][]byte{{0xFF}, {0xFE}}
+	revote := make([]ocrtypes.AttributedObservation, 0, 4)
+	for i := 0; i < 4; i++ {
+		revote = append(revote, ao(i, mustEncodeObs(t, Observation{UnixTimestampNanoseconds: 2000, PredecessorSigners: attacker})))
+	}
+	_, err = p.StateTransition(ctx, 3, ocrtypes.AttributedQuery{}, revote, kv, testBlobs)
+	require.NoError(t, err)
+	require.Equal(t, agreed, kv.m[string(keyPredecessorConfig)], "c/pred must be written at most once")
+}
+
+// Test_StateTransition_InvalidRetirementReport_KeepsObservation covers the
+// verification against the agreed signer set fails identically on every oracle,
+// so only the retirement report is ignored: the observation's timestamp,
+// votes and stream values still count. Otherwise one malformed field would
+// silently remove an oracle from the round.
+func Test_StateTransition_InvalidRetirementReport_KeepsObservation(t *testing.T) {
+	ctx := tests.Context(t)
+	p, kv := stagedPlugin(t, &mockPredecessorRetirementReportCache{verifyErr: errors.New("Verify failed; not enough valid signatures")})
+
+	precursor, err := p.StateTransition(ctx, 2, ocrtypes.AttributedQuery{}, promotionRoundAOs(t, 4), kv, testBlobs)
+	require.NoError(t, err, "a deterministic verification failure must not fail the round")
+	require.Equal(t, string(protocol.LifeCycleStageStaging), string(kv.m[string(keyLifecycle)]),
+		"an unverifiable retirement report must not promote")
+
+	// Every observation still counted: the median is over all four timestamps.
+	out, err := decodePrecursor(precursor)
+	require.NoError(t, err)
+	require.Equal(t, uint64(3000), out.ObservationTimestampNanoseconds)
+}
+
+// Test_Observation_PredecessorConfigVote covers the observation side: a staging
+// node votes its local signer set until c/pred exists, abstains when its poller
+// has nothing, and stops voting once the set is replicated.
+func Test_Observation_PredecessorConfigVote(t *testing.T) {
+	ctx := tests.Context(t)
+
+	// Observation reads the node-local caches; the vote is the only one under
+	// test, so the rest just answer.
+	stagedObserver := func(t *testing.T, prrc *mockPredecessorRetirementReportCache) (*Plugin, *memKV) {
+		t.Helper()
+		p, kv := stagedPlugin(t, prrc)
+		p.ShouldRetireCache = &mockShouldRetireCache{}
+		p.ChannelDefinitionCache = &mockChannelDefinitionCache{defs: llotypes.ChannelDefinitions{}}
+		return p, kv
+	}
+
+	t.Run("votes while c/pred is absent", func(t *testing.T) {
+		p, kv := stagedObserver(t, &mockPredecessorRetirementReportCache{})
+		obsBytes, err := p.Observation(ctx, 2, ocrtypes.AttributedQuery{}, kv, nil)
+		require.NoError(t, err)
+		obs, err := decodeObservation(ctx, obsBytes, testBlobs, nil)
+		require.NoError(t, err)
+		require.Equal(t, testPredecessorSigners, obs.PredecessorSigners)
+	})
+
+	t.Run("abstains when the poller has not caught up", func(t *testing.T) {
+		p, kv := stagedObserver(t, &mockPredecessorRetirementReportCache{noLocalConfig: true})
+		obsBytes, err := p.Observation(ctx, 2, ocrtypes.AttributedQuery{}, kv, nil)
+		require.NoError(t, err, "a lagging poller must not fail Observation")
+		obs, err := decodeObservation(ctx, obsBytes, testBlobs, nil)
+		require.NoError(t, err)
+		require.Empty(t, obs.PredecessorSigners)
+	})
+
+	t.Run("stops voting once c/pred is agreed", func(t *testing.T) {
+		p, kv := stagedObserver(t, &mockPredecessorRetirementReportCache{})
+		require.NoError(t, writePredecessorConfig(kv, predecessorConfig{signers: testPredecessorSigners}))
+		obsBytes, err := p.Observation(ctx, 2, ocrtypes.AttributedQuery{}, kv, nil)
+		require.NoError(t, err)
+		obs, err := decodeObservation(ctx, obsBytes, testBlobs, nil)
+		require.NoError(t, err)
+		require.Empty(t, obs.PredecessorSigners)
+	})
+}
+
+// Test_EncodeObservation_IsDeterministic covers the encoder builds repeated fields
+// and proto maps from Go maps, so without deterministic marshaling two oracles could
+// produce different bytes for the same logical observation.
+// Nothing compares observation bytes today and this keeps a future path that does from being silently wrong.
+func Test_EncodeObservation_IsDeterministic(t *testing.T) {
+	obs := Observation{
+		UnixTimestampNanoseconds:      1234,
+		AttestedPredecessorRetirement: []byte("attested"),
+		PredecessorSigners:            testPredecessorSigners,
+		PredecessorF:                  1,
+		RemoveChannelIDs:              map[llotypes.ChannelID]struct{}{7: {}, 1: {}, 4: {}, 2: {}, 9: {}},
+		UpdateChannelDefinitions: llotypes.ChannelDefinitions{
+			5: jsonChannel(), 3: jsonChannel(), 8: jsonChannel(), 1: jsonChannel(),
+		},
+		SupportedReportFormats: testSupportedReportFormats,
+	}
+
+	want, err := encodeObservation(obs, [][]byte{[]byte("handle")})
+	require.NoError(t, err)
+	for range 64 {
+		got, err := encodeObservation(obs, [][]byte{[]byte("handle")})
+		require.NoError(t, err)
+		require.Equal(t, want, got, "the same logical observation must encode to the same bytes")
+	}
+}
+
+// Test_MarshalStreamValues_IsDeterministic pins the same property for the blob
+// payload, which is content-addressed: the same values must hash to the same
+// handle on every oracle, or the round's fetch memo cannot dedupe.
+func Test_MarshalStreamValues_IsDeterministic(t *testing.T) {
+	sv := protocol.StreamValues{}
+	for id := llotypes.StreamID(1); id <= 32; id++ {
+		sv[id] = protocol.ToDecimal(decimal.NewFromInt(int64(id)))
+	}
+
+	want, err := marshalStreamValues(sv)
+	require.NoError(t, err)
+	require.NotEmpty(t, want)
+	for range 64 {
+		got, err := marshalStreamValues(sv)
+		require.NoError(t, err)
+		require.Equal(t, want, got, "the same stream values must marshal to the same payload")
+	}
+}
+
+// Test_Observation_EmptyDesiredSetRemovesOnlyTombstones covers that
+// the onchain cache reaps a tombstone by having the owner omit it,
+// so an all-tombstoned committed set legitimately merges to empty,
+// and abstaining there would strand those channels forever.
+func Test_Observation_EmptyDesiredSetRemovesOnlyTombstones(t *testing.T) {
+	ctx := tests.Context(t)
+
+	live := jsonChannel()
+	tombstoned := jsonChannel()
+	tombstoned.Tombstone = true
+
+	// observeRemovals commits defs, then asks what the node votes to remove
+	// once the definitions source has gone empty.
+	observeRemovals := func(t *testing.T, defs llotypes.ChannelDefinitions) map[llotypes.ChannelID]struct{} {
+		t.Helper()
+		p := testPlugin(t)
+		p.ShouldRetireCache = &mockShouldRetireCache{}
+		cdc := &mockChannelDefinitionCache{defs: defs}
+		p.ChannelDefinitionCache = cdc
+		kv := newMemKV()
+
+		_, err := p.StateTransition(ctx, 1, ocrtypes.AttributedQuery{}, []ocrtypes.AttributedObservation{ao(0, nil), ao(1, nil), ao(2, nil)}, kv, testBlobs)
+		require.NoError(t, err)
+		agree := make([]ocrtypes.AttributedObservation, 0, 4)
+		for i := 0; i < 4; i++ {
+			agree = append(agree, ao(i, mustEncodeObs(t, Observation{UnixTimestampNanoseconds: 1000, UpdateChannelDefinitions: defs})))
+		}
+		_, err = p.StateTransition(ctx, 2, ocrtypes.AttributedQuery{}, agree, kv, testBlobs)
+		require.NoError(t, err)
+		require.Len(t, kvChannelDefs(t, kv), len(defs))
+
+		cdc.defs = llotypes.ChannelDefinitions{}
+		obsBytes, err := p.Observation(ctx, 3, ocrtypes.AttributedQuery{}, kv, nil)
+		require.NoError(t, err)
+		obs, err := decodeObservation(ctx, obsBytes, testBlobs, nil)
+		require.NoError(t, err)
+		return obs.RemoveChannelIDs
+	}
+
+	t.Run("live channels are never removed by an empty set", func(t *testing.T) {
+		require.Empty(t, observeRemovals(t, llotypes.ChannelDefinitions{1: live, 2: live}))
+	})
+
+	t.Run("tombstoned channels still are", func(t *testing.T) {
+		require.Equal(t,
+			map[llotypes.ChannelID]struct{}{2: {}},
+			observeRemovals(t, llotypes.ChannelDefinitions{1: live, 2: tombstoned}))
+	})
+
+	t.Run("an all-tombstoned set can be reaped to empty", func(t *testing.T) {
+		require.Equal(t,
+			map[llotypes.ChannelID]struct{}{1: {}, 2: {}},
+			observeRemovals(t, llotypes.ChannelDefinitions{1: tombstoned, 2: tombstoned}))
+	})
+
+	t.Run("a non-empty desired set is still a genuine opinion", func(t *testing.T) {
+		p := testPlugin(t)
+		p.ShouldRetireCache = &mockShouldRetireCache{}
+		cdc := &mockChannelDefinitionCache{defs: llotypes.ChannelDefinitions{1: live, 2: live}}
+		p.ChannelDefinitionCache = cdc
+		kv := newMemKV()
+
+		_, err := p.StateTransition(ctx, 1, ocrtypes.AttributedQuery{}, []ocrtypes.AttributedObservation{ao(0, nil), ao(1, nil), ao(2, nil)}, kv, testBlobs)
+		require.NoError(t, err)
+		agree := make([]ocrtypes.AttributedObservation, 0, 4)
+		for i := 0; i < 4; i++ {
+			agree = append(agree, ao(i, mustEncodeObs(t, Observation{UnixTimestampNanoseconds: 1000, UpdateChannelDefinitions: cdc.defs})))
+		}
+		_, err = p.StateTransition(ctx, 2, ocrtypes.AttributedQuery{}, agree, kv, testBlobs)
+		require.NoError(t, err)
+
+		// Dropping one channel while still reporting the other is an opinion,
+		// so the dropped one is voted off even though it is live.
+		cdc.defs = llotypes.ChannelDefinitions{1: live}
+		obsBytes, err := p.Observation(ctx, 3, ocrtypes.AttributedQuery{}, kv, nil)
+		require.NoError(t, err)
+		obs, err := decodeObservation(ctx, obsBytes, testBlobs, nil)
+		require.NoError(t, err)
+		require.Equal(t, map[llotypes.ChannelID]struct{}{2: {}}, obs.RemoveChannelIDs)
+	})
+}
+
+// Test_IsReportable_MinReportIntervalDoesNotOverflow
+// validAfter is a nanosecond wall-clock timestamp and the offchain config
+// bounds DefaultMinReportIntervalNanoseconds only away from zero, so a large
+// enough interval used to wrap validAfter+minReportInterval to a small number.
+// The cadence comparison then passed for every channel and the interval
+// silently stopped gating anything.
+func Test_IsReportable_MinReportIntervalDoesNotOverflow(t *testing.T) {
+	const validAfter = uint64(1_700_000_000_000_000_000)
+
+	out := precursor{
+		LifeCycleStage:                  protocol.LifeCycleStageProduction,
+		ObservationTimestampNanoseconds: validAfter + 1,
+		ChannelDefinitions:              llotypes.ChannelDefinitions{1: jsonChannel()},
+		ValidAfterNanoseconds:           map[llotypes.ChannelID]uint64{1: validAfter},
+		StreamAggregates: protocol.StreamAggregates{
+			100: {llotypes.AggregatorMedian: protocol.ToDecimal(decimal.NewFromInt(1))},
+		},
+		SupportByFormat: map[llotypes.ReportFormat]int{llotypes.ReportFormatJSON: 4},
+	}
+	gen, err := protocol.NewChannelCache().Load(1, func() (llotypes.ChannelDefinitions, error) {
+		return out.ChannelDefinitions, nil
+	})
+	require.NoError(t, err)
+	optsCache := gen.Opts()
+
+	// One nanosecond past validAfter, so only the interval can hold it back.
+	require.True(t, out.isReportable(1, 1, 1, optsCache, logger.Test(t)),
+		"a one nanosecond interval must not gate a report one nanosecond late")
+
+	// An interval that overflows the sum must gate, not wrap into passing.
+	for _, interval := range []uint64{math.MaxUint64, math.MaxUint64 - validAfter + 1} {
+		require.False(t, out.isReportable(1, interval, 1, optsCache, logger.Test(t)),
+			"interval %d must gate the report, not wrap", interval)
+	}
+
+	require.Equal(t, uint64(math.MaxUint64), saturatingAdd(validAfter, math.MaxUint64))
+	require.Equal(t, uint64(9), saturatingAdd(4, 5))
 }

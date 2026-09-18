@@ -27,6 +27,19 @@ message LLOObservationProto {
     // uniqueness.
     map<uint32, LLOChannelDefinitionProto> updateChannelDefinitions = 5;
     map<uint32, LLOStreamValue> streamValues = 6;
+    // Report formats this oracle has a report codec for. Advertised so that
+    // reportability can require enough oracles to be able to encode a channel
+    // before validAfter advances over it. Encoding is node-local state and
+    // cannot be read in the state transition; this carries it as a replicated
+    // fact instead.
+    repeated uint32 supportedReportFormats = 8;
+    // The predecessor instance's signer set and f, read from the node-local
+    // retirement report cache. Carried only by a v31 staging instance that has
+    // not yet agreed on c/pred, so the state transition can verify attested
+    // retirement reports against replicated state instead of node-local state.
+    // Order is significant: a signature names its signer by index into it.
+    repeated bytes predecessorSigners = 9;
+    uint32 predecessorF = 10;
 }
 
 message LLOStreamValue {
@@ -175,6 +188,23 @@ message LLOChannelStateProto {
     repeated LLOChannelIDAndDefinitionProto channelDefinitions = 1;
 }
 
+// LLOPredecessorConfigProto is the v31 KeyValueState record holding the
+// predecessor instance's signer set and f under a single key (c/pred), agreed
+// by vote while staging and written at most once.
+//
+// It exists so that verifying an attested predecessor retirement report reads
+// only replicated state. The same data is available node-locally from the
+// retirement report cache, but that cache is filled asynchronously by the
+// config poller, so oracles reach different verdicts from it and the state
+// transition would fork.
+//
+// NOTE: must serialize deterministically. signers MUST keep the order the
+// predecessor's config gives them, since a signature names its signer by index.
+message LLOPredecessorConfigProto {
+    repeated bytes signers = 1;
+    uint32 f = 2;
+}
+
 // LLOHotStateProto is the v31 KeyValueState record holding the per-round
 // ("hot") state under a single key (r/agg): the state that changes on
 // essentially every round.
@@ -211,4 +241,13 @@ message LLOPrecursorProto {
     repeated LLOChannelIDAndValidAfterNanosecondsProto validAfterNanoseconds = 4;
     repeated LLOStreamAggregate streamAggregates = 5;
     uint64 channelStateSeqNr = 6;
+    // supportByFormat MUST be sorted ascending by reportFormat.
+    repeated LLOReportFormatSupportProto supportByFormat = 7;
+}
+
+// LLOReportFormatSupportProto is the number of oracles that advertised a report
+// codec for one report format in the round that produced the precursor.
+message LLOReportFormatSupportProto {
+    uint32 reportFormat = 1;
+    uint32 oracleCount = 2;
 }

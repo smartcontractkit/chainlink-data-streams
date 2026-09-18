@@ -11,7 +11,9 @@ import (
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
 )
 
-type AggregatorFunc func(values []StreamValue, f int) (StreamValue, error)
+// AggregatorFunc aggregates contributions, requiring at least
+// minContributions usable values of the selected type.
+type AggregatorFunc func(contributions []StreamValue, minContributions int) (StreamValue, error)
 
 func GetAggregatorFunc(a llotypes.Aggregator) AggregatorFunc {
 	switch a {
@@ -25,7 +27,8 @@ func GetAggregatorFunc(a llotypes.Aggregator) AggregatorFunc {
 		return nil
 	}
 }
-func MedianAggregator(values []StreamValue, f int) (StreamValue, error) {
+
+func MedianAggregator(values []StreamValue, minContributions int) (StreamValue, error) {
 	typ, typValues := mostCommonType(values)
 
 	switch typ {
@@ -49,7 +52,7 @@ func MedianAggregator(values []StreamValue, f int) (StreamValue, error) {
 			timestamps[i] = v.ObservedAtNanoseconds
 		}
 
-		medianValue, err := MedianAggregator(svalues, f)
+		medianValue, err := MedianAggregator(svalues, minContributions)
 		if err != nil {
 			return nil, err
 		}
@@ -71,12 +74,10 @@ func MedianAggregator(values []StreamValue, f int) (StreamValue, error) {
 				continue
 			}
 		}
-		if len(observations) <= f {
-			// In the worst case, we have 2f+1 observations, of which up to f
-			// are allowed to be invalid/missing. If we have less than f+1
-			// usable observations, we cannot securely generate a median at
-			// all.
-			return nil, fmt.Errorf("not enough observations to calculate median, expected at least f+1, got %d", len(observations))
+		if len(observations) < minContributions {
+			// Below the contribution floor the median is not guaranteed to sit
+			// inside the honest value range, so refuse to produce one.
+			return nil, fmt.Errorf("not enough contributions to calculate median: got %d, need %d", len(observations), minContributions)
 		}
 		sort.Slice(observations, func(i, j int) bool { return observations[i].Cmp(observations[j]) < 0 })
 		// We use a "rank-k" median here, instead one could average in case of
@@ -91,9 +92,10 @@ func MedianAggregator(values []StreamValue, f int) (StreamValue, error) {
 
 // ModeAggregator works on arbitrary StreamValue types
 // It picks the most common value
-// There must be at least f+1 observations in agreement in order to produce a value
-// nil observations are ignored
-func ModeAggregator(values []StreamValue, f int) (StreamValue, error) {
+// There must be at least minContributions contributions in agreement in order
+// to produce a value
+// nil contributions are ignored
+func ModeAggregator(values []StreamValue, minContributions int) (StreamValue, error) {
 	largestBucketType, largestBucket := mostCommonType(values)
 
 	// find the most common value in the bucket
@@ -119,8 +121,8 @@ func ModeAggregator(values []StreamValue, f int) (StreamValue, error) {
 		}
 	}
 
-	if modeCount < f+1 {
-		return nil, fmt.Errorf("not enough observations in agreement to calculate mode, expected at least f+1, most common value had %d", modeCount)
+	if modeCount < minContributions {
+		return nil, fmt.Errorf("not enough contributions in agreement to calculate mode: most common value had %d, need %d", modeCount, minContributions)
 	}
 	if len(modeSerialized) == 0 {
 		return nil, nil
@@ -153,7 +155,7 @@ func mostCommonType(values []StreamValue) (LLOStreamValue_Type, []StreamValue) {
 	return mostCommonType, largestBucket
 }
 
-func QuoteAggregator(values []StreamValue, f int) (StreamValue, error) {
+func QuoteAggregator(values []StreamValue, minContributions int) (StreamValue, error) {
 	var observations []*Quote
 	for _, value := range values {
 		if v, ok := value.(*Quote); !ok {
@@ -164,12 +166,10 @@ func QuoteAggregator(values []StreamValue, f int) (StreamValue, error) {
 		}
 		// Exclude Quotes that violate bid<=mid<=ask
 	}
-	if len(observations) <= f {
-		// In the worst case, we have 2f+1 observations, of which up to f
-		// are allowed to be invalid/missing. If we have less than f+1
-		// usable observations, we cannot securely generate a median at
-		// all.
-		return nil, fmt.Errorf("not enough valid observations to aggregate quote, expected at least f+1, got %d", len(observations))
+	if len(observations) < minContributions {
+		// Below the contribution floor the rank medians below are not
+		// guaranteed to sit inside the honest value range.
+		return nil, fmt.Errorf("not enough valid contributions to aggregate quote: got %d, need %d", len(observations), minContributions)
 	}
 	// Calculate "rank-k" median for benchmark, bid and ask separately.
 	// This is guaranteed not to return values that violate bid<=mid<=ask due
