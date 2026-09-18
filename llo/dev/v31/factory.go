@@ -139,6 +139,7 @@ func (f *PluginFactory) NewReportingPlugin(ctx context.Context, cfg ocr3types.Re
 	// Definitions and the opts decoded from them are cached together, as one
 	// immutable generation per c/seqnr, so a round can never mix the two.
 	p.ChannelCache = protocol.NewChannelCache()
+	p.ChannelAnalysisCache = protocol.NewChannelAnalysisCache()
 
 	// Setup the blobpump
 	p.pump = newBlobPump(l, blobPumpParams{

@@ -149,9 +149,15 @@ func (c *ChannelCache) store(gen *ChannelGeneration) *ChannelGeneration {
 func CloneChannelDefinitions(in llotypes.ChannelDefinitions) llotypes.ChannelDefinitions {
 	out := make(llotypes.ChannelDefinitions, len(in))
 	for id, cd := range in {
-		cd.Streams = slices.Clone(cd.Streams)
-		cd.Opts = slices.Clone(cd.Opts)
-		out[id] = cd
+		out[id] = cloneChannelDefinition(cd)
 	}
 	return out
+}
+
+// cloneChannelDefinition deep-copies one definition: the Streams slice and the
+// raw opts bytes are copied, so the copy shares no memory with the original.
+func cloneChannelDefinition(cd llotypes.ChannelDefinition) llotypes.ChannelDefinition {
+	cd.Streams = slices.Clone(cd.Streams)
+	cd.Opts = slices.Clone(cd.Opts)
+	return cd
 }
