@@ -129,6 +129,12 @@ func (c *ChannelCache) store(gen *ChannelGeneration) *ChannelGeneration {
 		c.gens = make(map[uint64]*ChannelGeneration, channelGenerationsRetained)
 	}
 	c.gens[gen.seqNr] = gen
+	// Evict by insertion order, not by sequence number: what a round asks for
+	// next is the record it is replaying, which for a node restoring from a
+	// snapshot is an older one than the cache already holds (see the type doc).
+	// Retaining the highest sequence numbers instead would evict exactly the
+	// generations such a node keeps asking for. In steady state the two agree,
+	// insertion being monotonic there.
 	c.order = append(c.order, gen.seqNr)
 	for len(c.order) > channelGenerationsRetained {
 		delete(c.gens, c.order[0])
