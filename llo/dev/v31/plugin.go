@@ -298,6 +298,30 @@ func (p *Plugin) voteOnPredecessorConfig(obs *Observation, kvReader ocr3_1types.
 
 // voteOnChannels populates obs.RemoveChannelIDs / obs.UpdateChannelDefinitions
 // by comparing the desired channel definitions against current KV state.
+//
+// ChannelDefinitionCache.Definitions(committed) is a reconciliation, not a
+// snapshot of a file: the shipped onchain cache merges what it has fetched into
+// the committed set it is handed and returns the result, so the desired set is
+// normally the committed one plus additions and changes. It deletes nothing
+// implicitly.
+//
+//   - before anything has been fetched, and after a fetch error, a poll that
+//     saw nothing, or a stale event, it returns the committed set unchanged. A
+//     source it cannot read produces no opinion rather than a removal;
+//   - the merge is upsert-only. A channel missing from a newly fetched file is
+//     preserved, not dropped. Removal is explicit: the owner marks the channel
+//     with Tombstone, which is a definition change like any other;
+//   - the single deletion path is reaping an already tombstoned channel, once
+//     the owner omits it from a later file. So a channel leaves the committed
+//     set only after the DON has already agreed it is a tombstone.
+//
+// This function must not assume that, because the contract does not require it.
+// Definitions may be implemented by anything, and the static cache shipped for
+// benchmarks and the dummy relayer ignores the committed set entirely and
+// returns its configured JSON verbatim. Everything below is therefore written
+// against the weaker guarantee: the desired set is one node's opinion, votes
+// decide, and an absent channel means "not mentioned", which is only treated as
+// "remove" when the set as a whole is credible. See the empty-set case below.
 func (p *Plugin) voteOnChannels(obs *Observation, state *kvState) {
 	obs.RemoveChannelIDs = map[llotypes.ChannelID]struct{}{}
 
@@ -312,7 +336,32 @@ func (p *Plugin) voteOnChannels(obs *Observation, state *kvState) {
 		return
 	}
 
-	removeChannelDefinitions := protocol.SubtractChannelDefinitions(state.channelDefinitions, expectedChannelDefs, protocol.MaxObservationRemoveChannelIDsLength)
+	// An empty desired set against a non-empty committed one is not read as
+	// "remove every channel". Under the reconciliation above the onchain cache
+	// cannot produce that for live channels, but nothing in the interface says
+	// so, and an implementation that returns nothing before it has loaded
+	// anything, or on a source it could not read, would make every live channel
+	// a removal candidate. Every node would do it from the same input, so the
+	// channels would really go.
+	//
+	// Tombstoned channels stay removable. An empty desired set is exactly what
+	// the onchain cache produces on the last reap: the owner omits the
+	// tombstones it wants dropped, and when every committed channel is a
+	// tombstone the merge comes back empty. Abstaining there would stop the
+	// removal the DON has already agreed to and strand those channels in the
+	// definitions permanently.
+	removable := state.channelDefinitions
+	if len(expectedChannelDefs) == 0 && len(state.channelDefinitions) > 0 {
+		removable = llotypes.ChannelDefinitions{}
+		for channelID, cd := range state.channelDefinitions {
+			if cd.Tombstone {
+				removable[channelID] = cd
+			}
+		}
+		p.Logger.Warnw("ChannelDefinitionCache.Definitions is empty while channels are committed; voting to remove only the tombstoned ones", "committed", len(state.channelDefinitions), "removable", len(removable))
+	}
+
+	removeChannelDefinitions := protocol.SubtractChannelDefinitions(removable, expectedChannelDefs, protocol.MaxObservationRemoveChannelIDsLength)
 	for channelID := range removeChannelDefinitions {
 		obs.RemoveChannelIDs[channelID] = struct{}{}
 	}
