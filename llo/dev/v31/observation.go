@@ -74,6 +74,9 @@ func encodeObservation(obs Observation, handles [][]byte) (ocrtypes.Observation,
 	for id := range obs.RemoveChannelIDs {
 		main.RemoveChannelIDs = append(main.RemoveChannelIDs, id)
 	}
+	// Map iteration order, so sort: Deterministic marshaling canonicalizes
+	// proto map fields, not a repeated field built from a Go map.
+	sortChannelIDs(main.RemoveChannelIDs)
 	if len(obs.UpdateChannelDefinitions) > 0 {
 		main.UpdateChannelDefinitions = make(map[uint32]*protocol.LLOChannelDefinitionProto, len(obs.UpdateChannelDefinitions))
 		for id, cd := range obs.UpdateChannelDefinitions {
@@ -81,11 +84,13 @@ func encodeObservation(obs Observation, handles [][]byte) (ocrtypes.Observation,
 		}
 	}
 
-	// Sorted and deduped: the wire bytes need not be deterministic, but a
-	// canonical list keeps goldens stable and matches what decode enforces.
+	// Sorted and deduped, matching what decode enforces.
 	main.SupportedReportFormats = sortedUniqueFormats(obs.SupportedReportFormats)
 
-	mainBytes, err := proto.Marshal(main)
+	// Deterministic even though nothing compares observation bytes today
+	// A future path which does compare or hash the value cannot be
+	// silently wrong.
+	mainBytes, err := deterministicMarshal.Marshal(main)
 	if err != nil {
 		return nil, fmt.Errorf("marshal observation: %w", err)
 	}
