@@ -69,6 +69,11 @@ const (
 	BlobReapingMarginRounds = 16
 	// MinPerOracleUnexpiredBlobCount is the floor for the derived budget.
 	MinPerOracleUnexpiredBlobCount = 32
+	// closeTimeoutSlackMultiplier scales the pump's observation timeout into how
+	// long Close waits for an in-flight cycle.
+	closeTimeoutSlackMultiplier = 5
+	// minCloseTimeout fixes the minimum time Close waits waits for an in-flight cycle.
+	minCloseTimeout = 1 * time.Second
 )
 
 // perOracleUnexpiredBlobCount derives the per-oracle unexpired-blob budget from
@@ -118,10 +123,11 @@ type blobPump struct {
 	blobPumpParams
 	lggr logger.Logger
 
-	trigger chan struct{}
-	ctx     context.Context
-	cancel  context.CancelFunc
-	wg      sync.WaitGroup
+	trigger      chan struct{}
+	ctx          context.Context
+	cancel       context.CancelFunc
+	wg           sync.WaitGroup
+	closeTimeout time.Duration
 
 	inFlight   atomic.Bool
 	misses     atomic.Uint64
@@ -163,6 +169,7 @@ func newBlobPump(lggr logger.Logger, params blobPumpParams) *blobPump {
 		trigger:        make(chan struct{}, 1),
 		ctx:            ctx,
 		cancel:         cancel,
+		closeTimeout:   max(params.observationTimeout*closeTimeoutSlackMultiplier, minCloseTimeout),
 	}
 }
 
@@ -183,10 +190,28 @@ func (p *blobPump) Start() {
 	go p.run()
 }
 
-// Close stops the pump and waits for any in-flight cycle to unwind.
-func (p *blobPump) Close() {
+// Close stops the pump and waits for any in-flight cycle to unwind, bounded by
+// closeTimeout. Reports false when the cycle did not unwind, meaning its
+// goroutine is still blocked in a DataSource or broadcaster call that ignored
+// the cancelled context: abandon it rather than let it hang the caller's
+// shutdown path.
+func (p *blobPump) Close() bool {
 	p.cancel()
-	p.wg.Wait()
+
+	done := make(chan struct{})
+	go func() {
+		p.wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		return true
+	case <-time.After(p.closeTimeout):
+		p.lggr.Errorw("Blob pump cycle did not unwind after context cancellation; abandoning goroutine",
+			"closeTimeout", p.closeTimeout, "observationTimeout", p.observationTimeout)
+		return false
+	}
 }
 
 // SetInput publishes the round context for subsequent cycles. Cheap; called

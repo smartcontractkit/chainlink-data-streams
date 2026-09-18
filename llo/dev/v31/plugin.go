@@ -385,8 +385,8 @@ func (p *Plugin) ShouldTransmitAcceptedReport(context.Context, uint64, ocr3types
 }
 
 func (p *Plugin) Close() error {
-	if p.pump != nil {
-		p.pump.Close()
+	if p.pump != nil && !p.pump.Close() {
+		return fmt.Errorf("blob pump did not stop within %s", p.pump.closeTimeout)
 	}
 	return nil
 }
