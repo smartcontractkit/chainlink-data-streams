@@ -3,6 +3,7 @@ package llo
 import (
 	"context"
 	"errors"
+	"math"
 	"sync"
 	"testing"
 	"time"
@@ -873,4 +874,43 @@ func Test_Observation_EmptyDesiredSetRemovesOnlyTombstones(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, map[llotypes.ChannelID]struct{}{2: {}}, obs.RemoveChannelIDs)
 	})
+}
+
+// Test_IsReportable_MinReportIntervalDoesNotOverflow
+// validAfter is a nanosecond wall-clock timestamp and the offchain config
+// bounds DefaultMinReportIntervalNanoseconds only away from zero, so a large
+// enough interval used to wrap validAfter+minReportInterval to a small number.
+// The cadence comparison then passed for every channel and the interval
+// silently stopped gating anything.
+func Test_IsReportable_MinReportIntervalDoesNotOverflow(t *testing.T) {
+	const validAfter = uint64(1_700_000_000_000_000_000)
+
+	out := precursor{
+		LifeCycleStage:                  protocol.LifeCycleStageProduction,
+		ObservationTimestampNanoseconds: validAfter + 1,
+		ChannelDefinitions:              llotypes.ChannelDefinitions{1: jsonChannel()},
+		ValidAfterNanoseconds:           map[llotypes.ChannelID]uint64{1: validAfter},
+		StreamAggregates: protocol.StreamAggregates{
+			100: {llotypes.AggregatorMedian: protocol.ToDecimal(decimal.NewFromInt(1))},
+		},
+		SupportByFormat: map[llotypes.ReportFormat]int{llotypes.ReportFormatJSON: 4},
+	}
+	gen, err := protocol.NewChannelCache().Load(1, func() (llotypes.ChannelDefinitions, error) {
+		return out.ChannelDefinitions, nil
+	})
+	require.NoError(t, err)
+	optsCache := gen.Opts()
+
+	// One nanosecond past validAfter, so only the interval can hold it back.
+	require.True(t, out.isReportable(1, 1, 1, optsCache, logger.Test(t)),
+		"a one nanosecond interval must not gate a report one nanosecond late")
+
+	// An interval that overflows the sum must gate, not wrap into passing.
+	for _, interval := range []uint64{math.MaxUint64, math.MaxUint64 - validAfter + 1} {
+		require.False(t, out.isReportable(1, interval, 1, optsCache, logger.Test(t)),
+			"interval %d must gate the report, not wrap", interval)
+	}
+
+	require.Equal(t, uint64(math.MaxUint64), saturatingAdd(validAfter, math.MaxUint64))
+	require.Equal(t, uint64(9), saturatingAdd(4, 5))
 }
