@@ -145,6 +145,7 @@ func (p *Plugin) Observation(_ context.Context, seqNr uint64, _ ocrtypes.Attribu
 				obs.AttestedPredecessorRetirement = nil
 				p.Logger.Errorw("Failed to fetch attested retirement report from cache, omitting it from this observation", "stage", "Observation", "seqNr", seqNr, "err", err)
 			}
+			p.voteOnPredecessorConfig(&obs, kvReader, seqNr)
 		}
 
 		obs.ShouldRetire, err = p.ShouldRetireCache.ShouldRetire(p.ConfigDigest)
@@ -260,6 +261,41 @@ func sortedChannelIDSet(set map[llotypes.ChannelID]struct{}) []llotypes.ChannelI
 	return ids
 }
 
+// voteOnPredecessorConfig populates obs.PredecessorSigners / obs.PredecessorF
+// with the predecessor's signer set from the node-local retirement report
+// cache, so the DON can agree on it and store it in c/pred.
+//
+// Verifying an attested predecessor retirement report needs that signer set.
+// Reading it from the local cache inside the state transition would fork the
+// state, because the config poller fills the cache asynchronously and a lagging
+// node reaches a different verdict from one that is caught up. Voting on it
+// here moves the node-local read into the observation, where oracles are
+// allowed to differ, and leaves the state transition reading only replicated
+// state.
+func (p *Plugin) voteOnPredecessorConfig(obs *Observation, kvReader ocr3_1types.KeyValueStateReader, seqNr uint64) {
+	agreed, err := readPredecessorConfig(kvReader)
+	if err != nil {
+		p.Logger.Errorw("Failed to read agreed predecessor config, not voting on it this round", "stage", "Observation", "seqNr", seqNr, "err", err)
+		return
+	}
+	if agreed != nil {
+		// Already replicated, so the vote would be dead weight on every
+		// observation for the rest of the staging period.
+		return
+	}
+	signers, f, exists := p.PredecessorRetirementReportCache.PredecessorConfig(*p.PredecessorConfigDigest)
+	if !exists {
+		p.Logger.Warnw("Predecessor config not in the local cache yet, not voting on it this round", "stage", "Observation", "seqNr", seqNr, "predecessorConfigDigest", *p.PredecessorConfigDigest)
+		return
+	}
+	if len(signers) == 0 || len(signers) > protocol.MaxObservationPredecessorSignersLength {
+		p.Logger.Errorw("Local predecessor config has an unusable signer set, not voting on it", "stage", "Observation", "seqNr", seqNr, "signers", len(signers))
+		return
+	}
+	obs.PredecessorSigners = signers
+	obs.PredecessorF = f
+}
+
 // voteOnChannels populates obs.RemoveChannelIDs / obs.UpdateChannelDefinitions
 // by comparing the desired channel definitions against current KV state.
 func (p *Plugin) voteOnChannels(obs *Observation, state *kvState) {
@@ -316,6 +352,9 @@ func (p *Plugin) ValidateObservation(ctx context.Context, seqNr uint64, _ ocrtyp
 
 	if p.PredecessorConfigDigest == nil && len(observation.AttestedPredecessorRetirement) != 0 {
 		return errors.New("AttestedPredecessorRetirement is not empty even though this instance has no predecessor")
+	}
+	if p.PredecessorConfigDigest == nil && len(observation.PredecessorSigners) != 0 {
+		return errors.New("PredecessorSigners is not empty even though this instance has no predecessor")
 	}
 	if len(observation.UpdateChannelDefinitions) > protocol.MaxObservationUpdateChannelDefinitionsLength {
 		return fmt.Errorf("UpdateChannelDefinitions is too long: %v vs %v", len(observation.UpdateChannelDefinitions), protocol.MaxObservationUpdateChannelDefinitionsLength)

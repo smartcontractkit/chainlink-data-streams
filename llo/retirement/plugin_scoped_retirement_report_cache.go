@@ -38,23 +38,34 @@ func NewPluginScopedRetirementReportCache(rrc RetirementReportCacheReader, verif
 	}
 }
 
+func (pr *pluginScopedRetirementReportCache) PredecessorConfig(predecessorConfigDigest ocr2types.ConfigDigest) ([][]byte, uint8, bool) {
+	config, exists := pr.rrc.Config(predecessorConfigDigest)
+	if !exists {
+		return nil, 0, false
+	}
+	return config.Signers, config.F, true
+}
+
 func (pr *pluginScopedRetirementReportCache) CheckAttestedRetirementReport(predecessorConfigDigest ocr2types.ConfigDigest, serializedAttestedRetirementReport []byte) (protocol.RetirementReport, error) {
 	config, exists := pr.rrc.Config(predecessorConfigDigest)
 	if !exists {
 		return protocol.RetirementReport{}, fmt.Errorf("Verify failed; predecessor config not found for config digest %x", predecessorConfigDigest[:])
 	}
+	return pr.VerifyAttestedRetirementReport(predecessorConfigDigest, config.Signers, config.F, serializedAttestedRetirementReport)
+}
 
+func (pr *pluginScopedRetirementReportCache) VerifyAttestedRetirementReport(predecessorConfigDigest ocr2types.ConfigDigest, signers [][]byte, f uint8, serializedAttestedRetirementReport []byte) (protocol.RetirementReport, error) {
 	var arr protocol.AttestedRetirementReport
 	if err := proto.Unmarshal(serializedAttestedRetirementReport, &arr); err != nil {
 		return protocol.RetirementReport{}, fmt.Errorf("Verify failed; failed to unmarshal protobuf: %w", err)
 	}
 
 	validSigs := 0
-	seenSigners := make(map[uint32]struct{}, len(config.Signers))
+	seenSigners := make(map[uint32]struct{}, len(signers))
 	for _, sig := range arr.Sigs {
 		// #nosec G115
-		if sig.Signer >= uint32(len(config.Signers)) {
-			return protocol.RetirementReport{}, fmt.Errorf("Verify failed; attested report signer index out of bounds (got: %d, max: %d)", sig.Signer, len(config.Signers)-1)
+		if sig.Signer >= uint32(len(signers)) {
+			return protocol.RetirementReport{}, fmt.Errorf("Verify failed; attested report signer index out of bounds (got: %d, max: %d)", sig.Signer, len(signers)-1)
 		}
 
 		// ensure we have unique signatures
@@ -63,7 +74,7 @@ func (pr *pluginScopedRetirementReportCache) CheckAttestedRetirementReport(prede
 		}
 
 		seenSigners[sig.Signer] = struct{}{}
-		signer := config.Signers[sig.Signer]
+		signer := signers[sig.Signer]
 		valid := pr.verifier.Verify(types.OnchainPublicKey(signer), predecessorConfigDigest, arr.SeqNr, ocr3types.ReportWithInfo[llotypes.ReportInfo]{
 			Report: arr.RetirementReport,
 			Info:   llotypes.ReportInfo{ReportFormat: llotypes.ReportFormatRetirement},
@@ -73,8 +84,8 @@ func (pr *pluginScopedRetirementReportCache) CheckAttestedRetirementReport(prede
 		}
 		validSigs++
 	}
-	if validSigs <= int(config.F) {
-		return protocol.RetirementReport{}, fmt.Errorf("Verify failed; not enough valid signatures (got: %d, need: %d)", validSigs, config.F+1)
+	if validSigs <= int(f) {
+		return protocol.RetirementReport{}, fmt.Errorf("Verify failed; not enough valid signatures (got: %d, need: %d)", validSigs, f+1)
 	}
 	decoded, err := pr.codec.Decode(arr.RetirementReport)
 	if err != nil {

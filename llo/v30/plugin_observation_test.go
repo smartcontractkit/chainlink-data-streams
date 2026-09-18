@@ -35,6 +35,12 @@ func (p *mockPredecessorRetirementReportCache) AttestedRetirementReport(predeces
 func (p *mockPredecessorRetirementReportCache) CheckAttestedRetirementReport(predecessorConfigDigest ocr2types.ConfigDigest, attestedRetirementReport []byte) (protocol.RetirementReport, error) {
 	panic("not implemented")
 }
+func (p *mockPredecessorRetirementReportCache) PredecessorConfig(predecessorConfigDigest ocr2types.ConfigDigest) ([][]byte, uint8, bool) {
+	panic("not implemented")
+}
+func (p *mockPredecessorRetirementReportCache) VerifyAttestedRetirementReport(predecessorConfigDigest ocr2types.ConfigDigest, signers [][]byte, f uint8, attestedRetirementReport []byte) (protocol.RetirementReport, error) {
+	panic("not implemented")
+}
 
 func Test_Observation(t *testing.T) {
 	for _, codec := range []OutcomeCodec{protoOutcomeCodecV0{}, protoOutcomeCodecV1{}} {
