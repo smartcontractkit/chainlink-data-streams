@@ -3,6 +3,7 @@ package llo
 import (
 	"context"
 	"fmt"
+	"math"
 	"sort"
 
 	"github.com/smartcontractkit/chainlink-common/pkg/logger"
@@ -194,6 +195,22 @@ func (o precursor) formatIsEncodable(format llotypes.ReportFormat, f int, channe
 
 // reportableChannels returns the sorted set of channels reportable in this
 // (current) round (see isReportable).
+// saturatingAdd returns a+b, clamped to MaxUint64 instead of wrapping.
+//
+// validAfter is a nanosecond wall-clock timestamp, so it already sits around
+// 1.7e18, and the offchain config bounds DefaultMinReportIntervalNanoseconds
+// only away from zero (see protocol.OffchainConfig.Validate). A large enough
+// interval would wrap the sum to a small number, the cadence comparison would
+// then always pass, and the interval would silently stop gating anything. The
+// config is replicated, so every oracle would do it identically: a silent loss
+// of the cadence, not a fork.
+func saturatingAdd(a, b uint64) uint64 {
+	if sum := a + b; sum >= a {
+		return sum
+	}
+	return math.MaxUint64
+}
+
 func (o precursor) reportableChannels(minReportInterval uint64, f int, optsCache *protocol.OptsCache, lggr logger.Logger) []llotypes.ChannelID {
 	reportable := make([]llotypes.ChannelID, 0, len(o.ChannelDefinitions))
 	for channelID := range o.ChannelDefinitions {
@@ -268,7 +285,7 @@ func (o precursor) isReportable(channelID llotypes.ChannelID, minReportInterval 
 	if !ok {
 		return false
 	}
-	if o.ObservationTimestampNanoseconds < validAfter+minReportInterval || o.ObservationTimestampNanoseconds <= validAfter {
+	if o.ObservationTimestampNanoseconds < saturatingAdd(validAfter, minReportInterval) || o.ObservationTimestampNanoseconds <= validAfter {
 		return false
 	}
 	// For seconds-resolution report formats, also require a full second between
