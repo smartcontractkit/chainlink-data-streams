@@ -123,8 +123,16 @@ func Test_Transmitter_Transmit(t *testing.T) {
 			err = mt.Transmit(t.Context(), digest, seqNr, report, sigs)
 			require.NoError(t, err)
 
-			// wait for the commit loop to run
-			time.Sleep(2 * commitInterval)
+			// Wait for the commit loops to pick the transmissions up rather
+			// than assuming a fixed delay. A loop batches until its ticker
+			// fires, and transmit then inserts into the database before
+			// pushing, so the enqueue lands an unbounded time after Transmit
+			// returns.
+			require.Eventually(t, func() bool {
+				return mt.servers[sURL].q.(*transmitQueue).Len() == 1 &&
+					mt.servers[sURL2].q.(*transmitQueue).Len() == 1 &&
+					mt.servers[sURL3].q.(*transmitQueue).Len() == 1
+			}, tests.WaitTimeout(t), commitInterval/5, "all three servers must have the transmission enqueued")
 
 			// ensure it was added to the queue
 			require.Equal(t, 1, mt.servers[sURL].q.(*transmitQueue).Len())
