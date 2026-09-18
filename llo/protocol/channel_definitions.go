@@ -11,7 +11,13 @@ import (
 // VerifyChannelDefinitions applies the checks that any definition set must
 // satisfy, whether it is being admitted or has already been committed.
 func VerifyChannelDefinitions(codecs map[llotypes.ReportFormat]ReportCodec, channelDefs llotypes.ChannelDefinitions) error {
-	return verifyChannelDefinitions(codecs, channelDefs, nil)
+	return verifyChannelDefinitions(codecs, channelDefs, nil, nil)
+}
+
+// VerifyChannelDefinitionsWithCache is VerifyChannelDefinitions, memoizing the
+// per-definition checks in cache. A nil cache memoizes nothing.
+func VerifyChannelDefinitionsWithCache(codecs map[llotypes.ReportFormat]ReportCodec, channelDefs llotypes.ChannelDefinitions, cache *ChannelAnalysisCache) error {
+	return verifyChannelDefinitions(codecs, channelDefs, nil, cache)
 }
 
 // VerifyChannelDefinitionsForAdmission additionally applies the admission-only
@@ -34,7 +40,14 @@ func VerifyChannelDefinitions(codecs map[llotypes.ReportFormat]ReportCodec, chan
 // -- not a consensus-critical one, so oracles running different versions of the
 // admission-only checks disagree only about what they vote for.
 func VerifyChannelDefinitionsForAdmission(codecs map[llotypes.ReportFormat]ReportCodec, channelDefs llotypes.ChannelDefinitions, admitting map[llotypes.ChannelID]struct{}) error {
-	return verifyChannelDefinitions(codecs, channelDefs, admitting)
+	return verifyChannelDefinitions(codecs, channelDefs, admitting, nil)
+}
+
+// VerifyChannelDefinitionsForAdmissionWithCache is
+// VerifyChannelDefinitionsForAdmission, memoizing the per-definition checks in
+// cache. A nil cache memoizes nothing.
+func VerifyChannelDefinitionsForAdmissionWithCache(codecs map[llotypes.ReportFormat]ReportCodec, channelDefs llotypes.ChannelDefinitions, admitting map[llotypes.ChannelID]struct{}, cache *ChannelAnalysisCache) error {
+	return verifyChannelDefinitions(codecs, channelDefs, admitting, cache)
 }
 
 // ChangedChannelIDs returns the IDs of the channels desired holds that current
@@ -100,7 +113,13 @@ func (f admissionFinding) appliesTo(admitting map[llotypes.ChannelID]struct{}) b
 // get. The returned error carries the whole-set baseline findings, which
 // implicate no particular channel and so cannot be skipped selectively.
 func UnverifiableChannelIDs(codecs map[llotypes.ReportFormat]ReportCodec, channelDefs llotypes.ChannelDefinitions) (map[llotypes.ChannelID]struct{}, error) {
-	res := analyzeChannelDefinitions(codecs, channelDefs)
+	return UnverifiableChannelIDsWithCache(codecs, channelDefs, nil)
+}
+
+// UnverifiableChannelIDsWithCache is UnverifiableChannelIDs, memoizing the
+// per-definition checks in cache. A nil cache memoizes nothing.
+func UnverifiableChannelIDsWithCache(codecs map[llotypes.ReportFormat]ReportCodec, channelDefs llotypes.ChannelDefinitions, cache *ChannelAnalysisCache) (map[llotypes.ChannelID]struct{}, error) {
+	res := analyzeChannelDefinitions(codecs, channelDefs, cache)
 	ids := make(map[llotypes.ChannelID]struct{}, len(res.channelErrs))
 	for channelID := range res.channelErrs {
 		ids[channelID] = struct{}{}
@@ -168,11 +187,16 @@ func (r verifyResult) err(admitting map[llotypes.ChannelID]struct{}) error {
 	return nil
 }
 
-func verifyChannelDefinitions(codecs map[llotypes.ReportFormat]ReportCodec, channelDefs llotypes.ChannelDefinitions, admitting map[llotypes.ChannelID]struct{}) error {
-	return analyzeChannelDefinitions(codecs, channelDefs).err(admitting)
+func verifyChannelDefinitions(codecs map[llotypes.ReportFormat]ReportCodec, channelDefs llotypes.ChannelDefinitions, admitting map[llotypes.ChannelID]struct{}, cache *ChannelAnalysisCache) error {
+	return analyzeChannelDefinitions(codecs, channelDefs, cache).err(admitting)
 }
 
-func analyzeChannelDefinitions(codecs map[llotypes.ReportFormat]ReportCodec, channelDefs llotypes.ChannelDefinitions) (res verifyResult) {
+// analyzeChannelDefinitions applies every check to the set. The checks that
+// need nothing but a single definition are taken from cache when it already
+// holds them for that exact definition (see ChannelAnalysisCache); everything
+// that involves more than one definition is computed here on every call, so
+// that a finding never depends on what was analyzed before.
+func analyzeChannelDefinitions(codecs map[llotypes.ReportFormat]ReportCodec, channelDefs llotypes.ChannelDefinitions, cache *ChannelAnalysisCache) (res verifyResult) {
 	res.channelErrs = make(map[llotypes.ChannelID]error)
 
 	if len(channelDefs) > MaxOutcomeChannelDefinitionsLength {
@@ -272,12 +296,13 @@ func analyzeChannelDefinitions(codecs map[llotypes.ReportFormat]ReportCodec, cha
 				}
 			}
 		}
+		facts := channelFactsFor(cache, codecs, channelID, cd)
+
 		if HasCalculatedStreams(cd) {
-			ids, err := CalculatedStreamIDs(nil, cd, channelID)
-			if err != nil {
-				admit(fmt.Errorf("invalid ChannelDefinition with ID %d: %w", channelID, err), channelID)
+			if facts.calculatedErr != nil {
+				admit(fmt.Errorf("invalid ChannelDefinition with ID %d: %w", channelID, facts.calculatedErr), channelID)
 			}
-			for _, streamID := range ids {
+			for _, streamID := range facts.calculatedIDs {
 				if owner, ok := calculatedBy[streamID]; ok {
 					admit(fmt.Errorf("ChannelDefinition with ID %d declares calculated stream %d already declared by channel %d", channelID, streamID, owner), channelID, owner)
 					continue
@@ -285,30 +310,21 @@ func analyzeChannelDefinitions(codecs map[llotypes.ReportFormat]ReportCodec, cha
 				calculatedBy[streamID] = channelID
 			}
 		}
-		var verifyErr error
-		if codec, ok := codecs[cd.ReportFormat]; ok {
-			verifyErr = codec.Verify(cd)
-			if verifyErr != nil {
-				base(fmt.Errorf("invalid ChannelDefinition with ID %d: %w", channelID, verifyErr), channelID)
-			}
-			if av, ok := codec.(AdmissionVerifier); ok && verifyErr == nil {
-				if err := av.VerifyForAdmission(cd); err != nil {
-					admit(fmt.Errorf("invalid ChannelDefinition with ID %d: %w", channelID, err), channelID)
-				}
-			}
+		if facts.verifyErr != nil {
+			base(fmt.Errorf("invalid ChannelDefinition with ID %d: %w", channelID, facts.verifyErr), channelID)
 		}
-		if feedIDer, ok := codecs[cd.ReportFormat].(FeedIDer); ok && verifyErr == nil {
-			feedID, hasFeedID, err := feedIDer.FeedID(cd)
-			switch {
-			case err != nil:
-				admit(fmt.Errorf("invalid ChannelDefinition with ID %d: failed to resolve feed ID: %w", channelID, err), channelID)
-			case !hasFeedID:
-			default:
-				if owner, ok := feedIDBy[feedID]; ok {
-					admit(fmt.Errorf("ChannelDefinition with ID %d has feed ID 0x%x already used by channel %d", channelID, feedID, owner), channelID, owner)
-				} else {
-					feedIDBy[feedID] = channelID
-				}
+		if facts.admissionErr != nil {
+			admit(fmt.Errorf("invalid ChannelDefinition with ID %d: %w", channelID, facts.admissionErr), channelID)
+		}
+		switch {
+		case facts.feedIDErr != nil:
+			admit(fmt.Errorf("invalid ChannelDefinition with ID %d: failed to resolve feed ID: %w", channelID, facts.feedIDErr), channelID)
+		case !facts.hasFeedID:
+		default:
+			if owner, ok := feedIDBy[facts.feedID]; ok {
+				admit(fmt.Errorf("ChannelDefinition with ID %d has feed ID 0x%x already used by channel %d", channelID, facts.feedID, owner), channelID, owner)
+			} else {
+				feedIDBy[facts.feedID] = channelID
 			}
 		}
 		if cd.ReportFormat == llotypes.ReportFormatHistoryBackfill {
@@ -318,9 +334,6 @@ func analyzeChannelDefinitions(codecs map[llotypes.ReportFormat]ReportCodec, cha
 			if err := ValidateHistoryBackfillTarget(cd, channelDefs); err != nil {
 				admit(fmt.Errorf("invalid history backfill channel %d: %w", channelID, err), channelID)
 			}
-		}
-		if verifyErr != nil {
-			continue
 		}
 	}
 

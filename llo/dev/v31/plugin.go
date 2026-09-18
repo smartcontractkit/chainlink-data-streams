@@ -51,6 +51,15 @@ type Plugin struct {
 	// could swap decoded opts out from under it.
 	ChannelCache *protocol.ChannelCache
 
+	// ChannelAnalysisCache memoizes the per-definition verification checks, whose
+	// cost is dominated by decoding channel opts. Verification runs three times
+	// per round over largely identical sets: the committed definitions and the
+	// desired ones in Observation, and the set each update-carrying observation
+	// advocates in ValidateObservation. One cache is shared by all of them, so
+	// the parallel ValidateObservation calls hit what Observation already
+	// decoded. May be nil, in which case nothing is memoized.
+	ChannelAnalysisCache *protocol.ChannelAnalysisCache
+
 	// Optional telemetry sinks; best-effort, non-blocking.
 	OutcomeTelemetryCh chan<- *protocol.LLOOutcomeTelemetry
 	ReportTelemetryCh  chan<- *protocol.LLOReportTelemetry
@@ -114,7 +123,10 @@ func (p *Plugin) Observation(_ context.Context, seqNr uint64, _ ocrtypes.Attribu
 		// but a version skew can make it reachable.
 		// Report the finding and carry on, which is the same treatment the
 		// admission-only findings get in voteOnChannels.
-		if badChannels, verifyErr := protocol.UnverifiableChannelIDs(p.ReportCodecs, state.channelDefinitions); len(badChannels) > 0 || verifyErr != nil {
+		// The committed set is the authority on which channels exist, so this is
+		// where entries for channels that are gone are dropped.
+		p.ChannelAnalysisCache.Prune(state.channelDefinitions)
+		if badChannels, verifyErr := protocol.UnverifiableChannelIDsWithCache(p.ReportCodecs, state.channelDefinitions, p.ChannelAnalysisCache); len(badChannels) > 0 || verifyErr != nil {
 			p.Logger.Errorw("Committed channel definitions fail baseline verification on this build", "stage", "Observation", "seqNr", seqNr, "channelIDs", sortedChannelIDSet(badChannels), "err", verifyErr)
 		}
 
@@ -252,7 +264,7 @@ func (p *Plugin) voteOnChannels(obs *Observation, state *kvState) {
 	// admission-only checks; the ones already committed are not, or a
 	// grandfathered channel would freeze channel voting entirely.
 	admitting := protocol.ChangedChannelIDs(state.channelDefinitions, expectedChannelDefs)
-	if err := protocol.VerifyChannelDefinitionsForAdmission(p.ReportCodecs, expectedChannelDefs, admitting); err != nil {
+	if err := protocol.VerifyChannelDefinitionsForAdmissionWithCache(p.ReportCodecs, expectedChannelDefs, admitting, p.ChannelAnalysisCache); err != nil {
 		// Don't halt on an invalid channel-definitions file; just don't vote.
 		p.Logger.Errorw("ChannelDefinitionCache.Definitions is invalid", "err", err)
 		return
@@ -346,7 +358,7 @@ func (p *Plugin) ValidateObservation(ctx context.Context, seqNr uint64, _ ocrtyp
 	// updates from a staler one, which costs update-voting liveness only. An
 	// observation that votes no update has nothing to verify here, so rounds
 	// themselves are unaffected.
-	if err := protocol.VerifyChannelDefinitions(p.ReportCodecs, defsForVerify); err != nil {
+	if err := protocol.VerifyChannelDefinitionsWithCache(p.ReportCodecs, defsForVerify, p.ChannelAnalysisCache); err != nil {
 		return fmt.Errorf("UpdateChannelDefinitions is invalid: %w", err)
 	}
 
