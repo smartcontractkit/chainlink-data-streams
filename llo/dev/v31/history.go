@@ -366,7 +366,11 @@ func (s *historyStore) Flush(w ocr3_1types.KeyValueStateReadWriter) error {
 	// it. A DON that has never used history writes no history keys at all, and
 	// stamping a version onto an otherwise untouched state would be the only
 	// exception to that.
-	if s.layoutReset && (indexChanged || len(s.index) > 0) {
+	//
+	// The index covers that condition on its own: a reset that abandoned any
+	// stored pair set indexChanged up front, and the only other way this round
+	// touches history is a pair it warmed, which adds it to the index.
+	if s.layoutReset && indexChanged {
 		if err := writeHistoryLayoutVersion(w); err != nil {
 			return fmt.Errorf("write history layout version: %w", err)
 		}
