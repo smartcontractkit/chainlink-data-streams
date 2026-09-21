@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"math"
-	reflect "reflect"
+	"reflect"
 	"testing"
 
 	"github.com/smartcontractkit/chainlink-data-streams/llo/protocol"
@@ -328,7 +328,7 @@ func Test_JSONCodec(t *testing.T) {
 
 			_, err := cdc.Pack(digest, seqNr, report, sigs)
 			require.Error(t, err)
-			require.Contains(t, err.Error(), "json: error calling MarshalJSON for type json.RawMessage")
+			require.Contains(t, err.Error(), "json: error calling MarshalJSON for type jsontext.Value")
 		})
 		t.Run("report is valid JSON", func(t *testing.T) {
 			digest := types.ConfigDigest([32]byte{1, 2, 3})
