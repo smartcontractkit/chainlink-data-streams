@@ -70,8 +70,9 @@ const (
 	MaxDecimalCoefficientBits = 192
 	// MaxStreamValueNesting bounds how deeply a stream value may nest another.
 	// Only TimestampedStreamValue nests, and only one level is meaningful, so
-	// this exists to keep the bounds check over untrusted bytes from recursing
-	// on a value crafted to nest.
+	// this exists to stop untrusted bytes crafted to nest from driving
+	// unbounded recursion. Enforced during unmarshal, which is where the
+	// recursion lives (see unmarshalProtoStreamValue).
 	MaxStreamValueNesting = 4
 
 	// MaxOutcomeChannelDefinitionsLength is the maximum number of channels that

@@ -39,7 +39,7 @@ func FuzzUnmarshalObservedProtoStreamValue(f *testing.F) {
 		}
 		// An accepted value must satisfy the bounds the decoder claims to
 		// enforce, at every nesting level.
-		if err := checkObservedStreamValue(sv, 0); err != nil {
+		if err := checkObservedStreamValue(sv); err != nil {
 			t.Fatalf("accepted a value that violates its own bounds: %v", err)
 		}
 	})

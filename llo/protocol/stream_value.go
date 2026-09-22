@@ -65,7 +65,7 @@ func UnmarshalObservedProtoStreamValue(enc *LLOStreamValue) (StreamValue, error)
 	if err != nil {
 		return nil, err
 	}
-	if err := checkObservedStreamValue(sv, 0); err != nil {
+	if err := checkObservedStreamValue(sv); err != nil {
 		return nil, err
 	}
 	return sv, nil
@@ -73,10 +73,11 @@ func UnmarshalObservedProtoStreamValue(enc *LLOStreamValue) (StreamValue, error)
 
 // checkObservedStreamValue applies the observation-only bounds to every decimal
 // a stream value carries, at any nesting depth.
-func checkObservedStreamValue(sv StreamValue, depth int) error {
-	if depth > MaxStreamValueNesting {
-		return fmt.Errorf("%w: got more than %d levels", ErrStreamValueNestingTooDeep, MaxStreamValueNesting)
-	}
+//
+// Nesting itself is bounded during unmarshal, not here: the recursion that has
+// to be bounded is the one inside unmarshalling, so a value deep enough to
+// matter never reaches this function.
+func checkObservedStreamValue(sv StreamValue) error {
 	switch v := sv.(type) {
 	case nil:
 		return nil
@@ -96,7 +97,7 @@ func checkObservedStreamValue(sv StreamValue, depth int) error {
 		if v == nil {
 			return nil
 		}
-		return checkObservedStreamValue(v.StreamValue, depth+1)
+		return checkObservedStreamValue(v.StreamValue)
 	default:
 		// An unknown type carries no decimal this function knows how to reach.
 		// UnmarshalProtoStreamValue rejects types it does not recognize, so this
@@ -152,25 +153,49 @@ func unmarshalTextDecimal(d *decimal.Decimal, data []byte) error {
 	return nil
 }
 
-func UnmarshalProtoStreamValue(enc *LLOStreamValue) (sv StreamValue, err error) {
+func UnmarshalProtoStreamValue(enc *LLOStreamValue) (StreamValue, error) {
+	return unmarshalProtoStreamValue(enc, 0)
+}
+
+// unmarshalProtoStreamValue decodes a stream value, refusing to descend past
+// MaxStreamValueNesting.
+//
+// The bound has to live here rather than in a check over the decoded value:
+// only TimestampedStreamValue nests, and it nests by calling back into this
+// function from its UnmarshalBinary, so the recursion a crafted value drives is
+// the unmarshalling itself. Each level also re-slices the nested Value bytes,
+// making the work quadratic in the payload, so an unbounded descent burns
+// minutes of CPU on every honest node before any post-hoc check could run.
+func unmarshalProtoStreamValue(enc *LLOStreamValue, depth int) (StreamValue, error) {
 	if enc == nil {
 		// Shouldn't ever happen except from byzantine node, but we must not panic
 		return nil, ErrNilStreamValue
 	}
+	if depth > MaxStreamValueNesting {
+		return nil, fmt.Errorf("%w: got more than %d levels", ErrStreamValueNestingTooDeep, MaxStreamValueNesting)
+	}
 	switch enc.Type {
 	case LLOStreamValue_Quote:
-		sv = new(Quote)
+		sv := new(Quote)
+		if err := sv.UnmarshalBinary(enc.Value); err != nil {
+			return nil, err
+		}
+		return sv, nil
 	case LLOStreamValue_Decimal:
-		sv = new(Decimal)
+		sv := new(Decimal)
+		if err := sv.UnmarshalBinary(enc.Value); err != nil {
+			return nil, err
+		}
+		return sv, nil
 	case LLOStreamValue_TimestampedStreamValue:
-		sv = new(TimestampedStreamValue)
+		sv := new(TimestampedStreamValue)
+		if err := sv.unmarshalBinary(enc.Value, depth+1); err != nil {
+			return nil, err
+		}
+		return sv, nil
 	default:
 		return nil, fmt.Errorf("cannot unmarshal protobuf stream value; unknown StreamValueType %d", enc.Type)
 	}
-	if err := sv.UnmarshalBinary(enc.Value); err != nil {
-		return nil, err
-	}
-	return sv, nil
 }
 
 func NewTypedTextStreamValue(sv StreamValue) (TypedTextStreamValue, error) {
@@ -193,25 +218,41 @@ type TypedTextStreamValue struct {
 }
 
 func UnmarshalTypedTextStreamValue(enc *TypedTextStreamValue) (StreamValue, error) {
+	return unmarshalTypedTextStreamValue(enc, 0)
+}
+
+// unmarshalTypedTextStreamValue is the text counterpart of
+// unmarshalProtoStreamValue and bounds the same recursion.
+func unmarshalTypedTextStreamValue(enc *TypedTextStreamValue, depth int) (StreamValue, error) {
 	if enc == nil {
 		// Shouldn't ever happen except from byzantine node, but we must not panic
 		return nil, ErrNilStreamValue
 	}
-	var sv StreamValue
+	if depth > MaxStreamValueNesting {
+		return nil, fmt.Errorf("%w: got more than %d levels", ErrStreamValueNestingTooDeep, MaxStreamValueNesting)
+	}
 	switch enc.Type {
 	case LLOStreamValue_Decimal:
-		sv = new(Decimal)
+		sv := new(Decimal)
+		if err := sv.UnmarshalText([]byte(enc.SerializedStreamValue)); err != nil {
+			return nil, err
+		}
+		return sv, nil
 	case LLOStreamValue_Quote:
-		sv = new(Quote)
+		sv := new(Quote)
+		if err := sv.UnmarshalText([]byte(enc.SerializedStreamValue)); err != nil {
+			return nil, err
+		}
+		return sv, nil
 	case LLOStreamValue_TimestampedStreamValue:
-		sv = new(TimestampedStreamValue)
+		sv := new(TimestampedStreamValue)
+		if err := sv.unmarshalText([]byte(enc.SerializedStreamValue), depth+1); err != nil {
+			return nil, err
+		}
+		return sv, nil
 	default:
 		return nil, fmt.Errorf("unknown StreamValueType %d", enc.Type)
 	}
-	if err := (sv).UnmarshalText([]byte(enc.SerializedStreamValue)); err != nil {
-		return nil, err
-	}
-	return sv, nil
 }
 
 func Decode(value StreamValue, data []byte) error {
@@ -390,12 +431,18 @@ func (v *TimestampedStreamValue) MarshalBinary() ([]byte, error) {
 }
 
 func (v *TimestampedStreamValue) UnmarshalBinary(data []byte) error {
+	return v.unmarshalBinary(data, 0)
+}
+
+// unmarshalBinary carries the nesting depth reached so far. See
+// unmarshalProtoStreamValue.
+func (v *TimestampedStreamValue) unmarshalBinary(data []byte, depth int) error {
 	t := new(LLOTimestampedStreamValue)
 	if err := proto.Unmarshal(data, t); err != nil {
 		return err
 	}
 	v.ObservedAtNanoseconds = t.ObservedAtNanoseconds
-	sv, err := UnmarshalProtoStreamValue(t.StreamValue)
+	sv, err := unmarshalProtoStreamValue(t.StreamValue, depth)
 	if err != nil {
 		return err
 	}
@@ -425,6 +472,12 @@ func (v *TimestampedStreamValue) MarshalText() ([]byte, error) {
 var timestampedStreamValueRegex = regexp.MustCompile(`^TSV\{ObservedAtNanoseconds: ([0-9]+), StreamValue: (.+)\}$`)
 
 func (v *TimestampedStreamValue) UnmarshalText(data []byte) error {
+	return v.unmarshalText(data, 0)
+}
+
+// unmarshalText carries the nesting depth reached so far. See
+// unmarshalProtoStreamValue.
+func (v *TimestampedStreamValue) unmarshalText(data []byte, depth int) error {
 	if v == nil {
 		return ErrNilStreamValue
 	}
@@ -445,7 +498,7 @@ func (v *TimestampedStreamValue) UnmarshalText(data []byte) error {
 		return fmt.Errorf("failed to unmarshal text stream value: %w", err)
 	}
 
-	sv, err := UnmarshalTypedTextStreamValue(tSv)
+	sv, err := unmarshalTypedTextStreamValue(tSv, depth)
 	if err != nil {
 		return fmt.Errorf("failed to unmarshal text stream value: %w", err)
 	}

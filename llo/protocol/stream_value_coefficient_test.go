@@ -68,12 +68,34 @@ func Test_UnmarshalObservedProtoStreamValue_CoefficientBound(t *testing.T) {
 		require.NoError(t, err)
 	})
 
-	t.Run("nesting is bounded", func(t *testing.T) {
-		var sv StreamValue = ToDecimal(decimal.NewFromInt(1))
-		for range MaxStreamValueNesting + 1 {
-			sv = &TimestampedStreamValue{ObservedAtNanoseconds: 1, StreamValue: sv}
+	t.Run("nesting is bounded during unmarshal", func(t *testing.T) {
+		nested := func(levels int) *LLOStreamValue {
+			var sv StreamValue = ToDecimal(decimal.NewFromInt(1))
+			for range levels {
+				sv = &TimestampedStreamValue{ObservedAtNanoseconds: 1, StreamValue: sv}
+			}
+			return protoOf(t, sv)
 		}
-		require.ErrorIs(t, checkObservedStreamValue(sv, 0), ErrStreamValueNestingTooDeep)
+
+		// The bound is enforced by unmarshal itself, not by a check over the
+		// decoded value: the recursion is inside unmarshalling, and each level
+		// re-slices the nested bytes, so a post-hoc check runs too late.
+		_, err := UnmarshalProtoStreamValue(nested(MaxStreamValueNesting + 1))
+		require.ErrorIs(t, err, ErrStreamValueNestingTooDeep)
+		_, err = UnmarshalObservedProtoStreamValue(nested(MaxStreamValueNesting + 1))
+		require.ErrorIs(t, err, ErrStreamValueNestingTooDeep)
+		_, err = UnmarshalProtoStreamValue(nested(MaxStreamValueNesting))
+		require.NoError(t, err)
+
+		// Same recursion, text encoding.
+		tsv := &TimestampedStreamValue{ObservedAtNanoseconds: 1, StreamValue: ToDecimal(decimal.NewFromInt(1))}
+		for range MaxStreamValueNesting {
+			tsv = &TimestampedStreamValue{ObservedAtNanoseconds: 1, StreamValue: tsv}
+		}
+		ttsv, err := NewTypedTextStreamValue(tsv)
+		require.NoError(t, err)
+		_, err = UnmarshalTypedTextStreamValue(&ttsv)
+		require.ErrorIs(t, err, ErrStreamValueNestingTooDeep)
 	})
 
 	t.Run("stored-state decode is deliberately unchecked", func(t *testing.T) {
