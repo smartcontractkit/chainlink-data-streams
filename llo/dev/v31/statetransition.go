@@ -658,7 +658,8 @@ func (p *Plugin) flushKV(
 	// round can advance validAfter faithfully (see prevReportable).
 	reportable := make(map[llotypes.ChannelID]bool, len(out.ChannelDefinitions))
 	for id := range out.ChannelDefinitions {
-		reportable[id] = out.isReportable(id, p.DefaultMinReportIntervalNanoseconds, p.F, prev.opts, p.Logger)
+		// nill tally, Reports() will handle the logging
+		reportable[id] = out.isReportable(id, p.DefaultMinReportIntervalNanoseconds, p.F, prev.opts, nil)
 	}
 
 	// Stream history: write modified windows, delete pairs no live channel

@@ -63,7 +63,9 @@ func (p *Plugin) Reports(ctx context.Context, seqNr uint64, rawPrecursor ocr3_1t
 		})
 	}
 
-	for _, cid := range out.reportableChannels(p.DefaultMinReportIntervalNanoseconds, p.F, channelOpts, p.Logger) {
+	unreportable := &unreportableTally{}
+	defer unreportable.log(p.Logger, "Report", seqNr)
+	for _, cid := range out.reportableChannels(p.DefaultMinReportIntervalNanoseconds, p.F, channelOpts, unreportable) {
 		cd := out.ChannelDefinitions[cid]
 
 		if cd.ReportFormat == llotypes.ReportFormatHistoryBackfill {
@@ -178,16 +180,73 @@ func (p *Plugin) Reports(ctx context.Context, seqNr uint64, rawPrecursor ocr3_1t
 	return rwis, nil
 }
 
+// maxUnreportableSamples bounds the channel IDs carried per reason, so one
+// summary line stays readable on a DON with hundreds of channels.
+const maxUnreportableSamples = 10
+
+// unreportableTally aggregates the reasons a round found channels unreportable.
+// A nil tally records nothing. flushKV passes one: it runs the same predicate
+// over the same precursor to persist reportedLastRound, so letting it log too
+// would only report every reason twice per round.
+type unreportableTally struct {
+	reasons map[string]*unreportableReason
+}
+
+// unreportableReason is one reason's aggregate: how many channels hit it, a
+// bounded sample of which, and the structured fields of the first occurrence as
+// a worked example.
+type unreportableReason struct {
+	count    int
+	channels []llotypes.ChannelID
+	detail   []any
+}
+
+func (t *unreportableTally) note(reason string, channelID llotypes.ChannelID, detail ...any) {
+	if t == nil {
+		return
+	}
+	if t.reasons == nil {
+		t.reasons = map[string]*unreportableReason{}
+	}
+	r := t.reasons[reason]
+	if r == nil {
+		r = &unreportableReason{detail: detail}
+		t.reasons[reason] = r
+	}
+	r.count++
+	if len(r.channels) < maxUnreportableSamples {
+		r.channels = append(r.channels, channelID)
+	}
+}
+
+// log emits one warning per distinct reason, in a stable order.
+func (t *unreportableTally) log(lggr logger.Logger, stage string, seqNr uint64) {
+	if t == nil || len(t.reasons) == 0 {
+		return
+	}
+	reasons := make([]string, 0, len(t.reasons))
+	for reason := range t.reasons {
+		reasons = append(reasons, reason)
+	}
+	sort.Strings(reasons)
+	for _, reason := range reasons {
+		r := t.reasons[reason]
+		kv := []any{"stage", stage, "seqNr", seqNr, "channels", r.count, "sampleChannelIDs", r.channels}
+		kv = append(kv, r.detail...)
+		lggr.Warnw("IsReportable=false; "+reason, kv...)
+	}
+}
+
 // formatIsEncodable reports whether enough oracles advertised a report codec
 // for format that a report encoded with it would actually be certified.
 //
 // The tally is read from the precursor, not from p.ReportCodecs, so this stays
 // a pure function of replicated state. An oracle that cannot encode still
 // computes reportable=true when enough peers can.
-func (o precursor) formatIsEncodable(format llotypes.ReportFormat, f int, channelID llotypes.ChannelID, lggr logger.Logger) bool {
+func (o precursor) formatIsEncodable(format llotypes.ReportFormat, f int, channelID llotypes.ChannelID, tally *unreportableTally) bool {
 	if supporters := o.SupportByFormat[format]; supporters < 2*f+1 {
-		lggr.Warnw("IsReportable=false; too few oracles advertise a report codec for this format",
-			"channelID", channelID, "reportFormat", format, "supporters", supporters, "required", 2*f+1)
+		tally.note("too few oracles advertise a report codec for this format", channelID,
+			"reportFormat", format, "supporters", supporters, "required", 2*f+1)
 		return false
 	}
 	return true
@@ -211,10 +270,10 @@ func saturatingAdd(a, b uint64) uint64 {
 	return math.MaxUint64
 }
 
-func (o precursor) reportableChannels(minReportInterval uint64, f int, optsCache *protocol.OptsCache, lggr logger.Logger) []llotypes.ChannelID {
+func (o precursor) reportableChannels(minReportInterval uint64, f int, optsCache *protocol.OptsCache, tally *unreportableTally) []llotypes.ChannelID {
 	reportable := make([]llotypes.ChannelID, 0, len(o.ChannelDefinitions))
 	for channelID := range o.ChannelDefinitions {
-		if o.isReportable(channelID, minReportInterval, f, optsCache, lggr) {
+		if o.isReportable(channelID, minReportInterval, f, optsCache, tally) {
 			reportable = append(reportable, channelID)
 		}
 	}
@@ -222,7 +281,7 @@ func (o precursor) reportableChannels(minReportInterval uint64, f int, optsCache
 	return reportable
 }
 
-func (o precursor) isReportable(channelID llotypes.ChannelID, minReportInterval uint64, f int, optsCache *protocol.OptsCache, lggr logger.Logger) bool {
+func (o precursor) isReportable(channelID llotypes.ChannelID, minReportInterval uint64, f int, optsCache *protocol.OptsCache, tally *unreportableTally) bool {
 	if o.LifeCycleStage == protocol.LifeCycleStageRetired {
 		return false
 	}
@@ -238,7 +297,7 @@ func (o precursor) isReportable(channelID llotypes.ChannelID, minReportInterval 
 		// Backfill reports are encoded with the target channel's codec, so the
 		// target's format is the one that must be encodable DON-wide. Selection
 		// above already established the target exists.
-		return o.formatIsEncodable(o.ChannelDefinitions[opts.TargetChannelID].ReportFormat, f, channelID, lggr)
+		return o.formatIsEncodable(o.ChannelDefinitions[opts.TargetChannelID].ReportFormat, f, channelID, tally)
 	}
 	// When DisableNilStreamValues is set, every stream must have a (non-nil)
 	// aggregate value for the channel to be reportable.
@@ -261,7 +320,7 @@ func (o precursor) isReportable(channelID llotypes.ChannelID, minReportInterval 
 	// node-dependent. Those failure modes remain outside this predicate.
 	streams, err := protocol.EffectiveStreams(optsCache, cd, channelID)
 	if err != nil {
-		lggr.Warnw("IsReportable=false; cannot derive effective streams", "channelID", channelID, "err", err)
+		tally.note("cannot derive effective streams", channelID, "err", err)
 		return false
 	}
 	// Calculated streams are derived state, and unlike observed streams a
@@ -274,11 +333,11 @@ func (o precursor) isReportable(channelID llotypes.ChannelID, minReportInterval 
 			continue
 		}
 		if o.StreamAggregates[strm.StreamID][strm.Aggregator] == nil {
-			lggr.Warnw("IsReportable=false; nil calculated stream value", "channelID", channelID, "streamID", strm.StreamID)
+			tally.note("nil calculated stream value", channelID, "streamID", strm.StreamID)
 			return false
 		}
 	}
-	if !o.formatIsEncodable(cd.ReportFormat, f, channelID, lggr) {
+	if !o.formatIsEncodable(cd.ReportFormat, f, channelID, tally) {
 		return false
 	}
 	validAfter, ok := o.ValidAfterNanoseconds[channelID]

@@ -902,12 +902,12 @@ func Test_IsReportable_MinReportIntervalDoesNotOverflow(t *testing.T) {
 	optsCache := gen.Opts()
 
 	// One nanosecond past validAfter, so only the interval can hold it back.
-	require.True(t, out.isReportable(1, 1, 1, optsCache, logger.Test(t)),
+	require.True(t, out.isReportable(1, 1, 1, optsCache, nil),
 		"a one nanosecond interval must not gate a report one nanosecond late")
 
 	// An interval that overflows the sum must gate, not wrap into passing.
 	for _, interval := range []uint64{math.MaxUint64, math.MaxUint64 - validAfter + 1} {
-		require.False(t, out.isReportable(1, interval, 1, optsCache, logger.Test(t)),
+		require.False(t, out.isReportable(1, interval, 1, optsCache, nil),
 			"interval %d must gate the report, not wrap", interval)
 	}
 
