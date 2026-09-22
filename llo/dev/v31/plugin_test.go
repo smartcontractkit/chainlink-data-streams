@@ -1286,6 +1286,60 @@ func Test_StateTransition_TalliesReportFormatSupport(t *testing.T) {
 	require.Equal(t, 2, prec.SupportByFormat[llotypes.ReportFormatJSON])
 }
 
+func Test_StateTransition_ObservationTimestampDoesNotRegress(t *testing.T) {
+	ctx := tests.Context(t)
+	p := testPlugin(t)
+	kv := newMemKV()
+
+	_, err := p.StateTransition(ctx, 1, ocrtypes.AttributedQuery{}, []ocrtypes.AttributedObservation{ao(0, nil), ao(1, nil), ao(2, nil)}, kv, testBlobs)
+	require.NoError(t, err)
+
+	obsAt := func(ts uint64) []byte {
+		return mustEncodeObs(t, Observation{UnixTimestampNanoseconds: ts})
+	}
+	agreedAt := func(seqNr uint64, aos ...ocrtypes.AttributedObservation) uint64 {
+		precBytes, err := p.StateTransition(ctx, seqNr, ocrtypes.AttributedQuery{}, aos, kv, testBlobs)
+		require.NoError(t, err)
+		prec, err := decodePrecursor(precBytes)
+		require.NoError(t, err)
+		return prec.ObservationTimestampNanoseconds
+	}
+
+	require.Equal(t, uint64(1_000), agreedAt(2, ao(0, obsAt(1_000)), ao(1, obsAt(1_000)), ao(2, obsAt(1_000))))
+
+	// Node clocks disagree and the quorum that carried the higher stamp is gone:
+	// hold the previous timestamp rather than dating a report before a watermark
+	// already in use.
+	require.Equal(t, uint64(1_000), agreedAt(3, ao(0, obsAt(500)), ao(1, obsAt(500)), ao(2, obsAt(500))))
+
+	// Forward again once the clock passes the floor.
+	require.Equal(t, uint64(2_000), agreedAt(4, ao(0, obsAt(2_000)), ao(1, obsAt(2_000)), ao(2, obsAt(2_000))))
+}
+
+func Test_Observation_StampsTheRoundNotTheSnapshot(t *testing.T) {
+	ctx := tests.Context(t)
+	p := testPlugin(t)
+	kv := newMemKV()
+	require.NoError(t, writeChannelState(kv, 1, llotypes.ChannelDefinitions{
+		1: {ReportFormat: llotypes.ReportFormatJSON, Streams: []llotypes.Stream{{StreamID: 100, Aggregator: llotypes.AggregatorMedian}}},
+	}))
+	p.ChannelDefinitionCache = &mockChannelDefinitionCache{}
+	p.ShouldRetireCache = &mockShouldRetireCache{}
+	bc := newFakeBroadcaster()
+	attachPump(t, p, &recordingDataSource{}, bc)
+
+	// Whether or not the pump has a snapshot ready, the stamp is the round time.
+	for _, round := range []uint64{2, 3} {
+		before := uint64(time.Now().UnixNano()) //nolint:gosec // G115 test clock is positive
+		obsBytes, err := p.Observation(ctx, round, ocrtypes.AttributedQuery{}, kv, nil)
+		require.NoError(t, err)
+		obs, err := decodeObservation(ctx, obsBytes, bc, nil)
+		require.NoError(t, err)
+		require.GreaterOrEqual(t, obs.UnixTimestampNanoseconds, before)
+		require.Eventually(t, func() bool { return p.pump.Cycles() >= 1 }, tests.WaitTimeout(t), 10*time.Millisecond)
+	}
+}
+
 // Codec support accumulates across rounds, so f oracles omitting their
 // advertisement cannot drop a format below the 2f+1 threshold.
 //

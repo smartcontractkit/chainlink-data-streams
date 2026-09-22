@@ -101,7 +101,7 @@ func (p *Plugin) StateTransition(ctx context.Context, seqNr uint64, _ ocrtypes.A
 	pending := cloneChannelDefinitions(prev.channelDefinitions)
 
 	out := precursor{
-		ObservationTimestampNanoseconds: medianTimestamp(tally.timestampsNanoseconds),
+		ObservationTimestampNanoseconds: p.agreedObservationTimestamp(tally.timestampsNanoseconds, prev.observationTimestampNs, seqNr),
 		ChannelDefinitions:              effective,
 		ChannelStateSeqNr:               prev.channelStateSeqNr,
 		ValidAfterNanoseconds:           map[llotypes.ChannelID]uint64{},
@@ -694,6 +694,23 @@ func channelDefinitionsChanged(prev, next llotypes.ChannelDefinitions) bool {
 // the value the v30 code derives from previousOutcome.IsReportable.
 func prevReportable(prev *kvState, channelID llotypes.ChannelID) bool {
 	return prev.reportedLastRound[channelID]
+}
+
+// agreedObservationTimestamp is the round observation timestamp, the median of
+// the observed timestamps, held to the previous round's value as a floor.
+//
+// Monotonically increasing, validAfter advances to it, reportability requires the
+// next round to exceed that watermark and appendHistory only records a value
+// strictly newer than the newest stored one. A regression leaves every channel
+// unreportable and silently drops history appends until the clock catches back up.
+func (p *Plugin) agreedObservationTimestamp(timestampsNanoseconds []uint64, prevObservationTimestampNs uint64, seqNr uint64) uint64 {
+	median := medianTimestamp(timestampsNanoseconds)
+	if median < prevObservationTimestampNs {
+		p.Logger.Warnw("Observation timestamp median regressed; holding the previous round's timestamp",
+			"seqNr", seqNr, "median", median, "prev", prevObservationTimestampNs, "contributors", len(timestampsNanoseconds))
+		return prevObservationTimestampNs
+	}
+	return median
 }
 
 func medianTimestamp(timestampsNanoseconds []uint64) uint64 {
