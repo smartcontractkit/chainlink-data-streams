@@ -145,3 +145,45 @@ func Test_BlobPayloadCache_BudgetChargedOnHit(t *testing.T) {
 	require.NoError(t, memoErr)
 	require.Len(t, withMemo.StreamValues, len(withoutMemo.StreamValues))
 }
+
+// The memo declines to grow past its budget.
+func Test_BlobPayloadCache_BoundedByByteBudget(t *testing.T) {
+	c := newBlobPayloadCache()
+	r := c.round(7)
+
+	// Each entry claims a quarter of the budget, so the fifth does not fit.
+	size := maxMemoizedPayloadBytes / 4
+	for i := 0; i < 4; i++ {
+		r.put([]byte{byte(i)}, blobPayloadEntry{values: testStreamValues(1), size: size})
+	}
+	require.Len(t, c.entries, 4)
+	require.Equal(t, maxMemoizedPayloadBytes, c.bytes)
+
+	r.put([]byte{4}, blobPayloadEntry{values: testStreamValues(1), size: 1})
+	require.Len(t, c.entries, 4, "an entry that does not fit the budget is not memoized")
+	require.Equal(t, maxMemoizedPayloadBytes, c.bytes)
+
+	// Replacing an entry is charged as a delta, not as an addition.
+	r.put([]byte{0}, blobPayloadEntry{values: testStreamValues(1), size: size - 1})
+	require.Len(t, c.entries, 4)
+	require.Equal(t, maxMemoizedPayloadBytes-1, c.bytes)
+
+	// The budget is per round, so a new sequence number starts empty.
+	r = c.round(8)
+	require.Empty(t, c.entries)
+	require.Zero(t, c.bytes)
+	r.put([]byte{0}, blobPayloadEntry{values: testStreamValues(1), size: size})
+	require.Len(t, c.entries, 1)
+}
+
+// The byte budget alone does not bound the entry count, because an empty
+// payload costs no bytes.
+func Test_BlobPayloadCache_BoundedByEntryCount(t *testing.T) {
+	c := newBlobPayloadCache()
+	r := c.round(7)
+
+	for i := 0; i < maxMemoizedPayloads+10; i++ {
+		r.put([]byte{byte(i % 256), byte(i / 256)}, blobPayloadEntry{size: 0})
+	}
+	require.Len(t, c.entries, maxMemoizedPayloads)
+}

@@ -4,7 +4,20 @@ import (
 	"sync"
 
 	protocol "github.com/smartcontractkit/chainlink-data-streams/llo/protocol"
+
+	ocrtypes "github.com/smartcontractkit/libocr/offchainreporting2plus/types"
 )
+
+// maxMemoizedPayloadBytes bounds the decompressed bytes one round's memo
+// may hold across all of its entries.The budget is a small multiple of what
+// one observation may carry, which covers honest traffic while keeping the
+// worst case independent of N.
+const maxMemoizedPayloadBytes = 4 * maxObservationDecompressedBytes
+
+// maxMemoizedPayloads bounds the entry count, which the byte budget alone does
+// not: an empty payload costs no bytes. No round can legitimately reference more
+// handles than every oracle naming the most it is allowed.
+const maxMemoizedPayloads = ocrtypes.MaxOracles * maxObservationBlobHandles
 
 // blobPayloadCache memoizes the stream values decoded from blob payloads within
 // one sequence number. ValidateObservation and StateTransition decode the same
@@ -23,9 +36,16 @@ import (
 //
 // Decoded stream values are treated as immutable: a hit copies the map entries
 // into the observation rather than handing out the memoized map.
+//
+// The memo enforces its own budget (maxMemoizedPayloadBytes) and simply declines
+// to store beyond it. Declining is safe because memoization is an optimization,
+// and a miss decodes and costs exactly what a hit would have.
 type blobPayloadCache struct {
-	mu      sync.Mutex
-	seqNr   uint64
+	mu    sync.Mutex
+	seqNr uint64
+	// bytes is the sum of entries' sizes, tracked so the budget does not have
+	// to walk the map on every write.
+	bytes   int
 	entries map[string]blobPayloadEntry
 }
 
@@ -54,6 +74,7 @@ func (c *blobPayloadCache) round(seqNr uint64) *roundBlobPayloads {
 	if c.seqNr != seqNr || c.entries == nil {
 		c.seqNr = seqNr
 		c.entries = make(map[string]blobPayloadEntry)
+		c.bytes = 0
 	}
 	return &roundBlobPayloads{cache: c, seqNr: seqNr}
 }
@@ -88,5 +109,18 @@ func (r *roundBlobPayloads) put(handle []byte, entry blobPayloadEntry) {
 	if r.cache.seqNr != r.seqNr {
 		return
 	}
-	r.cache.entries[string(handle)] = entry
+	key := string(handle)
+	prev, replacing := r.cache.entries[key]
+	if !replacing && len(r.cache.entries) >= maxMemoizedPayloads {
+		return
+	}
+	bytes := r.cache.bytes + entry.size
+	if replacing {
+		bytes -= prev.size
+	}
+	if bytes > maxMemoizedPayloadBytes {
+		return
+	}
+	r.cache.entries[key] = entry
+	r.cache.bytes = bytes
 }
