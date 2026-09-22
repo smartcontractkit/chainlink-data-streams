@@ -251,3 +251,18 @@ message LLOReportFormatSupportProto {
     uint32 reportFormat = 1;
     uint32 oracleCount = 2;
 }
+
+// LLOCodecSupportProto is the v31 KeyValueState record (c/codecs) holding the
+// report formats each oracle last advertised a codec for.
+// NOTE: must serialize deterministically. oracles MUST be sorted ascending by
+// oracleID, and each oracle's reportFormats MUST be sorted ascending.
+message LLOCodecSupportProto {
+    repeated LLOOracleCodecSupportProto oracles = 1;
+}
+
+// LLOOracleCodecSupportProto is one oracle's last advertised set of report
+// formats.
+message LLOOracleCodecSupportProto {
+    uint32 oracleID = 1;
+    repeated uint32 reportFormats = 2;
+}

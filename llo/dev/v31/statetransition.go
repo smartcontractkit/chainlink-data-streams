@@ -16,6 +16,7 @@ import (
 	protocol "github.com/smartcontractkit/chainlink-data-streams/llo/protocol"
 	"github.com/smartcontractkit/chainlink-data-streams/llo/protocol/calculated"
 
+	"github.com/smartcontractkit/libocr/commontypes"
 	"github.com/smartcontractkit/libocr/offchainreporting2plus/ocr3_1types"
 	ocrtypes "github.com/smartcontractkit/libocr/offchainreporting2plus/types"
 )
@@ -90,6 +91,10 @@ func (p *Plugin) StateTransition(ctx context.Context, seqNr uint64, _ ocrtypes.A
 		return nil, err
 	}
 
+	// Codec coverage is cumulative across rounds: merge this round's
+	// advertisements over the persisted ones before counting supporters.
+	codecSupport := mergeCodecSupport(prev.codecSupport, tally.supportedFormatsByOracle)
+
 	// The definitions in effect for this round are the ones Observation read.
 	// Changes agreed below land in pending and take effect next round.
 	effective := cloneChannelDefinitions(prev.channelDefinitions)
@@ -101,7 +106,7 @@ func (p *Plugin) StateTransition(ctx context.Context, seqNr uint64, _ ocrtypes.A
 		ChannelStateSeqNr:               prev.channelStateSeqNr,
 		ValidAfterNanoseconds:           map[llotypes.ChannelID]uint64{},
 		StreamAggregates:                protocol.StreamAggregates{},
-		SupportByFormat:                 tally.supportVotesByFormat,
+		SupportByFormat:                 supportVotesForEffectiveFormats(countSupportByFormat(codecSupport), effective),
 	}
 
 	// Lifecycle stage & promotion.
@@ -220,7 +225,7 @@ func (p *Plugin) StateTransition(ctx context.Context, seqNr uint64, _ ocrtypes.A
 	calculated.ProcessCalculatedStreams(p.Logger, effective, out.StreamAggregates, out.ObservationTimestampNanoseconds, prev.opts, history)
 
 	// Flush KV mutations.
-	if err := p.flushKV(kvRW, seqNr, prev, out, pending, carryForward, history); err != nil {
+	if err := p.flushKV(kvRW, seqNr, prev, out, pending, codecSupport, carryForward, history); err != nil {
 		return nil, err
 	}
 
@@ -250,8 +255,11 @@ type observationTally struct {
 	removeChannelVotesByID         map[llotypes.ChannelID]int
 	updateChannelDefinitionsByHash map[[32]byte]protocol.ChannelDefinitionWithID
 	updateChannelVotesByHash       map[[32]byte]int
-	supportVotesByFormat           map[llotypes.ReportFormat]int
-	streamObservations             map[llotypes.StreamID][]protocol.StreamValue
+	// supportedFormatsByOracle[oracleID] is the formats that oracle advertised
+	// this round, deduped by decodeObservation. It is merged into the persisted
+	// per-oracle record rather than counted here: see writeCodecSupport.
+	supportedFormatsByOracle map[commontypes.OracleID][]llotypes.ReportFormat
+	streamObservations       map[llotypes.StreamID][]protocol.StreamValue
 }
 
 func (p *Plugin) decodeObservations(ctx context.Context, aos []ocrtypes.AttributedObservation, bf ocr3_1types.BlobFetcher, memo *roundBlobPayloads) (observationTally, error) {
@@ -261,7 +269,7 @@ func (p *Plugin) decodeObservations(ctx context.Context, aos []ocrtypes.Attribut
 		removeChannelVotesByID:         make(map[llotypes.ChannelID]int),
 		updateChannelDefinitionsByHash: make(map[[32]byte]protocol.ChannelDefinitionWithID),
 		updateChannelVotesByHash:       make(map[[32]byte]int),
-		supportVotesByFormat:           make(map[llotypes.ReportFormat]int),
+		supportedFormatsByOracle:       make(map[commontypes.OracleID][]llotypes.ReportFormat),
 		streamObservations:             make(map[llotypes.StreamID][]protocol.StreamValue),
 	}
 
@@ -316,11 +324,11 @@ func (p *Plugin) decodeObservations(ctx context.Context, aos []ocrtypes.Attribut
 		}
 		tally.timestampsNanoseconds = append(tally.timestampsNanoseconds, observation.UnixTimestampNanoseconds)
 
-		// Deduped by decodeObservation, so one oracle contributes at most one
-		// vote per format.
-		for _, format := range observation.SupportedReportFormats {
-			tally.supportVotesByFormat[format]++
-		}
+		// Deduped by decodeObservation, so an oracle names each format at most
+		// once. Recording the whole advertised set (including an empty one)
+		// makes this round's advertisement replace that oracle's last, so an
+		// oracle that loses a codec stops counting for it.
+		tally.supportedFormatsByOracle[ao.Observer] = observation.SupportedReportFormats
 		for channelID := range observation.RemoveChannelIDs {
 			tally.removeChannelVotesByID[channelID]++
 		}
@@ -338,6 +346,69 @@ func (p *Plugin) decodeObservations(ctx context.Context, aos []ocrtypes.Attribut
 		}
 	}
 	return tally, nil
+}
+
+// mergeCodecSupport overlays this round's advertisements on the persisted ones,
+// replacing the entry of every oracle that contributed an observation and
+// leaving the rest untouched.
+func mergeCodecSupport(persisted, thisRound map[commontypes.OracleID][]llotypes.ReportFormat) map[commontypes.OracleID][]llotypes.ReportFormat {
+	merged := make(map[commontypes.OracleID][]llotypes.ReportFormat, len(persisted)+len(thisRound))
+	for oracleID, formats := range persisted {
+		merged[oracleID] = formats
+	}
+	for oracleID, formats := range thisRound {
+		merged[oracleID] = formats
+	}
+	return merged
+}
+
+// codecSupportChanged reports whether any oracle's advertised set differs. Both
+// sides hold deduped sets, so comparing as sets (not slices) is what matters:
+// order must not trigger a rewrite.
+func codecSupportChanged(prev, next map[commontypes.OracleID][]llotypes.ReportFormat) bool {
+	if len(prev) != len(next) {
+		return true
+	}
+	for oracleID, nextFormats := range next {
+		prevFormats, ok := prev[oracleID]
+		if !ok || len(prevFormats) != len(nextFormats) {
+			return true
+		}
+		seen := make(map[llotypes.ReportFormat]struct{}, len(prevFormats))
+		for _, f := range prevFormats {
+			seen[f] = struct{}{}
+		}
+		for _, f := range nextFormats {
+			if _, ok := seen[f]; !ok {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// countSupportByFormat counts, per report format, the oracles whose last
+// advertisement named it.
+func countSupportByFormat(support map[commontypes.OracleID][]llotypes.ReportFormat) map[llotypes.ReportFormat]int {
+	counts := make(map[llotypes.ReportFormat]int)
+	for _, formats := range support {
+		for _, format := range formats {
+			counts[format]++
+		}
+	}
+	return counts
+}
+
+// supportVotesForEffectiveFormats restricts the codec support tally to the
+// report formats this round can actually needs.
+func supportVotesForEffectiveFormats(votes map[llotypes.ReportFormat]int, effective llotypes.ChannelDefinitions) map[llotypes.ReportFormat]int {
+	pruned := make(map[llotypes.ReportFormat]int, len(votes))
+	for _, cd := range effective {
+		if n, ok := votes[cd.ReportFormat]; ok {
+			pruned[cd.ReportFormat] = n
+		}
+	}
+	return pruned
 }
 
 // applyChannelVotes applies remove/add votes with a >F threshold, in ascending
@@ -553,6 +624,7 @@ func (p *Plugin) flushKV(
 	prev *kvState,
 	out precursor,
 	pending llotypes.ChannelDefinitions,
+	codecSupport map[commontypes.OracleID][]llotypes.ReportFormat,
 	carryForward map[llotypes.StreamID]map[llotypes.Aggregator]*protocol.TimestampedStreamValue,
 	history *historyStore,
 ) error {
@@ -572,6 +644,14 @@ func (p *Plugin) flushKV(
 		// The cache entry for prev.channelStateSeqNr is still valid for the
 		// state this round read; the next round observes the new c/seqnr and
 		// reloads.
+	}
+
+	// Codec coverage: rewrite the record only when an oracle's advertised set
+	// actually changed, which is rare outside a rollout.
+	if codecSupportChanged(prev.codecSupport, codecSupport) {
+		if err := writeCodecSupport(kvRW, codecSupport); err != nil {
+			return err
+		}
 	}
 
 	// Reportability: persist this round's decision for each channel so the next

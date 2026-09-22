@@ -26,8 +26,9 @@ type precursor struct {
 	// ChannelDefinitions came from. It lets Reports tell whether the decoded-opts
 	// cache already matches these definitions without walking every channel.
 	ChannelStateSeqNr uint64
-	// SupportByFormat is the number of oracles that advertised a report codec
-	// for each report format in the round that produced this precursor.
+	// SupportByFormat is the number of oracles whose last advertisement named
+	// each report format, counted over the cumulative c/codecs record rather
+	// than over this round's observations alone (see writeCodecSupport).
 	//
 	// Snapshotted rather than recomputed so that reportability and the
 	// validAfter advance for a round read the identical number: Reports runs
@@ -91,6 +92,9 @@ func encodePrecursor(p precursor) (ocr3_1types.ReportsPlusPrecursor, error) {
 		})
 	}
 
+	if len(p.SupportByFormat) > protocol.MaxOutcomeChannelDefinitionsLength {
+		return nil, fmt.Errorf("too many report format support entries: %d (max %d)", len(p.SupportByFormat), protocol.MaxOutcomeChannelDefinitionsLength)
+	}
 	if len(p.SupportByFormat) > 0 {
 		pb.SupportByFormat = make([]*protocol.LLOReportFormatSupportProto, 0, len(p.SupportByFormat))
 		for format, count := range p.SupportByFormat {
@@ -136,8 +140,12 @@ func decodePrecursor(b ocr3_1types.ReportsPlusPrecursor) (precursor, error) {
 	for _, va := range pb.ValidAfterNanoseconds {
 		p.ValidAfterNanoseconds[va.ChannelID] = va.ValidAfterNanoseconds
 	}
-	if len(pb.SupportByFormat) > protocol.MaxObservationSupportedReportFormatsLength {
-		return precursor{}, fmt.Errorf("precursor carries too many report format support entries: %d (max %d)", len(pb.SupportByFormat), protocol.MaxObservationSupportedReportFormatsLength)
+	// One entry per report format in the effective channel set, so the channel
+	// cap is the bound here. The observation-side cap does not apply: the tally
+	// is pruned to effective formats before encoding, and the effective set may
+	// legitimately use more distinct formats than one observation may advertise.
+	if len(pb.SupportByFormat) > protocol.MaxOutcomeChannelDefinitionsLength {
+		return precursor{}, fmt.Errorf("precursor carries too many report format support entries: %d (max %d)", len(pb.SupportByFormat), protocol.MaxOutcomeChannelDefinitionsLength)
 	}
 	if len(pb.SupportByFormat) > 0 {
 		p.SupportByFormat = make(map[llotypes.ReportFormat]int, len(pb.SupportByFormat))

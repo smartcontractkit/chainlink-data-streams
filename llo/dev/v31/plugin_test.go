@@ -1270,6 +1270,9 @@ func Test_StateTransition_TalliesReportFormatSupport(t *testing.T) {
 
 	_, err := p.StateTransition(ctx, 1, ocrtypes.AttributedQuery{}, []ocrtypes.AttributedObservation{ao(0, nil), ao(1, nil), ao(2, nil)}, kv, testBlobs)
 	require.NoError(t, err)
+	require.NoError(t, writeChannelState(kv, 1, llotypes.ChannelDefinitions{
+		1: {ReportFormat: llotypes.ReportFormatJSON, Streams: []llotypes.Stream{{StreamID: 1, Aggregator: llotypes.AggregatorMedian}}},
+	}))
 
 	// Two oracles advertise JSON, one advertises nothing: the tally is a count
 	// of advertisements, and an oracle that advertises nothing is not counted.
@@ -1281,6 +1284,82 @@ func Test_StateTransition_TalliesReportFormatSupport(t *testing.T) {
 	prec, err := decodePrecursor(precBytes)
 	require.NoError(t, err)
 	require.Equal(t, 2, prec.SupportByFormat[llotypes.ReportFormatJSON])
+}
+
+// Codec support accumulates across rounds, so f oracles omitting their
+// advertisement cannot drop a format below the 2f+1 threshold.
+//
+// Counted per round, support could never exceed the 2f+1 observation quorum, so
+// the threshold would demand that every observation in a minimal quorum
+// advertise the format and any single omission would make every channel of that
+// format unreportable.
+func Test_StateTransition_CodecSupportAccumulatesAcrossRounds(t *testing.T) {
+	ctx := tests.Context(t)
+	p := testPlugin(t)
+	kv := newMemKV()
+
+	_, err := p.StateTransition(ctx, 1, ocrtypes.AttributedQuery{}, []ocrtypes.AttributedObservation{ao(0, nil), ao(1, nil), ao(2, nil)}, kv, testBlobs)
+	require.NoError(t, err)
+	require.NoError(t, writeChannelState(kv, 1, llotypes.ChannelDefinitions{
+		1: {ReportFormat: llotypes.ReportFormatJSON, Streams: []llotypes.Stream{{StreamID: 1, Aggregator: llotypes.AggregatorMedian}}},
+	}))
+
+	obsJSON := func(ts uint64) []byte {
+		return mustEncodeObs(t, Observation{UnixTimestampNanoseconds: ts, SupportedReportFormats: []llotypes.ReportFormat{llotypes.ReportFormatJSON}})
+	}
+	obsNone := func(ts uint64) []byte {
+		return mustEncodeObs(t, Observation{UnixTimestampNanoseconds: ts, SupportedReportFormats: []llotypes.ReportFormat{}})
+	}
+
+	// All N oracles advertise JSON.
+	precBytes, err := p.StateTransition(ctx, 2, ocrtypes.AttributedQuery{}, []ocrtypes.AttributedObservation{ao(0, obsJSON(10)), ao(1, obsJSON(10)), ao(2, obsJSON(10)), ao(3, obsJSON(10))}, kv, testBlobs)
+	require.NoError(t, err)
+	prec, err := decodePrecursor(precBytes)
+	require.NoError(t, err)
+	require.Equal(t, p.N, prec.SupportByFormat[llotypes.ReportFormatJSON])
+
+	// A minimal quorum in which one oracle now omits its advertisement. Oracle
+	// 3 contributes nothing this round, but its last advertisement still counts,
+	// so the format keeps 2f+1 supporters and the channel stays reportable.
+	precBytes, err = p.StateTransition(ctx, 3, ocrtypes.AttributedQuery{}, []ocrtypes.AttributedObservation{ao(0, obsJSON(20)), ao(1, obsJSON(20)), ao(2, obsNone(20))}, kv, testBlobs)
+	require.NoError(t, err)
+	prec, err = decodePrecursor(precBytes)
+	require.NoError(t, err)
+	require.Equal(t, 2*p.F+1, prec.SupportByFormat[llotypes.ReportFormatJSON])
+	require.Equal(t, []llotypes.ChannelID{1}, prec.reportableChannels(0, p.F, nil, logger.Test(t)))
+}
+
+// One oracle padding its observation with unused report formats must not be
+// able to grow the precursor tally: the encoded map is keyed by oracle-chosen
+// values, and an oversized one fails to decode on every oracle, which would
+// stop reporting DON-wide while StateTransition keeps succeeding.
+func Test_StateTransition_PrunesUnusedReportFormatSupport(t *testing.T) {
+	ctx := tests.Context(t)
+	p := testPlugin(t)
+	kv := newMemKV()
+
+	_, err := p.StateTransition(ctx, 1, ocrtypes.AttributedQuery{}, []ocrtypes.AttributedObservation{ao(0, nil), ao(1, nil), ao(2, nil)}, kv, testBlobs)
+	require.NoError(t, err)
+	require.NoError(t, writeChannelState(kv, 1, llotypes.ChannelDefinitions{
+		1: {ReportFormat: llotypes.ReportFormatJSON, Streams: []llotypes.Stream{{StreamID: 1, Aggregator: llotypes.AggregatorMedian}}},
+	}))
+
+	// Each oracle advertises JSON plus a disjoint block of junk formats, so an
+	// unpruned tally would hold 3*MaxObservationSupportedReportFormatsLength-2
+	// entries.
+	padded := func(oracle int) []byte {
+		formats := []llotypes.ReportFormat{llotypes.ReportFormatJSON}
+		for i := 1; i < protocol.MaxObservationSupportedReportFormatsLength; i++ {
+			formats = append(formats, llotypes.ReportFormat(1_000_000+oracle*1_000+i))
+		}
+		return mustEncodeObs(t, Observation{UnixTimestampNanoseconds: 1, SupportedReportFormats: formats})
+	}
+	precBytes, err := p.StateTransition(ctx, 2, ocrtypes.AttributedQuery{}, []ocrtypes.AttributedObservation{ao(0, padded(0)), ao(1, padded(1)), ao(2, padded(2))}, kv, testBlobs)
+	require.NoError(t, err)
+
+	prec, err := decodePrecursor(precBytes)
+	require.NoError(t, err)
+	require.Equal(t, map[llotypes.ReportFormat]int{llotypes.ReportFormatJSON: 3}, prec.SupportByFormat)
 }
 
 // strictJSONCodec is reportcodec.JSONReportCodec with an extra Verify rule this

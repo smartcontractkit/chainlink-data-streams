@@ -10,7 +10,9 @@ import (
 
 	protocol "github.com/smartcontractkit/chainlink-data-streams/llo/protocol"
 
+	"github.com/smartcontractkit/libocr/commontypes"
 	"github.com/smartcontractkit/libocr/offchainreporting2plus/ocr3_1types"
+	ocrtypes "github.com/smartcontractkit/libocr/offchainreporting2plus/types"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -25,6 +27,9 @@ import (
 //	c/pred      -> LLOPredecessorConfigProto: the predecessor's signer set and
 //	               f, agreed by vote while staging (written at most once, and
 //	               only by an instance that has a predecessor)
+//	c/codecs    -> LLOCodecSupportProto: the report formats each oracle last
+//	               advertised a codec for (written only when some oracle's
+//	               advertised set changes)
 //	r/agg       -> LLOHotStateProto: observation timestamp, validAfter
 //	               watermarks, per-channel reportability, and carry-forward
 //	               timestamped aggregates (written every round)
@@ -49,6 +54,7 @@ var (
 	keyChannelState      = []byte("c/defs")
 	keyChannelSeqNr      = []byte("c/seqnr")
 	keyPredecessorConfig = []byte("c/pred")
+	keyCodecSupport      = []byte("c/codecs")
 	keyHotState          = []byte("r/agg")
 
 	keyHistoryIndex   = []byte("hidx")
@@ -111,6 +117,10 @@ type kvState struct {
 	// concurrently-running round from swapping decoded opts out from under this
 	// one; always read opts from here rather than from plugin-wide state.
 	opts *protocol.OptsCache
+	// codecSupport[oracleID] is the report formats that oracle last advertised
+	// a codec for. See writeCodecSupport for why it is remembered per oracle
+	// instead of being counted per round.
+	codecSupport map[commontypes.OracleID][]llotypes.ReportFormat
 	// channelStateSeqNr is the seqNr at which channelDefinitions were written.
 	channelStateSeqNr     uint64
 	validAfterNanoseconds map[llotypes.ChannelID]uint64
@@ -154,6 +164,7 @@ func loadKVState(r ocr3_1types.KeyValueStateReader, cache *protocol.ChannelCache
 func loadColdKVState(r ocr3_1types.KeyValueStateReader, cache *protocol.ChannelCache) (*kvState, error) {
 	s := &kvState{
 		channelDefinitions:    llotypes.ChannelDefinitions{},
+		codecSupport:          map[commontypes.OracleID][]llotypes.ReportFormat{},
 		validAfterNanoseconds: map[llotypes.ChannelID]uint64{},
 		reportedLastRound:     map[llotypes.ChannelID]bool{},
 		carryForward:          map[llotypes.StreamID]map[llotypes.Aggregator]*protocol.TimestampedStreamValue{},
@@ -182,7 +193,73 @@ func loadColdKVState(r ocr3_1types.KeyValueStateReader, cache *protocol.ChannelC
 	s.channelDefinitions = gen.Definitions()
 	s.opts = gen.Opts()
 
+	support, err := readCodecSupport(r)
+	if err != nil {
+		return nil, err
+	}
+	s.codecSupport = support
+
 	return s, nil
+}
+
+// readCodecSupport reads and decodes the c/codecs record.
+func readCodecSupport(r ocr3_1types.KeyValueStateReader) (map[commontypes.OracleID][]llotypes.ReportFormat, error) {
+	support := map[commontypes.OracleID][]llotypes.ReportFormat{}
+	b, err := r.Read(keyCodecSupport)
+	if err != nil {
+		return nil, fmt.Errorf("read codec support: %w", err)
+	}
+	if len(b) == 0 {
+		return support, nil
+	}
+	pb := &protocol.LLOCodecSupportProto{}
+	if err := proto.Unmarshal(b, pb); err != nil {
+		return nil, fmt.Errorf("unmarshal codec support: %w", err)
+	}
+	if len(pb.Oracles) > ocrtypes.MaxOracles {
+		return nil, fmt.Errorf("codec support names too many oracles: %d (max %d)", len(pb.Oracles), ocrtypes.MaxOracles)
+	}
+	for _, entry := range pb.Oracles {
+		if len(entry.ReportFormats) > protocol.MaxObservationSupportedReportFormatsLength {
+			return nil, fmt.Errorf("oracle %d advertises too many report formats: %d (max %d)", entry.OracleID, len(entry.ReportFormats), protocol.MaxObservationSupportedReportFormatsLength)
+		}
+		formats := make([]llotypes.ReportFormat, 0, len(entry.ReportFormats))
+		for _, f := range entry.ReportFormats {
+			formats = append(formats, llotypes.ReportFormat(f))
+		}
+		support[commontypes.OracleID(entry.OracleID)] = formats
+	}
+	return support, nil
+}
+
+// writeCodecSupport persists the report formats each oracle last advertised a
+// codec for.
+//
+// Support is remembered per oracle rather than counted per round because the
+// observation quorum is 2f+1. A count taken from one round can never exceed
+// 2f+1, so the supporter threshold reportability would demand that every observation
+// in a minimal quorum advertise the format.
+func writeCodecSupport(w ocr3_1types.KeyValueStateReadWriter, support map[commontypes.OracleID][]llotypes.ReportFormat) error {
+	pb := &protocol.LLOCodecSupportProto{
+		Oracles: make([]*protocol.LLOOracleCodecSupportProto, 0, len(support)),
+	}
+	for oracleID, formats := range support {
+		encoded := make([]uint32, 0, len(formats))
+		for _, f := range formats {
+			encoded = append(encoded, uint32(f))
+		}
+		sort.Slice(encoded, func(i, j int) bool { return encoded[i] < encoded[j] })
+		pb.Oracles = append(pb.Oracles, &protocol.LLOOracleCodecSupportProto{
+			OracleID:      uint32(oracleID),
+			ReportFormats: encoded,
+		})
+	}
+	sort.Slice(pb.Oracles, func(i, j int) bool { return pb.Oracles[i].OracleID < pb.Oracles[j].OracleID })
+	b, err := deterministicMarshal.Marshal(pb)
+	if err != nil {
+		return fmt.Errorf("marshal codec support: %w", err)
+	}
+	return w.Write(keyCodecSupport, b)
 }
 
 // readChannelState reads and decodes the c/defs record.
