@@ -1640,3 +1640,137 @@ func Test_UnreportableTally_CollapsesPerChannelWarnings(t *testing.T) {
 	// A nil tally is the no-op the predicate-only callers pass.
 	require.Empty(t, out.withSupport(0).reportableChannels(0, 1, protocol.NewOptsCache(), nil))
 }
+
+// Test_StateTransition_BackfillValidAfterRequiresPreviousReport covers the
+// backfill watermark advancing only over a row the previous round actually
+// reported.
+func Test_StateTransition_BackfillValidAfterRequiresPreviousReport(t *testing.T) {
+	const (
+		targetCID   = llotypes.ChannelID(10)
+		backfillCID = llotypes.ChannelID(20)
+		fiveSec     = uint64(5_000_000_000)
+		tenSec      = uint64(10_000_000_000)
+	)
+	targetCD := llotypes.ChannelDefinition{ReportFormat: llotypes.ReportFormatJSON, Streams: []llotypes.Stream{{StreamID: 100, Aggregator: llotypes.AggregatorMedian}}}
+	backfillCD := llotypes.ChannelDefinition{
+		ReportFormat: llotypes.ReportFormatHistoryBackfill,
+		Opts:         []byte(`{"targetChannelId":10,"observations":{"5":{"100":"1.5"},"8":{"100":"2.5"}}}`),
+	}
+
+	// round builds four identical observations at ts.
+	round := func(t *testing.T, ts uint64, shape func(*Observation)) []ocrtypes.AttributedObservation {
+		t.Helper()
+		aos := make([]ocrtypes.AttributedObservation, 0, 4)
+		for i := 0; i < 4; i++ {
+			obs := Observation{UnixTimestampNanoseconds: ts}
+			if shape != nil {
+				shape(&obs)
+			}
+			aos = append(aos, ao(i, mustEncodeObs(t, obs)))
+		}
+		return aos
+	}
+
+	for _, tc := range []struct {
+		name string
+		// defs is what the verdict round starts from; shape is how its
+		// observations differ from a healthy round.
+		defs  llotypes.ChannelDefinitions
+		shape func(*Observation)
+		want  uint64
+	}{
+		{
+			// Guard 1: a retired instance emits nothing, and retirement is
+			// terminal, so an unguarded advance drains the whole backfill.
+			name:  "retired instance",
+			defs:  llotypes.ChannelDefinitions{targetCID: targetCD, backfillCID: backfillCD},
+			shape: func(obs *Observation) { obs.ShouldRetire = true },
+			want:  0,
+		},
+		{
+			// Guard 2: selection checks that the channel exists but not that
+			// it is live, so a tombstone is invisible to it.
+			name: "tombstoned backfill channel",
+			defs: func() llotypes.ChannelDefinitions {
+				tombstoned := backfillCD
+				tombstoned.Tombstone = true
+				return llotypes.ChannelDefinitions{targetCID: targetCD, backfillCID: tombstoned}
+			}(),
+			want: 0,
+		},
+		{
+			// The support gate: no oracle advertises a codec for the target's
+			// format, so the verdict round could not certify a report. Codec
+			// coverage is not an input to selection. Coverage returns in the
+			// next round, which must still not skip the row.
+			name: "target format not encodable",
+			defs: llotypes.ChannelDefinitions{targetCID: targetCD, backfillCID: backfillCD},
+			shape: func(obs *Observation) {
+				obs.SupportedReportFormats = []llotypes.ReportFormat{llotypes.ReportFormatHistoryBackfill}
+			},
+			want: 0,
+		},
+		{
+			// Selection reads this round's definitions against the previous
+			// round's watermark and timestamp. The verdict round has no target
+			// channel, so nothing was selectable and nothing was reported; the
+			// vote it agrees adds one, which makes the same row selectable in
+			// the round that decides the advance.
+			name: "target channel added since the verdict",
+			defs: llotypes.ChannelDefinitions{backfillCID: backfillCD},
+			shape: func(obs *Observation) {
+				obs.UpdateChannelDefinitions = llotypes.ChannelDefinitions{targetCID: targetCD}
+			},
+			want: 0,
+		},
+		{
+			// Control: the verdict round did report, so the watermark moves to
+			// the row it emitted.
+			name: "previous round reported",
+			defs: llotypes.ChannelDefinitions{targetCID: targetCD, backfillCID: backfillCD},
+			want: fiveSec,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := tests.Context(t)
+			p := testPlugin(t)
+			kv := newMemKV()
+
+			// State the verdict round starts from. A candidate is selectable
+			// throughout (watermark 0, observations at 5s and 8s), so the
+			// advance turns entirely on the verdict.
+			require.NoError(t, writeLifecycle(kv, protocol.LifeCycleStageProduction))
+			require.NoError(t, writeChannelState(kv, 1, tc.defs))
+			require.NoError(t, writeHotState(kv, tenSec,
+				map[llotypes.ChannelID]uint64{targetCID: tenSec, backfillCID: 0},
+				map[llotypes.ChannelID]bool{targetCID: false, backfillCID: false},
+				nil, logger.Test(t)))
+
+			// The verdict round.
+			_, err := p.StateTransition(ctx, 2, ocrtypes.AttributedQuery{}, round(t, tenSec+1, tc.shape), kv, testBlobs)
+			require.NoError(t, err)
+			require.Equal(t, uint64(0), readHotStateForTest(t, kv).validAfterNanoseconds[backfillCID],
+				"the verdict round must not have advanced the watermark itself")
+
+			// The round that decides the advance.
+			precursorBytes, err := p.StateTransition(ctx, 3, ocrtypes.AttributedQuery{}, round(t, tenSec+2, nil), kv, testBlobs)
+			require.NoError(t, err)
+
+			out, err := decodePrecursor(precursorBytes)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, out.ValidAfterNanoseconds[backfillCID])
+		})
+	}
+}
+
+// readHotStateForTest decodes the r/agg record written by the last round.
+func readHotStateForTest(t *testing.T, kv *memKV) *kvState {
+	t.Helper()
+	s := &kvState{
+		validAfterNanoseconds: map[llotypes.ChannelID]uint64{},
+		reportedLastRound:     map[llotypes.ChannelID]bool{},
+		carryForward:          map[llotypes.StreamID]map[llotypes.Aggregator]*protocol.TimestampedStreamValue{},
+	}
+	require.NoError(t, readHotState(kv, s))
+	return s
+}
