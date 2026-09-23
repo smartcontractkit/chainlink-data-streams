@@ -41,7 +41,7 @@ func FuzzDecodeObservation(f *testing.F) {
 		UnixTimestampNanoseconds:      1_700_000_000_000_000_000,
 		RemoveChannelIDs:              map[llotypes.ChannelID]struct{}{7: {}},
 		UpdateChannelDefinitions:      llotypes.ChannelDefinitions{1: jsonChannel()},
-		SupportedReportFormats:        []llotypes.ReportFormat{llotypes.ReportFormatJSON, llotypes.ReportFormatEVMPremiumLegacy},
+		SupportedReportFormats:        formatSet(llotypes.ReportFormatJSON, llotypes.ReportFormatEVMPremiumLegacy),
 	}
 	encoded, err := encodeObservation(obs, nil)
 	if err != nil {
@@ -76,9 +76,11 @@ func FuzzDecodeObservation(f *testing.F) {
 		if len(decoded.SupportedReportFormats) > protocol.MaxObservationSupportedReportFormatsLength {
 			t.Fatalf("decoded %d report formats, max %d", len(decoded.SupportedReportFormats), protocol.MaxObservationSupportedReportFormatsLength)
 		}
-		for i := 1; i < len(decoded.SupportedReportFormats); i++ {
-			if decoded.SupportedReportFormats[i-1] >= decoded.SupportedReportFormats[i] {
-				t.Fatalf("report formats are not strictly ascending: %v", decoded.SupportedReportFormats)
+		// Re-encoding the decoded set is what the wire has to be canonical in.
+		wire := sortedFormatsToWire(decoded.SupportedReportFormats)
+		for i := 1; i < len(wire); i++ {
+			if wire[i-1] >= wire[i] {
+				t.Fatalf("report formats are not strictly ascending: %v", wire)
 			}
 		}
 		for id, cd := range decoded.UpdateChannelDefinitions {

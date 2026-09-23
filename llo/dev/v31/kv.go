@@ -116,7 +116,7 @@ type kvState struct {
 	// codecSupport[oracleID] is the report formats that oracle last advertised
 	// a codec for. See writeCodecSupport for why it is remembered per oracle
 	// instead of being counted per round.
-	codecSupport map[commontypes.OracleID][]llotypes.ReportFormat
+	codecSupport map[commontypes.OracleID]map[llotypes.ReportFormat]struct{}
 	// channelStateSeqNr is the seqNr at which channelDefinitions were written.
 	channelStateSeqNr     uint64
 	validAfterNanoseconds map[llotypes.ChannelID]uint64
@@ -160,7 +160,7 @@ func loadKVState(r ocr3_1types.KeyValueStateReader, cache *protocol.ChannelCache
 func loadColdKVState(r ocr3_1types.KeyValueStateReader, cache *protocol.ChannelCache) (*kvState, error) {
 	s := &kvState{
 		channelDefinitions:    llotypes.ChannelDefinitions{},
-		codecSupport:          map[commontypes.OracleID][]llotypes.ReportFormat{},
+		codecSupport:          map[commontypes.OracleID]map[llotypes.ReportFormat]struct{}{},
 		validAfterNanoseconds: map[llotypes.ChannelID]uint64{},
 		reportedLastRound:     map[llotypes.ChannelID]bool{},
 		carryForward:          map[llotypes.StreamID]map[llotypes.Aggregator]*protocol.TimestampedStreamValue{},
@@ -199,8 +199,8 @@ func loadColdKVState(r ocr3_1types.KeyValueStateReader, cache *protocol.ChannelC
 }
 
 // readCodecSupport reads and decodes the c/codecs record.
-func readCodecSupport(r ocr3_1types.KeyValueStateReader) (map[commontypes.OracleID][]llotypes.ReportFormat, error) {
-	support := map[commontypes.OracleID][]llotypes.ReportFormat{}
+func readCodecSupport(r ocr3_1types.KeyValueStateReader) (map[commontypes.OracleID]map[llotypes.ReportFormat]struct{}, error) {
+	support := map[commontypes.OracleID]map[llotypes.ReportFormat]struct{}{}
 	b, err := r.Read(keyCodecSupport)
 	if err != nil {
 		return nil, fmt.Errorf("read codec support: %w", err)
@@ -219,9 +219,9 @@ func readCodecSupport(r ocr3_1types.KeyValueStateReader) (map[commontypes.Oracle
 		if len(entry.ReportFormats) > protocol.MaxObservationSupportedReportFormatsLength {
 			return nil, fmt.Errorf("oracle %d advertises too many report formats: %d (max %d)", entry.OracleID, len(entry.ReportFormats), protocol.MaxObservationSupportedReportFormatsLength)
 		}
-		formats := make([]llotypes.ReportFormat, 0, len(entry.ReportFormats))
+		formats := make(map[llotypes.ReportFormat]struct{}, len(entry.ReportFormats))
 		for _, f := range entry.ReportFormats {
-			formats = append(formats, llotypes.ReportFormat(f))
+			formats[llotypes.ReportFormat(f)] = struct{}{}
 		}
 		support[commontypes.OracleID(entry.OracleID)] = formats
 	}
@@ -235,13 +235,13 @@ func readCodecSupport(r ocr3_1types.KeyValueStateReader) (map[commontypes.Oracle
 // observation quorum is 2f+1. A count taken from one round can never exceed
 // 2f+1, so the supporter threshold reportability would demand that every observation
 // in a minimal quorum advertise the format.
-func writeCodecSupport(w ocr3_1types.KeyValueStateReadWriter, support map[commontypes.OracleID][]llotypes.ReportFormat) error {
+func writeCodecSupport(w ocr3_1types.KeyValueStateReadWriter, support map[commontypes.OracleID]map[llotypes.ReportFormat]struct{}) error {
 	pb := &protocol.LLOCodecSupportProto{
 		Oracles: make([]*protocol.LLOOracleCodecSupportProto, 0, len(support)),
 	}
 	for oracleID, formats := range support {
 		encoded := make([]uint32, 0, len(formats))
-		for _, f := range formats {
+		for f := range formats {
 			encoded = append(encoded, uint32(f))
 		}
 		sort.Slice(encoded, func(i, j int) bool { return encoded[i] < encoded[j] })

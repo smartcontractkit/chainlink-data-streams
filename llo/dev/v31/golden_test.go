@@ -13,6 +13,8 @@ import (
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
 
 	protocol "github.com/smartcontractkit/chainlink-data-streams/llo/protocol"
+
+	"github.com/smartcontractkit/libocr/commontypes"
 )
 
 // Golden tests freeze the wire format of the two records the plugin cannot
@@ -138,6 +140,9 @@ func Test_Golden_KVRecords(t *testing.T) {
 		},
 		logger.Test(t),
 	))
+	// Out-of-order oracles and formats, so the sorting the writer does is part
+	// of what is frozen.
+	require.NoError(t, writeCodecSupport(kv, goldenCodecSupport()))
 	require.NoError(t, writeHistoryLayoutVersion(kv))
 	require.NoError(t, writeHistoryIndex(kv, []histKey{
 		{streamID: 100, aggregator: llotypes.AggregatorMedian},
@@ -152,6 +157,7 @@ func Test_Golden_KVRecords(t *testing.T) {
 		{"kv_channel_state.bin", keyChannelState},
 		{"kv_channel_seqnr.bin", keyChannelSeqNr},
 		{"kv_hot_state.bin", keyHotState},
+		{"kv_codec_support.bin", keyCodecSupport},
 		{"kv_history_version.bin", keyHistoryVersion},
 		{"kv_history_index.bin", keyHistoryIndex},
 	} {
@@ -173,6 +179,7 @@ func Test_Golden_KVRecords(t *testing.T) {
 	require.Equal(t, p.ValidAfterNanoseconds, s.validAfterNanoseconds)
 	require.Equal(t, map[llotypes.ChannelID]bool{3: true, 2: true}, s.reportedLastRound)
 	require.Len(t, s.carryForward, 2)
+	require.Equal(t, goldenCodecSupport(), s.codecSupport)
 
 	version, err := readHistoryLayoutVersion(kv)
 	require.NoError(t, err)
@@ -183,6 +190,20 @@ func Test_Golden_KVRecords(t *testing.T) {
 		{streamID: 100, aggregator: llotypes.AggregatorMedian},
 		{streamID: 300, aggregator: llotypes.AggregatorQuote},
 	}, index)
+}
+
+// goldenCodecSupport is the codec support record the golden cases freeze: two
+// oracles, disjoint sets, and neither oracles nor formats in ascending order.
+func goldenCodecSupport() map[commontypes.OracleID]map[llotypes.ReportFormat]struct{} {
+	return map[commontypes.OracleID]map[llotypes.ReportFormat]struct{}{
+		3: {
+			llotypes.ReportFormatJSON:             {},
+			llotypes.ReportFormatEVMPremiumLegacy: {},
+		},
+		1: {
+			llotypes.ReportFormatEVMPremiumLegacy: {},
+		},
+	}
 }
 
 func Test_Golden_KVHistoryRecords(t *testing.T) {

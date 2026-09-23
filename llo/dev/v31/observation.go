@@ -29,7 +29,7 @@ type Observation struct {
 	// codec for. Encoding is node-local state that the state transition cannot
 	// read without forking; advertising it here turns it into a replicated fact
 	// that reportability can gate on (see isReportable).
-	SupportedReportFormats []llotypes.ReportFormat
+	SupportedReportFormats map[llotypes.ReportFormat]struct{}
 	// PredecessorSigners and PredecessorF are the predecessor instance's signer
 	// set and f, read from the node-local retirement report cache. A staging
 	// instance carries them alongside an attested retirement report, so the
@@ -84,8 +84,9 @@ func encodeObservation(obs Observation, handles [][]byte) (ocrtypes.Observation,
 		}
 	}
 
-	// Sorted and deduped, matching what decode enforces.
-	main.SupportedReportFormats = sortedUniqueFormats(obs.SupportedReportFormats)
+	// Map iteration order, so sort: the wire form is a repeated field, which
+	// deterministic marshaling does not canonicalize.
+	main.SupportedReportFormats = sortedFormatsToWire(obs.SupportedReportFormats)
 
 	// Deterministic even though nothing compares observation bytes today
 	// A future path which does compare or hash the value cannot be
@@ -292,46 +293,35 @@ func observationFromProto(main *protocol.LLOObservationProto) (Observation, erro
 	obs.PredecessorSigners = main.PredecessorSigners
 	obs.PredecessorF = uint8(main.PredecessorF)
 
-	obs.SupportedReportFormats = sortedUniqueFormatsFromWire(main.SupportedReportFormats)
+	obs.SupportedReportFormats = formatsFromWire(main.SupportedReportFormats)
 	return obs, nil
 }
 
-// sortedUniqueFormats returns the formats sorted ascending with duplicates
-// removed. nil in, nil out, so an oracle advertising nothing stays absent from
-// the wire rather than carrying an empty list.
-func sortedUniqueFormats(in []llotypes.ReportFormat) []uint32 {
+// sortedFormatsToWire returns the formats sorted ascending. nil in, nil out, so
+// an oracle advertising nothing stays absent from the wire rather than carrying
+// an empty list.
+func sortedFormatsToWire(in map[llotypes.ReportFormat]struct{}) []uint32 {
 	if len(in) == 0 {
 		return nil
 	}
-	seen := make(map[llotypes.ReportFormat]struct{}, len(in))
 	out := make([]uint32, 0, len(in))
-	for _, f := range in {
-		if _, dup := seen[f]; dup {
-			continue
-		}
-		seen[f] = struct{}{}
+	for f := range in {
 		out = append(out, uint32(f))
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
 	return out
 }
 
-// sortedUniqueFormatsFromWire is sortedUniqueFormats for the wire
-// representation: sorted ascending, duplicates removed.
-func sortedUniqueFormatsFromWire(in []uint32) []llotypes.ReportFormat {
+// formatsFromWire is sortedFormatsToWire inverted. Duplicate wire entries
+// collapse, so the set an oracle advertises never depends on repetition.
+func formatsFromWire(in []uint32) map[llotypes.ReportFormat]struct{} {
 	if len(in) == 0 {
 		return nil
 	}
-	seen := make(map[uint32]struct{}, len(in))
-	out := make([]llotypes.ReportFormat, 0, len(in))
+	out := make(map[llotypes.ReportFormat]struct{}, len(in))
 	for _, f := range in {
-		if _, dup := seen[f]; dup {
-			continue
-		}
-		seen[f] = struct{}{}
-		out = append(out, llotypes.ReportFormat(f))
+		out[llotypes.ReportFormat(f)] = struct{}{}
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
 	return out
 }
 

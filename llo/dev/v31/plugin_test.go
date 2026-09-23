@@ -146,12 +146,21 @@ func ao(observer int, obsBytes []byte) ocrtypes.AttributedObservation {
 
 // testSupportedReportFormats is the codec coverage a fixture oracle advertises
 // by default: every format the tests in this package build channels for.
-var testSupportedReportFormats = []llotypes.ReportFormat{
+var testSupportedReportFormats = formatSet(
 	llotypes.ReportFormatJSON,
 	llotypes.ReportFormatEVMPremiumLegacy,
 	llotypes.ReportFormatEVMABIEncodeUnpacked,
 	llotypes.ReportFormatEVMABIEncodeUnpackedExpr,
 	llotypes.ReportFormatHistoryBackfill,
+)
+
+// formatSet builds the advertised-format set a fixture oracle carries.
+func formatSet(formats ...llotypes.ReportFormat) map[llotypes.ReportFormat]struct{} {
+	out := make(map[llotypes.ReportFormat]struct{}, len(formats))
+	for _, f := range formats {
+		out[f] = struct{}{}
+	}
+	return out
 }
 
 // testBlobs is the shared in-memory blob store used by StateTransition
@@ -1206,21 +1215,31 @@ func Test_ReportFormatSupportGate_StopsValidAfterAdvance(t *testing.T) {
 func Test_Observation_SupportedReportFormats_RoundTrip(t *testing.T) {
 	ctx := tests.Context(t)
 
-	// Duplicates are collapsed and the list is sorted, so one oracle can only
-	// ever contribute one vote per format to the tally.
+	// The set is sorted on the wire and collapses back to a set on decode, so
+	// one oracle can only ever contribute one vote per format to the tally.
 	obs := Observation{
 		UnixTimestampNanoseconds: 1,
-		SupportedReportFormats: []llotypes.ReportFormat{
+		SupportedReportFormats: formatSet(
 			llotypes.ReportFormatJSON,
 			llotypes.ReportFormatEVMPremiumLegacy,
-			llotypes.ReportFormatJSON,
-		},
+		),
 	}
 	b, err := encodeObservation(obs, nil)
 	require.NoError(t, err)
 	got, err := decodeObservation(ctx, b, nil, nil)
 	require.NoError(t, err)
-	require.Equal(t, []llotypes.ReportFormat{llotypes.ReportFormatEVMPremiumLegacy, llotypes.ReportFormatJSON}, got.SupportedReportFormats)
+	require.Equal(t, formatSet(llotypes.ReportFormatEVMPremiumLegacy, llotypes.ReportFormatJSON), got.SupportedReportFormats)
+	require.Equal(t, []uint32{uint32(llotypes.ReportFormatEVMPremiumLegacy), uint32(llotypes.ReportFormatJSON)}, sortedFormatsToWire(got.SupportedReportFormats))
+
+	// Duplicate wire entries collapse rather than double counting.
+	dup, err := proto.Marshal(&protocol.LLOObservationProto{
+		UnixTimestampNanoseconds: 1,
+		SupportedReportFormats:   []uint32{uint32(llotypes.ReportFormatJSON), uint32(llotypes.ReportFormatJSON)},
+	})
+	require.NoError(t, err)
+	got, err = decodeObservation(ctx, frameObservation(nil, dup), nil, nil)
+	require.NoError(t, err)
+	require.Equal(t, formatSet(llotypes.ReportFormatJSON), got.SupportedReportFormats)
 
 	// An oracle advertising nothing decodes as advertising nothing, rather than
 	// as an empty-but-present list.
@@ -1276,8 +1295,8 @@ func Test_StateTransition_TalliesReportFormatSupport(t *testing.T) {
 
 	// Two oracles advertise JSON, one advertises nothing: the tally is a count
 	// of advertisements, and an oracle that advertises nothing is not counted.
-	obsJSON := mustEncodeObs(t, Observation{UnixTimestampNanoseconds: 1, SupportedReportFormats: []llotypes.ReportFormat{llotypes.ReportFormatJSON}})
-	obsNone := mustEncodeObs(t, Observation{UnixTimestampNanoseconds: 1, SupportedReportFormats: []llotypes.ReportFormat{}})
+	obsJSON := mustEncodeObs(t, Observation{UnixTimestampNanoseconds: 1, SupportedReportFormats: formatSet(llotypes.ReportFormatJSON)})
+	obsNone := mustEncodeObs(t, Observation{UnixTimestampNanoseconds: 1, SupportedReportFormats: formatSet()})
 	precBytes, err := p.StateTransition(ctx, 2, ocrtypes.AttributedQuery{}, []ocrtypes.AttributedObservation{ao(0, obsJSON), ao(1, obsJSON), ao(2, obsNone)}, kv, testBlobs)
 	require.NoError(t, err)
 
@@ -1359,10 +1378,10 @@ func Test_StateTransition_CodecSupportAccumulatesAcrossRounds(t *testing.T) {
 	}))
 
 	obsJSON := func(ts uint64) []byte {
-		return mustEncodeObs(t, Observation{UnixTimestampNanoseconds: ts, SupportedReportFormats: []llotypes.ReportFormat{llotypes.ReportFormatJSON}})
+		return mustEncodeObs(t, Observation{UnixTimestampNanoseconds: ts, SupportedReportFormats: formatSet(llotypes.ReportFormatJSON)})
 	}
 	obsNone := func(ts uint64) []byte {
-		return mustEncodeObs(t, Observation{UnixTimestampNanoseconds: ts, SupportedReportFormats: []llotypes.ReportFormat{}})
+		return mustEncodeObs(t, Observation{UnixTimestampNanoseconds: ts, SupportedReportFormats: formatSet()})
 	}
 
 	// All N oracles advertise JSON.
@@ -1402,9 +1421,9 @@ func Test_StateTransition_PrunesUnusedReportFormatSupport(t *testing.T) {
 	// unpruned tally would hold 3*MaxObservationSupportedReportFormatsLength-2
 	// entries.
 	padded := func(oracle int) []byte {
-		formats := []llotypes.ReportFormat{llotypes.ReportFormatJSON}
+		formats := formatSet(llotypes.ReportFormatJSON)
 		for i := 1; i < protocol.MaxObservationSupportedReportFormatsLength; i++ {
-			formats = append(formats, llotypes.ReportFormat(1_000_000+oracle*1_000+i))
+			formats[llotypes.ReportFormat(1_000_000+oracle*1_000+i)] = struct{}{}
 		}
 		return mustEncodeObs(t, Observation{UnixTimestampNanoseconds: 1, SupportedReportFormats: formats})
 	}
@@ -1706,7 +1725,7 @@ func Test_StateTransition_BackfillValidAfterRequiresPreviousReport(t *testing.T)
 			name: "target format not encodable",
 			defs: llotypes.ChannelDefinitions{targetCID: targetCD, backfillCID: backfillCD},
 			shape: func(obs *Observation) {
-				obs.SupportedReportFormats = []llotypes.ReportFormat{llotypes.ReportFormatHistoryBackfill}
+				obs.SupportedReportFormats = formatSet(llotypes.ReportFormatHistoryBackfill)
 			},
 			want: 0,
 		},

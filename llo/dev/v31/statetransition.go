@@ -7,6 +7,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"maps"
 	"sort"
 	"sync"
 
@@ -254,7 +255,7 @@ type observationTally struct {
 	// supportedFormatsByOracle[oracleID] is the formats that oracle advertised
 	// this round, deduped by decodeObservation. It is merged into the persisted
 	// per-oracle record rather than counted here: see writeCodecSupport.
-	supportedFormatsByOracle map[commontypes.OracleID][]llotypes.ReportFormat
+	supportedFormatsByOracle map[commontypes.OracleID]map[llotypes.ReportFormat]struct{}
 	streamObservations       map[llotypes.StreamID][]protocol.StreamValue
 }
 
@@ -265,7 +266,7 @@ func (p *Plugin) decodeObservations(ctx context.Context, aos []ocrtypes.Attribut
 		removeChannelVotesByID:         make(map[llotypes.ChannelID]int),
 		updateChannelDefinitionsByHash: make(map[[32]byte]protocol.ChannelDefinitionWithID),
 		updateChannelVotesByHash:       make(map[[32]byte]int),
-		supportedFormatsByOracle:       make(map[commontypes.OracleID][]llotypes.ReportFormat),
+		supportedFormatsByOracle:       make(map[commontypes.OracleID]map[llotypes.ReportFormat]struct{}),
 		streamObservations:             make(map[llotypes.StreamID][]protocol.StreamValue),
 	}
 
@@ -320,8 +321,7 @@ func (p *Plugin) decodeObservations(ctx context.Context, aos []ocrtypes.Attribut
 		}
 		tally.timestampsNanoseconds = append(tally.timestampsNanoseconds, observation.UnixTimestampNanoseconds)
 
-		// Deduped by decodeObservation, so an oracle names each format at most
-		// once. Recording the whole advertised set (including an empty one)
+		// Recording the whole advertised set (including an empty one)
 		// makes this round's advertisement replace that oracle's last, so an
 		// oracle that loses a codec stops counting for it.
 		tally.supportedFormatsByOracle[ao.Observer] = observation.SupportedReportFormats
@@ -347,8 +347,8 @@ func (p *Plugin) decodeObservations(ctx context.Context, aos []ocrtypes.Attribut
 // mergeCodecSupport overlays this round's advertisements on the persisted ones,
 // replacing the entry of every oracle that contributed an observation and
 // leaving the rest untouched.
-func mergeCodecSupport(persisted, thisRound map[commontypes.OracleID][]llotypes.ReportFormat) map[commontypes.OracleID][]llotypes.ReportFormat {
-	merged := make(map[commontypes.OracleID][]llotypes.ReportFormat, len(persisted)+len(thisRound))
+func mergeCodecSupport(persisted, thisRound map[commontypes.OracleID]map[llotypes.ReportFormat]struct{}) map[commontypes.OracleID]map[llotypes.ReportFormat]struct{} {
+	merged := make(map[commontypes.OracleID]map[llotypes.ReportFormat]struct{}, len(persisted)+len(thisRound))
 	for oracleID, formats := range persisted {
 		merged[oracleID] = formats
 	}
@@ -358,26 +358,15 @@ func mergeCodecSupport(persisted, thisRound map[commontypes.OracleID][]llotypes.
 	return merged
 }
 
-// codecSupportChanged reports whether any oracle's advertised set differs. Both
-// sides hold deduped sets, so comparing as sets (not slices) is what matters:
-// order must not trigger a rewrite.
-func codecSupportChanged(prev, next map[commontypes.OracleID][]llotypes.ReportFormat) bool {
+// codecSupportChanged reports whether any oracle's advertised set differs.
+func codecSupportChanged(prev, next map[commontypes.OracleID]map[llotypes.ReportFormat]struct{}) bool {
 	if len(prev) != len(next) {
 		return true
 	}
 	for oracleID, nextFormats := range next {
 		prevFormats, ok := prev[oracleID]
-		if !ok || len(prevFormats) != len(nextFormats) {
+		if !ok || !maps.Equal(prevFormats, nextFormats) {
 			return true
-		}
-		seen := make(map[llotypes.ReportFormat]struct{}, len(prevFormats))
-		for _, f := range prevFormats {
-			seen[f] = struct{}{}
-		}
-		for _, f := range nextFormats {
-			if _, ok := seen[f]; !ok {
-				return true
-			}
 		}
 	}
 	return false
@@ -385,10 +374,10 @@ func codecSupportChanged(prev, next map[commontypes.OracleID][]llotypes.ReportFo
 
 // countSupportByFormat counts, per report format, the oracles whose last
 // advertisement named it.
-func countSupportByFormat(support map[commontypes.OracleID][]llotypes.ReportFormat) map[llotypes.ReportFormat]int {
+func countSupportByFormat(support map[commontypes.OracleID]map[llotypes.ReportFormat]struct{}) map[llotypes.ReportFormat]int {
 	counts := make(map[llotypes.ReportFormat]int)
 	for _, formats := range support {
-		for _, format := range formats {
+		for format := range formats {
 			counts[format]++
 		}
 	}
@@ -620,7 +609,7 @@ func (p *Plugin) flushKV(
 	prev *kvState,
 	out precursor,
 	pending llotypes.ChannelDefinitions,
-	codecSupport map[commontypes.OracleID][]llotypes.ReportFormat,
+	codecSupport map[commontypes.OracleID]map[llotypes.ReportFormat]struct{},
 	carryForward map[llotypes.StreamID]map[llotypes.Aggregator]*protocol.TimestampedStreamValue,
 	history *historyStore,
 ) error {

@@ -205,14 +205,20 @@ func (p *Plugin) Observation(_ context.Context, seqNr uint64, _ ocrtypes.Attribu
 // from the codecs it was constructed with. Truncated to the advertisable bound
 // so the observation stays within its size budget; a real codec map is far
 // smaller than the bound, so this never fires in practice.
-func supportedReportFormats(codecs map[llotypes.ReportFormat]protocol.ReportCodec) []llotypes.ReportFormat {
-	out := make([]llotypes.ReportFormat, 0, len(codecs))
+func supportedReportFormats(codecs map[llotypes.ReportFormat]protocol.ReportCodec) map[llotypes.ReportFormat]struct{} {
+	sorted := make([]llotypes.ReportFormat, 0, len(codecs))
 	for format := range codecs {
-		out = append(out, format)
+		sorted = append(sorted, format)
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
-	if len(out) > protocol.MaxObservationSupportedReportFormatsLength {
-		out = out[:protocol.MaxObservationSupportedReportFormatsLength]
+	// Truncation must not depend on map iteration order: every node with the
+	// same codecs has to advertise the same set.
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i] < sorted[j] })
+	if len(sorted) > protocol.MaxObservationSupportedReportFormatsLength {
+		sorted = sorted[:protocol.MaxObservationSupportedReportFormatsLength]
+	}
+	out := make(map[llotypes.ReportFormat]struct{}, len(sorted))
+	for _, format := range sorted {
+		out[format] = struct{}{}
 	}
 	return out
 }
