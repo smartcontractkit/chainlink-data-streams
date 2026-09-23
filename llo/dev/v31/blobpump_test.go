@@ -108,9 +108,7 @@ func Test_blobPump_TakeIsSingleUse(t *testing.T) {
 
 	// The pump may have parked a fresh snapshot by now, so assert on the parked
 	// slot directly rather than on a second Take.
-	p.mu.Lock()
-	p.ready = nil
-	p.mu.Unlock()
+	p.takeReady(0)
 	snap, reason := p.Take(2)
 	require.Nil(t, snap)
 	require.NotEmpty(t, reason)
@@ -122,9 +120,7 @@ func Test_blobPump_RejectsStaleSnapshots(t *testing.T) {
 	// is still fetchable by peers.
 	t.Run("too stale by sequence number", func(t *testing.T) {
 		p := testPump(t, mockDS(), newFakeBroadcaster(), time.Minute)
-		p.mu.Lock()
-		p.ready = &blobSnapshot{handleBytes: []byte{1}, observedAt: time.Now(), forSeqNr: 2, usableBefore: 4, expiresAt: 6}
-		p.mu.Unlock()
+		p.park(&blobSnapshot{handleBytes: []byte{1}, observedAt: time.Now(), forSeqNr: 2, usableBefore: 4, expiresAt: 6})
 
 		snap, reason := p.Take(4)
 		require.Nil(t, snap)
@@ -134,9 +130,7 @@ func Test_blobPump_RejectsStaleSnapshots(t *testing.T) {
 
 	t.Run("expired by wall clock", func(t *testing.T) {
 		p := testPump(t, mockDS(), newFakeBroadcaster(), time.Nanosecond)
-		p.mu.Lock()
-		p.ready = &blobSnapshot{handleBytes: []byte{1}, observedAt: time.Now().Add(-time.Hour), forSeqNr: 2, usableBefore: 100, expiresAt: 100}
-		p.mu.Unlock()
+		p.park(&blobSnapshot{handleBytes: []byte{1}, observedAt: time.Now().Add(-time.Hour), forSeqNr: 2, usableBefore: 100, expiresAt: 100})
 
 		snap, reason := p.Take(3)
 		require.Nil(t, snap)
@@ -145,9 +139,7 @@ func Test_blobPump_RejectsStaleSnapshots(t *testing.T) {
 
 	t.Run("age check disabled", func(t *testing.T) {
 		p := testPump(t, mockDS(), newFakeBroadcaster(), -1)
-		p.mu.Lock()
-		p.ready = &blobSnapshot{handleBytes: []byte{1}, observedAt: time.Now().Add(-time.Hour), forSeqNr: 2, usableBefore: 100, expiresAt: 100}
-		p.mu.Unlock()
+		p.park(&blobSnapshot{handleBytes: []byte{1}, observedAt: time.Now().Add(-time.Hour), forSeqNr: 2, usableBefore: 100, expiresAt: 100})
 
 		snap, _ := p.Take(3)
 		require.NotNil(t, snap, "with the age check disabled only maxSnapshotRounds bounds staleness")
@@ -158,9 +150,7 @@ func Test_blobPump_RejectsStaleSnapshots(t *testing.T) {
 	// cadence would silently stop the node contributing stream values.
 	t.Run("derived age check is inert until a round period is measured", func(t *testing.T) {
 		p := testPump(t, mockDS(), newFakeBroadcaster(), 0)
-		p.mu.Lock()
-		p.ready = &blobSnapshot{handleBytes: []byte{1}, observedAt: time.Now().Add(-time.Hour), forSeqNr: 2, usableBefore: 100, expiresAt: 100}
-		p.mu.Unlock()
+		p.park(&blobSnapshot{handleBytes: []byte{1}, observedAt: time.Now().Add(-time.Hour), forSeqNr: 2, usableBefore: 100, expiresAt: 100})
 
 		snap, reason := p.Take(3)
 		require.NotNil(t, snap, "reason: %s", reason)
@@ -170,8 +160,8 @@ func Test_blobPump_RejectsStaleSnapshots(t *testing.T) {
 		p := testPump(t, mockDS(), newFakeBroadcaster(), 0)
 		p.mu.Lock()
 		p.roundPeriod = time.Millisecond
-		p.ready = &blobSnapshot{handleBytes: []byte{1}, observedAt: time.Now().Add(-time.Hour), forSeqNr: 2, usableBefore: 100, expiresAt: 100}
 		p.mu.Unlock()
+		p.park(&blobSnapshot{handleBytes: []byte{1}, observedAt: time.Now().Add(-time.Hour), forSeqNr: 2, usableBefore: 100, expiresAt: 100})
 
 		snap, reason := p.Take(3)
 		require.Nil(t, snap)
@@ -252,6 +242,123 @@ func Test_blobPump_SingleFlight(t *testing.T) {
 	close(release)
 }
 
+// gatedDataSource blocks until released and then observes normally, modelling a
+// cycle that is still gathering values when Take arrives.
+type gatedDataSource struct {
+	release chan struct{}
+	entered chan struct{}
+	once    sync.Once
+	// err, when set, fails the observation instead of producing values, so the
+	// cycle unwinds without parking anything.
+	err error
+}
+
+func (g *gatedDataSource) Observe(ctx context.Context, sv protocol.StreamValues, opts DSOpts) error {
+	g.once.Do(func() { close(g.entered) })
+	select {
+	case <-g.release:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	if g.err != nil {
+		return g.err
+	}
+	sv[100] = protocol.ToDecimal(decimal.NewFromInt(7))
+	return nil
+}
+
+// Test_blobPump_TakeWaitsForInFlightCycle covers the rescue path: a Take that
+// finds nothing parked while a cycle is gathering waits for that cycle instead
+// of missing the round outright. The data source is released only once the
+// second Take is already waiting, so the snapshot can only have been served by
+// the wait.
+func Test_blobPump_TakeWaitsForInFlightCycle(t *testing.T) {
+	ds := &gatedDataSource{release: make(chan struct{}), entered: make(chan struct{})}
+	p := testPump(t, ds, newFakeBroadcaster(), time.Minute)
+	p.inFlightWait = tests.WaitTimeout(t)
+
+	// The first Take only kicks the cycle: nothing is in flight yet, so there is
+	// nothing for it to wait on.
+	p.SetInput(pumpInputFor(2))
+	snap, reason := p.Take(2)
+	require.Nil(t, snap)
+	require.Equal(t, "no snapshot parked", reason)
+
+	select {
+	case <-ds.entered:
+	case <-time.After(tests.WaitTimeout(t)):
+		t.Fatal("DataSource.Observe was never called")
+	}
+	require.True(t, p.inFlight.Load())
+
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		close(ds.release)
+	}()
+
+	snap, reason = p.Take(2)
+	require.NotNil(t, snap, "Take did not wait for the in-flight cycle: %s", reason)
+	require.Empty(t, reason)
+}
+
+// Test_blobPump_TakeWaitFallsThroughOnTimeout asserts the wait is bounded and
+// the miss path stays the fallback: a cycle that does not park in time still
+// misses the round rather than holding up the observation.
+func Test_blobPump_TakeWaitFallsThroughOnTimeout(t *testing.T) {
+	ds := &gatedDataSource{release: make(chan struct{}), entered: make(chan struct{})}
+	defer close(ds.release)
+
+	p := testPump(t, ds, newFakeBroadcaster(), time.Minute)
+	p.inFlightWait = 50 * time.Millisecond
+
+	p.SetInput(pumpInputFor(2))
+	_, _ = p.Take(2)
+	select {
+	case <-ds.entered:
+	case <-time.After(tests.WaitTimeout(t)):
+		t.Fatal("DataSource.Observe was never called")
+	}
+
+	start := time.Now()
+	snap, reason := p.Take(2)
+	elapsed := time.Since(start)
+	require.Nil(t, snap)
+	require.Equal(t, "cycle in flight", reason)
+	require.GreaterOrEqual(t, elapsed, p.inFlightWait, "Take returned before the wait elapsed")
+	require.Less(t, elapsed, 10*p.inFlightWait, "Take waited well past its bound")
+}
+
+// Test_blobPump_TakeWaitReportsCycleAfterItEnds pins the miss reason for a
+// round that waited: the cycle it waited on can finish empty and clear the
+// in-flight flag before the wait expires, and the round still belongs to that
+// cycle rather than to an absent snapshot.
+func Test_blobPump_TakeWaitReportsCycleAfterItEnds(t *testing.T) {
+	ds := &gatedDataSource{release: make(chan struct{}), entered: make(chan struct{}), err: errors.New("boom")}
+	p := testPump(t, ds, newFakeBroadcaster(), time.Minute)
+	p.inFlightWait = 500 * time.Millisecond
+
+	p.SetInput(pumpInputFor(2))
+	_, _ = p.Take(2)
+	select {
+	case <-ds.entered:
+	case <-time.After(tests.WaitTimeout(t)):
+		t.Fatal("DataSource.Observe was never called")
+	}
+
+	// Fail the cycle while the next Take is waiting on it.
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		close(ds.release)
+	}()
+
+	// The reason is resolved inside Take, before its deferred kick starts the
+	// next cycle, so it is the only assertable evidence here: reading inFlight
+	// after Take returns would race that new cycle.
+	snap, reason := p.Take(2)
+	require.Nil(t, snap)
+	require.Equal(t, "cycle in flight", reason)
+}
+
 func Test_observableStreams(t *testing.T) {
 	state := &kvState{channelDefinitions: llotypes.ChannelDefinitions{
 		1: {ReportFormat: llotypes.ReportFormatJSON, Streams: []llotypes.Stream{
@@ -317,7 +424,9 @@ func Test_blobPump_SurvivesDataSourcePanic(t *testing.T) {
 	p.SetInput(pumpInputFor(3))
 	_, _ = p.Take(3)
 	require.Eventually(t, func() bool { return ds.calls.Load() >= 2 }, tests.WaitTimeout(t), 10*time.Millisecond)
-	require.False(t, p.inFlight.Load())
+	// Take kicks before it returns, so the last kicked cycle may still be
+	// running; it must unwind rather than leave the flag stuck.
+	require.Eventually(t, func() bool { return !p.inFlight.Load() }, tests.WaitTimeout(t), 10*time.Millisecond)
 }
 
 // stuckDataSource ignores its context and blocks until released, modelling a

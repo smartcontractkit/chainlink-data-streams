@@ -80,6 +80,9 @@ const (
 	closeTimeoutSlackMultiplier = 5
 	// minCloseTimeout fixes the minimum time Close waits waits for an in-flight cycle.
 	minCloseTimeout = 1 * time.Second
+	// BlobInFlightWaitDivisor scales MaxDurationObservation into how long Take
+	// waits for a cycle that is already in flight to park.
+	BlobInFlightWaitDivisor = 8
 )
 
 // perOracleUnexpiredBlobCount derives the per-oracle unexpired-blob budget from
@@ -140,9 +143,11 @@ type blobPump struct {
 	cycles     atomic.Uint64
 	missStreak atomic.Uint64
 
+	// ready holds the latest parked snapshot.
+	ready chan *blobSnapshot
+
 	mu    sync.Mutex
 	input pumpInput
-	ready *blobSnapshot
 	// lastTakeAt and roundPeriod estimate the round cadence from the interval
 	// between consecutive Take calls (one per round), which is the only signal
 	// the plugin has: deltaRound is not part of the reporting plugin config.
@@ -165,6 +170,8 @@ type blobPumpParams struct {
 	maxSnapshotRounds uint64
 	// blobLifetimeRounds is the remote fetchability bound. See DefaultBlobLifetimeRounds.
 	blobLifetimeRounds uint64
+	// inFlightWait bounds how long Take waits for an in-flight cycle to park.
+	inFlightWait time.Duration
 }
 
 func newBlobPump(lggr logger.Logger, params blobPumpParams) *blobPump {
@@ -173,6 +180,7 @@ func newBlobPump(lggr logger.Logger, params blobPumpParams) *blobPump {
 		blobPumpParams: params,
 		lggr:           logger.Sugared(lggr).Named("BlobPump"),
 		trigger:        make(chan struct{}, 1),
+		ready:          make(chan *blobSnapshot, 1),
 		ctx:            ctx,
 		cancel:         cancel,
 		closeTimeout:   max(params.observationTimeout*closeTimeoutSlackMultiplier, minCloseTimeout),
@@ -232,35 +240,28 @@ func (p *blobPump) SetInput(in pumpInput) {
 // kicks the next cycle: kicking on a discard as well as on a hit is what stops
 // a single unusable snapshot from stalling the pump forever. The second return
 // value is the reason a snapshot was not returned, for logging.
+//
+// A round that finds nothing parked while a cycle is running waits for
+// inFlightWait for the cycle to park.
 func (p *blobPump) Take(seqNr uint64) (*blobSnapshot, string) {
 	if !p.enabled() {
 		p.miss()
 		return nil, "blob pump disabled"
 	}
 
-	now := time.Now()
-
 	p.mu.Lock()
-	snap := p.ready
-	p.ready = nil
-	// Measure before resolving the limit, both under the same lock. On the very
-	// first Take there is no previous call to measure against, so roundPeriod is
-	// still zero and the derived age check is inert. That Take is also the one
-	// that kicks the first cycle, though, so nothing is parked yet and the round
-	// misses on "no snapshot parked" regardless. By the second Take, which is
-	// the first that can see a snapshot, the gap has been measured and the check
-	// is live. There is no round in which a snapshot exists and roundPeriod is
-	// still zero.
-	p.recordRoundLocked(now)
+	p.recordRoundLocked(time.Now())
 	ageLimit := p.snapshotAgeLimitLocked()
 	p.mu.Unlock()
 
 	defer p.kick()
+	snap, waited := p.takeReady(p.inFlightWait)
 
+	now := time.Now()
 	switch {
 	case snap == nil:
 		p.miss()
-		if p.inFlight.Load() {
+		if waited || p.inFlight.Load() {
 			return nil, "cycle in flight"
 		}
 		return nil, "no snapshot parked"
@@ -274,6 +275,36 @@ func (p *blobPump) Take(seqNr uint64) (*blobSnapshot, string) {
 		p.missStreak.Store(0)
 		return snap, ""
 	}
+}
+
+// takeReady detaches the parked snapshot, waiting up to timeout for an
+// in-flight cycle to park one.
+func (p *blobPump) takeReady(timeout time.Duration) (*blobSnapshot, bool) {
+	waited := false
+	if timeout > 0 && p.inFlight.Load() {
+		waited = true
+		ctx, cancel := context.WithTimeout(p.ctx, timeout)
+		defer cancel()
+		select {
+		case snap := <-p.ready:
+			return snap, waited
+		case <-ctx.Done():
+		}
+	}
+
+	select {
+	case snap := <-p.ready:
+		return snap, waited
+	default:
+		return nil, waited
+	}
+}
+
+// park makes a snapshot available to take, replacing if we have a snap
+// that no round has taken. The newest snapshot has a higher priority.
+func (p *blobPump) park(snap *blobSnapshot) {
+	p.takeReady(0)
+	p.ready <- snap
 }
 
 // miss records a round that found no usable snapshot. Sustained misses means
@@ -386,9 +417,7 @@ func (p *blobPump) cycle() {
 	}
 
 	p.cycles.Add(1)
-	p.mu.Lock()
-	p.ready = snap
-	p.mu.Unlock()
+	p.park(snap)
 
 	if p.verboseLogging {
 		p.lggr.Debugw("Blob pump parked snapshot", "seqNr", in.seqNr, "usableBefore", snap.usableBefore, "expiresAt", snap.expiresAt, "streams", snap.streamCount, "handleBytes", len(snap.handleBytes))

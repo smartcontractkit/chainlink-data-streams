@@ -149,6 +149,7 @@ func (f *PluginFactory) NewReportingPlugin(ctx context.Context, cfg ocr3types.Re
 		configDigest:       cfg.ConfigDigest,
 		verboseLogging:     f.Config.VerboseLogging,
 		observationTimeout: blobObservationTimeout,
+		inFlightWait:       cfg.MaxDurationObservation / BlobInFlightWaitDivisor,
 		maxSnapshotAge:     f.MaxBlobSnapshotAge,
 		maxSnapshotRounds:  maxSnapshotRounds,
 		blobLifetimeRounds: blobLifetimeRounds,
