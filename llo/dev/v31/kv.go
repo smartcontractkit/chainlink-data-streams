@@ -24,9 +24,6 @@ import (
 //	c/defs      -> LLOChannelStateProto: every live channel definition
 //	               (written only when the definitions change)
 //	c/seqnr     -> uint64 BE seqNr of the last c/defs write
-//	c/pred      -> LLOPredecessorConfigProto: the predecessor's signer set and
-//	               f, agreed by vote while staging (written at most once, and
-//	               only by an instance that has a predecessor)
 //	c/codecs    -> LLOCodecSupportProto: the report formats each oracle last
 //	               advertised a codec for (written only when some oracle's
 //	               advertised set changes)
@@ -50,12 +47,11 @@ import (
 // a read cost of depth/chunkSize point reads instead of one. See
 // protocol.RingWindow.
 var (
-	keyLifecycle         = []byte("c/lifecycle")
-	keyChannelState      = []byte("c/defs")
-	keyChannelSeqNr      = []byte("c/seqnr")
-	keyPredecessorConfig = []byte("c/pred")
-	keyCodecSupport      = []byte("c/codecs")
-	keyHotState          = []byte("r/agg")
+	keyLifecycle    = []byte("c/lifecycle")
+	keyChannelState = []byte("c/defs")
+	keyChannelSeqNr = []byte("c/seqnr")
+	keyCodecSupport = []byte("c/codecs")
+	keyHotState     = []byte("r/agg")
 
 	keyHistoryIndex   = []byte("hidx")
 	keyHistoryVersion = []byte("hv")
@@ -283,47 +279,6 @@ func readChannelState(r ocr3_1types.KeyValueStateReader) (llotypes.ChannelDefini
 		defs[entry.ChannelID] = protocol.ChannelDefinitionFromProto(entry.ChannelDefinition)
 	}
 	return defs, nil
-}
-
-// predecessorConfig is the decoded c/pred record: the signer set and f of the
-// predecessor instance, which is what verifying an attested predecessor
-// retirement report needs.
-type predecessorConfig struct {
-	signers [][]byte
-	f       uint8
-}
-
-// readPredecessorConfig reads and decodes the c/pred record, returning nil when
-// it has not been agreed yet.
-//
-// Only a staging instance that has a predecessor ever reads or writes this key,
-// so every other instance pays nothing for it.
-func readPredecessorConfig(r ocr3_1types.KeyValueStateReader) (*predecessorConfig, error) {
-	b, err := r.Read(keyPredecessorConfig)
-	if err != nil {
-		return nil, fmt.Errorf("read predecessor config: %w", err)
-	}
-	if len(b) == 0 {
-		return nil, nil
-	}
-	pb := &protocol.LLOPredecessorConfigProto{}
-	if err := proto.Unmarshal(b, pb); err != nil {
-		return nil, fmt.Errorf("unmarshal predecessor config: %w", err)
-	}
-	if pb.F > 255 {
-		return nil, fmt.Errorf("predecessor config has f out of range: %d", pb.F)
-	}
-	return &predecessorConfig{signers: pb.Signers, f: uint8(pb.F)}, nil
-}
-
-// writePredecessorConfig persists the agreed c/pred record. Signer order is
-// preserved: a signature names its signer by index into the set.
-func writePredecessorConfig(w ocr3_1types.KeyValueStateReadWriter, pc predecessorConfig) error {
-	b, err := deterministicMarshal.Marshal(&protocol.LLOPredecessorConfigProto{Signers: pc.signers, F: uint32(pc.f)})
-	if err != nil {
-		return fmt.Errorf("marshal predecessor config: %w", err)
-	}
-	return w.Write(keyPredecessorConfig, b)
 }
 
 // readHotState reads and decodes the r/agg record into s.

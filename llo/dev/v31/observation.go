@@ -32,9 +32,9 @@ type Observation struct {
 	SupportedReportFormats []llotypes.ReportFormat
 	// PredecessorSigners and PredecessorF are the predecessor instance's signer
 	// set and f, read from the node-local retirement report cache. A staging
-	// instance carries them until c/pred is agreed, which turns them into a
-	// replicated fact the state transition can verify retirement reports
-	// against; see readPredecessorConfig.
+	// instance carries them alongside an attested retirement report, so the
+	// state transition can agree on the set by vote and verify the report
+	// against it; see resolvePredecessorRetirement.
 	//
 	// Signer order is significant: a signature names its signer by index.
 	PredecessorSigners [][]byte

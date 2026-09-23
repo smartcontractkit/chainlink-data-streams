@@ -82,14 +82,10 @@ func (p *Plugin) StateTransition(ctx context.Context, seqNr uint64, _ ocrtypes.A
 	}
 
 	// Verifying an attested predecessor retirement report needs the
-	// predecessor's signer set, which is node-local until the DON agrees on it.
-	// Agree first, then verify against the agreed set, so every oracle reaches
-	// the same verdict. A set agreed this round is usable this round, so a
-	// handover normally costs no extra round.
-	validPredecessorRetirementReport, err := p.resolvePredecessorRetirement(kvRW, seqNr, prev.lifeCycleStage, tally)
-	if err != nil {
-		return nil, err
-	}
+	// predecessor's signer set, which is node-local. Agree on it from this
+	// round's votes, then verify against the agreed set, so every oracle
+	// reaches the same verdict.
+	validPredecessorRetirementReport := p.resolvePredecessorRetirement(seqNr, prev.lifeCycleStage, tally)
 
 	// Codec coverage is cumulative across rounds: merge this round's
 	// advertisements over the persisted ones before counting supporters.
@@ -721,6 +717,14 @@ func medianTimestamp(timestampsNanoseconds []uint64) uint64 {
 
 // makeChannelHash delegates to the shared implementation so that v3.0 running
 // protocol version 2 and v3.1 cannot drift apart on channel identity.
+// predecessorConfig is a candidate predecessor instance's signer set and f,
+// which is what verifying an attested predecessor retirement report needs. It
+// is agreed by vote within a round and never persisted.
+type predecessorConfig struct {
+	signers [][]byte
+	f       uint8
+}
+
 // hashPredecessorConfig identifies a candidate predecessor config so votes for
 // the same one can be tallied. Signer order is part of the identity: a
 // signature names its signer by index, so two sets differing only in order are
@@ -740,47 +744,35 @@ func hashPredecessorConfig(pc predecessorConfig) [32]byte {
 	return out
 }
 
-// resolvePredecessorRetirement agrees on the predecessor's signer set, then
-// verifies this round's attested retirement reports against it.
+// resolvePredecessorRetirement agrees on the predecessor's signer set from
+// this round's votes, then verifies this round's attested retirement reports
+// against it.
 //
-// The signer set is written to c/pred once more than f oracles vote for the
-// same one, so at least one honest oracle vouches for it. It is written at most
-// once: if it could be revoted, a coalition that later reaches f+1 could swap
-// in a signer set of its own and forge a retirement report, promoting this
-// instance on a handover that never happened.
+// Agreement holds for this round only and is never stored. More than f votes
+// for the same set means at least one honest oracle vouches for it, and that
+// argument is per round: a coalition of f can never elect a set of its own, in
+// this round or any later one, and nothing accumulates between rounds for it
+// to build on.
 //
-// Everything here reads replicated state only, so every oracle reaches the same
-// verdict. A report that fails verification is ignored, not fatal: the bytes
-// are the same everywhere, so ignoring them is deterministic too.
+// Everything here reads the round's observations only, so every oracle reaches
+// the same verdict. A report that fails verification is ignored, not fatal:
+// the bytes are the same everywhere, so ignoring them is deterministic too.
 func (p *Plugin) resolvePredecessorRetirement(
-	kvRW ocr3_1types.KeyValueStateReadWriter,
 	seqNr uint64,
 	stage llotypes.LifeCycleStage,
 	tally observationTally,
-) (*protocol.RetirementReport, error) {
+) *protocol.RetirementReport {
 	// Only a staging instance with a predecessor has a handover to complete.
 	if p.PredecessorConfigDigest == nil || stage != protocol.LifeCycleStageStaging {
-		return nil, nil
+		return nil
 	}
 
-	agreed, err := readPredecessorConfig(kvRW)
-	if err != nil {
-		return nil, err
-	}
-	if agreed == nil {
-		if elected := electPredecessorConfig(tally.predConfigsByHash, tally.predConfigVotesByHash, p.F); elected != nil {
-			if err := writePredecessorConfig(kvRW, *elected); err != nil {
-				return nil, err
-			}
-			p.Logger.Infow("Agreed on predecessor config", "seqNr", seqNr, "signers", len(elected.signers), "f", elected.f, "predecessorConfigDigest", *p.PredecessorConfigDigest)
-			agreed = elected
-		}
-	}
+	agreed := electPredecessorConfig(tally.predConfigsByHash, tally.predConfigVotesByHash, p.F)
 	if agreed == nil {
 		if len(tally.attestedRetirements) > 0 {
-			p.Logger.Warnw("Ignoring attested predecessor retirement reports: the predecessor config is not agreed yet", "seqNr", seqNr, "reports", len(tally.attestedRetirements))
+			p.Logger.Warnw("Ignoring attested predecessor retirement reports: the predecessor config is not agreed this round", "seqNr", seqNr, "reports", len(tally.attestedRetirements))
 		}
-		return nil, nil
+		return nil
 	}
 
 	for _, attested := range tally.attestedRetirements {
@@ -789,9 +781,9 @@ func (p *Plugin) resolvePredecessorRetirement(
 			p.Logger.Warnw("Ignoring invalid attested predecessor retirement", "seqNr", seqNr, "error", verr, "predecessorConfigDigest", *p.PredecessorConfigDigest)
 			continue
 		}
-		return &retirementReport, nil
+		return &retirementReport
 	}
-	return nil, nil
+	return nil
 }
 
 // electPredecessorConfig returns the candidate with more than f votes, or nil.

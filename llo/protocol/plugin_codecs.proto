@@ -34,10 +34,10 @@ message LLOObservationProto {
     // fact instead.
     repeated uint32 supportedReportFormats = 8;
     // The predecessor instance's signer set and f, read from the node-local
-    // retirement report cache. Carried only by a v31 staging instance that has
-    // not yet agreed on c/pred, so the state transition can verify attested
-    // retirement reports against replicated state instead of node-local state.
-    // Order is significant: a signature names its signer by index into it.
+    // retirement report cache. Carried by a v31 staging instance alongside an
+    // attested retirement report, so the state transition can agree on the set
+    // by vote and verify the report against it instead of reading node-local
+    // state. Order is significant: a signature names its signer by index.
     repeated bytes predecessorSigners = 9;
     uint32 predecessorF = 10;
 }
@@ -186,23 +186,6 @@ message LLOStreamAggregate {
 // of a map. channelDefinitions MUST be sorted ascending by channelID.
 message LLOChannelStateProto {
     repeated LLOChannelIDAndDefinitionProto channelDefinitions = 1;
-}
-
-// LLOPredecessorConfigProto is the v31 KeyValueState record holding the
-// predecessor instance's signer set and f under a single key (c/pred), agreed
-// by vote while staging and written at most once.
-//
-// It exists so that verifying an attested predecessor retirement report reads
-// only replicated state. The same data is available node-locally from the
-// retirement report cache, but that cache is filled asynchronously by the
-// config poller, so oracles reach different verdicts from it and the state
-// transition would fork.
-//
-// NOTE: must serialize deterministically. signers MUST keep the order the
-// predecessor's config gives them, since a signature names its signer by index.
-message LLOPredecessorConfigProto {
-    repeated bytes signers = 1;
-    uint32 f = 2;
 }
 
 // LLOHotStateProto is the v31 KeyValueState record holding the per-round

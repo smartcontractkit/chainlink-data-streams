@@ -31,11 +31,6 @@
 //     timestamped aggregates — and is rewritten every round.
 //   - c/defs holds every channel definition and is rewritten only when the
 //     definitions change; c/seqnr records the sequence number of that write.
-//   - c/pred holds the predecessor instance's signer set and f, agreed by vote
-//     while staging and written at most once. Verifying an attested predecessor
-//     retirement report against it keeps the state transition reading only
-//     replicated state: the node-local retirement report cache is filled
-//     asynchronously, so reading it here would fork.
 //   - c/lifecycle holds the lifecycle stage and is written only on change.
 //
 // Because c/defs is a pure function of c/seqnr, the plugin keeps the decoded

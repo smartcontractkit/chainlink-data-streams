@@ -138,10 +138,6 @@ func Test_Golden_KVRecords(t *testing.T) {
 		},
 		logger.Test(t),
 	))
-	require.NoError(t, writePredecessorConfig(kv, predecessorConfig{
-		signers: [][]byte{{0xAA, 0xBB}, {0xCC}, {0xDD}, {0xEE}},
-		f:       1,
-	}))
 	require.NoError(t, writeHistoryLayoutVersion(kv))
 	require.NoError(t, writeHistoryIndex(kv, []histKey{
 		{streamID: 100, aggregator: llotypes.AggregatorMedian},
@@ -156,7 +152,6 @@ func Test_Golden_KVRecords(t *testing.T) {
 		{"kv_channel_state.bin", keyChannelState},
 		{"kv_channel_seqnr.bin", keyChannelSeqNr},
 		{"kv_hot_state.bin", keyHotState},
-		{"kv_predecessor_config.bin", keyPredecessorConfig},
 		{"kv_history_version.bin", keyHistoryVersion},
 		{"kv_history_index.bin", keyHistoryIndex},
 	} {
@@ -178,10 +173,6 @@ func Test_Golden_KVRecords(t *testing.T) {
 	require.Equal(t, p.ValidAfterNanoseconds, s.validAfterNanoseconds)
 	require.Equal(t, map[llotypes.ChannelID]bool{3: true, 2: true}, s.reportedLastRound)
 	require.Len(t, s.carryForward, 2)
-
-	pc, err := readPredecessorConfig(kv)
-	require.NoError(t, err)
-	require.Equal(t, &predecessorConfig{signers: [][]byte{{0xAA, 0xBB}, {0xCC}, {0xDD}, {0xEE}}, f: 1}, pc)
 
 	version, err := readHistoryLayoutVersion(kv)
 	require.NoError(t, err)
@@ -249,7 +240,6 @@ func Test_Golden_KVKeys(t *testing.T) {
 		{"c/defs", string(keyChannelState)},
 		{"c/seqnr", string(keyChannelSeqNr)},
 		{"r/agg", string(keyHotState)},
-		{"c/pred", string(keyPredecessorConfig)},
 		{"hidx", string(keyHistoryIndex)},
 		{"hv", string(keyHistoryVersion)},
 	} {
