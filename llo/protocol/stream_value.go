@@ -106,6 +106,12 @@ func checkObservedStreamValue(sv StreamValue) error {
 	}
 }
 
+// CheckDecimalCoefficient bounds the coefficient length of a decimal that is
+// about to be written into state. See MaxDecimalCoefficientBits.
+func CheckDecimalCoefficient(d decimal.Decimal) error {
+	return checkDecimalCoefficient(d)
+}
+
 // checkDecimalCoefficient bounds the coefficient length of a decimal carried by
 // an observation. See MaxDecimalCoefficientBits.
 func checkDecimalCoefficient(d decimal.Decimal) error {

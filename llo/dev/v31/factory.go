@@ -170,14 +170,18 @@ func (f *PluginFactory) NewReportingPlugin(ctx context.Context, cfg ocr3types.Re
 	//	                              MaxObservationUpdateChannelDefinitionsLength
 	//	                              definitions.
 	//	MaxReportsPlusPrecursorBytes  the precursor embeds every definition plus
-	//	                              every stream aggregate. The aggregate count
-	//	                              is bounded by protocol.MaxPersistedAggregates,
-	//	                              and the definition set by channel count
+	//	                              every stream aggregate. Admission bounds
+	//	                              the aggregate count by
+	//	                              protocol.MaxPersistedAggregates, and the
+	//	                              definition set by channel count
 	//	                              (MaxOutcomeChannelDefinitionsLength), total
 	//	                              stream entries (MaxTotalStreamEntries) and
-	//	                              opts bytes (MaxTotalOptsBytes) at admission.
-	//                                A stream value's decimal coefficient is bounded
-	//	                              on observation decode.
+	//	                              opts bytes (MaxTotalOptsBytes). Calculated
+	//	                              streams are counted separately, by
+	//	                              MaxTotalCalculatedStreams. A stream value's
+	//	                              decimal coefficient is bounded on
+	//	                              observation decode, and a calculated one
+	//	                              where it is written into the aggregates.
 	//	MaxKeyValueModifiedKeys*      the per-round write set is c/defs plus r/agg
 	//	                              plus the history windows, and history is
 	//	                              held to protocol.MaxHistoryTotalBytes so it

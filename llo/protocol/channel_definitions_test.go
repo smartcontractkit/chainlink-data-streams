@@ -439,6 +439,72 @@ func Test_VerifyChannelDefinitions_SizeBudgets(t *testing.T) {
 			fmt.Sprintf("too many stream entries across all channels, got: %d/%d", 11*(MaxTotalStreamEntries/10), MaxTotalStreamEntries))
 	})
 
+	t.Run("aggregated pairs across the set", func(t *testing.T) {
+		// One channel per aggregator, each listing the same streams, so the
+		// pair count grows while the unique-stream-ID cap and the entry budget
+		// stay untouched.
+		perAggregator := func(aggregators ...llotypes.Aggregator) llotypes.ChannelDefinitions {
+			defs := llotypes.ChannelDefinitions{}
+			for c, agg := range aggregators {
+				cd := llotypes.ChannelDefinition{Streams: make([]llotypes.Stream, 0, MaxObservationStreamValuesLength)}
+				for i := range MaxObservationStreamValuesLength {
+					cd.Streams = append(cd.Streams, llotypes.Stream{StreamID: llotypes.StreamID(i + 1), Aggregator: agg})
+				}
+				defs[llotypes.ChannelID(c+1)] = cd
+			}
+			return defs
+		}
+
+		atLimit := perAggregator(llotypes.AggregatorMedian, llotypes.AggregatorMode)
+		require.NoError(t, verifyAdmittingAll(codecs, atLimit))
+
+		over := perAggregator(llotypes.AggregatorMedian, llotypes.AggregatorMode, llotypes.AggregatorQuote)
+		require.EqualError(t, verifyAdmittingAll(codecs, over),
+			fmt.Sprintf("too many aggregated (stream, aggregator) pairs across all channels, got: %d/%d", 3*MaxObservationStreamValuesLength, MaxPersistedAggregates))
+	})
+
+	t.Run("a pair costs one aggregate however many channels name it", func(t *testing.T) {
+		// The same (stream, aggregator) pair repeated across channels is one
+		// carried-forward value, so the pair budget must count it once even
+		// where the entry budget counts it every time.
+		defs := sharedStream(4, MaxPersistedAggregates/2)
+		require.NoError(t, verifyAdmittingAll(codecs, defs))
+	})
+
+	t.Run("calculated streams across the set", func(t *testing.T) {
+		// Expression channels declaring distinct calculated stream IDs, spread
+		// across enough channels to stay under MaxChannelOptsBytes. The entry
+		// and opts budgets stay well clear: a calculated stream costs an ABI
+		// entry, not a stream entry.
+		const perChannel = 500
+		calculated := func(total int) llotypes.ChannelDefinitions {
+			defs := llotypes.ChannelDefinitions{}
+			next := llotypes.StreamID(1_000_000)
+			for c := 0; total > 0; c++ {
+				n := min(perChannel, total)
+				total -= n
+				abi := make([]string, 0, n)
+				for range n {
+					abi = append(abi, fmt.Sprintf(`{"expressionStreamID":%d}`, next))
+					next++
+				}
+				defs[llotypes.ChannelID(c+1)] = llotypes.ChannelDefinition{
+					ReportFormat: llotypes.ReportFormatEVMABIEncodeUnpackedExpr,
+					Streams:      []llotypes.Stream{{StreamID: llotypes.StreamID(c + 1), Aggregator: llotypes.AggregatorMedian}},
+					Opts:         llotypes.ChannelOpts(fmt.Sprintf(`{"abi":[%s]}`, strings.Join(abi, ","))),
+				}
+			}
+			return defs
+		}
+
+		atLimit := calculated(MaxTotalCalculatedStreams)
+		require.NoError(t, verifyAdmittingAll(codecs, atLimit))
+
+		over := calculated(MaxTotalCalculatedStreams + 1)
+		require.EqualError(t, verifyAdmittingAll(codecs, over),
+			fmt.Sprintf("too many calculated streams across all channels, got: %d/%d", MaxTotalCalculatedStreams+1, MaxTotalCalculatedStreams))
+	})
+
 	t.Run("total opts bytes across the set", func(t *testing.T) {
 		// Every channel individually within MaxChannelOptsBytes; only the sum
 		// exceeds the budget.

@@ -863,6 +863,14 @@ func applyCalculatedStreams(lggr logger.Logger, channelDefinitions llotypes.Chan
 					work.cid, abi.ExpressionStreamID, abi.Expression)
 				break
 			}
+			// A calculated value never passes through observation decode, so
+			// this is the only place its coefficient is bounded.
+			if cerr := protocol.CheckDecimalCoefficient(value); cerr != nil {
+				err = fmt.Errorf(
+					"calculated stream value out of range, channelID: %d, expressionStreamID: %d, expression: %s: %w",
+					work.cid, abi.ExpressionStreamID, abi.Expression, cerr)
+				break
+			}
 			// update the aggregates with the new stream value if expression was successfully evaluated
 			streamAggregates[abi.ExpressionStreamID] = map[llotypes.Aggregator]protocol.StreamValue{
 				llotypes.AggregatorCalculated: protocol.ToDecimal(value),

@@ -236,6 +236,16 @@ func analyzeChannelDefinitions(codecs map[llotypes.ReportFormat]ReportCodec, cha
 	// reads) and checked once at the end.
 	var totalStreamEntries, totalOptsBytes int
 
+	// Every (streamID, aggregator) pair that will hold an aggregate. Distinct
+	// pairs, not stream entries: several channels naming the same pair cost one
+	// aggregate between them. Bounded by MaxPersistedAggregates, which is what
+	// the r/agg record can carry.
+	aggregatedPairs := make(map[streamAggregatorPair]struct{}, len(channelDefs))
+	// Calculated streams declared across the set. Counted separately from the
+	// pairs above because they are recomputed each round rather than carried
+	// forward, so they cost precursor bytes but no r/agg bytes.
+	var totalCalculatedStreams int
+
 	uniqueStreamIDs := make(map[llotypes.StreamID]struct{}, len(channelDefs))
 	// Owners of every stream ID that will hold an aggregate: observed streams
 	// come from the definitions, calculated streams from the expressions their
@@ -285,6 +295,12 @@ func analyzeChannelDefinitions(codecs map[llotypes.ReportFormat]ReportCodec, cha
 				admit(fmt.Errorf("ChannelDefinition with ID %d has stream %d with unknown aggregator %d", channelID, strm.StreamID, strm.Aggregator), channelID)
 			}
 			uniqueStreamIDs[strm.StreamID] = struct{}{}
+			// Pairs that aggregation actually produces a value for: calculated
+			// streams are recomputed each round rather than aggregated, and
+			// history backfill channels are not aggregated at all.
+			if strm.Aggregator != llotypes.AggregatorCalculated && cd.ReportFormat != llotypes.ReportFormatHistoryBackfill {
+				aggregatedPairs[streamAggregatorPair{streamID: strm.StreamID, aggregator: strm.Aggregator}] = struct{}{}
+			}
 			// Calculated streams are derived from the opts that declare them and
 			// are not stored on the definition, so anything listed here is
 			// observed. Definitions written by older code may still carry their
@@ -302,6 +318,7 @@ func analyzeChannelDefinitions(codecs map[llotypes.ReportFormat]ReportCodec, cha
 			if facts.calculatedErr != nil {
 				admit(fmt.Errorf("invalid ChannelDefinition with ID %d: %w", channelID, facts.calculatedErr), channelID)
 			}
+			totalCalculatedStreams += len(facts.calculatedIDs)
 			for _, streamID := range facts.calculatedIDs {
 				if owner, ok := calculatedBy[streamID]; ok {
 					admit(fmt.Errorf("ChannelDefinition with ID %d declares calculated stream %d already declared by channel %d", channelID, streamID, owner), channelID, owner)
@@ -349,10 +366,17 @@ func analyzeChannelDefinitions(codecs map[llotypes.ReportFormat]ReportCodec, cha
 		}
 	}
 
-	// Whole-set budgets. Both are what the sizes of the channel-definitions
-	// record and the precursor actually depend on; see the limits they name.
+	// Whole-set budgets. Each is what the sizes of the channel-definitions
+	// record, the precursor and the carry-forward record actually depend on;
+	// see the limits they name.
 	if totalStreamEntries > MaxTotalStreamEntries {
 		admitSet(fmt.Errorf("too many stream entries across all channels, got: %d/%d", totalStreamEntries, MaxTotalStreamEntries))
+	}
+	if len(aggregatedPairs) > MaxPersistedAggregates {
+		admitSet(fmt.Errorf("too many aggregated (stream, aggregator) pairs across all channels, got: %d/%d", len(aggregatedPairs), MaxPersistedAggregates))
+	}
+	if totalCalculatedStreams > MaxTotalCalculatedStreams {
+		admitSet(fmt.Errorf("too many calculated streams across all channels, got: %d/%d", totalCalculatedStreams, MaxTotalCalculatedStreams))
 	}
 	if totalOptsBytes > MaxTotalOptsBytes {
 		admitSet(fmt.Errorf("too many opts bytes across all channels, got: %d/%d", totalOptsBytes, MaxTotalOptsBytes))
@@ -360,6 +384,14 @@ func analyzeChannelDefinitions(codecs map[llotypes.ReportFormat]ReportCodec, cha
 
 	res.uniqueStreamIDs = len(uniqueStreamIDs)
 	return res
+}
+
+// streamAggregatorPair identifies one aggregate. The aggregator is part of the
+// identity because the same stream can be aggregated differently by different
+// channels, and each way costs its own carried-forward value.
+type streamAggregatorPair struct {
+	streamID   llotypes.StreamID
+	aggregator llotypes.Aggregator
 }
 
 func sortedStreamIDs(m map[llotypes.StreamID]llotypes.ChannelID) []llotypes.StreamID {

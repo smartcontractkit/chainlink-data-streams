@@ -118,6 +118,11 @@ const (
 	// (measured by TestLimits_ChannelStateWorstCaseFitsPerKeyLimit).
 	MaxTotalOptsBytes = 1 << 20
 
+	// MaxTotalCalculatedStreams bounds how many calculated streams the whole
+	// definition set may declare. One expression produces one value, so this is
+	// the expression count too.
+	MaxTotalCalculatedStreams = MaxPersistedAggregates
+
 	// Stream history limits.
 	//
 	// A history "pair" is a (streamID, aggregator) tuple: the identity of one
@@ -263,23 +268,7 @@ const (
 
 	// MaxPersistedAggregates bounds how many (streamID, aggregator) pairs may
 	// carry a timestamped aggregate forward across rounds in the v3.1 r/agg
-	// record. Pairs are ordered by (streamID, aggregator) and those beyond the
-	// cap are not persisted: their streams simply lose carry-forward and are
-	// re-aggregated from fresh observations each round, which is a degradation
-	// rather than a halt.
-	//
-	// Without it the count is bounded only indirectly, by
-	// MaxObservationStreamValuesLength unique streams times the number of
-	// aggregators each may be aggregated by, which reaches tens of thousands of
-	// pairs -- past libocr's 2 MiB per-key limit for a single record, at which
-	// point every oracle's write is rejected and the round fails.
-	//
-	// 20_000 is twice MaxObservationStreamValuesLength, so it accommodates every
-	// observed stream being aggregated two ways -- more than any real
-	// configuration -- while holding the record to the low MiB range. Note this
-	// caps the pair count, not the bytes: a single record is only bounded once
-	// the decimal coefficient is bounded too (see MaxHistoryRecordBytes for the
-	// same caveat).
+	// record.
 	MaxPersistedAggregates = 2 * MaxObservationStreamValuesLength
 
 	// MaxHistoryBackfillObservations bounds the maximum number of
