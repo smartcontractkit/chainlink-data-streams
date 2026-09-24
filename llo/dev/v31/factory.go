@@ -50,6 +50,11 @@ type PluginFactoryParams struct {
 	// budget (default: DefaultBlobObservationDurationMultiplier *
 	// cfg.MaxDurationObservation).
 	MaxDurationBlobObservation time.Duration
+	// BlobInFlightWaitFactor overrides defaultBlobInFlightWaitFactor if
+	// non-zero. Divides cfg.MaxDurationObservation into how long Take waits for
+	// a cycle already in flight to park, so a larger factor waits less. Must
+	// be >0.
+	BlobInFlightWaitFactor uint64
 	// MaxBlobSnapshotAge pins the wall-clock age at which a parked snapshot is
 	// discarded. Left at zero the pump derives it from the round period it
 	// measures, which is the only safe default: any bound derived from
@@ -110,6 +115,11 @@ func (f *PluginFactory) NewReportingPlugin(ctx context.Context, cfg ocr3types.Re
 			aggregationFaultTolerance, cfg.F, 2*aggregationFaultTolerance+1, 2*cfg.F+1)
 	}
 
+	blobInFlightWaitFactor := f.BlobInFlightWaitFactor
+	if blobInFlightWaitFactor == 0 {
+		blobInFlightWaitFactor = defaultBlobInFlightWaitFactor
+	}
+
 	blobObservationTimeout := f.MaxDurationBlobObservation
 	if blobObservationTimeout <= 0 {
 		blobObservationTimeout = DefaultBlobObservationDurationMultiplier * cfg.MaxDurationObservation
@@ -149,7 +159,7 @@ func (f *PluginFactory) NewReportingPlugin(ctx context.Context, cfg ocr3types.Re
 		configDigest:       cfg.ConfigDigest,
 		verboseLogging:     f.Config.VerboseLogging,
 		observationTimeout: blobObservationTimeout,
-		inFlightWait:       cfg.MaxDurationObservation / BlobInFlightWaitDivisor,
+		inFlightWait:       cfg.MaxDurationObservation / time.Duration(blobInFlightWaitFactor),
 		maxSnapshotAge:     f.MaxBlobSnapshotAge,
 		maxSnapshotRounds:  maxSnapshotRounds,
 		blobLifetimeRounds: blobLifetimeRounds,

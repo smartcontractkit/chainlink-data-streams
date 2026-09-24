@@ -80,9 +80,10 @@ const (
 	closeTimeoutSlackMultiplier = 5
 	// minCloseTimeout fixes the minimum time Close waits waits for an in-flight cycle.
 	minCloseTimeout = 1 * time.Second
-	// BlobInFlightWaitDivisor scales MaxDurationObservation into how long Take
-	// waits for a cycle that is already in flight to park.
-	BlobInFlightWaitDivisor = 8
+	// defaultBlobInFlightWaitFactor scales MaxDurationObservation into how long
+	// Take waits for a cycle that is already in flight to park. Overridden by
+	// PluginFactoryParams.BlobInFlightWaitFactor.
+	defaultBlobInFlightWaitFactor = 8
 )
 
 // perOracleUnexpiredBlobCount derives the per-oracle unexpired-blob budget from
