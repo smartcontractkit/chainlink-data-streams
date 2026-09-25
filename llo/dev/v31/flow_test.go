@@ -236,6 +236,30 @@ func Test_Factory_NewReportingPlugin_aggregationFaultTolerance(t *testing.T) {
 	})
 }
 
+func Test_Factory_MaxRoundPeriod(t *testing.T) {
+	ctx := tests.Context(t)
+	base := ocr3types.ReportingPluginConfig{N: 4, F: 1, ConfigDigest: ocrtypes.ConfigDigest{9}, OffchainConfig: mustEncodeOffchainConfig(t, 1)}
+
+	newPump := func(t *testing.T, params PluginFactoryParams, cfg ocr3types.ReportingPluginConfig) *blobPump {
+		t.Helper()
+		params.OnchainConfigCodec = mockOnchainConfigCodec{}
+		params.Logger = logger.Test(t)
+		p, _, err := NewPluginFactory(params).NewReportingPlugin(ctx, cfg, nil)
+		require.NoError(t, err)
+		t.Cleanup(func() { require.NoError(t, p.Close()) })
+		return p.(*Plugin).pump
+	}
+
+	t.Run("defaulted", func(t *testing.T) {
+		require.Equal(t, DefaultMaxRoundPeriod, newPump(t, PluginFactoryParams{}, base).maxRoundPeriod)
+	})
+
+	t.Run("override wins", func(t *testing.T) {
+		pump := newPump(t, PluginFactoryParams{MaxRoundPeriod: time.Second}, base)
+		require.Equal(t, time.Second, pump.maxRoundPeriod)
+	})
+}
+
 func Test_Factory_NewReportingPlugin(t *testing.T) {
 	ctx := tests.Context(t)
 	f := NewPluginFactory(PluginFactoryParams{
@@ -259,6 +283,7 @@ func Test_Factory_NewReportingPlugin(t *testing.T) {
 	require.NotNil(t, pl.pump)
 	require.Equal(t, uint64(DefaultMaxSnapshotRounds), pl.pump.maxSnapshotRounds)
 	require.Equal(t, uint64(DefaultBlobLifetimeRounds), pl.pump.blobLifetimeRounds)
+	require.Equal(t, DefaultMaxRoundPeriod, pl.pump.maxRoundPeriod)
 	require.NoError(t, pl.Close())
 }
 

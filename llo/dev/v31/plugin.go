@@ -102,12 +102,20 @@ func (p *Plugin) Query(ctx context.Context, seqNr uint64, _ ocr3_1types.KeyValue
 // values most recently gathered by the blob pump.
 // The per-round BlobBroadcastFetcher is unused: broadcasting happens in the blob
 // pump, which holds the identical fetcher handed to the factory.
-func (p *Plugin) Observation(_ context.Context, seqNr uint64, _ ocrtypes.AttributedQuery, kvReader ocr3_1types.KeyValueStateReader, _ ocr3_1types.BlobBroadcastFetcher) (ocrtypes.Observation, error) {
+//
+// MaxDurationObservation is not enforced by OCR3.1 (it only logs a warning), so
+// ctx carries no observation deadline; it is honoured for cancellation, which is
+// what bounds the wait for an in-flight blob pump cycle.
+func (p *Plugin) Observation(ctx context.Context, seqNr uint64, _ ocrtypes.AttributedQuery, kvReader ocr3_1types.KeyValueStateReader, _ ocr3_1types.BlobBroadcastFetcher) (ocrtypes.Observation, error) {
 	if seqNr < 1 {
 		return nil, fmt.Errorf("got invalid seqnr=%d, must be >=1", seqNr)
 	} else if seqNr == 1 {
 		// First round: state is empty and the result is never used (see StateTransition).
 		return nil, nil
+	}
+
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("observation canceled: %w", err)
 	}
 
 	state, err := loadColdKVState(kvReader, p.ChannelCache)
@@ -178,7 +186,7 @@ func (p *Plugin) Observation(_ context.Context, seqNr uint64, _ ocrtypes.Attribu
 		p.pump.SetInput(pumpInput{streams: streams, seqNr: seqNr, lifeCycleStage: state.lifeCycleStage})
 
 		var reason string
-		if snap, reason = p.pump.Take(seqNr); snap != nil {
+		if snap, reason = p.pump.Take(ctx, seqNr); snap != nil {
 			handles = append(handles, snap.handleBytes)
 		} else {
 			p.Logger.Debugw("No usable stream-value snapshot for this round", "stage", "Observation", "seqNr", seqNr, "reason", reason, "misses", p.pump.Misses(), "cycles", p.pump.Cycles())

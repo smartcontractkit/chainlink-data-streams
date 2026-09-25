@@ -57,14 +57,14 @@ func Test_blobPump_TakeKicksNextCycle(t *testing.T) {
 	p := testPump(t, ds, bc, time.Minute)
 
 	p.SetInput(pumpInputFor(2))
-	snap, reason := p.Take(2)
+	snap, reason := p.Take(t.Context(), 2)
 	require.Nil(t, snap)
 	require.NotEmpty(t, reason)
 
 	require.Eventually(t, func() bool { return p.Cycles() >= 1 }, tests.WaitTimeout(t), 10*time.Millisecond)
 
 	p.SetInput(pumpInputFor(3))
-	snap, reason = p.Take(3)
+	snap, reason = p.Take(t.Context(), 3)
 	require.NotNil(t, snap, "reason: %s", reason)
 	require.Equal(t, uint64(2), snap.forSeqNr)
 	require.Equal(t, uint64(2+DefaultMaxSnapshotRounds), snap.usableBefore)
@@ -97,19 +97,19 @@ func Test_blobPump_TakeIsSingleUse(t *testing.T) {
 	p := testPump(t, mockDS(), newFakeBroadcaster(), time.Minute)
 	p.SetInput(pumpInputFor(2))
 	require.Eventually(t, func() bool {
-		_, _ = p.Take(2)
+		_, _ = p.Take(t.Context(), 2)
 		return p.Cycles() >= 1
 	}, tests.WaitTimeout(t), 10*time.Millisecond)
 
 	require.Eventually(t, func() bool {
-		snap, _ := p.Take(2)
+		snap, _ := p.Take(t.Context(), 2)
 		return snap != nil
 	}, tests.WaitTimeout(t), 10*time.Millisecond)
 
 	// The pump may have parked a fresh snapshot by now, so assert on the parked
 	// slot directly rather than on a second Take.
-	p.takeReady(0)
-	snap, reason := p.Take(2)
+	p.takeReady(t.Context(), 0)
+	snap, reason := p.Take(t.Context(), 2)
 	require.Nil(t, snap)
 	require.NotEmpty(t, reason)
 }
@@ -122,7 +122,7 @@ func Test_blobPump_RejectsStaleSnapshots(t *testing.T) {
 		p := testPump(t, mockDS(), newFakeBroadcaster(), time.Minute)
 		p.park(&blobSnapshot{handleBytes: []byte{1}, observedAt: time.Now(), forSeqNr: 2, usableBefore: 4, expiresAt: 6})
 
-		snap, reason := p.Take(4)
+		snap, reason := p.Take(t.Context(), 4)
 		require.Nil(t, snap)
 		require.Contains(t, reason, "too stale")
 		require.Equal(t, uint64(1), p.Misses())
@@ -132,7 +132,7 @@ func Test_blobPump_RejectsStaleSnapshots(t *testing.T) {
 		p := testPump(t, mockDS(), newFakeBroadcaster(), time.Nanosecond)
 		p.park(&blobSnapshot{handleBytes: []byte{1}, observedAt: time.Now().Add(-time.Hour), forSeqNr: 2, usableBefore: 100, expiresAt: 100})
 
-		snap, reason := p.Take(3)
+		snap, reason := p.Take(t.Context(), 3)
 		require.Nil(t, snap)
 		require.Contains(t, reason, "too old")
 	})
@@ -141,7 +141,7 @@ func Test_blobPump_RejectsStaleSnapshots(t *testing.T) {
 		p := testPump(t, mockDS(), newFakeBroadcaster(), -1)
 		p.park(&blobSnapshot{handleBytes: []byte{1}, observedAt: time.Now().Add(-time.Hour), forSeqNr: 2, usableBefore: 100, expiresAt: 100})
 
-		snap, _ := p.Take(3)
+		snap, _ := p.Take(t.Context(), 3)
 		require.NotNil(t, snap, "with the age check disabled only maxSnapshotRounds bounds staleness")
 	})
 
@@ -152,7 +152,7 @@ func Test_blobPump_RejectsStaleSnapshots(t *testing.T) {
 		p := testPump(t, mockDS(), newFakeBroadcaster(), 0)
 		p.park(&blobSnapshot{handleBytes: []byte{1}, observedAt: time.Now().Add(-time.Hour), forSeqNr: 2, usableBefore: 100, expiresAt: 100})
 
-		snap, reason := p.Take(3)
+		snap, reason := p.Take(t.Context(), 3)
 		require.NotNil(t, snap, "reason: %s", reason)
 	})
 
@@ -163,7 +163,7 @@ func Test_blobPump_RejectsStaleSnapshots(t *testing.T) {
 		p.mu.Unlock()
 		p.park(&blobSnapshot{handleBytes: []byte{1}, observedAt: time.Now().Add(-time.Hour), forSeqNr: 2, usableBefore: 100, expiresAt: 100})
 
-		snap, reason := p.Take(3)
+		snap, reason := p.Take(t.Context(), 3)
 		require.Nil(t, snap)
 		require.Contains(t, reason, "too old")
 	})
@@ -178,11 +178,11 @@ func Test_blobPump_ParksNothingOnFailure(t *testing.T) {
 		ds.err = errors.New("bridge down")
 		p := testPump(t, ds, newFakeBroadcaster(), time.Minute)
 		p.SetInput(pumpInputFor(2))
-		_, _ = p.Take(2)
+		_, _ = p.Take(t.Context(), 2)
 
 		require.Eventually(t, func() bool { return ds.observeCount() >= 1 }, tests.WaitTimeout(t), 10*time.Millisecond)
 		require.Zero(t, p.Cycles())
-		snap, _ := p.Take(3)
+		snap, _ := p.Take(t.Context(), 3)
 		require.Nil(t, snap)
 	})
 
@@ -194,11 +194,11 @@ func Test_blobPump_ParksNothingOnFailure(t *testing.T) {
 		}()
 		p := testPump(t, mockDS(), bc, time.Minute)
 		p.SetInput(pumpInputFor(2))
-		_, _ = p.Take(2)
+		_, _ = p.Take(t.Context(), 2)
 
 		require.Eventually(t, func() bool { return bc.Broadcasts() >= 1 }, tests.WaitTimeout(t), 10*time.Millisecond)
 		require.Zero(t, p.Cycles())
-		snap, _ := p.Take(3)
+		snap, _ := p.Take(t.Context(), 3)
 		require.Nil(t, snap)
 	})
 }
@@ -217,7 +217,7 @@ func Test_blobPump_SkipsIdleInput(t *testing.T) {
 			p := testPump(t, ds, bc, time.Minute)
 			p.SetInput(in)
 			for i := 0; i < 3; i++ {
-				_, _ = p.Take(2)
+				_, _ = p.Take(t.Context(), 2)
 			}
 			// Give the loop a chance to run the kicked cycles.
 			require.Never(t, func() bool { return ds.observeCount() > 0 || bc.Broadcasts() > 0 }, 100*time.Millisecond, 10*time.Millisecond)
@@ -235,7 +235,7 @@ func Test_blobPump_SingleFlight(t *testing.T) {
 	p.SetInput(pumpInputFor(2))
 
 	for i := 0; i < 10; i++ {
-		_, _ = p.Take(2)
+		_, _ = p.Take(t.Context(), 2)
 	}
 	require.Eventually(t, func() bool { return ds.started() >= 1 }, tests.WaitTimeout(t), 10*time.Millisecond)
 	require.Never(t, func() bool { return ds.concurrent() > 1 }, 100*time.Millisecond, 10*time.Millisecond)
@@ -280,7 +280,7 @@ func Test_blobPump_TakeWaitsForInFlightCycle(t *testing.T) {
 	// The first Take only kicks the cycle: nothing is in flight yet, so there is
 	// nothing for it to wait on.
 	p.SetInput(pumpInputFor(2))
-	snap, reason := p.Take(2)
+	snap, reason := p.Take(t.Context(), 2)
 	require.Nil(t, snap)
 	require.Equal(t, "no snapshot parked", reason)
 
@@ -296,7 +296,7 @@ func Test_blobPump_TakeWaitsForInFlightCycle(t *testing.T) {
 		close(ds.release)
 	}()
 
-	snap, reason = p.Take(2)
+	snap, reason = p.Take(t.Context(), 2)
 	require.NotNil(t, snap, "Take did not wait for the in-flight cycle: %s", reason)
 	require.Empty(t, reason)
 }
@@ -312,7 +312,7 @@ func Test_blobPump_TakeWaitFallsThroughOnTimeout(t *testing.T) {
 	p.inFlightWait = 50 * time.Millisecond
 
 	p.SetInput(pumpInputFor(2))
-	_, _ = p.Take(2)
+	_, _ = p.Take(t.Context(), 2)
 	select {
 	case <-ds.entered:
 	case <-time.After(tests.WaitTimeout(t)):
@@ -320,12 +320,124 @@ func Test_blobPump_TakeWaitFallsThroughOnTimeout(t *testing.T) {
 	}
 
 	start := time.Now()
-	snap, reason := p.Take(2)
+	snap, reason := p.Take(t.Context(), 2)
 	elapsed := time.Since(start)
 	require.Nil(t, snap)
 	require.Equal(t, "cycle in flight", reason)
 	require.GreaterOrEqual(t, elapsed, p.inFlightWait, "Take returned before the wait elapsed")
 	require.Less(t, elapsed, 10*p.inFlightWait, "Take waited well past its bound")
+}
+
+// Test_blobPump_RoundPeriodOnlyMeasuresConsecutiveRounds pins the cadence
+// estimate to gaps that really are one round wide: rounds that observe no
+// streams skip Take, and folding the wider gap they leave would inflate the
+// derived age bound.
+func Test_blobPump_RoundPeriodOnlyMeasuresConsecutiveRounds(t *testing.T) {
+	p := testPump(t, mockDS(), newFakeBroadcaster(), time.Minute)
+
+	base := time.Now()
+	p.recordRoundLocked(base, 2)
+	require.Zero(t, p.roundPeriod, "first round has nothing to measure against")
+
+	// Round 5 skips rounds 3 and 4, so its gap spans three round periods.
+	p.recordRoundLocked(base.Add(300*time.Millisecond), 5)
+	require.Zero(t, p.roundPeriod, "gap across skipped rounds was folded in")
+
+	p.recordRoundLocked(base.Add(400*time.Millisecond), 6)
+	require.Equal(t, 100*time.Millisecond, p.roundPeriod)
+
+	// A repeated sequence number is not a new round either.
+	p.recordRoundLocked(base.Add(900*time.Millisecond), 6)
+	require.Equal(t, 100*time.Millisecond, p.roundPeriod)
+}
+
+// Test_blobPump_RoundPeriodIsCapped covers a stalled round: the gap is wall
+// clock, so without the cap one stall would inflate the derived age bound for
+// several rounds after it.
+func Test_blobPump_RoundPeriodIsCapped(t *testing.T) {
+	p := testPump(t, mockDS(), newFakeBroadcaster(), time.Minute)
+	p.maxRoundPeriod = 400 * time.Millisecond
+
+	base := time.Now()
+	p.recordRoundLocked(base, 2)
+	p.recordRoundLocked(base.Add(time.Hour), 3)
+	require.Equal(t, p.maxRoundPeriod, p.roundPeriod, "a stalled round was folded in uncapped")
+
+	// Uncapped, the estimate stays free to follow a slow DON.
+	cap := p.maxRoundPeriod
+	p.maxRoundPeriod = 0
+	p.recordRoundLocked(base.Add(2*time.Hour), 4)
+	require.Greater(t, p.roundPeriod, cap)
+}
+
+// Test_blobPump_ExpectedMissesAreNotCounted covers the rounds that lose their
+// stream values by design: a pump with no transport wired, and a round whose
+// input gives a cycle nothing to do. Neither is a miss, so the counters stay
+// clean and the streak error stays reserved for a pump that should be
+// producing and is not.
+func Test_blobPump_ExpectedMissesAreNotCounted(t *testing.T) {
+	t.Run("disabled pump", func(t *testing.T) {
+		p := testPump(t, nil, nil, time.Minute)
+
+		for i := 0; i < 2*MissStreakLogThreshold; i++ {
+			snap, reason := p.Take(t.Context(), 2)
+			require.Nil(t, snap)
+			require.Equal(t, "blob pump disabled", reason)
+		}
+		require.Zero(t, p.Misses())
+		require.Zero(t, p.missStreak.Load())
+	})
+
+	t.Run("nothing to observe", func(t *testing.T) {
+		p := testPump(t, mockDS(), newFakeBroadcaster(), time.Minute)
+		p.SetInput(pumpInput{streams: nil, seqNr: 2, lifeCycleStage: protocol.LifeCycleStageProduction})
+
+		snap, reason := p.Take(t.Context(), 2)
+		require.Nil(t, snap)
+		require.Equal(t, "nothing to observe this round", reason)
+		require.Zero(t, p.Misses())
+		require.Zero(t, p.missStreak.Load())
+	})
+
+	t.Run("retired", func(t *testing.T) {
+		p := testPump(t, mockDS(), newFakeBroadcaster(), time.Minute)
+		p.SetInput(pumpInput{streams: []llotypes.StreamID{100}, seqNr: 2, lifeCycleStage: protocol.LifeCycleStageRetired})
+
+		snap, reason := p.Take(t.Context(), 2)
+		require.Nil(t, snap)
+		require.Equal(t, "nothing to observe this round", reason)
+		require.Zero(t, p.Misses())
+		require.Zero(t, p.missStreak.Load())
+	})
+}
+
+// Test_blobPump_TakeWaitHonoursContext asserts a canceled round context ends
+// the in-flight wait early: OCR3.1 does not bound Observation, so cancellation
+// is the only thing that can cut this wait short.
+func Test_blobPump_TakeWaitHonoursContext(t *testing.T) {
+	ds := &gatedDataSource{release: make(chan struct{}), entered: make(chan struct{})}
+	defer close(ds.release)
+
+	p := testPump(t, ds, newFakeBroadcaster(), time.Minute)
+	p.inFlightWait = tests.WaitTimeout(t)
+
+	p.SetInput(pumpInputFor(2))
+	_, _ = p.Take(t.Context(), 2)
+	select {
+	case <-ds.entered:
+	case <-time.After(tests.WaitTimeout(t)):
+		t.Fatal("DataSource.Observe was never called")
+	}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	start := time.Now()
+	snap, reason := p.Take(ctx, 2)
+	elapsed := time.Since(start)
+	require.Nil(t, snap)
+	require.Equal(t, "cycle in flight", reason)
+	require.Less(t, elapsed, p.inFlightWait/2, "Take ignored the canceled context")
 }
 
 // Test_blobPump_TakeWaitReportsCycleAfterItEnds pins the miss reason for a
@@ -338,7 +450,7 @@ func Test_blobPump_TakeWaitReportsCycleAfterItEnds(t *testing.T) {
 	p.inFlightWait = 500 * time.Millisecond
 
 	p.SetInput(pumpInputFor(2))
-	_, _ = p.Take(2)
+	_, _ = p.Take(t.Context(), 2)
 	select {
 	case <-ds.entered:
 	case <-time.After(tests.WaitTimeout(t)):
@@ -354,7 +466,7 @@ func Test_blobPump_TakeWaitReportsCycleAfterItEnds(t *testing.T) {
 	// The reason is resolved inside Take, before its deferred kick starts the
 	// next cycle, so it is the only assertable evidence here: reading inFlight
 	// after Take returns would race that new cycle.
-	snap, reason := p.Take(2)
+	snap, reason := p.Take(t.Context(), 2)
 	require.Nil(t, snap)
 	require.Equal(t, "cycle in flight", reason)
 }
@@ -386,7 +498,7 @@ func Test_blobPump_DisabledIsInert(t *testing.T) {
 		p := testPump(t, ds, nil, time.Minute)
 		p.SetInput(pumpInputFor(2))
 		for i := 0; i < 3; i++ {
-			snap, reason := p.Take(2)
+			snap, reason := p.Take(t.Context(), 2)
 			require.Nil(t, snap)
 			require.Equal(t, "blob pump disabled", reason)
 		}
@@ -398,7 +510,7 @@ func Test_blobPump_DisabledIsInert(t *testing.T) {
 		bc := newFakeBroadcaster()
 		p := testPump(t, nil, bc, time.Minute)
 		p.SetInput(pumpInputFor(2))
-		snap, reason := p.Take(2)
+		snap, reason := p.Take(t.Context(), 2)
 		require.Nil(t, snap)
 		require.Equal(t, "blob pump disabled", reason)
 		require.Zero(t, bc.Broadcasts())
@@ -420,13 +532,13 @@ func Test_blobPump_SurvivesDataSourcePanic(t *testing.T) {
 	p := testPump(t, ds, newFakeBroadcaster(), time.Minute)
 
 	p.SetInput(pumpInputFor(2))
-	_, _ = p.Take(2)
+	_, _ = p.Take(t.Context(), 2)
 	require.Eventually(t, func() bool { return ds.calls.Load() >= 1 }, tests.WaitTimeout(t), 10*time.Millisecond)
 	require.Zero(t, p.Cycles())
 
 	// Pump goroutine is still alive: a second kick still reaches the DataSource.
 	p.SetInput(pumpInputFor(3))
-	_, _ = p.Take(3)
+	_, _ = p.Take(t.Context(), 3)
 	require.Eventually(t, func() bool { return ds.calls.Load() >= 2 }, tests.WaitTimeout(t), 10*time.Millisecond)
 	// Take kicks before it returns, so the last kicked cycle may still be
 	// running; it must unwind rather than leave the flag stuck.
@@ -468,7 +580,7 @@ func Test_blobPump_CloseDoesNotHangOnStuckDataSource(t *testing.T) {
 	p.Start()
 
 	p.SetInput(pumpInputFor(2))
-	p.Take(2)
+	p.Take(t.Context(), 2)
 	select {
 	case <-ds.entered:
 	case <-time.After(tests.WaitTimeout(t)):
@@ -516,12 +628,12 @@ func Test_blobPump_RetriesFailedBroadcast(t *testing.T) {
 
 	p := testPump(t, ds, bc, time.Minute)
 	p.SetInput(pumpInputFor(2))
-	_, _ = p.Take(2)
+	_, _ = p.Take(t.Context(), 2)
 
 	require.Eventually(t, func() bool { return p.Cycles() >= 1 }, tests.WaitTimeout(t), 10*time.Millisecond)
 	require.EqualValues(t, 2, bc.attempts.Load(), "the failed attempt must be retried, once")
 
-	snap, reason := p.Take(3)
+	snap, reason := p.Take(t.Context(), 3)
 	require.NotNil(t, snap, reason)
 	require.EqualValues(t, 2, snap.forSeqNr, "the retry does not change the round the values were gathered for")
 }
@@ -544,7 +656,7 @@ func Test_blobPump_BroadcastRetryRefreshesExpiry(t *testing.T) {
 	}
 	p = testPump(t, ds, bc, time.Minute)
 	p.SetInput(pumpInputFor(2))
-	_, _ = p.Take(2)
+	_, _ = p.Take(t.Context(), 2)
 
 	require.Eventually(t, func() bool { return p.Cycles() >= 1 }, tests.WaitTimeout(t), 10*time.Millisecond)
 	hints := inner.Hints()
@@ -552,7 +664,7 @@ func Test_blobPump_BroadcastRetryRefreshesExpiry(t *testing.T) {
 	require.Equal(t, ocr3_1types.BlobExpirationHintSequenceNumber{SeqNr: 5 + DefaultBlobLifetimeRounds}, hints[0])
 
 	// Fetchability moved forward; local freshness did not.
-	snap, reason := p.Take(3)
+	snap, reason := p.Take(t.Context(), 3)
 	require.NotNil(t, snap, reason)
 	require.EqualValues(t, 2+DefaultMaxSnapshotRounds, snap.usableBefore)
 	require.EqualValues(t, 5+DefaultBlobLifetimeRounds, snap.expiresAt)
@@ -567,10 +679,10 @@ func Test_blobPump_BroadcastRetriesAreBounded(t *testing.T) {
 
 	p := testPump(t, ds, bc, time.Minute)
 	p.SetInput(pumpInputFor(2))
-	_, _ = p.Take(2)
+	_, _ = p.Take(t.Context(), 2)
 
 	require.Eventually(t, func() bool { return bc.attempts.Load() >= BlobBroadcastAttempts }, tests.WaitTimeout(t), 10*time.Millisecond)
 	require.Zero(t, p.Cycles())
-	snap, _ := p.Take(3)
+	snap, _ := p.Take(t.Context(), 3)
 	require.Nil(t, snap)
 }

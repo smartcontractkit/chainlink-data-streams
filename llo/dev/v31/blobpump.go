@@ -54,6 +54,11 @@ const (
 	// stream values. Slack makes this a jitter guard, not a second freshness
 	// gate, since staleness in rounds is already bounded by MaxSnapshotRounds.
 	SnapshotAgeSlack = 2
+	// DefaultMaxRoundPeriod is the ceiling on the measured round period. The
+	// measurement is wall clock, so a stall or a pause folds a gap far wider
+	// than the protocol ever schedules and inflates the derived age bound for
+	// several rounds after. Not using DeltaRound which can be a valid zero
+	DefaultMaxRoundPeriod = 2 * time.Second
 	// MaxBlobLifetimeRounds bounds BlobLifetimeRounds. The pump broadcasts
 	// roughly one blob per round, so the unexpired-blob budget declared to
 	// libocr grows with the lifetime; this keeps that budget sane.
@@ -98,6 +103,13 @@ type pumpInput struct {
 	streams        []llotypes.StreamID
 	seqNr          uint64
 	lifeCycleStage llotypes.LifeCycleStage
+}
+
+// observable reports whether a cycle fed this input can produce a snapshot.
+// An unset input (no round has published one yet), a round with nothing to
+// observe, and a retired instance all park nothing by design.
+func (in pumpInput) observable() bool {
+	return in.seqNr != 0 && len(in.streams) > 0 && in.lifeCycleStage != protocol.LifeCycleStageRetired
 }
 
 // blobSnapshot is one completed pump cycle: stream values already serialized,
@@ -149,11 +161,12 @@ type blobPump struct {
 
 	mu    sync.Mutex
 	input pumpInput
-	// lastTakeAt and roundPeriod estimate the round cadence from the interval
-	// between consecutive Take calls (one per round), which is the only signal
-	// the plugin has: deltaRound is not part of the reporting plugin config.
-	lastTakeAt  time.Time
-	roundPeriod time.Duration
+	// lastTakeAt, lastTakeSeqNr and roundPeriod estimate the round cadence from
+	// the interval between Take calls for consecutive sequence numbers. The
+	// estimate is bounded by maxRoundPeriod.
+	lastTakeAt    time.Time
+	lastTakeSeqNr uint64
+	roundPeriod   time.Duration
 }
 
 // blobPumpParams is the pump's configuration, resolved by the factory.
@@ -169,6 +182,8 @@ type blobPumpParams struct {
 	maxSnapshotAge time.Duration
 	// maxSnapshotRounds is the local freshness gate. See DefaultMaxSnapshotRounds.
 	maxSnapshotRounds uint64
+	// maxRoundPeriod caps the measured round period. See DefaultMaxRoundPeriod.
+	maxRoundPeriod time.Duration
 	// blobLifetimeRounds is the remote fetchability bound. See DefaultBlobLifetimeRounds.
 	blobLifetimeRounds uint64
 	// inFlightWait bounds how long Take waits for an in-flight cycle to park.
@@ -242,24 +257,26 @@ func (p *blobPump) SetInput(in pumpInput) {
 // a single unusable snapshot from stalling the pump forever. The second return
 // value is the reason a snapshot was not returned, for logging.
 //
-// A round that finds nothing parked while a cycle is running waits for
-// inFlightWait for the cycle to park.
-func (p *blobPump) Take(seqNr uint64) (*blobSnapshot, string) {
+// A round that finds nothing parked while a cycle is running waits up to
+// inFlightWait for the cycle to park, or until ctx is done.
+func (p *blobPump) Take(ctx context.Context, seqNr uint64) (*blobSnapshot, string) {
 	if !p.enabled() {
-		p.miss()
 		return nil, "blob pump disabled"
 	}
 
 	p.mu.Lock()
-	p.recordRoundLocked(time.Now())
+	p.recordRoundLocked(time.Now(), seqNr)
 	ageLimit := p.snapshotAgeLimitLocked()
+	in := p.input
 	p.mu.Unlock()
 
 	defer p.kick()
-	snap, waited := p.takeReady(p.inFlightWait)
+	snap, waited := p.takeReady(ctx, p.inFlightWait)
 
 	now := time.Now()
 	switch {
+	case snap == nil && !in.observable():
+		return nil, "nothing to observe this round"
 	case snap == nil:
 		p.miss()
 		if waited || p.inFlight.Load() {
@@ -279,17 +296,19 @@ func (p *blobPump) Take(seqNr uint64) (*blobSnapshot, string) {
 }
 
 // takeReady detaches the parked snapshot, waiting up to timeout for an
-// in-flight cycle to park one.
-func (p *blobPump) takeReady(timeout time.Duration) (*blobSnapshot, bool) {
+// in-flight cycle to park one. The wait ends early when ctx is done or the
+// pump shuts down.
+func (p *blobPump) takeReady(ctx context.Context, timeout time.Duration) (*blobSnapshot, bool) {
 	waited := false
 	if timeout > 0 && p.inFlight.Load() {
 		waited = true
-		ctx, cancel := context.WithTimeout(p.ctx, timeout)
+		waitCtx, cancel := context.WithTimeout(ctx, timeout)
 		defer cancel()
 		select {
 		case snap := <-p.ready:
 			return snap, waited
-		case <-ctx.Done():
+		case <-waitCtx.Done():
+		case <-p.ctx.Done():
 		}
 	}
 
@@ -304,12 +323,13 @@ func (p *blobPump) takeReady(timeout time.Duration) (*blobSnapshot, bool) {
 // park makes a snapshot available to take, replacing if we have a snap
 // that no round has taken. The newest snapshot has a higher priority.
 func (p *blobPump) park(snap *blobSnapshot) {
-	p.takeReady(0)
+	p.takeReady(context.Background(), 0)
 	p.ready <- snap
 }
 
-// miss records a round that found no usable snapshot. Sustained misses means
-// this node is not contributing at all. Record misses and log when above MissStreakLogThreshold.
+// miss records a round that found no usable snapshot when one was expected.
+// Sustained misses means this node is not contributing at all. Record misses
+// and log when above MissStreakLogThreshold.
 func (p *blobPump) miss() {
 	p.misses.Add(1)
 	if streak := p.missStreak.Add(1); streak >= MissStreakLogThreshold && streak%MissStreakLogThreshold == 0 {
@@ -318,18 +338,15 @@ func (p *blobPump) miss() {
 	}
 }
 
-// recordRoundLocked folds the interval since the previous Take into the round
-// period estimate. Take is called once per round, so consecutive calls measure
-// the round cadence.
-//
-// Rounds that observe no streams skip Take entirely, so the next gap spans several
-// round periods and overestimates; a stall inflates one gap badly, and estimation
-// takes about four rounds to decay it.
-// Both leave the age bound too generous for a while rather than too tight,
-// which is the direction that cannot silently stop this node contributing.
-func (p *blobPump) recordRoundLocked(now time.Time) {
-	if !p.lastTakeAt.IsZero() {
+// recordRoundLocked builds the interval since the previous Take into the round
+// period estimate, but only for subsequent rounds.
+// Gaps are capped at maxRoundPeriod, so a stall cannot overestimate.
+func (p *blobPump) recordRoundLocked(now time.Time, seqNr uint64) {
+	if !p.lastTakeAt.IsZero() && seqNr == p.lastTakeSeqNr+1 {
 		gap := now.Sub(p.lastTakeAt)
+		if p.maxRoundPeriod > 0 && gap > p.maxRoundPeriod {
+			gap = p.maxRoundPeriod
+		}
 		if p.roundPeriod == 0 {
 			p.roundPeriod = gap
 		} else {
@@ -337,6 +354,7 @@ func (p *blobPump) recordRoundLocked(now time.Time) {
 		}
 	}
 	p.lastTakeAt = now
+	p.lastTakeSeqNr = seqNr
 }
 
 // snapshotAgeLimitLocked resolves the wall-clock bound for this round. Zero
@@ -404,7 +422,7 @@ func (p *blobPump) cycle() {
 	in := p.input
 	p.mu.Unlock()
 
-	if !p.enabled() || in.seqNr == 0 || len(in.streams) == 0 || in.lifeCycleStage == protocol.LifeCycleStageRetired {
+	if !p.enabled() || !in.observable() {
 		return
 	}
 

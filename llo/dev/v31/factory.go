@@ -62,6 +62,10 @@ type PluginFactoryParams struct {
 	// every snapshot. A negative value disables the check, leaving
 	// MaxSnapshotRounds as the only staleness bound.
 	MaxBlobSnapshotAge time.Duration
+	// MaxRoundPeriod overrides DefaultMaxRoundPeriod if non-zero. Bounds the
+	// round period the pump measures, so a stalled round cannot inflate the
+	// derived snapshot age bound. Must be set above the DON real round cadence.
+	MaxRoundPeriod time.Duration
 }
 
 func NewPluginFactory(p PluginFactoryParams) *PluginFactory {
@@ -120,6 +124,11 @@ func (f *PluginFactory) NewReportingPlugin(ctx context.Context, cfg ocr3types.Re
 		blobInFlightWaitFactor = defaultBlobInFlightWaitFactor
 	}
 
+	maxRoundPeriod := f.MaxRoundPeriod
+	if maxRoundPeriod <= 0 {
+		maxRoundPeriod = DefaultMaxRoundPeriod
+	}
+
 	blobObservationTimeout := f.MaxDurationBlobObservation
 	if blobObservationTimeout <= 0 {
 		blobObservationTimeout = DefaultBlobObservationDurationMultiplier * cfg.MaxDurationObservation
@@ -162,6 +171,7 @@ func (f *PluginFactory) NewReportingPlugin(ctx context.Context, cfg ocr3types.Re
 		inFlightWait:       cfg.MaxDurationObservation / time.Duration(blobInFlightWaitFactor),
 		maxSnapshotAge:     f.MaxBlobSnapshotAge,
 		maxSnapshotRounds:  maxSnapshotRounds,
+		maxRoundPeriod:     maxRoundPeriod,
 		blobLifetimeRounds: blobLifetimeRounds,
 	})
 	p.pump.Start()
