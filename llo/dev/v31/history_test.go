@@ -1076,3 +1076,78 @@ func TestHistoryStore_DeterministicAcrossALap(t *testing.T) {
 
 	assert.Equal(t, run(), run(), "two oracles running identical rounds must end with byte-identical state")
 }
+
+// TestHistoryStore_LayoutChangeWithEmptyIndex checks a stale version alone does
+// not make the round write: a DON that has never stored history has no index to
+// rewrite, so there is nothing for a version to describe yet.
+func TestHistoryStore_LayoutChangeWithEmptyIndex(t *testing.T) {
+	t.Parallel()
+
+	kv := newCountingKV()
+	require.NoError(t, kv.Write(keyHistoryVersion, []byte{historyLayoutVersion + 1}))
+	kv.writes = map[string]int{}
+
+	s := newTestHistoryStore(t, kv)
+	require.NoError(t, s.Flush(kv))
+	assert.Empty(t, kv.writes, "a reset with nothing stored and nothing warmed must write no history keys")
+
+	version, err := readHistoryLayoutVersion(kv)
+	require.NoError(t, err)
+	assert.Equal(t, byte(historyLayoutVersion+1), version, "the stale version stands until this layout stores something")
+
+	// The next round that stores something stamps the version and the index.
+	s = newTestHistoryStore(t, kv)
+	require.NoError(t, s.SetRequired(1, testAggMedian, 3))
+	_, err = s.Append(1, testAggMedian, 1_000, testDecimal(4))
+	require.NoError(t, err)
+	require.NoError(t, s.Flush(kv))
+
+	version, err = readHistoryLayoutVersion(kv)
+	require.NoError(t, err)
+	assert.Equal(t, byte(historyLayoutVersion), version)
+}
+
+// TestHistoryStore_LayoutChangeWarmingNothing checks a reset that warms nothing
+// still settles the stale index it inherited: every abandoned pair is reclaimed,
+// the index is rewritten empty, and the version is stamped so the reset does not
+// repeat.
+func TestHistoryStore_LayoutChangeWarmingNothing(t *testing.T) {
+	t.Parallel()
+
+	kv := newCountingKV()
+	key := histKey{streamID: 1, aggregator: testAggMedian}
+
+	seed := newTestHistoryStore(t, kv)
+	require.NoError(t, seed.SetRequired(key.streamID, key.aggregator, 3))
+	_, err := seed.Append(key.streamID, key.aggregator, 1_000, testDecimal(7))
+	require.NoError(t, err)
+	require.NoError(t, seed.Flush(kv))
+	require.Len(t, readHistoryRecords(t, kv, key.streamID, key.aggregator), 1)
+
+	// A node comes up on a different layout and no channel requires the pair.
+	require.NoError(t, kv.Write(keyHistoryVersion, []byte{historyLayoutVersion + 1}))
+
+	s := newTestHistoryStore(t, kv)
+	require.NoError(t, s.Flush(kv))
+
+	assert.Nil(t, readHistory(t, kv, key.streamID, key.aggregator), "the abandoned header must be deleted")
+	for _, k := range historyKeys(key.streamID, key.aggregator) {
+		b, err := kv.Read(k)
+		require.NoError(t, err)
+		assert.Empty(t, b, "key %x must be deleted", k)
+	}
+
+	index, err := readHistoryIndex(kv)
+	require.NoError(t, err)
+	assert.Empty(t, index, "the stale index must be rewritten from what this round warmed, which is nothing")
+
+	version, err := readHistoryLayoutVersion(kv)
+	require.NoError(t, err)
+	assert.Equal(t, byte(historyLayoutVersion), version)
+
+	// The reset settled, so a later idle round writes nothing at all.
+	writes := len(kv.writes)
+	s = newTestHistoryStore(t, kv)
+	require.NoError(t, s.Flush(kv))
+	assert.Len(t, kv.writes, writes, "the settled reset must not write again")
+}

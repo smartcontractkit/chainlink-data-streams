@@ -2,6 +2,8 @@ package protocol
 
 import (
 	"errors"
+	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -60,6 +62,34 @@ func Test_VerifyChannelDefinitions(t *testing.T) {
 		}
 		err := VerifyChannelDefinitions(codecs, channelDefs)
 		require.EqualError(t, err, "ChannelDefinition with ID 1 has stream 0 with zero aggregator (this may indicate an uninitialized struct)")
+	})
+
+	t.Run("rejects unknown aggregator at admission but not once committed", func(t *testing.T) {
+		channelDefs := llotypes.ChannelDefinitions{
+			1: llotypes.ChannelDefinition{
+				Streams: []llotypes.Stream{{StreamID: 7, Aggregator: llotypes.Aggregator(99)}},
+			},
+		}
+		err := verifyAdmittingAll(codecs, channelDefs)
+		require.EqualError(t, err, "ChannelDefinition with ID 1 has stream 7 with unknown aggregator 99")
+
+		// Already committed: verification must pass, otherwise every oracle
+		// fails every round and the protocol halts with no recovery path.
+		require.NoError(t, VerifyChannelDefinitions(codecs, channelDefs))
+	})
+
+	t.Run("accepts known and calculated aggregators at admission", func(t *testing.T) {
+		channelDefs := llotypes.ChannelDefinitions{
+			1: llotypes.ChannelDefinition{
+				Streams: []llotypes.Stream{
+					{StreamID: 1, Aggregator: llotypes.AggregatorMedian},
+					{StreamID: 2, Aggregator: llotypes.AggregatorMode},
+					{StreamID: 3, Aggregator: llotypes.AggregatorQuote},
+					{StreamID: 4, Aggregator: llotypes.AggregatorCalculated},
+				},
+			},
+		}
+		require.NoError(t, verifyAdmittingAll(codecs, channelDefs))
 	})
 
 	t.Run("fails if too many total unique stream IDs", func(t *testing.T) {
@@ -361,6 +391,171 @@ func Test_VerifyChannelDefinitions_AdmissionScope(t *testing.T) {
 	})
 }
 
+func Test_VerifyChannelDefinitions_SizeBudgets(t *testing.T) {
+	codecs := map[llotypes.ReportFormat]ReportCodec{0: stubReportCodec{}}
+
+	channel := func(streams int, optsBytes int) llotypes.ChannelDefinition {
+		cd := llotypes.ChannelDefinition{Streams: make([]llotypes.Stream, 0, streams)}
+		for i := range streams {
+			cd.Streams = append(cd.Streams, llotypes.Stream{StreamID: llotypes.StreamID(i + 1), Aggregator: llotypes.AggregatorMedian})
+		}
+		if optsBytes > 0 {
+			cd.Opts = []byte(strings.Repeat("x", optsBytes))
+		}
+		return cd
+	}
+	// Channels sharing one stream ID, so the whole-set entry count grows while
+	// the unique-stream-ID cap stays untouched. That is the case the per-channel
+	// and per-set caps miss between them.
+	sharedStream := func(channels, streamsEach int) llotypes.ChannelDefinitions {
+		defs := llotypes.ChannelDefinitions{}
+		for c := range channels {
+			cd := llotypes.ChannelDefinition{Streams: make([]llotypes.Stream, 0, streamsEach)}
+			for i := range streamsEach {
+				cd.Streams = append(cd.Streams, llotypes.Stream{StreamID: llotypes.StreamID(i + 1), Aggregator: llotypes.AggregatorMedian})
+			}
+			defs[llotypes.ChannelID(c+1)] = cd
+		}
+		return defs
+	}
+
+	t.Run("per-channel opts length", func(t *testing.T) {
+		atLimit := llotypes.ChannelDefinitions{1: channel(1, MaxChannelOptsBytes)}
+		require.NoError(t, verifyAdmittingAll(codecs, atLimit))
+
+		over := llotypes.ChannelDefinitions{1: channel(1, MaxChannelOptsBytes+1)}
+		require.EqualError(t, verifyAdmittingAll(codecs, over),
+			fmt.Sprintf("ChannelDefinition with ID 1 has opts that are too long, got: %d/%d", MaxChannelOptsBytes+1, MaxChannelOptsBytes))
+	})
+
+	t.Run("total stream entries across the set", func(t *testing.T) {
+		// Ten channels listing the same 5_000 streams: 50_000 entries against
+		// 5_000 unique IDs, and every channel well under MaxStreamsPerChannel.
+		atLimit := sharedStream(10, MaxTotalStreamEntries/10)
+		require.NoError(t, verifyAdmittingAll(codecs, atLimit))
+
+		over := sharedStream(11, MaxTotalStreamEntries/10)
+		require.EqualError(t, verifyAdmittingAll(codecs, over),
+			fmt.Sprintf("too many stream entries across all channels, got: %d/%d", 11*(MaxTotalStreamEntries/10), MaxTotalStreamEntries))
+	})
+
+	t.Run("aggregated pairs across the set", func(t *testing.T) {
+		// One channel per aggregator, each listing the same streams, so the
+		// pair count grows while the unique-stream-ID cap and the entry budget
+		// stay untouched.
+		perAggregator := func(aggregators ...llotypes.Aggregator) llotypes.ChannelDefinitions {
+			defs := llotypes.ChannelDefinitions{}
+			for c, agg := range aggregators {
+				cd := llotypes.ChannelDefinition{Streams: make([]llotypes.Stream, 0, MaxObservationStreamValuesLength)}
+				for i := range MaxObservationStreamValuesLength {
+					cd.Streams = append(cd.Streams, llotypes.Stream{StreamID: llotypes.StreamID(i + 1), Aggregator: agg})
+				}
+				defs[llotypes.ChannelID(c+1)] = cd
+			}
+			return defs
+		}
+
+		atLimit := perAggregator(llotypes.AggregatorMedian, llotypes.AggregatorMode)
+		require.NoError(t, verifyAdmittingAll(codecs, atLimit))
+
+		over := perAggregator(llotypes.AggregatorMedian, llotypes.AggregatorMode, llotypes.AggregatorQuote)
+		require.EqualError(t, verifyAdmittingAll(codecs, over),
+			fmt.Sprintf("too many aggregated (stream, aggregator) pairs across all channels, got: %d/%d", 3*MaxObservationStreamValuesLength, MaxPersistedAggregates))
+	})
+
+	t.Run("a pair costs one aggregate however many channels name it", func(t *testing.T) {
+		// The same (stream, aggregator) pair repeated across channels is one
+		// carried-forward value, so the pair budget must count it once even
+		// where the entry budget counts it every time.
+		defs := sharedStream(4, MaxPersistedAggregates/2)
+		require.NoError(t, verifyAdmittingAll(codecs, defs))
+	})
+
+	t.Run("calculated streams across the set", func(t *testing.T) {
+		// Expression channels declaring distinct calculated stream IDs, spread
+		// across enough channels to stay under MaxChannelOptsBytes. The entry
+		// and opts budgets stay well clear: a calculated stream costs an ABI
+		// entry, not a stream entry.
+		const perChannel = 500
+		calculated := func(total int) llotypes.ChannelDefinitions {
+			defs := llotypes.ChannelDefinitions{}
+			next := llotypes.StreamID(1_000_000)
+			for c := 0; total > 0; c++ {
+				n := min(perChannel, total)
+				total -= n
+				abi := make([]string, 0, n)
+				for range n {
+					abi = append(abi, fmt.Sprintf(`{"expressionStreamID":%d}`, next))
+					next++
+				}
+				defs[llotypes.ChannelID(c+1)] = llotypes.ChannelDefinition{
+					ReportFormat: llotypes.ReportFormatEVMABIEncodeUnpackedExpr,
+					Streams:      []llotypes.Stream{{StreamID: llotypes.StreamID(c + 1), Aggregator: llotypes.AggregatorMedian}},
+					Opts:         llotypes.ChannelOpts(fmt.Sprintf(`{"abi":[%s]}`, strings.Join(abi, ","))),
+				}
+			}
+			return defs
+		}
+
+		atLimit := calculated(MaxTotalCalculatedStreams)
+		require.NoError(t, verifyAdmittingAll(codecs, atLimit))
+
+		over := calculated(MaxTotalCalculatedStreams + 1)
+		require.EqualError(t, verifyAdmittingAll(codecs, over),
+			fmt.Sprintf("too many calculated streams across all channels, got: %d/%d", MaxTotalCalculatedStreams+1, MaxTotalCalculatedStreams))
+	})
+
+	t.Run("total opts bytes across the set", func(t *testing.T) {
+		// Every channel individually within MaxChannelOptsBytes; only the sum
+		// exceeds the budget.
+		set := func(channels int) llotypes.ChannelDefinitions {
+			defs := llotypes.ChannelDefinitions{}
+			for c := range channels {
+				defs[llotypes.ChannelID(c+1)] = channel(1, MaxChannelOptsBytes)
+			}
+			return defs
+		}
+		atLimit := set(MaxTotalOptsBytes / MaxChannelOptsBytes)
+		require.NoError(t, verifyAdmittingAll(codecs, atLimit))
+
+		over := set(MaxTotalOptsBytes/MaxChannelOptsBytes + 1)
+		require.EqualError(t, verifyAdmittingAll(codecs, over),
+			fmt.Sprintf("too many opts bytes across all channels, got: %d/%d", MaxTotalOptsBytes+MaxChannelOptsBytes, MaxTotalOptsBytes))
+	})
+
+	t.Run("budgets are admission-only", func(t *testing.T) {
+		// A committed set over budget must not fail verification: every oracle
+		// runs this every round, so rejecting it would halt the protocol over
+		// definitions that are already installed.
+		over := llotypes.ChannelDefinitions{1: channel(1, MaxChannelOptsBytes+1)}
+		require.NoError(t, VerifyChannelDefinitions(codecs, over))
+		require.NoError(t, VerifyChannelDefinitionsForAdmission(codecs, over, nil))
+		require.NoError(t, VerifyChannelDefinitionsForAdmission(codecs, over, map[llotypes.ChannelID]struct{}{}))
+	})
+
+	t.Run("a whole-set finding applies to whatever is being admitted", func(t *testing.T) {
+		// The budget is a property of the set, so the channels that pushed it
+		// over are not distinguishable. Admitting any channel is refused while
+		// the set is over budget, which stops it growing; admitting nothing is
+		// left alone.
+		over := sharedStream(11, MaxTotalStreamEntries/10)
+		for _, admitted := range []llotypes.ChannelID{1, 11} {
+			err := VerifyChannelDefinitionsForAdmission(codecs, over, map[llotypes.ChannelID]struct{}{admitted: {}})
+			require.ErrorContains(t, err, "too many stream entries across all channels")
+		}
+	})
+
+	t.Run("tombstones cost nothing", func(t *testing.T) {
+		// A tombstone carries neither streams nor opts that anything reads, so
+		// it must not consume either budget.
+		defs := sharedStream(11, MaxTotalStreamEntries/10)
+		tombstoned := defs[11]
+		tombstoned.Tombstone = true
+		defs[11] = tombstoned
+		require.NoError(t, verifyAdmittingAll(codecs, defs))
+	})
+}
+
 func Test_ChangedChannelIDs(t *testing.T) {
 	streams := []llotypes.Stream{{StreamID: 1, Aggregator: llotypes.AggregatorMedian}}
 	current := llotypes.ChannelDefinitions{
@@ -377,4 +572,98 @@ func Test_ChangedChannelIDs(t *testing.T) {
 	require.Equal(t, map[llotypes.ChannelID]struct{}{2: {}, 4: {}}, ChangedChannelIDs(current, desired))
 	require.Empty(t, ChangedChannelIDs(current, current))
 	require.Empty(t, ChangedChannelIDs(current, nil))
+}
+
+// rejectingCodec fails Verify for the channels whose IDs are in reject, keyed
+// by the first stream ID of the definition (channel IDs are not passed to
+// Verify).
+type rejectingCodec struct {
+	rejectStream llotypes.StreamID
+}
+
+func (rejectingCodec) Encode(Report, llotypes.ChannelDefinition, *OptsCache) ([]byte, error) {
+	return nil, nil
+}
+
+func (c rejectingCodec) Verify(cd llotypes.ChannelDefinition) error {
+	if len(cd.Streams) > 0 && cd.Streams[0].StreamID == c.rejectStream {
+		return errors.New("codec says no")
+	}
+	return nil
+}
+
+func Test_UnverifiableChannelIDs(t *testing.T) {
+	channel := func(streamID llotypes.StreamID) llotypes.ChannelDefinition {
+		return llotypes.ChannelDefinition{Streams: []llotypes.Stream{{StreamID: streamID, Aggregator: llotypes.AggregatorMedian}}}
+	}
+
+	t.Run("attributes a baseline failure to exactly its channel", func(t *testing.T) {
+		codecs := map[llotypes.ReportFormat]ReportCodec{0: rejectingCodec{rejectStream: 2}}
+		defs := llotypes.ChannelDefinitions{1: channel(1), 2: channel(2), 3: channel(3)}
+
+		ids, err := UnverifiableChannelIDs(codecs, defs)
+		require.NoError(t, err)
+		require.Equal(t, map[llotypes.ChannelID]struct{}{2: {}}, ids)
+
+		// The same set is still a hard error on the admission path.
+		require.EqualError(t, VerifyChannelDefinitions(codecs, defs), "invalid ChannelDefinition with ID 2: codec says no")
+	})
+
+	t.Run("attributes every kind of baseline finding", func(t *testing.T) {
+		codecs := map[llotypes.ReportFormat]ReportCodec{0: stubReportCodec{}}
+		tooManyStreams := llotypes.ChannelDefinition{Streams: make([]llotypes.Stream, MaxStreamsPerChannel+1)}
+		for i := range tooManyStreams.Streams {
+			tooManyStreams.Streams[i] = llotypes.Stream{StreamID: llotypes.StreamID(i + 100), Aggregator: llotypes.AggregatorMedian}
+		}
+		defs := llotypes.ChannelDefinitions{
+			1: channel(1),
+			2: {},                                          // no streams
+			3: {Streams: []llotypes.Stream{{StreamID: 3}}}, // zero aggregator
+			4: tooManyStreams,
+		}
+
+		ids, err := UnverifiableChannelIDs(codecs, defs)
+		require.NoError(t, err)
+		require.Equal(t, map[llotypes.ChannelID]struct{}{2: {}, 3: {}, 4: {}}, ids)
+	})
+
+	t.Run("admission-only findings are not attributed", func(t *testing.T) {
+		// Two channels sharing a feed ID is admission-only: a committed set
+		// carrying it keeps reporting, so neither channel is skipped.
+		codecs := map[llotypes.ReportFormat]ReportCodec{0: mockFeedIDCodec{feedID: [32]byte{0xab}, ok: true}}
+		defs := llotypes.ChannelDefinitions{1: channel(1), 2: channel(2)}
+
+		ids, err := UnverifiableChannelIDs(codecs, defs)
+		require.NoError(t, err)
+		require.Empty(t, ids)
+		require.Error(t, verifyAdmittingAll(codecs, defs))
+	})
+
+	t.Run("a tombstone is never unverifiable", func(t *testing.T) {
+		codecs := map[llotypes.ReportFormat]ReportCodec{0: rejectingCodec{rejectStream: 2}}
+		defs := llotypes.ChannelDefinitions{1: channel(1), 2: {Tombstone: true}}
+
+		ids, err := UnverifiableChannelIDs(codecs, defs)
+		require.NoError(t, err)
+		require.Empty(t, ids)
+	})
+
+	t.Run("a whole-set finding is returned as an error with no channels to skip", func(t *testing.T) {
+		codecs := map[llotypes.ReportFormat]ReportCodec{0: stubReportCodec{}}
+		defs := make(llotypes.ChannelDefinitions, MaxOutcomeChannelDefinitionsLength+1)
+		for i := range MaxOutcomeChannelDefinitionsLength + 1 {
+			defs[llotypes.ChannelID(i+1)] = channel(llotypes.StreamID(i + 1))
+		}
+
+		ids, err := UnverifiableChannelIDs(codecs, defs)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "too many channels")
+		require.Empty(t, ids)
+	})
+
+	t.Run("an empty definition set is clean", func(t *testing.T) {
+		ids, err := UnverifiableChannelIDs(map[llotypes.ReportFormat]ReportCodec{}, llotypes.ChannelDefinitions{})
+		require.NoError(t, err)
+		require.Empty(t, ids)
+	})
 }

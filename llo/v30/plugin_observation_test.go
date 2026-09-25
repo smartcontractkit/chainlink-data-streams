@@ -35,6 +35,12 @@ func (p *mockPredecessorRetirementReportCache) AttestedRetirementReport(predeces
 func (p *mockPredecessorRetirementReportCache) CheckAttestedRetirementReport(predecessorConfigDigest ocr2types.ConfigDigest, attestedRetirementReport []byte) (protocol.RetirementReport, error) {
 	panic("not implemented")
 }
+func (p *mockPredecessorRetirementReportCache) PredecessorConfig(predecessorConfigDigest ocr2types.ConfigDigest) ([][]byte, uint8, bool) {
+	panic("not implemented")
+}
+func (p *mockPredecessorRetirementReportCache) VerifyAttestedRetirementReport(predecessorConfigDigest ocr2types.ConfigDigest, signers [][]byte, f uint8, attestedRetirementReport []byte) (protocol.RetirementReport, error) {
+	panic("not implemented")
+}
 
 func Test_Observation(t *testing.T) {
 	for _, codec := range []OutcomeCodec{protoOutcomeCodecV0{}, protoOutcomeCodecV1{}} {
@@ -296,7 +302,7 @@ func testObservation(t *testing.T, outcomeCodec OutcomeCodec) {
 			assert.Equal(t, ds.s, decoded.StreamValues)
 		})
 
-		t.Run("in case previous outcome channel definitions is invalid, returns error", func(t *testing.T) {
+		t.Run("in case previous outcome channel definitions fails a whole-set baseline check, does not halt", func(t *testing.T) {
 			dfns := make(llotypes.ChannelDefinitions)
 			for i := uint32(0); i < 2*protocol.MaxOutcomeChannelDefinitionsLength; i++ {
 				dfns[i] = llotypes.ChannelDefinition{
@@ -311,9 +317,62 @@ func testObservation(t *testing.T, outcomeCodec OutcomeCodec) {
 			encodedPreviousOutcome, err := p.OutcomeCodec.Encode(previousOutcome)
 			require.NoError(t, err)
 
+			// Agreed state that this build considers invalid is logged and worked
+			// around, never fatal: halting here would stop every node on this
+			// build at once, and the removal votes are cast in this same call.
 			outctx := ocr3types.OutcomeContext{SeqNr: 3, PreviousOutcome: encodedPreviousOutcome}
-			_, err = p.Observation(context.Background(), outctx, query)
-			require.EqualError(t, err, "previousOutcome.Definitions is invalid: too many channels, got: 4000/2000")
+			obs, err := p.Observation(context.Background(), outctx, query)
+			require.NoError(t, err)
+			require.NotEmpty(t, obs)
+		})
+
+		t.Run("a committed channel this build rejects is not fatal and is still voted out", func(t *testing.T) {
+			rejected := llotypes.ChannelDefinition{
+				ReportFormat: llotypes.ReportFormatJSON,
+				Streams:      []llotypes.Stream{{StreamID: 999, Aggregator: llotypes.AggregatorMedian}},
+			}
+			committed := llotypes.ChannelDefinitions{
+				1: smallDefinitions[1],
+				9: rejected,
+			}
+			previousOutcome := Outcome{
+				LifeCycleStage:                  llotypes.LifeCycleStage("test"),
+				ObservationTimestampNanoseconds: testStartTSNanos,
+				ChannelDefinitions:              committed,
+			}
+			encodedPreviousOutcome, err := p.OutcomeCodec.Encode(previousOutcome)
+			require.NoError(t, err)
+
+			// This build's codec rejects channel 9; the build that admitted it
+			// did not. The definitions file has already dropped it.
+			strict := &Plugin{
+				Config:            Config{true},
+				OutcomeCodec:      outcomeCodec,
+				ShouldRetireCache: &mockShouldRetireCache{},
+				Logger:            logger.Test(t),
+				ObservationCodec:  obsCodec,
+				ReportCodecs: map[llotypes.ReportFormat]protocol.ReportCodec{
+					llotypes.ReportFormatJSON: strictJSONVerifyCodec{rejectStream: 999},
+				},
+				ChannelDefinitionCache: &mockChannelDefinitionCache{definitions: llotypes.ChannelDefinitions{1: smallDefinitions[1]}},
+				// Fills only the streams it was asked for, so the assertions
+				// below reflect what the observation actually requested.
+				DataSource: &echoDataSource{},
+			}
+
+			outctx := ocr3types.OutcomeContext{SeqNr: 3, PreviousOutcome: encodedPreviousOutcome}
+			obsBytes, err := strict.Observation(context.Background(), outctx, query)
+			require.NoError(t, err, "a committed definition this build rejects must not halt the node")
+			decoded, err := strict.ObservationCodec.Decode(obsBytes)
+			require.NoError(t, err)
+
+			// The removal vote is the recovery path.
+			require.Contains(t, decoded.RemoveChannelIDs, llotypes.ChannelID(9))
+			// Channel 9's stream is still observed: withholding it would only
+			// starve the nodes still on the old build, which considers the
+			// channel valid and reportable.
+			require.Contains(t, decoded.StreamValues, llotypes.StreamID(999))
+			require.Contains(t, decoded.StreamValues, llotypes.StreamID(1))
 		})
 
 		t.Run("in case ChannelDefinitionsCache returns invalid definitions, does not vote to change anything", func(t *testing.T) {
@@ -463,7 +522,7 @@ func testObservation(t *testing.T, outcomeCodec OutcomeCodec) {
 
 			assert.Equal(t, []byte("foo"), decoded.AttestedPredecessorRetirement)
 		})
-		t.Run("if predecessor retirement report cache returns error, returns error", func(t *testing.T) {
+		t.Run("if predecessor retirement report cache returns error, omits it from the observation", func(t *testing.T) {
 			prrc := &mockPredecessorRetirementReportCache{
 				err: errors.New("retirement report not found error"),
 			}
@@ -479,8 +538,32 @@ func testObservation(t *testing.T, outcomeCodec OutcomeCodec) {
 			require.NoError(t, err)
 
 			outctx := ocr3types.OutcomeContext{SeqNr: 2, PreviousOutcome: encodedPreviousOutcome}
-			_, err = p.Observation(context.Background(), outctx, query)
-			require.EqualError(t, err, "error fetching attested retirement report from cache: retirement report not found error")
+			obs, err := p.Observation(context.Background(), outctx, query)
+			require.NoError(t, err)
+			decoded, err := p.ObservationCodec.Decode(obs)
+			require.NoError(t, err)
+
+			assert.Empty(t, decoded.AttestedPredecessorRetirement)
+		})
+		t.Run("if shouldRetire cache returns error, does not vote to retire", func(t *testing.T) {
+			p.PredecessorRetirementReportCache = &mockPredecessorRetirementReportCache{}
+			p.ShouldRetireCache = &mockShouldRetireCache{shouldRetire: true, err: errors.New("should retire check failed")}
+			defer func() { p.ShouldRetireCache = &mockShouldRetireCache{} }()
+			previousOutcome := Outcome{
+				LifeCycleStage:                  protocol.LifeCycleStageStaging,
+				ObservationTimestampNanoseconds: testStartTSNanos,
+				ChannelDefinitions:              cdc.definitions,
+			}
+			encodedPreviousOutcome, err := p.OutcomeCodec.Encode(previousOutcome)
+			require.NoError(t, err)
+
+			outctx := ocr3types.OutcomeContext{SeqNr: 2, PreviousOutcome: encodedPreviousOutcome}
+			obs, err := p.Observation(context.Background(), outctx, query)
+			require.NoError(t, err)
+			decoded, err := p.ObservationCodec.Decode(obs)
+			require.NoError(t, err)
+
+			assert.False(t, decoded.ShouldRetire)
 		})
 		t.Run("in production lifecycle stage, does not add attestedRetirementReport to observation", func(t *testing.T) {
 			prrc := &mockPredecessorRetirementReportCache{
@@ -558,4 +641,34 @@ func testObservation(t *testing.T, outcomeCodec OutcomeCodec) {
 		assert.GreaterOrEqual(t, decoded.UnixTimestampNanoseconds, testStartTSNanos)
 		assert.Equal(t, ds.s, decoded.StreamValues)
 	})
+}
+
+// echoDataSource returns a value for exactly the streams it is asked to observe.
+type echoDataSource struct{}
+
+func (echoDataSource) Observe(_ context.Context, streamValues protocol.StreamValues, _ DSOpts) error {
+	for streamID := range streamValues {
+		streamValues[streamID] = protocol.ToDecimal(decimal.NewFromInt(1))
+	}
+	return nil
+}
+
+// strictJSONVerifyCodec rejects any definition carrying rejectStream, standing
+// in for a build whose Verify is stricter than the one that admitted the
+// definition.
+type strictJSONVerifyCodec struct {
+	rejectStream llotypes.StreamID
+}
+
+func (strictJSONVerifyCodec) Encode(protocol.Report, llotypes.ChannelDefinition, *protocol.OptsCache) ([]byte, error) {
+	return nil, nil
+}
+
+func (c strictJSONVerifyCodec) Verify(cd llotypes.ChannelDefinition) error {
+	for _, strm := range cd.Streams {
+		if strm.StreamID == c.rejectStream {
+			return errors.New("this build rejects this definition")
+		}
+	}
+	return nil
 }

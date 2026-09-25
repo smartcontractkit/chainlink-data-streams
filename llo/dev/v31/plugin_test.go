@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"strconv"
+	"sync"
 	"testing"
 	"time"
 
@@ -113,6 +115,8 @@ func testPlugin(t *testing.T) *Plugin {
 		ChannelCache:                        protocol.NewChannelCache(),
 		ProtocolVersion:                     0,
 		DefaultMinReportIntervalNanoseconds: 0,
+		// Floor of 3 contributions, which is what N=4, F=1 can sustain.
+		AggregationFaultTolerance: 1,
 	}
 }
 
@@ -121,7 +125,16 @@ func testPlugin(t *testing.T) *Plugin {
 func attachPump(t *testing.T, p *Plugin, ds DataSource, bbf ocr3_1types.BlobBroadcastFetcher) *blobPump {
 	t.Helper()
 	p.DataSource = ds
-	p.pump = newBlobPump(bbf, ds, logger.Test(t), p.ConfigDigest, true, tests.WaitTimeout(t), time.Minute, DefaultBlobLifetimeRounds)
+	p.pump = newBlobPump(logger.Test(t), blobPumpParams{
+		bbf:                bbf,
+		ds:                 ds,
+		configDigest:       p.ConfigDigest,
+		verboseLogging:     true,
+		observationTimeout: tests.WaitTimeout(t),
+		maxSnapshotAge:     time.Minute,
+		maxSnapshotRounds:  DefaultMaxSnapshotRounds,
+		blobLifetimeRounds: DefaultBlobLifetimeRounds,
+	})
 	p.pump.Start()
 	t.Cleanup(func() { require.NoError(t, p.Close()) })
 	return p.pump
@@ -129,6 +142,25 @@ func attachPump(t *testing.T, p *Plugin, ds DataSource, bbf ocr3_1types.BlobBroa
 
 func ao(observer int, obsBytes []byte) ocrtypes.AttributedObservation {
 	return ocrtypes.AttributedObservation{Observer: commontypes.OracleID(observer), Observation: obsBytes}
+}
+
+// testSupportedReportFormats is the codec coverage a fixture oracle advertises
+// by default: every format the tests in this package build channels for.
+var testSupportedReportFormats = formatSet(
+	llotypes.ReportFormatJSON,
+	llotypes.ReportFormatEVMPremiumLegacy,
+	llotypes.ReportFormatEVMABIEncodeUnpacked,
+	llotypes.ReportFormatEVMABIEncodeUnpackedExpr,
+	llotypes.ReportFormatHistoryBackfill,
+)
+
+// formatSet builds the advertised-format set a fixture oracle carries.
+func formatSet(formats ...llotypes.ReportFormat) map[llotypes.ReportFormat]struct{} {
+	out := make(map[llotypes.ReportFormat]struct{}, len(formats))
+	for _, f := range formats {
+		out[f] = struct{}{}
+	}
+	return out
 }
 
 // testBlobs is the shared in-memory blob store used by StateTransition
@@ -140,6 +172,13 @@ var testBlobs = llotest.NewBlobBroadcastFetcher()
 // referenced by handle. Pass testBlobs as the fetcher to StateTransition.
 func mustEncodeObs(t *testing.T, obs Observation) []byte {
 	t.Helper()
+	// A real oracle always advertises the formats it can encode, and channel
+	// reportability requires 2f+1 of them to do so. Fixtures that do not care
+	// about the support gate get the full set, so they behave like a healthy
+	// DON; tests that exercise the gate set the field explicitly.
+	if obs.SupportedReportFormats == nil {
+		obs.SupportedReportFormats = testSupportedReportFormats
+	}
 	if len(obs.StreamValues) == 0 {
 		b, err := encodeObservation(obs, nil)
 		require.NoError(t, err)
@@ -171,7 +210,7 @@ func Test_Observation_WireRoundTrip(t *testing.T) {
 	enc, err := encodeObservation(obs, nil)
 	require.NoError(t, err)
 
-	got, err := decodeObservation(ctx, enc, nil)
+	got, err := decodeObservation(ctx, enc, nil, nil)
 	require.NoError(t, err)
 
 	assert.Equal(t, obs.ShouldRetire, got.ShouldRetire)
@@ -193,7 +232,7 @@ func Test_Observation_StreamValuesNeverInline(t *testing.T) {
 	enc, err := encodeObservation(obs, nil)
 	require.NoError(t, err)
 
-	got, err := decodeObservation(ctx, enc, nil)
+	got, err := decodeObservation(ctx, enc, nil, nil)
 	require.NoError(t, err)
 	require.Empty(t, got.StreamValues, "stream values must travel in a blob, never inline")
 }
@@ -219,14 +258,14 @@ func Test_Observation_BlobRoundTrip(t *testing.T) {
 	enc, err := encodeObservation(Observation{UnixTimestampNanoseconds: 1}, [][]byte{handleBytes})
 	require.NoError(t, err)
 
-	got, err := decodeObservation(ctx, enc, bc)
+	got, err := decodeObservation(ctx, enc, bc, nil)
 	require.NoError(t, err)
 	require.Len(t, got.StreamValues, len(sv))
 	require.True(t, equalStreamValue(sv[100], got.StreamValues[100]))
 
 	// Without a fetcher the reference is unusable, and that must be classified
 	// as a node-local blob-fetch failure rather than a malformed observation.
-	_, err = decodeObservation(ctx, enc, nil)
+	_, err = decodeObservation(ctx, enc, nil, nil)
 	var bfErr *blobFetchError
 	require.ErrorAs(t, err, &bfErr)
 }
@@ -316,6 +355,64 @@ func Test_FullRound_AddChannelThenReport(t *testing.T) {
 	assert.Equal(t, llotypes.ReportFormatJSON, reports4[0].ReportWithInfo.Info.ReportFormat)
 }
 
+func Test_StateTransition_ContributionFloor(t *testing.T) {
+	ctx := tests.Context(t)
+	p := testPlugin(t) // F=1, AggregationFaultTolerance=1, floor 3
+	require.Equal(t, 3, p.minContributions())
+	kv := newMemKV()
+
+	channelDef := llotypes.ChannelDefinition{
+		ReportFormat: llotypes.ReportFormatJSON,
+		Streams:      []llotypes.Stream{{StreamID: 100, Aggregator: llotypes.AggregatorMedian}},
+	}
+	_, err := p.StateTransition(ctx, 1, ocrtypes.AttributedQuery{}, []ocrtypes.AttributedObservation{ao(0, nil), ao(1, nil), ao(2, nil)}, kv, testBlobs)
+	require.NoError(t, err)
+	addAOs := []ocrtypes.AttributedObservation{}
+	for i := 0; i < 4; i++ {
+		addAOs = append(addAOs, ao(i, mustEncodeObs(t, Observation{
+			UnixTimestampNanoseconds: 1_000,
+			UpdateChannelDefinitions: llotypes.ChannelDefinitions{1: channelDef},
+		})))
+	}
+	_, err = p.StateTransition(ctx, 2, ocrtypes.AttributedQuery{}, addAOs, kv, testBlobs)
+	require.NoError(t, err)
+
+	// contributors oracles carry stream 100; the rest take part in the round
+	// without contributing a value for it, which is exactly the population
+	// collapse the floor guards against.
+	valObs := func(ts uint64, contributors int) []ocrtypes.AttributedObservation {
+		aos := []ocrtypes.AttributedObservation{}
+		for i := 0; i < 4; i++ {
+			obs := Observation{UnixTimestampNanoseconds: ts}
+			if i < contributors {
+				obs.StreamValues = protocol.StreamValues{100: protocol.ToDecimal(decimal.NewFromInt(42))}
+			}
+			aos = append(aos, ao(i, mustEncodeObs(t, obs)))
+		}
+		return aos
+	}
+
+	// Three contributions meet the floor, so the stream aggregates.
+	prec, err := p.StateTransition(ctx, 3, ocrtypes.AttributedQuery{}, valObs(2_000, 3), kv, testBlobs)
+	require.NoError(t, err)
+	out, err := decodePrecursor(prec)
+	require.NoError(t, err)
+	require.Contains(t, out.StreamAggregates, llotypes.StreamID(100))
+
+	// Two do not: no aggregate, so no report. The channel itself stays
+	// reportable, since nil observed stream values are permitted unless the
+	// definition sets DisableNilStreamValues; the report is then dropped at
+	// encode time, exactly as for any other missing observed value.
+	prec, err = p.StateTransition(ctx, 4, ocrtypes.AttributedQuery{}, valObs(3_000, 2), kv, testBlobs)
+	require.NoError(t, err)
+	out, err = decodePrecursor(prec)
+	require.NoError(t, err)
+	require.NotContains(t, out.StreamAggregates, llotypes.StreamID(100))
+	reports, err := p.Reports(ctx, 4, prec)
+	require.NoError(t, err)
+	require.Empty(t, reports)
+}
+
 func Test_Precursor_RoundTrip_And_Determinism(t *testing.T) {
 	p := precursor{
 		LifeCycleStage:                  protocol.LifeCycleStageProduction,
@@ -390,7 +487,7 @@ func Test_decodeObservation_RejectsHugeHandleCount(t *testing.T) {
 	var tmp [binary.MaxVarintLen64]byte
 	n := binary.PutUvarint(tmp[:], ^uint64(0)) // max uint64
 	buf = append(buf, tmp[:n]...)
-	_, err := decodeObservation(ctx, buf, nil)
+	_, err := decodeObservation(ctx, buf, nil, nil)
 	require.Error(t, err, "must reject an oversized handle count instead of allocating")
 	require.Contains(t, err.Error(), "too many blobs")
 }
@@ -429,7 +526,7 @@ func Test_SecondsResolutionOverlap(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			p := mkPrec(tc.format, tc.opts, tc.validAfter, tc.obsTs)
-			got := p.reportableChannels(0, protocol.NewOptsCache(), logger.Test(t))
+			got := p.withSupport(1).reportableChannels(0, 0, protocol.NewOptsCache(), nil)
 			if tc.reportable {
 				require.Equal(t, []llotypes.ChannelID{1}, got)
 			} else {
@@ -457,14 +554,14 @@ func Test_DisableNilStreamValues(t *testing.T) {
 
 	// Missing stream 200 -> not reportable.
 	missing := base(protocol.StreamAggregates{100: {llotypes.AggregatorMedian: protocol.ToDecimal(decimal.NewFromInt(1))}})
-	require.Empty(t, missing.reportableChannels(0, protocol.NewOptsCache(), logger.Test(t)))
+	require.Empty(t, missing.withSupport(1).reportableChannels(0, 0, protocol.NewOptsCache(), nil))
 
 	// Both streams present -> reportable.
 	full := base(protocol.StreamAggregates{
 		100: {llotypes.AggregatorMedian: protocol.ToDecimal(decimal.NewFromInt(1))},
 		200: {llotypes.AggregatorMedian: protocol.ToDecimal(decimal.NewFromInt(2))},
 	})
-	require.Equal(t, []llotypes.ChannelID{1}, full.reportableChannels(0, protocol.NewOptsCache(), logger.Test(t)))
+	require.Equal(t, []llotypes.ChannelID{1}, full.withSupport(1).reportableChannels(0, 0, protocol.NewOptsCache(), nil))
 }
 
 func Test_DisableNilStreamValues_CalculatedStreams(t *testing.T) {
@@ -521,17 +618,17 @@ func Test_DisableNilStreamValues_CalculatedStreams(t *testing.T) {
 		// ProcessCalculatedStreams bailed before writing the calculated
 		// aggregate; the definition alone looks complete.
 		o := mkPrec(true, validOpts, baseStreams, baseAggregates())
-		require.Empty(t, o.reportableChannels(0, populatedCache(o), logger.Test(t)))
+		require.Empty(t, o.withSupport(1).reportableChannels(0, 0, populatedCache(o), nil))
 	})
 
 	t.Run("inline calculated stream but nil aggregate -> not reportable", func(t *testing.T) {
 		o := mkPrec(true, validOpts, withCalculated, baseAggregates())
-		require.Empty(t, o.reportableChannels(0, populatedCache(o), logger.Test(t)))
+		require.Empty(t, o.withSupport(1).reportableChannels(0, 0, populatedCache(o), nil))
 	})
 
 	t.Run("fully evaluated -> reportable", func(t *testing.T) {
 		o := mkPrec(true, validOpts, withCalculated, evaluatedAggregates())
-		require.Equal(t, []llotypes.ChannelID{1}, o.reportableChannels(0, populatedCache(o), logger.Test(t)))
+		require.Equal(t, []llotypes.ChannelID{1}, o.withSupport(1).reportableChannels(0, 0, populatedCache(o), nil))
 	})
 
 	t.Run("DisableNilStreamValues=false, evaluation failed -> not reportable", func(t *testing.T) {
@@ -541,32 +638,32 @@ func Test_DisableNilStreamValues_CalculatedStreams(t *testing.T) {
 		// report. Treating the channel as reportable would advance validAfter
 		// over a round that emitted nothing.
 		o := mkPrec(false, validOpts, baseStreams, baseAggregates())
-		require.Empty(t, o.reportableChannels(0, populatedCache(o), logger.Test(t)))
+		require.Empty(t, o.withSupport(1).reportableChannels(0, 0, populatedCache(o), nil))
 	})
 
 	t.Run("DisableNilStreamValues=false, fully evaluated -> reportable", func(t *testing.T) {
 		o := mkPrec(false, validOpts, withCalculated, evaluatedAggregates())
-		require.Equal(t, []llotypes.ChannelID{1}, o.reportableChannels(0, populatedCache(o), logger.Test(t)))
+		require.Equal(t, []llotypes.ChannelID{1}, o.withSupport(1).reportableChannels(0, 0, populatedCache(o), nil))
 	})
 
 	t.Run("malformed opts -> not reportable", func(t *testing.T) {
 		o := mkPrec(true, []byte(`{"abi":`), withCalculated, evaluatedAggregates())
-		require.Empty(t, o.reportableChannels(0, populatedCache(o), logger.Test(t)))
+		require.Empty(t, o.withSupport(1).reportableChannels(0, 0, populatedCache(o), nil))
 	})
 
 	t.Run("opts declare no expressions -> not reportable", func(t *testing.T) {
 		o := mkPrec(true, []byte(`{"abi":[]}`), withCalculated, evaluatedAggregates())
-		require.Empty(t, o.reportableChannels(0, populatedCache(o), logger.Test(t)))
+		require.Empty(t, o.withSupport(1).reportableChannels(0, 0, populatedCache(o), nil))
 	})
 
 	t.Run("cache miss falls back to channel opts -> reportable", func(t *testing.T) {
 		o := mkPrec(true, validOpts, withCalculated, evaluatedAggregates())
-		require.Equal(t, []llotypes.ChannelID{1}, o.reportableChannels(0, protocol.NewOptsCache(), logger.Test(t)))
+		require.Equal(t, []llotypes.ChannelID{1}, o.withSupport(1).reportableChannels(0, 0, protocol.NewOptsCache(), nil))
 	})
 
 	t.Run("cache miss falls back to channel opts -> not reportable when unevaluated", func(t *testing.T) {
 		o := mkPrec(true, validOpts, baseStreams, baseAggregates())
-		require.Empty(t, o.reportableChannels(0, protocol.NewOptsCache(), logger.Test(t)))
+		require.Empty(t, o.withSupport(1).reportableChannels(0, 0, protocol.NewOptsCache(), nil))
 	})
 }
 
@@ -600,6 +697,51 @@ func Test_TimestampedAggregate_CarryForward(t *testing.T) {
 	persisted := carry[100][llotypes.AggregatorMedian]
 	require.NotNil(t, persisted)
 	require.Equal(t, uint64(200), persisted.ObservedAtNanoseconds)
+}
+
+func Test_TimestampedAggregate_CarryForwardOnAggregationFailure(t *testing.T) {
+	p := testPlugin(t) // F=1, contribution floor of 3
+	defs := llotypes.ChannelDefinitions{1: {ReportFormat: llotypes.ReportFormatJSON, Streams: []llotypes.Stream{{StreamID: 100, Aggregator: llotypes.AggregatorMedian}}}}
+
+	tsv := func(ts uint64, v int64) protocol.StreamValue {
+		return &protocol.TimestampedStreamValue{ObservedAtNanoseconds: ts, StreamValue: protocol.ToDecimal(decimal.NewFromInt(v))}
+	}
+
+	// A single contribution is below the floor, so the median aggregator fails.
+	starved := map[llotypes.StreamID][]protocol.StreamValue{100: {tsv(200, 9)}}
+
+	t.Run("carried value is republished into the precursor", func(t *testing.T) {
+		carry := map[llotypes.StreamID]map[llotypes.Aggregator]*protocol.TimestampedStreamValue{}
+		next := map[llotypes.StreamID]map[llotypes.Aggregator]*protocol.TimestampedStreamValue{}
+		out := protocol.StreamAggregates{}
+
+		// Round 1: enough contributions, establishes ts=100.
+		healthy := map[llotypes.StreamID][]protocol.StreamValue{100: {tsv(100, 5), tsv(100, 5), tsv(100, 5)}}
+		require.NoError(t, p.aggregate(carry, next, defs, healthy, out, nil, historyRequirements{}, 100))
+		// Round 2: aggregation fails, the carried value stands in for it.
+		carry = next
+		next = map[llotypes.StreamID]map[llotypes.Aggregator]*protocol.TimestampedStreamValue{}
+		out = protocol.StreamAggregates{}
+		require.NoError(t, p.aggregate(carry, next, defs, starved, out, nil, historyRequirements{}, 200))
+
+		got, ok := out[100][llotypes.AggregatorMedian].(*protocol.TimestampedStreamValue)
+		require.True(t, ok, "failed aggregation must still publish the carried value")
+		require.Equal(t, uint64(100), got.ObservedAtNanoseconds)
+
+		persisted := next[100][llotypes.AggregatorMedian]
+		require.NotNil(t, persisted, "the carry must survive into the next round")
+		require.Equal(t, uint64(100), persisted.ObservedAtNanoseconds)
+	})
+
+	t.Run("without a carry the pair is absent", func(t *testing.T) {
+		carry := map[llotypes.StreamID]map[llotypes.Aggregator]*protocol.TimestampedStreamValue{}
+		next := map[llotypes.StreamID]map[llotypes.Aggregator]*protocol.TimestampedStreamValue{}
+		out := protocol.StreamAggregates{}
+
+		require.NoError(t, p.aggregate(carry, next, defs, starved, out, nil, historyRequirements{}, 200))
+		require.NotContains(t, out[100], llotypes.AggregatorMedian)
+		require.Empty(t, next)
+	})
 }
 
 func Test_Telemetry(t *testing.T) {
@@ -753,7 +895,7 @@ func Test_HistoryBackfill(t *testing.T) {
 		ValidAfterNanoseconds:           map[llotypes.ChannelID]uint64{targetCID: tenSec /* target not reportable */, backfillCID: 0},
 		StreamAggregates:                protocol.StreamAggregates{},
 	}
-	b, err := encodePrecursor(prec)
+	b, err := encodePrecursor(prec.withSupport(3))
 	require.NoError(t, err)
 	reports, err := p.Reports(ctx, 2, b)
 	require.NoError(t, err)
@@ -790,12 +932,12 @@ func Test_decodeObservation_BlobFetchErrorIsClassified(t *testing.T) {
 	var bfErr *blobFetchError
 
 	// A failing fetcher -> node-local error, must be a *blobFetchError.
-	_, err = decodeObservation(ctx, frame, &errBroadcaster{})
+	_, err = decodeObservation(ctx, frame, &errBroadcaster{}, nil)
 	require.Error(t, err)
 	require.True(t, errors.As(err, &bfErr), "fetch failure must be a blobFetchError so StateTransition propagates it")
 
 	// A nil fetcher (blob referenced but unfetchable) -> also a *blobFetchError.
-	_, err = decodeObservation(ctx, frame, nil)
+	_, err = decodeObservation(ctx, frame, nil, nil)
 	require.Error(t, err)
 	require.True(t, errors.As(err, &bfErr))
 }
@@ -809,13 +951,13 @@ func Test_decodeObservation_MalformedIsNotBlobFetchError(t *testing.T) {
 	var bfErr *blobFetchError
 
 	// Unknown wire version.
-	_, err := decodeObservation(ctx, []byte{0x02, 0x00}, &errBroadcaster{})
+	_, err := decodeObservation(ctx, []byte{0x02, 0x00}, &errBroadcaster{}, nil)
 	require.Error(t, err)
 	require.False(t, errors.As(err, &bfErr), "malformed framing must stay droppable, not a blobFetchError")
 
 	// Well-framed but garbage handle bytes: UnmarshalBinary fails deterministically.
 	frame := frameObservation([][]byte{{0xFF}}, nil)
-	_, err = decodeObservation(ctx, frame, &errBroadcaster{})
+	_, err = decodeObservation(ctx, frame, &errBroadcaster{}, nil)
 	require.Error(t, err)
 	require.False(t, errors.As(err, &bfErr))
 }
@@ -914,7 +1056,7 @@ func Test_CalculatedStreams_ReportValues(t *testing.T) {
 	cache.ResetTo(definitions)
 	calculated.ProcessCalculatedStreams(p.Logger, prec.ChannelDefinitions, prec.StreamAggregates, prec.ObservationTimestampNanoseconds, cache, nil)
 
-	precBytes, err := encodePrecursor(prec)
+	precBytes, err := encodePrecursor(prec.withSupport(3))
 	require.NoError(t, err)
 	reports, err := p.Reports(ctx, 2, precBytes)
 	require.NoError(t, err)
@@ -942,10 +1084,757 @@ func Test_Observation_RejectsInlineStreamValues(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	_, err = decodeObservation(ctx, frameObservation(nil, mainBytes), nil)
+	_, err = decodeObservation(ctx, frameObservation(nil, mainBytes), nil, nil)
 	require.ErrorContains(t, err, "inline stream values")
 
 	// Deterministic across oracles, so it must not be a blob-fetch failure.
 	var bfErr *blobFetchError
 	require.NotErrorAs(t, err, &bfErr)
+}
+
+func Test_IsReportable_EffectiveStreamsFailure(t *testing.T) {
+	// Reportability and emission share one derivation: isReportable and Reports
+	// both go through protocol.EffectiveStreams. A channel whose opts cannot be
+	// decoded has no derivable stream list, so Reports could not assemble
+	// values for it and reportability must agree, otherwise validAfter advances
+	// over a round that emitted nothing.
+	cd := llotypes.ChannelDefinition{
+		ReportFormat: llotypes.ReportFormatEVMABIEncodeUnpackedExpr,
+		Opts:         []byte(`{"not":`),
+		Streams:      []llotypes.Stream{{StreamID: 100, Aggregator: llotypes.AggregatorMedian}},
+	}
+	prec := precursor{
+		LifeCycleStage:                  protocol.LifeCycleStageProduction,
+		ObservationTimestampNanoseconds: 2_000_000_000,
+		ChannelDefinitions:              llotypes.ChannelDefinitions{1: cd},
+		ValidAfterNanoseconds:           map[llotypes.ChannelID]uint64{1: 1_000_000_000},
+		StreamAggregates: protocol.StreamAggregates{
+			100: {llotypes.AggregatorMedian: protocol.ToDecimal(decimal.NewFromInt(1))},
+		},
+	}
+	require.Empty(t, prec.withSupport(1).reportableChannels(0, 0, protocol.NewOptsCache(), nil))
+}
+
+func Test_SelectBackfillCandidate_UnemittableRow(t *testing.T) {
+	const (
+		targetCID   = llotypes.ChannelID(10)
+		backfillCID = llotypes.ChannelID(20)
+		tenSec      = uint64(10_000_000_000)
+	)
+	targetCD := llotypes.ChannelDefinition{ReportFormat: llotypes.ReportFormatJSON, Streams: []llotypes.Stream{{StreamID: 100, Aggregator: llotypes.AggregatorMedian}}}
+
+	// Row carries stream 999, not the target's stream 100, so
+	// BuildBackfillStreamValues would fail in Reports. The candidate must not
+	// be selectable: the watermark would otherwise advance past a row that
+	// never emitted, losing it permanently.
+	missingStream := llotypes.ChannelDefinition{
+		ReportFormat: llotypes.ReportFormatHistoryBackfill,
+		Opts:         []byte(`{"targetChannelId":10,"observations":{"5":{"999":"1.5"}}}`),
+	}
+	defs := llotypes.ChannelDefinitions{targetCID: targetCD, backfillCID: missingStream}
+	_, _, _, ok := selectBackfillCandidate(defs, map[llotypes.ChannelID]uint64{backfillCID: 0}, tenSec, backfillCID, nil)
+	require.False(t, ok, "row missing a target stream must not be selectable")
+
+	// Same row shape, but the value is not parseable as a stream value.
+	badValue := llotypes.ChannelDefinition{
+		ReportFormat: llotypes.ReportFormatHistoryBackfill,
+		Opts:         []byte(`{"targetChannelId":10,"observations":{"5":{"100":"not-a-number"}}}`),
+	}
+	defs[backfillCID] = badValue
+	_, _, _, ok = selectBackfillCandidate(defs, map[llotypes.ChannelID]uint64{backfillCID: 0}, tenSec, backfillCID, nil)
+	require.False(t, ok, "row with an unparseable value must not be selectable")
+}
+
+// withSupport returns a copy of the precursor with n oracles advertising a
+// report codec for every format its channels need, so tests that are not about
+// the support gate are unaffected by it. Backfill channels are resolved to
+// their target's format, which is the one their report is encoded with.
+func (o precursor) withSupport(n int) precursor {
+	o.SupportByFormat = make(map[llotypes.ReportFormat]int, len(o.ChannelDefinitions))
+	for _, cd := range o.ChannelDefinitions {
+		o.SupportByFormat[cd.ReportFormat] = n
+	}
+	return o
+}
+
+func Test_ReportFormatSupportGate(t *testing.T) {
+	const cid = llotypes.ChannelID(1)
+	cd := llotypes.ChannelDefinition{
+		ReportFormat: llotypes.ReportFormatJSON,
+		Streams:      []llotypes.Stream{{StreamID: 100, Aggregator: llotypes.AggregatorMedian}},
+	}
+	base := func(support int) precursor {
+		return precursor{
+			LifeCycleStage:                  protocol.LifeCycleStageProduction,
+			ObservationTimestampNanoseconds: 2_000_000_000,
+			ChannelDefinitions:              llotypes.ChannelDefinitions{cid: cd},
+			ValidAfterNanoseconds:           map[llotypes.ChannelID]uint64{cid: 1_000_000_000},
+			StreamAggregates: protocol.StreamAggregates{
+				100: {llotypes.AggregatorMedian: protocol.ToDecimal(decimal.NewFromInt(1))},
+			},
+			SupportByFormat: map[llotypes.ReportFormat]int{llotypes.ReportFormatJSON: support},
+		}
+	}
+
+	// f=1 requires 2f+1 = 3 advertised supporters: 2f would only guarantee f+1
+	// real encoders if none of the advertisements were lies.
+	require.Equal(t, []llotypes.ChannelID{cid}, base(3).reportableChannels(0, 1, protocol.NewOptsCache(), nil))
+	require.Empty(t, base(2).reportableChannels(0, 1, protocol.NewOptsCache(), nil))
+	require.Empty(t, base(0).reportableChannels(0, 1, protocol.NewOptsCache(), nil))
+
+	// A format no oracle advertises is never reportable, however healthy the
+	// channel otherwise is.
+	noEntry := base(3)
+	noEntry.SupportByFormat = map[llotypes.ReportFormat]int{}
+	require.Empty(t, noEntry.reportableChannels(0, 1, protocol.NewOptsCache(), nil))
+
+	// Support is keyed by format, not channel: an unrelated format's coverage
+	// does not carry the channel.
+	wrongFormat := base(0)
+	wrongFormat.SupportByFormat = map[llotypes.ReportFormat]int{llotypes.ReportFormatEVMPremiumLegacy: 4}
+	require.Empty(t, wrongFormat.reportableChannels(0, 1, protocol.NewOptsCache(), nil))
+}
+
+func Test_ReportFormatSupportGate_Backfill(t *testing.T) {
+	const (
+		targetCID   = llotypes.ChannelID(10)
+		backfillCID = llotypes.ChannelID(20)
+		tenSec      = uint64(10_000_000_000)
+	)
+	defs := llotypes.ChannelDefinitions{
+		targetCID: {ReportFormat: llotypes.ReportFormatJSON, Streams: []llotypes.Stream{{StreamID: 100, Aggregator: llotypes.AggregatorMedian}}},
+		backfillCID: {
+			ReportFormat: llotypes.ReportFormatHistoryBackfill,
+			Opts:         []byte(`{"targetChannelId":10,"observations":{"5":{"100":"1.5"}}}`),
+		},
+	}
+	base := func(support map[llotypes.ReportFormat]int) precursor {
+		return precursor{
+			LifeCycleStage:                  protocol.LifeCycleStageProduction,
+			ObservationTimestampNanoseconds: tenSec,
+			ChannelDefinitions:              defs,
+			ValidAfterNanoseconds:           map[llotypes.ChannelID]uint64{targetCID: tenSec /* target not reportable */, backfillCID: 0},
+			StreamAggregates:                protocol.StreamAggregates{},
+			SupportByFormat:                 support,
+		}
+	}
+
+	// The backfill report is encoded with the TARGET's codec, so the target's
+	// format is what must be covered. Coverage of history_backfill itself is
+	// irrelevant: no codec encodes it.
+	targetCovered := base(map[llotypes.ReportFormat]int{llotypes.ReportFormatJSON: 3})
+	require.Equal(t, []llotypes.ChannelID{backfillCID}, targetCovered.reportableChannels(0, 1, protocol.NewOptsCache(), nil))
+
+	backfillCoveredOnly := base(map[llotypes.ReportFormat]int{llotypes.ReportFormatHistoryBackfill: 4})
+	require.Empty(t, backfillCoveredOnly.reportableChannels(0, 1, protocol.NewOptsCache(), nil))
+}
+
+func Test_ReportFormatSupportGate_StopsValidAfterAdvance(t *testing.T) {
+	// The gate's point: an uncovered channel must not have validAfter advance
+	// over a round that emitted nothing. reportedLastRound is what the next
+	// round reads to decide the advance, so assert on that.
+	const cid = llotypes.ChannelID(1)
+	cd := llotypes.ChannelDefinition{
+		ReportFormat: llotypes.ReportFormatJSON,
+		Streams:      []llotypes.Stream{{StreamID: 100, Aggregator: llotypes.AggregatorMedian}},
+	}
+	prec := precursor{
+		LifeCycleStage:                  protocol.LifeCycleStageProduction,
+		ObservationTimestampNanoseconds: 2_000_000_000,
+		ChannelDefinitions:              llotypes.ChannelDefinitions{cid: cd},
+		ValidAfterNanoseconds:           map[llotypes.ChannelID]uint64{cid: 1_000_000_000},
+		StreamAggregates: protocol.StreamAggregates{
+			100: {llotypes.AggregatorMedian: protocol.ToDecimal(decimal.NewFromInt(1))},
+		},
+	}
+
+	covered := prec
+	covered.SupportByFormat = map[llotypes.ReportFormat]int{llotypes.ReportFormatJSON: 3}
+	require.True(t, covered.isReportable(cid, 0, 1, protocol.NewOptsCache(), nil))
+
+	uncovered := prec
+	uncovered.SupportByFormat = map[llotypes.ReportFormat]int{llotypes.ReportFormatJSON: 2}
+	require.False(t, uncovered.isReportable(cid, 0, 1, protocol.NewOptsCache(), nil))
+}
+
+func Test_Observation_SupportedReportFormats_RoundTrip(t *testing.T) {
+	ctx := tests.Context(t)
+
+	// The set is sorted on the wire and collapses back to a set on decode, so
+	// one oracle can only ever contribute one vote per format to the tally.
+	obs := Observation{
+		UnixTimestampNanoseconds: 1,
+		SupportedReportFormats: formatSet(
+			llotypes.ReportFormatJSON,
+			llotypes.ReportFormatEVMPremiumLegacy,
+		),
+	}
+	b, err := encodeObservation(obs, nil)
+	require.NoError(t, err)
+	got, err := decodeObservation(ctx, b, nil, nil)
+	require.NoError(t, err)
+	require.Equal(t, formatSet(llotypes.ReportFormatEVMPremiumLegacy, llotypes.ReportFormatJSON), got.SupportedReportFormats)
+	require.Equal(t, []uint32{uint32(llotypes.ReportFormatEVMPremiumLegacy), uint32(llotypes.ReportFormatJSON)}, sortedFormatsToWire(got.SupportedReportFormats))
+
+	// Duplicate wire entries collapse rather than double counting.
+	dup, err := proto.Marshal(&protocol.LLOObservationProto{
+		UnixTimestampNanoseconds: 1,
+		SupportedReportFormats:   []uint32{uint32(llotypes.ReportFormatJSON), uint32(llotypes.ReportFormatJSON)},
+	})
+	require.NoError(t, err)
+	got, err = decodeObservation(ctx, frameObservation(nil, dup), nil, nil)
+	require.NoError(t, err)
+	require.Equal(t, formatSet(llotypes.ReportFormatJSON), got.SupportedReportFormats)
+
+	// An oracle advertising nothing decodes as advertising nothing, rather than
+	// as an empty-but-present list.
+	b, err = encodeObservation(Observation{UnixTimestampNanoseconds: 1}, nil)
+	require.NoError(t, err)
+	got, err = decodeObservation(ctx, b, nil, nil)
+	require.NoError(t, err)
+	require.Nil(t, got.SupportedReportFormats)
+
+	// Over-length lists are rejected at decode rather than reaching the tally.
+	tooMany := make([]uint32, protocol.MaxObservationSupportedReportFormatsLength+1)
+	for i := range tooMany {
+		tooMany[i] = uint32(i)
+	}
+	raw, err := proto.Marshal(&protocol.LLOObservationProto{UnixTimestampNanoseconds: 1, SupportedReportFormats: tooMany})
+	require.NoError(t, err)
+	_, err = decodeObservation(ctx, frameObservation(nil, raw), nil, nil)
+	require.ErrorContains(t, err, "advertises too many report formats")
+}
+
+func Test_Precursor_SupportByFormat_RoundTrip(t *testing.T) {
+	prec := precursor{
+		LifeCycleStage: protocol.LifeCycleStageProduction,
+		SupportByFormat: map[llotypes.ReportFormat]int{
+			llotypes.ReportFormatJSON:             4,
+			llotypes.ReportFormatEVMPremiumLegacy: 3,
+		},
+	}
+	// Encoding must be deterministic despite map iteration order: libocr
+	// digests the precursor bytes, so two oracles disagreeing on byte order
+	// would fail attestation.
+	b1, err := encodePrecursor(prec)
+	require.NoError(t, err)
+	b2, err := encodePrecursor(prec)
+	require.NoError(t, err)
+	require.Equal(t, b1, b2)
+
+	got, err := decodePrecursor(b1)
+	require.NoError(t, err)
+	require.Equal(t, prec.SupportByFormat, got.SupportByFormat)
+}
+
+func Test_StateTransition_TalliesReportFormatSupport(t *testing.T) {
+	ctx := tests.Context(t)
+	p := testPlugin(t)
+	kv := newMemKV()
+
+	_, err := p.StateTransition(ctx, 1, ocrtypes.AttributedQuery{}, []ocrtypes.AttributedObservation{ao(0, nil), ao(1, nil), ao(2, nil)}, kv, testBlobs)
+	require.NoError(t, err)
+	require.NoError(t, writeChannelState(kv, 1, llotypes.ChannelDefinitions{
+		1: {ReportFormat: llotypes.ReportFormatJSON, Streams: []llotypes.Stream{{StreamID: 1, Aggregator: llotypes.AggregatorMedian}}},
+	}))
+
+	// Two oracles advertise JSON, one advertises nothing: the tally is a count
+	// of advertisements, and an oracle that advertises nothing is not counted.
+	obsJSON := mustEncodeObs(t, Observation{UnixTimestampNanoseconds: 1, SupportedReportFormats: formatSet(llotypes.ReportFormatJSON)})
+	obsNone := mustEncodeObs(t, Observation{UnixTimestampNanoseconds: 1, SupportedReportFormats: formatSet()})
+	precBytes, err := p.StateTransition(ctx, 2, ocrtypes.AttributedQuery{}, []ocrtypes.AttributedObservation{ao(0, obsJSON), ao(1, obsJSON), ao(2, obsNone)}, kv, testBlobs)
+	require.NoError(t, err)
+
+	prec, err := decodePrecursor(precBytes)
+	require.NoError(t, err)
+	require.Equal(t, 2, prec.SupportByFormat[llotypes.ReportFormatJSON])
+}
+
+func Test_StateTransition_ObservationTimestampDoesNotRegress(t *testing.T) {
+	ctx := tests.Context(t)
+	p := testPlugin(t)
+	kv := newMemKV()
+
+	_, err := p.StateTransition(ctx, 1, ocrtypes.AttributedQuery{}, []ocrtypes.AttributedObservation{ao(0, nil), ao(1, nil), ao(2, nil)}, kv, testBlobs)
+	require.NoError(t, err)
+
+	obsAt := func(ts uint64) []byte {
+		return mustEncodeObs(t, Observation{UnixTimestampNanoseconds: ts})
+	}
+	agreedAt := func(seqNr uint64, aos ...ocrtypes.AttributedObservation) uint64 {
+		precBytes, err := p.StateTransition(ctx, seqNr, ocrtypes.AttributedQuery{}, aos, kv, testBlobs)
+		require.NoError(t, err)
+		prec, err := decodePrecursor(precBytes)
+		require.NoError(t, err)
+		return prec.ObservationTimestampNanoseconds
+	}
+
+	require.Equal(t, uint64(1_000), agreedAt(2, ao(0, obsAt(1_000)), ao(1, obsAt(1_000)), ao(2, obsAt(1_000))))
+
+	// Node clocks disagree and the quorum that carried the higher stamp is gone:
+	// hold the previous timestamp rather than dating a report before a watermark
+	// already in use.
+	require.Equal(t, uint64(1_000), agreedAt(3, ao(0, obsAt(500)), ao(1, obsAt(500)), ao(2, obsAt(500))))
+
+	// Forward again once the clock passes the floor.
+	require.Equal(t, uint64(2_000), agreedAt(4, ao(0, obsAt(2_000)), ao(1, obsAt(2_000)), ao(2, obsAt(2_000))))
+}
+
+func Test_Observation_StampsTheRoundNotTheSnapshot(t *testing.T) {
+	ctx := tests.Context(t)
+	p := testPlugin(t)
+	kv := newMemKV()
+	require.NoError(t, writeChannelState(kv, 1, llotypes.ChannelDefinitions{
+		1: {ReportFormat: llotypes.ReportFormatJSON, Streams: []llotypes.Stream{{StreamID: 100, Aggregator: llotypes.AggregatorMedian}}},
+	}))
+	p.ChannelDefinitionCache = &mockChannelDefinitionCache{}
+	p.ShouldRetireCache = &mockShouldRetireCache{}
+	bc := newFakeBroadcaster()
+	attachPump(t, p, &recordingDataSource{}, bc)
+
+	// Whether or not the pump has a snapshot ready, the stamp is the round time.
+	for _, round := range []uint64{2, 3} {
+		before := uint64(time.Now().UnixNano()) //nolint:gosec // G115 test clock is positive
+		obsBytes, err := p.Observation(ctx, round, ocrtypes.AttributedQuery{}, kv, nil)
+		require.NoError(t, err)
+		obs, err := decodeObservation(ctx, obsBytes, bc, nil)
+		require.NoError(t, err)
+		require.GreaterOrEqual(t, obs.UnixTimestampNanoseconds, before)
+		require.Eventually(t, func() bool { return p.pump.Cycles() >= 1 }, tests.WaitTimeout(t), 10*time.Millisecond)
+	}
+}
+
+// Codec support accumulates across rounds, so f oracles omitting their
+// advertisement cannot drop a format below the 2f+1 threshold.
+//
+// Counted per round, support could never exceed the 2f+1 observation quorum, so
+// the threshold would demand that every observation in a minimal quorum
+// advertise the format and any single omission would make every channel of that
+// format unreportable.
+func Test_StateTransition_CodecSupportAccumulatesAcrossRounds(t *testing.T) {
+	ctx := tests.Context(t)
+	p := testPlugin(t)
+	kv := newMemKV()
+
+	_, err := p.StateTransition(ctx, 1, ocrtypes.AttributedQuery{}, []ocrtypes.AttributedObservation{ao(0, nil), ao(1, nil), ao(2, nil)}, kv, testBlobs)
+	require.NoError(t, err)
+	require.NoError(t, writeChannelState(kv, 1, llotypes.ChannelDefinitions{
+		1: {ReportFormat: llotypes.ReportFormatJSON, Streams: []llotypes.Stream{{StreamID: 1, Aggregator: llotypes.AggregatorMedian}}},
+	}))
+
+	obsJSON := func(ts uint64) []byte {
+		return mustEncodeObs(t, Observation{UnixTimestampNanoseconds: ts, SupportedReportFormats: formatSet(llotypes.ReportFormatJSON)})
+	}
+	obsNone := func(ts uint64) []byte {
+		return mustEncodeObs(t, Observation{UnixTimestampNanoseconds: ts, SupportedReportFormats: formatSet()})
+	}
+
+	// All N oracles advertise JSON.
+	precBytes, err := p.StateTransition(ctx, 2, ocrtypes.AttributedQuery{}, []ocrtypes.AttributedObservation{ao(0, obsJSON(10)), ao(1, obsJSON(10)), ao(2, obsJSON(10)), ao(3, obsJSON(10))}, kv, testBlobs)
+	require.NoError(t, err)
+	prec, err := decodePrecursor(precBytes)
+	require.NoError(t, err)
+	require.Equal(t, p.N, prec.SupportByFormat[llotypes.ReportFormatJSON])
+
+	// A minimal quorum in which one oracle now omits its advertisement. Oracle
+	// 3 contributes nothing this round, but its last advertisement still counts,
+	// so the format keeps 2f+1 supporters and the channel stays reportable.
+	precBytes, err = p.StateTransition(ctx, 3, ocrtypes.AttributedQuery{}, []ocrtypes.AttributedObservation{ao(0, obsJSON(20)), ao(1, obsJSON(20)), ao(2, obsNone(20))}, kv, testBlobs)
+	require.NoError(t, err)
+	prec, err = decodePrecursor(precBytes)
+	require.NoError(t, err)
+	require.Equal(t, 2*p.F+1, prec.SupportByFormat[llotypes.ReportFormatJSON])
+	require.Equal(t, []llotypes.ChannelID{1}, prec.reportableChannels(0, p.F, nil, nil))
+}
+
+// One oracle padding its observation with unused report formats must not be
+// able to grow the precursor tally: the encoded map is keyed by oracle-chosen
+// values, and an oversized one fails to decode on every oracle, which would
+// stop reporting DON-wide while StateTransition keeps succeeding.
+func Test_StateTransition_PrunesUnusedReportFormatSupport(t *testing.T) {
+	ctx := tests.Context(t)
+	p := testPlugin(t)
+	kv := newMemKV()
+
+	_, err := p.StateTransition(ctx, 1, ocrtypes.AttributedQuery{}, []ocrtypes.AttributedObservation{ao(0, nil), ao(1, nil), ao(2, nil)}, kv, testBlobs)
+	require.NoError(t, err)
+	require.NoError(t, writeChannelState(kv, 1, llotypes.ChannelDefinitions{
+		1: {ReportFormat: llotypes.ReportFormatJSON, Streams: []llotypes.Stream{{StreamID: 1, Aggregator: llotypes.AggregatorMedian}}},
+	}))
+
+	// Each oracle advertises JSON plus a disjoint block of junk formats, so an
+	// unpruned tally would hold 3*MaxObservationSupportedReportFormatsLength-2
+	// entries.
+	padded := func(oracle int) []byte {
+		formats := formatSet(llotypes.ReportFormatJSON)
+		for i := 1; i < protocol.MaxObservationSupportedReportFormatsLength; i++ {
+			formats[llotypes.ReportFormat(1_000_000+oracle*1_000+i)] = struct{}{}
+		}
+		return mustEncodeObs(t, Observation{UnixTimestampNanoseconds: 1, SupportedReportFormats: formats})
+	}
+	precBytes, err := p.StateTransition(ctx, 2, ocrtypes.AttributedQuery{}, []ocrtypes.AttributedObservation{ao(0, padded(0)), ao(1, padded(1)), ao(2, padded(2))}, kv, testBlobs)
+	require.NoError(t, err)
+
+	prec, err := decodePrecursor(precBytes)
+	require.NoError(t, err)
+	require.Equal(t, map[llotypes.ReportFormat]int{llotypes.ReportFormatJSON: 3}, prec.SupportByFormat)
+}
+
+// strictJSONCodec is reportcodec.JSONReportCodec with an extra Verify rule this
+// build has and the build that admitted the definition did not: the version
+// skew that makes a baseline failure on committed state reachable.
+type strictJSONCodec struct {
+	reportcodec.JSONReportCodec
+	rejectStream llotypes.StreamID
+}
+
+func (c strictJSONCodec) Verify(cd llotypes.ChannelDefinition) error {
+	for _, strm := range cd.Streams {
+		if strm.StreamID == c.rejectStream {
+			return errors.New("this build rejects stream " + strconv.Itoa(int(strm.StreamID)))
+		}
+	}
+	return c.JSONReportCodec.Verify(cd)
+}
+
+// recordingDataSource records the stream IDs it was asked to observe.
+type recordingDataSource struct {
+	mu   sync.Mutex
+	seen map[llotypes.StreamID]struct{}
+}
+
+func (d *recordingDataSource) Observe(_ context.Context, sv protocol.StreamValues, _ DSOpts) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.seen == nil {
+		d.seen = map[llotypes.StreamID]struct{}{}
+	}
+	for streamID := range sv {
+		d.seen[streamID] = struct{}{}
+		sv[streamID] = protocol.ToDecimal(decimal.NewFromInt(1))
+	}
+	return nil
+}
+
+func (d *recordingDataSource) streams() []llotypes.StreamID {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	out := make([]llotypes.StreamID, 0, len(d.seen))
+	for streamID := range d.seen {
+		out = append(out, streamID)
+	}
+	return out
+}
+
+// Test_Observation_UnverifiableCommittedChannelIsNotFatal covers the
+// version-skew case: a channel committed under an older build fails this
+// build's codec.Verify. The node must not halt. It keeps observing and,
+// crucially, still votes the offending channel out, which is the only way the
+// DON recovers.
+func Test_Observation_UnverifiableCommittedChannelIsNotFatal(t *testing.T) {
+	ctx := tests.Context(t)
+	p := testPlugin(t)
+	kv := newMemKV()
+
+	healthy := llotypes.ChannelDefinition{
+		ReportFormat: llotypes.ReportFormatJSON,
+		Streams:      []llotypes.Stream{{StreamID: 100, Aggregator: llotypes.AggregatorMedian}},
+	}
+	rejected := llotypes.ChannelDefinition{
+		ReportFormat: llotypes.ReportFormatJSON,
+		Streams:      []llotypes.Stream{{StreamID: 999, Aggregator: llotypes.AggregatorMedian}},
+	}
+
+	// Rounds 1-2: both channels are admitted by a build that accepts them.
+	_, err := p.StateTransition(ctx, 1, ocrtypes.AttributedQuery{}, []ocrtypes.AttributedObservation{ao(0, nil), ao(1, nil), ao(2, nil)}, kv, testBlobs)
+	require.NoError(t, err)
+	addObs := Observation{
+		UnixTimestampNanoseconds: 1_000,
+		UpdateChannelDefinitions: llotypes.ChannelDefinitions{1: healthy, 2: rejected},
+	}
+	addAOs := []ocrtypes.AttributedObservation{}
+	for i := 0; i < 4; i++ {
+		addAOs = append(addAOs, ao(i, mustEncodeObs(t, addObs)))
+	}
+	_, err = p.StateTransition(ctx, 2, ocrtypes.AttributedQuery{}, addAOs, kv, testBlobs)
+	require.NoError(t, err)
+	require.Contains(t, kvChannelDefs(t, kv), llotypes.ChannelID(2))
+
+	// Now this node upgrades to a build whose codec rejects channel 2, and the
+	// definitions file drops it so the node has something to vote for.
+	p.ReportCodecs = map[llotypes.ReportFormat]protocol.ReportCodec{
+		llotypes.ReportFormatJSON: strictJSONCodec{rejectStream: 999},
+	}
+	p.ChannelCache = protocol.NewChannelCache()
+	p.ChannelDefinitionCache = &mockChannelDefinitionCache{defs: llotypes.ChannelDefinitions{1: healthy}}
+	p.ShouldRetireCache = &mockShouldRetireCache{}
+	ds := &recordingDataSource{}
+	attachPump(t, p, ds, newFakeBroadcaster())
+
+	obsBytes, err := p.Observation(ctx, 3, ocrtypes.AttributedQuery{}, kv, nil)
+	require.NoError(t, err, "a committed definition this build rejects must not halt the node")
+	obs, err := decodeObservation(ctx, obsBytes, testBlobs, nil)
+	require.NoError(t, err)
+
+	// The removal vote is the recovery path, and it is only cast because the
+	// verification failure above was not fatal.
+	require.Contains(t, obs.RemoveChannelIDs, llotypes.ChannelID(2))
+	require.NotContains(t, obs.UpdateChannelDefinitions, llotypes.ChannelID(2))
+
+	// The rejected channel's streams are still observed: withholding them would
+	// only starve the nodes still on the old build, which considers the channel
+	// valid and reportable.
+	require.Eventually(t, func() bool { return p.pump.Cycles() >= 1 }, tests.WaitTimeout(t), 10*time.Millisecond)
+	require.ElementsMatch(t, []llotypes.StreamID{100, 999}, ds.streams())
+}
+
+// Test_FullRound_RecoverFromUnverifiableChannel is the end-to-end recovery:
+// every node upgrades to a build that rejects a committed channel, and the DON
+// keeps making rounds and votes the channel out.
+func Test_FullRound_RecoverFromUnverifiableChannel(t *testing.T) {
+	ctx := tests.Context(t)
+	p := testPlugin(t)
+	kv := newMemKV()
+
+	healthy := llotypes.ChannelDefinition{
+		ReportFormat: llotypes.ReportFormatJSON,
+		Streams:      []llotypes.Stream{{StreamID: 100, Aggregator: llotypes.AggregatorMedian}},
+	}
+	rejected := llotypes.ChannelDefinition{
+		ReportFormat: llotypes.ReportFormatJSON,
+		Streams:      []llotypes.Stream{{StreamID: 999, Aggregator: llotypes.AggregatorMedian}},
+	}
+
+	_, err := p.StateTransition(ctx, 1, ocrtypes.AttributedQuery{}, []ocrtypes.AttributedObservation{ao(0, nil), ao(1, nil), ao(2, nil)}, kv, testBlobs)
+	require.NoError(t, err)
+	addObs := Observation{
+		UnixTimestampNanoseconds: 1_000,
+		UpdateChannelDefinitions: llotypes.ChannelDefinitions{1: healthy, 2: rejected},
+	}
+	addAOs := []ocrtypes.AttributedObservation{}
+	for i := 0; i < 4; i++ {
+		addAOs = append(addAOs, ao(i, mustEncodeObs(t, addObs)))
+	}
+	_, err = p.StateTransition(ctx, 2, ocrtypes.AttributedQuery{}, addAOs, kv, testBlobs)
+	require.NoError(t, err)
+
+	p.ReportCodecs = map[llotypes.ReportFormat]protocol.ReportCodec{
+		llotypes.ReportFormatJSON: strictJSONCodec{rejectStream: 999},
+	}
+	p.ChannelCache = protocol.NewChannelCache()
+
+	// Every oracle votes the rejected channel out, and the round is accepted:
+	// the same observation must also pass ValidateObservation on the new build.
+	removeObs := Observation{
+		UnixTimestampNanoseconds: 2_000,
+		RemoveChannelIDs:         map[llotypes.ChannelID]struct{}{2: {}},
+		StreamValues:             protocol.StreamValues{100: protocol.ToDecimal(decimal.NewFromInt(42))},
+	}
+	removeAOs := []ocrtypes.AttributedObservation{}
+	for i := 0; i < 4; i++ {
+		removeAOs = append(removeAOs, ao(i, mustEncodeObs(t, removeObs)))
+	}
+	for _, aObs := range removeAOs {
+		require.NoError(t, p.ValidateObservation(ctx, 3, ocrtypes.AttributedQuery{}, aObs, kv, testBlobs))
+	}
+	_, err = p.StateTransition(ctx, 3, ocrtypes.AttributedQuery{}, removeAOs, kv, testBlobs)
+	require.NoError(t, err)
+	require.NotContains(t, kvChannelDefs(t, kv), llotypes.ChannelID(2))
+	require.Contains(t, kvChannelDefs(t, kv), llotypes.ChannelID(1))
+}
+
+// Test_Observation_RetirementCacheErrorsAreNotFatal guards the liveness fix:
+// both retirement caches read from node-local, asynchronously populated state,
+// so a transient failure must not fail the round. The vote is best-effort — a
+// single node supplying a valid retirement report is enough, and retirement
+// needs a quorum of votes — so the node abstains and carries on.
+func Test_Observation_RetirementCacheErrorsAreNotFatal(t *testing.T) {
+	ctx := tests.Context(t)
+	p := testPlugin(t)
+	predecessor := ocrtypes.ConfigDigest{0xAB}
+	p.PredecessorConfigDigest = &predecessor
+	p.PredecessorRetirementReportCache = &mockPredecessorRetirementReportCache{err: errors.New("rpc failure")}
+	p.ShouldRetireCache = &mockShouldRetireCache{retire: true, err: errors.New("rpc failure")}
+	p.ChannelDefinitionCache = &mockChannelDefinitionCache{defs: llotypes.ChannelDefinitions{}}
+	kv := newMemKV()
+
+	// Bootstrap -> staging, which is the only stage that reads the predecessor
+	// retirement report cache.
+	_, err := p.StateTransition(ctx, 1, ocrtypes.AttributedQuery{}, []ocrtypes.AttributedObservation{ao(0, nil), ao(1, nil), ao(2, nil)}, kv, testBlobs)
+	require.NoError(t, err)
+
+	obsBytes, err := p.Observation(ctx, 2, ocrtypes.AttributedQuery{}, kv, nil)
+	require.NoError(t, err, "a failing retirement cache must not halt the node")
+	obs, err := decodeObservation(ctx, obsBytes, testBlobs, nil)
+	require.NoError(t, err)
+
+	require.Empty(t, obs.AttestedPredecessorRetirement)
+	require.False(t, obs.ShouldRetire)
+}
+
+func Test_UnreportableTally_CollapsesPerChannelWarnings(t *testing.T) {
+	const channels = 50
+	out := precursor{
+		LifeCycleStage:                  protocol.LifeCycleStageProduction,
+		ObservationTimestampNanoseconds: 1_000,
+		ChannelDefinitions:              llotypes.ChannelDefinitions{},
+		ValidAfterNanoseconds:           map[llotypes.ChannelID]uint64{},
+		StreamAggregates:                protocol.StreamAggregates{},
+	}
+	for i := 1; i <= channels; i++ {
+		cid := llotypes.ChannelID(i) //nolint:gosec // G115 bounded by the loop
+		out.ChannelDefinitions[cid] = llotypes.ChannelDefinition{
+			ReportFormat: llotypes.ReportFormatJSON,
+			Streams:      []llotypes.Stream{{StreamID: 1, Aggregator: llotypes.AggregatorMedian}},
+		}
+		out.ValidAfterNanoseconds[cid] = 1
+	}
+
+	// No oracle advertises the format, so every channel fails the same check.
+	tally := &unreportableTally{}
+	require.Empty(t, out.withSupport(0).reportableChannels(0, 1, protocol.NewOptsCache(), tally))
+
+	require.Len(t, tally.reasons, 1, "one reason, not one entry per channel")
+	reason := tally.reasons["too few oracles advertise a report codec for this format"]
+	require.NotNil(t, reason)
+	require.Equal(t, channels, reason.count)
+	require.Len(t, reason.channels, maxUnreportableSamples, "the sample is bounded")
+	require.Equal(t, []any{"reportFormat", llotypes.ReportFormatJSON, "supporters", 0, "required", 3}, reason.detail)
+
+	// A nil tally is the no-op the predicate-only callers pass.
+	require.Empty(t, out.withSupport(0).reportableChannels(0, 1, protocol.NewOptsCache(), nil))
+}
+
+// Test_StateTransition_BackfillValidAfterRequiresPreviousReport covers the
+// backfill watermark advancing only over a row the previous round actually
+// reported.
+func Test_StateTransition_BackfillValidAfterRequiresPreviousReport(t *testing.T) {
+	const (
+		targetCID   = llotypes.ChannelID(10)
+		backfillCID = llotypes.ChannelID(20)
+		fiveSec     = uint64(5_000_000_000)
+		tenSec      = uint64(10_000_000_000)
+	)
+	targetCD := llotypes.ChannelDefinition{ReportFormat: llotypes.ReportFormatJSON, Streams: []llotypes.Stream{{StreamID: 100, Aggregator: llotypes.AggregatorMedian}}}
+	backfillCD := llotypes.ChannelDefinition{
+		ReportFormat: llotypes.ReportFormatHistoryBackfill,
+		Opts:         []byte(`{"targetChannelId":10,"observations":{"5":{"100":"1.5"},"8":{"100":"2.5"}}}`),
+	}
+
+	// round builds four identical observations at ts.
+	round := func(t *testing.T, ts uint64, shape func(*Observation)) []ocrtypes.AttributedObservation {
+		t.Helper()
+		aos := make([]ocrtypes.AttributedObservation, 0, 4)
+		for i := 0; i < 4; i++ {
+			obs := Observation{UnixTimestampNanoseconds: ts}
+			if shape != nil {
+				shape(&obs)
+			}
+			aos = append(aos, ao(i, mustEncodeObs(t, obs)))
+		}
+		return aos
+	}
+
+	for _, tc := range []struct {
+		name string
+		// defs is what the verdict round starts from; shape is how its
+		// observations differ from a healthy round.
+		defs  llotypes.ChannelDefinitions
+		shape func(*Observation)
+		want  uint64
+	}{
+		{
+			// Guard 1: a retired instance emits nothing, and retirement is
+			// terminal, so an unguarded advance drains the whole backfill.
+			name:  "retired instance",
+			defs:  llotypes.ChannelDefinitions{targetCID: targetCD, backfillCID: backfillCD},
+			shape: func(obs *Observation) { obs.ShouldRetire = true },
+			want:  0,
+		},
+		{
+			// Guard 2: selection checks that the channel exists but not that
+			// it is live, so a tombstone is invisible to it.
+			name: "tombstoned backfill channel",
+			defs: func() llotypes.ChannelDefinitions {
+				tombstoned := backfillCD
+				tombstoned.Tombstone = true
+				return llotypes.ChannelDefinitions{targetCID: targetCD, backfillCID: tombstoned}
+			}(),
+			want: 0,
+		},
+		{
+			// The support gate: no oracle advertises a codec for the target's
+			// format, so the verdict round could not certify a report. Codec
+			// coverage is not an input to selection. Coverage returns in the
+			// next round, which must still not skip the row.
+			name: "target format not encodable",
+			defs: llotypes.ChannelDefinitions{targetCID: targetCD, backfillCID: backfillCD},
+			shape: func(obs *Observation) {
+				obs.SupportedReportFormats = formatSet(llotypes.ReportFormatHistoryBackfill)
+			},
+			want: 0,
+		},
+		{
+			// Selection reads this round's definitions against the previous
+			// round's watermark and timestamp. The verdict round has no target
+			// channel, so nothing was selectable and nothing was reported; the
+			// vote it agrees adds one, which makes the same row selectable in
+			// the round that decides the advance.
+			name: "target channel added since the verdict",
+			defs: llotypes.ChannelDefinitions{backfillCID: backfillCD},
+			shape: func(obs *Observation) {
+				obs.UpdateChannelDefinitions = llotypes.ChannelDefinitions{targetCID: targetCD}
+			},
+			want: 0,
+		},
+		{
+			// Control: the verdict round did report, so the watermark moves to
+			// the row it emitted.
+			name: "previous round reported",
+			defs: llotypes.ChannelDefinitions{targetCID: targetCD, backfillCID: backfillCD},
+			want: fiveSec,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := tests.Context(t)
+			p := testPlugin(t)
+			kv := newMemKV()
+
+			// State the verdict round starts from. A candidate is selectable
+			// throughout (watermark 0, observations at 5s and 8s), so the
+			// advance turns entirely on the verdict.
+			require.NoError(t, writeLifecycle(kv, protocol.LifeCycleStageProduction))
+			require.NoError(t, writeChannelState(kv, 1, tc.defs))
+			require.NoError(t, writeHotState(kv, tenSec,
+				map[llotypes.ChannelID]uint64{targetCID: tenSec, backfillCID: 0},
+				map[llotypes.ChannelID]bool{targetCID: false, backfillCID: false},
+				nil, logger.Test(t)))
+
+			// The verdict round.
+			_, err := p.StateTransition(ctx, 2, ocrtypes.AttributedQuery{}, round(t, tenSec+1, tc.shape), kv, testBlobs)
+			require.NoError(t, err)
+			require.Equal(t, uint64(0), readHotStateForTest(t, kv).validAfterNanoseconds[backfillCID],
+				"the verdict round must not have advanced the watermark itself")
+
+			// The round that decides the advance.
+			precursorBytes, err := p.StateTransition(ctx, 3, ocrtypes.AttributedQuery{}, round(t, tenSec+2, nil), kv, testBlobs)
+			require.NoError(t, err)
+
+			out, err := decodePrecursor(precursorBytes)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, out.ValidAfterNanoseconds[backfillCID])
+		})
+	}
+}
+
+// readHotStateForTest decodes the r/agg record written by the last round.
+func readHotStateForTest(t *testing.T, kv *memKV) *kvState {
+	t.Helper()
+	s := &kvState{
+		validAfterNanoseconds: map[llotypes.ChannelID]uint64{},
+		reportedLastRound:     map[llotypes.ChannelID]bool{},
+		carryForward:          map[llotypes.StreamID]map[llotypes.Aggregator]*protocol.TimestampedStreamValue{},
+	}
+	require.NoError(t, readHotState(kv, s))
+	return s
 }

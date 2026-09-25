@@ -13,7 +13,7 @@ test:
 
 .PHONY: test-ci
 test-ci: testdb
-	go test ./... -covermode=atomic -coverpkg=./... -coverprofile=./coverage.txt -json | tee output.txt
+	go test ./... -covermode=atomic -race -coverpkg=./... -coverprofile=./coverage.txt -json | tee output.txt
 
 .PHONY: lint
 lint:

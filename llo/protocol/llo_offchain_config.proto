@@ -7,4 +7,11 @@ message LLOOffchainConfigProto {
     uint32 protocolVersion = 1;
     uint64 defaultMinReportIntervalNanoseconds = 2;
     bool enableObservationCompression = 3;
+    // How many Byzantine contributors per-stream aggregation tolerates in
+    // LLO v31: an aggregate is built only from at least
+    // 2*aggregationFaultTolerance+1 contributions. Distinct from the OCR
+    // consensus F, which governs observations, not contributions. Explicitly
+    // presence-tracked: unset and 0 are different configs, and LLO v31 refuses
+    // to start when unset.
+    optional uint32 aggregationFaultTolerance = 4;
 }

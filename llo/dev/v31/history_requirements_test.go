@@ -24,7 +24,7 @@ func exprChannel(streams []llotypes.Stream, expressions ...string) llotypes.Chan
 	return llotypes.ChannelDefinition{
 		ReportFormat: llotypes.ReportFormatEVMABIEncodeUnpackedExpr,
 		Streams:      streams,
-		Opts:         []byte(fmt.Sprintf(`{"abi":[%s]}`, abi)),
+		Opts:         fmt.Appendf(nil, `{"abi":[%s]}`, abi),
 	}
 }
 

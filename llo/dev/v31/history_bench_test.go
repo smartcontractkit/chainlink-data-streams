@@ -49,32 +49,52 @@ func benchState(tb testing.TB, pairs, depth int) *memKV {
 		key := histKey{streamID: llotypes.StreamID(p + 1), aggregator: benchAggreg}
 		keys = append(keys, key)
 
-		// Built in one pass rather than round by round: the window is kept in
-		// memory and each chunk is persisted as it seals, which is exactly what
-		// a run of rounds would have written.
-		w := protocol.NewRingWindow(nil)
-		_, err := w.SetRequiredCount(uint32(depth))
-		require.NoError(tb, err)
+		// One window instance per record, because a window admits a single
+		// append per round (protocol.ErrHistoryAlreadyAppended) and each
+		// instance IS a round. The header and the newest chunk are carried in
+		// memory across instances instead of through storage, and the chunk is
+		// persisted as it seals, so what lands in kv is what a run of rounds
+		// would have written without paying to marshal every intermediate
+		// round.
+		var (
+			header *protocol.StreamHistoryHeader
+			tail   *protocol.StreamHistoryChunk
+		)
 
 		// Half a chunk past the required depth, so the benchmark measures a
 		// settled window with a half-full newest chunk rather than the boundary
 		// case where the next append happens to start a fresh, nearly empty one.
 		records := depth + protocol.MaxHistoryChunkRecords/2
 		for i := 1; i <= records; i++ {
+			w := protocol.NewRingWindow(header)
+			_, err := w.SetRequiredCount(uint32(depth))
+			require.NoError(tb, err)
+
+			// The newest chunk when it still has room; a sealed or absent one
+			// needs nothing, exactly as historyStore.Append plans it.
+			for _, sequence := range w.AppendPlan() {
+				require.NotNil(tb, tail)
+				require.Equal(tb, sequence, tail.Sequence())
+				require.NoError(tb, w.Provide(tail))
+			}
+
 			appended, err := w.Append(uint64(i)*uint64(1_000_000_000), benchQuote(i))
 			require.NoError(tb, err)
 			require.True(tb, appended)
 
 			set := w.WriteSet()
-			if set.Chunk.Len() == protocol.MaxHistoryChunkRecords || i == records {
-				_, err := writeHistoryChunk(kv, key.streamID, key.aggregator, set.Chunk)
+			require.NotNil(tb, set.Chunk)
+			tail = set.Chunk
+			if tail.Len() == protocol.MaxHistoryChunkRecords || i == records {
+				_, err := writeHistoryChunk(kv, key.streamID, key.aggregator, tail)
 				require.NoError(tb, err)
 			}
 			for _, slot := range set.DeletedSlots {
 				require.NoError(tb, deleteHistoryChunk(kv, key.streamID, key.aggregator, slot))
 			}
+			header = w.Header()
 		}
-		_, err = writeHistoryHeader(kv, key.streamID, key.aggregator, w.WriteSet().Header)
+		_, err := writeHistoryHeader(kv, key.streamID, key.aggregator, header)
 		require.NoError(tb, err)
 	}
 	require.NoError(tb, writeHistoryIndex(kv, keys))
@@ -96,8 +116,7 @@ func BenchmarkHistoryStore_LoadAll(b *testing.B) {
 	kv := benchState(b, benchPairs, benchDepth)
 	lggr := logger.Test(b)
 
-	b.ResetTimer()
-	for range b.N {
+	for b.Loop() {
 		store, err := newHistoryStore(kv, lggr)
 		if err != nil {
 			b.Fatal(err)
@@ -166,9 +185,9 @@ func BenchmarkComputeHistoryRequirements(b *testing.B) {
 				defs[llotypes.ChannelID(c+1)] = llotypes.ChannelDefinition{
 					ReportFormat: llotypes.ReportFormatEVMABIEncodeUnpackedExpr,
 					Streams:      []llotypes.Stream{{StreamID: streamID, Aggregator: benchAggreg}},
-					Opts: []byte(fmt.Sprintf(
+					Opts: fmt.Appendf(nil,
 						`{"abi":[{"type":"int256","expression":"Avg(History(s%d, 300))","expressionStreamID":%d}]}`,
-						streamID, 900+c)),
+						streamID, 900+c),
 				}
 			}
 			cache := protocol.NewOptsCache()

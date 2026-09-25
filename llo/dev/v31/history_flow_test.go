@@ -22,7 +22,7 @@ func historyExprChannel(expression string) llotypes.ChannelDefinition {
 	return llotypes.ChannelDefinition{
 		ReportFormat: llotypes.ReportFormatEVMABIEncodeUnpackedExpr,
 		Streams:      []llotypes.Stream{{StreamID: 100, Aggregator: llotypes.AggregatorMedian}},
-		Opts:         []byte(fmt.Sprintf(`{"abi":[{"type":"int256","expression":%q,"expressionStreamID":999}]}`, expression)),
+		Opts:         fmt.Appendf(nil, `{"abi":[{"type":"int256","expression":%q,"expressionStreamID":999}]}`, expression),
 	}
 }
 

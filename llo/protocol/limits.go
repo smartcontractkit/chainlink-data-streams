@@ -27,6 +27,19 @@ const (
 	MaxObservationUpdateChannelDefinitionsLength = 5
 	// Maximum number of streams that can be observed per round
 	MaxObservationStreamValuesLength = 10_000
+	// MaxObservationSupportedReportFormatsLength bounds the report formats an
+	// observation may advertise support for. A real codec map holds a handful
+	// of entries; the headroom keeps the bound from needing revision while
+	// still stopping a peer from padding its observation.
+	MaxObservationSupportedReportFormatsLength = 32
+	// MaxObservationPredecessorSignersLength bounds the predecessor signer set
+	// an observation may carry. libocr allows at most types.MaxOracles signers
+	// in a config, so anything longer cannot be a real predecessor config.
+	MaxObservationPredecessorSignersLength = 31
+	// MaxPredecessorSignerBytes bounds one onchain public key in that set. The
+	// largest key any supported chain uses is well under this; the headroom
+	// stops a peer from padding its observation with oversized entries.
+	MaxPredecessorSignerBytes = 128
 	// Maximum allowed number of streams per channel
 	MaxStreamsPerChannel = 10_000
 	// MaxDecimalExponent bounds the absolute value of the base-10 exponent of
@@ -35,9 +48,80 @@ const (
 	// Stream values need only a couple of dozen decimal places, so this
 	// leaves enough headroom.
 	MaxDecimalExponent = 1_000
+	// MaxDecimalCoefficientBits bounds the coefficient of a decimal carried by
+	// an observation, which MaxDecimalExponent does not: the exponent says where
+	// the point sits, not how many digits precede it, so a value with a legal
+	// exponent can still carry an arbitrarily long coefficient and be
+	// arbitrarily large on the wire.
+	//
+	// 192 bits is 58 decimal digits, derived from MaxHistoryRecordBytes
+	// A timestamped quote, the largest shape a stream value takes carrying
+	// three coefficients at this bound measures 125B as a history record,
+	// the most that fits the 128B per-record limit.
+	// One step up (224 bits) measures 137 B, which observation decode would accept
+	// and history would then refuse, leaving a gap in the series for a value the round agreed on.
+	// Asserted by TestDecimalCoefficientBoundFitsHistoryRecord.
+	//
+	// For scale, the fixtures in the size table below are 57 bits (an 18-digit
+	// price) and 124 bits (38 digits), so this is ~3x and ~1.5x those.
+	// Increasing this limit needs to move this constant and MaxHistoryRecordBytes together.
+	//
+	// Enforced at observation decode (see UnmarshalObservedProtoStreamValue).
+	MaxDecimalCoefficientBits = 192
+	// MaxStreamValueNesting bounds how deeply a stream value may nest another.
+	// Only TimestampedStreamValue nests, and only one level is meaningful, so
+	// this exists to stop untrusted bytes crafted to nest from driving
+	// unbounded recursion. Enforced during unmarshal, which is where the
+	// recursion lives (see unmarshalProtoStreamValue).
+	MaxStreamValueNesting = 4
+
 	// MaxOutcomeChannelDefinitionsLength is the maximum number of channels that
 	// can be supported
 	MaxOutcomeChannelDefinitionsLength = MaxReportCount
+
+	// MaxTotalStreamEntries bounds the sum of len(cd.Streams) over the whole
+	// definition set.
+	//
+	// The per-channel and per-set caps do not bound this between them:
+	// MaxStreamsPerChannel times MaxOutcomeChannelDefinitionsLength permits
+	// 20 million entries, and MaxObservationStreamValuesLength counts only
+	// DISTINCT stream IDs, so the same stream listed by many channels costs
+	// nothing against it. Every entry is carried in the channel-definitions
+	// record and again in the precursor, so the total is what those sizes
+	// actually depend on.
+	//
+	// 50_000 is five channels at MaxStreamsPerChannel, or five entries for every
+	// observable stream -- far past any real configuration, while holding the
+	// definitions record itself to well under a MiB.
+	MaxTotalStreamEntries = 50_000
+	// MaxChannelOptsBytes bounds one channel's opts blob. Opts are opaque JSON
+	// decoded per report format, so nothing else constrains their length, and
+	// they travel in the definitions record, the precursor and observations that
+	// vote to add a channel.
+	//
+	// 16 KiB is roughly two orders of magnitude above the largest real opts (an
+	// ABI plus expressions, a few hundred bytes).
+	MaxChannelOptsBytes = 16 << 10
+	// MaxTotalOptsBytes bounds the sum over the whole set, because
+	// MaxChannelOptsBytes alone would still permit MaxOutcomeChannelDefinitionsLength
+	// (2_000) channels times 16 KiB, or 32 MiB.
+	//
+	// 1 MiB is ~512 B per channel at the channel-count limit. A production DON
+	// measured 304 KiB of opts over 705 live channels (431 B each, nearly all
+	// ABI), so this leaves it room to more than double its channel count before
+	// the budget binds -- the bound has to be above where real configurations
+	// grow, or it refuses legitimate admissions rather than abuse.
+	//
+	// Worst case it still leaves the definitions record inside libocr's 2 MiB
+	// per-key limit: 1 MiB of opts plus MaxTotalStreamEntries worth of stream
+	// entries plus per-channel framing measures 1.31 MiB, 66% of the limit
+	// (measured by TestLimits_ChannelStateWorstCaseFitsPerKeyLimit).
+	MaxTotalOptsBytes = 1 << 20
+
+	// MaxTotalCalculatedStreams bounds how many calculated streams the whole
+	// definition set may declare. One expression produces one value, so this is
+	// the expression count too.
+	MaxTotalCalculatedStreams = MaxPersistedAggregates
 
 	// Stream history limits.
 	//
@@ -181,6 +265,11 @@ const (
 	// to MaxStreamsPerChannel streams each, which lands in the low single-digit
 	// MiB range. 16 MiB leaves generous headroom.
 	MaxDecompressedObservationLength = 16 << 20
+
+	// MaxPersistedAggregates bounds how many (streamID, aggregator) pairs may
+	// carry a timestamped aggregate forward across rounds in the v3.1 r/agg
+	// record.
+	MaxPersistedAggregates = 2 * MaxObservationStreamValuesLength
 
 	// MaxHistoryBackfillObservations bounds the maximum number of
 	// observations to backfill per definition.

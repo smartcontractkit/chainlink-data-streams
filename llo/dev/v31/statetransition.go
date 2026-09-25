@@ -3,9 +3,13 @@ package llo
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/binary"
 	"errors"
 	"fmt"
+	"maps"
 	"sort"
+	"sync"
 
 	"github.com/smartcontractkit/chainlink-common/pkg/logger"
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
@@ -13,6 +17,7 @@ import (
 	protocol "github.com/smartcontractkit/chainlink-data-streams/llo/protocol"
 	"github.com/smartcontractkit/chainlink-data-streams/llo/protocol/calculated"
 
+	"github.com/smartcontractkit/libocr/commontypes"
 	"github.com/smartcontractkit/libocr/offchainreporting2plus/ocr3_1types"
 	ocrtypes "github.com/smartcontractkit/libocr/offchainreporting2plus/types"
 )
@@ -58,7 +63,7 @@ func (p *Plugin) StateTransition(ctx context.Context, seqNr uint64, _ ocrtypes.A
 		if err := writeChannelState(kvRW, seqNr, nil); err != nil {
 			return nil, err
 		}
-		if err := writeHotState(kvRW, 0, nil, nil, nil); err != nil {
+		if err := writeHotState(kvRW, 0, nil, nil, nil, p.Logger); err != nil {
 			return nil, err
 		}
 		return encodePrecursor(precursor{LifeCycleStage: stage})
@@ -69,13 +74,23 @@ func (p *Plugin) StateTransition(ctx context.Context, seqNr uint64, _ ocrtypes.A
 		return nil, fmt.Errorf("failed to load KV state: %w", err)
 	}
 
-	timestamps, validPredecessorRetirementReport, shouldRetireVotes, removeChannelVotesByID, updateDefsByHash, updateVotesByHash, streamObservations, err := p.decodeObservations(ctx, aos, seqNr, bf)
+	tally, err := p.decodeObservations(ctx, aos, bf, p.BlobPayloads.round(seqNr))
 	if err != nil {
 		return nil, err
 	}
-	if len(timestamps) == 0 {
+	if len(tally.timestampsNanoseconds) == 0 {
 		return nil, fmt.Errorf("no valid observations")
 	}
+
+	// Verifying an attested predecessor retirement report needs the
+	// predecessor's signer set, which is node-local. Agree on it from this
+	// round's votes, then verify against the agreed set, so every oracle
+	// reaches the same verdict.
+	validPredecessorRetirementReport := p.resolvePredecessorRetirement(seqNr, prev.lifeCycleStage, tally)
+
+	// Codec coverage is cumulative across rounds: merge this round's
+	// advertisements over the persisted ones before counting supporters.
+	codecSupport := mergeCodecSupport(prev.codecSupport, tally.supportedFormatsByOracle)
 
 	// The definitions in effect for this round are the ones Observation read.
 	// Changes agreed below land in pending and take effect next round.
@@ -83,11 +98,12 @@ func (p *Plugin) StateTransition(ctx context.Context, seqNr uint64, _ ocrtypes.A
 	pending := cloneChannelDefinitions(prev.channelDefinitions)
 
 	out := precursor{
-		ObservationTimestampNanoseconds: medianTimestamp(timestamps),
+		ObservationTimestampNanoseconds: p.agreedObservationTimestamp(tally.timestampsNanoseconds, prev.observationTimestampNs, seqNr),
 		ChannelDefinitions:              effective,
 		ChannelStateSeqNr:               prev.channelStateSeqNr,
 		ValidAfterNanoseconds:           map[llotypes.ChannelID]uint64{},
 		StreamAggregates:                protocol.StreamAggregates{},
+		SupportByFormat:                 supportVotesForEffectiveFormats(countSupportByFormat(codecSupport), effective),
 	}
 
 	// Lifecycle stage & promotion.
@@ -99,7 +115,7 @@ func (p *Plugin) StateTransition(ctx context.Context, seqNr uint64, _ ocrtypes.A
 	} else {
 		out.LifeCycleStage = prev.lifeCycleStage
 	}
-	if out.LifeCycleStage == protocol.LifeCycleStageProduction && shouldRetireVotes > p.F {
+	if out.LifeCycleStage == protocol.LifeCycleStageProduction && tally.shouldRetireVotes > p.F {
 		p.Logger.Infow("Retiring production protocol instance ⚰️", "seqNr", seqNr)
 		out.LifeCycleStage = protocol.LifeCycleStageRetired
 	}
@@ -107,7 +123,7 @@ func (p *Plugin) StateTransition(ctx context.Context, seqNr uint64, _ ocrtypes.A
 	// Channel definition changes (skipped once retired). These apply to pending
 	// only: they take effect next round.
 	if out.LifeCycleStage != protocol.LifeCycleStageRetired {
-		applyChannelVotes(pending, removeChannelVotesByID, updateDefsByHash, updateVotesByHash, p.F)
+		applyChannelVotes(pending, tally.removeChannelVotesByID, tally.updateChannelDefinitionsByHash, tally.updateChannelVotesByHash, p.F)
 	}
 
 	// validAfter.
@@ -134,12 +150,12 @@ func (p *Plugin) StateTransition(ctx context.Context, seqNr uint64, _ ocrtypes.A
 				continue
 			}
 			if cd.ReportFormat == llotypes.ReportFormatHistoryBackfill {
-				// Backfill: the watermark advances to whatever observation the
-				// previous round would have selected (and emitted), or stays put.
-				if tsNanos, _, _, found := selectBackfillCandidate(effective, prev.validAfterNanoseconds, prev.observationTimestampNs, channelID, prev.opts); found {
-					out.ValidAfterNanoseconds[channelID] = tsNanos
-				} else {
-					out.ValidAfterNanoseconds[channelID] = prevValidAfter
+				// Backfill: prevReportable and selection conditions must be met, or stays put.
+				out.ValidAfterNanoseconds[channelID] = prevValidAfter
+				if prevReportable(prev, channelID) {
+					if tsNanos, _, _, found := selectBackfillCandidate(effective, prev.validAfterNanoseconds, prev.observationTimestampNs, channelID, prev.opts); found {
+						out.ValidAfterNanoseconds[channelID] = tsNanos
+					}
 				}
 				continue
 			}
@@ -188,7 +204,7 @@ func (p *Plugin) StateTransition(ctx context.Context, seqNr uint64, _ ocrtypes.A
 	// next round. Runs over the effective set, which is what was observed. The
 	// agreed value of every pair history requires is recorded as it is computed.
 	carryForward := map[llotypes.StreamID]map[llotypes.Aggregator]*protocol.TimestampedStreamValue{}
-	if err := p.aggregate(prev.carryForward, carryForward, effective, streamObservations, out.StreamAggregates,
+	if err := p.aggregate(prev.carryForward, carryForward, effective, tally.streamObservations, out.StreamAggregates,
 		history, requirements, out.ObservationTimestampNanoseconds); err != nil {
 		return nil, err
 	}
@@ -206,7 +222,7 @@ func (p *Plugin) StateTransition(ctx context.Context, seqNr uint64, _ ocrtypes.A
 	calculated.ProcessCalculatedStreams(p.Logger, effective, out.StreamAggregates, out.ObservationTimestampNanoseconds, prev.opts, history)
 
 	// Flush KV mutations.
-	if err := p.flushKV(kvRW, seqNr, prev, out, pending, carryForward, history); err != nil {
+	if err := p.flushKV(kvRW, seqNr, prev, out, pending, codecSupport, carryForward, history); err != nil {
 		return nil, err
 	}
 
@@ -221,23 +237,57 @@ func (p *Plugin) StateTransition(ctx context.Context, seqNr uint64, _ ocrtypes.A
 	return encodePrecursor(out)
 }
 
-func (p *Plugin) decodeObservations(ctx context.Context, aos []ocrtypes.AttributedObservation, seqNr uint64, bf ocr3_1types.BlobFetcher) (
-	timestampsNanoseconds []uint64,
-	validPredecessorRetirementReport *protocol.RetirementReport,
-	shouldRetireVotes int,
-	removeChannelVotesByID map[llotypes.ChannelID]int,
-	updateChannelDefinitionsByHash map[[32]byte]protocol.ChannelDefinitionWithID,
-	updateChannelVotesByHash map[[32]byte]int,
-	streamObservations map[llotypes.StreamID][]protocol.StreamValue,
-	err error,
-) {
-	removeChannelVotesByID = make(map[llotypes.ChannelID]int)
-	updateChannelDefinitionsByHash = make(map[[32]byte]protocol.ChannelDefinitionWithID)
-	updateChannelVotesByHash = make(map[[32]byte]int)
-	streamObservations = make(map[llotypes.StreamID][]protocol.StreamValue)
+// observationTally is what the round's observations add up to: the votes,
+// timestamps and stream values the state transition works from. Every field is
+// accumulated in aos order, so it does not depend on which observation decoded
+// first.
+type observationTally struct {
+	timestampsNanoseconds []uint64
+	// attestedRetirements are collected but not verified: verification needs
+	// the agreed predecessor signer set, which the votes below decide.
+	attestedRetirements            [][]byte
+	predConfigsByHash              map[[32]byte]predecessorConfig
+	predConfigVotesByHash          map[[32]byte]int
+	shouldRetireVotes              int
+	removeChannelVotesByID         map[llotypes.ChannelID]int
+	updateChannelDefinitionsByHash map[[32]byte]protocol.ChannelDefinitionWithID
+	updateChannelVotesByHash       map[[32]byte]int
+	// supportedFormatsByOracle[oracleID] is the formats that oracle advertised
+	// this round, deduped by decodeObservation. It is merged into the persisted
+	// per-oracle record rather than counted here: see writeCodecSupport.
+	supportedFormatsByOracle map[commontypes.OracleID]map[llotypes.ReportFormat]struct{}
+	streamObservations       map[llotypes.StreamID][]protocol.StreamValue
+}
 
-	for _, ao := range aos {
-		observation, derr := decodeObservation(ctx, ao.Observation, bf)
+func (p *Plugin) decodeObservations(ctx context.Context, aos []ocrtypes.AttributedObservation, bf ocr3_1types.BlobFetcher, memo *roundBlobPayloads) (observationTally, error) {
+	tally := observationTally{
+		predConfigsByHash:              make(map[[32]byte]predecessorConfig),
+		predConfigVotesByHash:          make(map[[32]byte]int),
+		removeChannelVotesByID:         make(map[llotypes.ChannelID]int),
+		updateChannelDefinitionsByHash: make(map[[32]byte]protocol.ChannelDefinitionWithID),
+		updateChannelVotesByHash:       make(map[[32]byte]int),
+		supportedFormatsByOracle:       make(map[commontypes.OracleID]map[llotypes.ReportFormat]struct{}),
+		streamObservations:             make(map[llotypes.StreamID][]protocol.StreamValue),
+	}
+
+	// Decode concurrently: each observation may reference blobs that are not yet
+	// assembled locally, and waiting for one serially delays every other. The
+	// tally below still runs in aos order, so the outcome does not depend on
+	// which decode finished first.
+	decoded := make([]Observation, len(aos))
+	decodeErrs := make([]error, len(aos))
+	var wg sync.WaitGroup
+	wg.Add(len(aos))
+	for i, ao := range aos {
+		go func() {
+			defer wg.Done()
+			decoded[i], decodeErrs[i] = decodeObservation(ctx, ao.Observation, bf, memo)
+		}()
+	}
+	wg.Wait()
+
+	for i, ao := range aos {
+		observation, derr := decoded[i], decodeErrs[i]
 		if derr != nil {
 			var bfErr *blobFetchError
 			if errors.As(derr, &bfErr) {
@@ -246,8 +296,7 @@ func (p *Plugin) decodeObservations(ctx context.Context, aos []ocrtypes.Attribut
 				// non-deterministic; instead abort the round so every oracle
 				// retries uniformly. Determinism is not required when returning
 				// an error (see the ReportingPlugin contract).
-				err = fmt.Errorf("failed to fetch blob for observation from oracle %v: %w", ao.Observer, derr)
-				return
+				return observationTally{}, fmt.Errorf("failed to fetch blob for observation from oracle %v: %w", ao.Observer, derr)
 			}
 			// Deterministic decode failure (same bytes on every oracle): safe to
 			// drop just this observation.
@@ -255,38 +304,96 @@ func (p *Plugin) decodeObservations(ctx context.Context, aos []ocrtypes.Attribut
 			continue
 		}
 
-		if len(observation.AttestedPredecessorRetirement) != 0 && validPredecessorRetirementReport == nil && p.PredecessorConfigDigest != nil {
-			pcd := *p.PredecessorConfigDigest
-			retirementReport, cerr := p.PredecessorRetirementReportCache.CheckAttestedRetirementReport(pcd, observation.AttestedPredecessorRetirement)
-			if cerr != nil {
-				p.Logger.Warnw("ignoring observation with invalid attested predecessor retirement", "oracleID", ao.Observer, "error", cerr, "predecessorConfigDigest", pcd)
-				continue
+		if p.PredecessorConfigDigest != nil {
+			if len(observation.AttestedPredecessorRetirement) != 0 {
+				tally.attestedRetirements = append(tally.attestedRetirements, observation.AttestedPredecessorRetirement)
 			}
-			validPredecessorRetirementReport = &retirementReport
+			if len(observation.PredecessorSigners) > 0 {
+				pc := predecessorConfig{signers: observation.PredecessorSigners, f: observation.PredecessorF}
+				h := hashPredecessorConfig(pc)
+				tally.predConfigVotesByHash[h]++
+				tally.predConfigsByHash[h] = pc
+			}
 		}
 
 		if observation.ShouldRetire {
-			shouldRetireVotes++
+			tally.shouldRetireVotes++
 		}
-		timestampsNanoseconds = append(timestampsNanoseconds, observation.UnixTimestampNanoseconds)
+		tally.timestampsNanoseconds = append(tally.timestampsNanoseconds, observation.UnixTimestampNanoseconds)
 
+		// Recording the whole advertised set (including an empty one)
+		// makes this round's advertisement replace that oracle's last, so an
+		// oracle that loses a codec stops counting for it.
+		tally.supportedFormatsByOracle[ao.Observer] = observation.SupportedReportFormats
 		for channelID := range observation.RemoveChannelIDs {
-			removeChannelVotesByID[channelID]++
+			tally.removeChannelVotesByID[channelID]++
 		}
 		for channelID, channelDefinition := range observation.UpdateChannelDefinitions {
 			defWithID := protocol.ChannelDefinitionWithID{ChannelDefinition: channelDefinition, ChannelID: channelID}
 			h := makeChannelHash(defWithID)
-			updateChannelVotesByHash[h]++
-			updateChannelDefinitionsByHash[h] = defWithID
+			tally.updateChannelVotesByHash[h]++
+			tally.updateChannelDefinitionsByHash[h] = defWithID
 		}
 		for id, sv := range observation.StreamValues {
 			if sv == nil {
 				continue
 			}
-			streamObservations[id] = append(streamObservations[id], sv)
+			tally.streamObservations[id] = append(tally.streamObservations[id], sv)
 		}
 	}
-	return
+	return tally, nil
+}
+
+// mergeCodecSupport overlays this round's advertisements on the persisted ones,
+// replacing the entry of every oracle that contributed an observation and
+// leaving the rest untouched.
+func mergeCodecSupport(persisted, thisRound map[commontypes.OracleID]map[llotypes.ReportFormat]struct{}) map[commontypes.OracleID]map[llotypes.ReportFormat]struct{} {
+	merged := make(map[commontypes.OracleID]map[llotypes.ReportFormat]struct{}, len(persisted)+len(thisRound))
+	for oracleID, formats := range persisted {
+		merged[oracleID] = formats
+	}
+	for oracleID, formats := range thisRound {
+		merged[oracleID] = formats
+	}
+	return merged
+}
+
+// codecSupportChanged reports whether any oracle's advertised set differs.
+func codecSupportChanged(prev, next map[commontypes.OracleID]map[llotypes.ReportFormat]struct{}) bool {
+	if len(prev) != len(next) {
+		return true
+	}
+	for oracleID, nextFormats := range next {
+		prevFormats, ok := prev[oracleID]
+		if !ok || !maps.Equal(prevFormats, nextFormats) {
+			return true
+		}
+	}
+	return false
+}
+
+// countSupportByFormat counts, per report format, the oracles whose last
+// advertisement named it.
+func countSupportByFormat(support map[commontypes.OracleID]map[llotypes.ReportFormat]struct{}) map[llotypes.ReportFormat]int {
+	counts := make(map[llotypes.ReportFormat]int)
+	for _, formats := range support {
+		for format := range formats {
+			counts[format]++
+		}
+	}
+	return counts
+}
+
+// supportVotesForEffectiveFormats restricts the codec support tally to the
+// report formats this round can actually needs.
+func supportVotesForEffectiveFormats(votes map[llotypes.ReportFormat]int, effective llotypes.ChannelDefinitions) map[llotypes.ReportFormat]int {
+	pruned := make(map[llotypes.ReportFormat]int, len(votes))
+	for _, cd := range effective {
+		if n, ok := votes[cd.ReportFormat]; ok {
+			pruned[cd.ReportFormat] = n
+		}
+	}
+	return pruned
 }
 
 // applyChannelVotes applies remove/add votes with a >F threshold, in ascending
@@ -356,8 +463,8 @@ func applyChannelVotes(
 // reclaimed.
 //
 // The agreed value of each pair is also recorded into stream history for the
-// pairs that require it. History records what the round actually agreed on --
-// the same value written into StreamAggregates -- so a window is always a series
+// pairs that require it. History records what the round actually agreed on,
+// the same value written into StreamAggregates, so a window is always a series
 // of values that reached consensus. A pair with no aggregate this round
 // (aggregation failed, stream absent) contributes nothing: a gap in the series
 // is honest, whereas repeating the previous value would silently weight it
@@ -406,20 +513,38 @@ func (p *Plugin) aggregate(
 
 			aggF := protocol.GetAggregatorFunc(agg)
 			if aggF == nil {
-				return fmt.Errorf("no aggregator function defined for aggregator of type %v", agg)
+				// Unknown aggregator, e.g. one added by a newer version. Admission
+				// rejects these, but a committed definition must not halt the
+				// protocol: skip the pair and carry forward what it had.
+				if prevTSV != nil {
+					keep(sid, agg, prevTSV)
+				}
+				continue
 			}
-			result, aerr := aggF(streamObservations[sid], p.F)
+			result, aerr := aggF(streamObservations[sid], p.minContributions())
+			if aerr != nil {
+				// Aggregation failed: republish and keep the carried-forward
+				// value (if any) so a transient failure does not discard it.
+				// Without a carry the pair is simply absent from the precursor.
+				if prevTSV != nil {
+					m[agg] = prevTSV
+					keep(sid, agg, prevTSV)
+				}
+				continue
+			}
+			if result == nil {
+				// An aggregator may agree on no value at all, e.g. mode with an
+				// empty bucket. Leave the pair absent rather than writing a nil
+				// into the precursor, and keep any carried value.
+				if prevTSV != nil {
+					m[agg] = prevTSV
+					keep(sid, agg, prevTSV)
+				}
+				continue
+			}
 
 			switch v := result.(type) {
 			case *protocol.TimestampedStreamValue:
-				if aerr != nil {
-					// Aggregation failed: keep the carried-forward value (if any).
-					if prevTSV != nil {
-						m[agg] = prevTSV
-						keep(sid, agg, prevTSV)
-					}
-					continue
-				}
 				if prevTSV == nil || v.ObservedAtNanoseconds > prevTSV.ObservedAtNanoseconds {
 					// Strictly newer: adopt and persist.
 					m[agg] = v
@@ -430,16 +555,6 @@ func (p *Plugin) aggregate(
 					keep(sid, agg, prevTSV)
 				}
 			default:
-				if aerr != nil {
-					// Ignore streams that cannot be aggregated; absent from the
-					// precursor. A previously-carried value for this pair is
-					// preserved so a transient aggregation failure does not
-					// discard it.
-					if prevTSV != nil {
-						keep(sid, agg, prevTSV)
-					}
-					continue
-				}
 				m[agg] = result
 				// Defensive: if this pair was previously timestamped but now
 				// yields a non-timestamped value, drop the stale carry-forward
@@ -496,6 +611,7 @@ func (p *Plugin) flushKV(
 	prev *kvState,
 	out precursor,
 	pending llotypes.ChannelDefinitions,
+	codecSupport map[commontypes.OracleID]map[llotypes.ReportFormat]struct{},
 	carryForward map[llotypes.StreamID]map[llotypes.Aggregator]*protocol.TimestampedStreamValue,
 	history *historyStore,
 ) error {
@@ -517,11 +633,20 @@ func (p *Plugin) flushKV(
 		// reloads.
 	}
 
+	// Codec coverage: rewrite the record only when an oracle's advertised set
+	// actually changed, which is rare outside a rollout.
+	if codecSupportChanged(prev.codecSupport, codecSupport) {
+		if err := writeCodecSupport(kvRW, codecSupport); err != nil {
+			return err
+		}
+	}
+
 	// Reportability: persist this round's decision for each channel so the next
 	// round can advance validAfter faithfully (see prevReportable).
 	reportable := make(map[llotypes.ChannelID]bool, len(out.ChannelDefinitions))
 	for id := range out.ChannelDefinitions {
-		reportable[id] = out.isReportable(id, p.DefaultMinReportIntervalNanoseconds, prev.opts, p.Logger)
+		// nill tally, Reports() will handle the logging
+		reportable[id] = out.isReportable(id, p.DefaultMinReportIntervalNanoseconds, p.F, prev.opts, nil)
 	}
 
 	// Stream history: write modified windows, delete pairs no live channel
@@ -532,7 +657,7 @@ func (p *Plugin) flushKV(
 		}
 	}
 
-	return writeHotState(kvRW, out.ObservationTimestampNanoseconds, out.ValidAfterNanoseconds, reportable, carryForward)
+	return writeHotState(kvRW, out.ObservationTimestampNanoseconds, out.ValidAfterNanoseconds, reportable, carryForward, p.Logger)
 }
 
 // channelDefinitionsChanged reports whether the channel set or any individual
@@ -559,6 +684,23 @@ func prevReportable(prev *kvState, channelID llotypes.ChannelID) bool {
 	return prev.reportedLastRound[channelID]
 }
 
+// agreedObservationTimestamp is the round observation timestamp, the median of
+// the observed timestamps, held to the previous round's value as a floor.
+//
+// Monotonically increasing, validAfter advances to it, reportability requires the
+// next round to exceed that watermark and appendHistory only records a value
+// strictly newer than the newest stored one. A regression leaves every channel
+// unreportable and silently drops history appends until the clock catches back up.
+func (p *Plugin) agreedObservationTimestamp(timestampsNanoseconds []uint64, prevObservationTimestampNs uint64, seqNr uint64) uint64 {
+	median := medianTimestamp(timestampsNanoseconds)
+	if median < prevObservationTimestampNs {
+		p.Logger.Warnw("Observation timestamp median regressed; holding the previous round's timestamp",
+			"seqNr", seqNr, "median", median, "prev", prevObservationTimestampNs, "contributors", len(timestampsNanoseconds))
+		return prevObservationTimestampNs
+	}
+	return median
+}
+
 func medianTimestamp(timestampsNanoseconds []uint64) uint64 {
 	sort.Slice(timestampsNanoseconds, func(i, j int) bool { return timestampsNanoseconds[i] < timestampsNanoseconds[j] })
 	return timestampsNanoseconds[len(timestampsNanoseconds)/2]
@@ -566,6 +708,101 @@ func medianTimestamp(timestampsNanoseconds []uint64) uint64 {
 
 // makeChannelHash delegates to the shared implementation so that v3.0 running
 // protocol version 2 and v3.1 cannot drift apart on channel identity.
+// predecessorConfig is a candidate predecessor instance's signer set and f,
+// which is what verifying an attested predecessor retirement report needs. It
+// is agreed by vote within a round and never persisted.
+type predecessorConfig struct {
+	signers [][]byte
+	f       uint8
+}
+
+// hashPredecessorConfig identifies a candidate predecessor config so votes for
+// the same one can be tallied. Signer order is part of the identity: a
+// signature names its signer by index, so two sets differing only in order are
+// different configs.
+func hashPredecessorConfig(pc predecessorConfig) [32]byte {
+	h := sha256.New()
+	var buf [8]byte
+	binary.BigEndian.PutUint64(buf[:], uint64(pc.f))
+	h.Write(buf[:])
+	for _, signer := range pc.signers {
+		binary.BigEndian.PutUint64(buf[:], uint64(len(signer)))
+		h.Write(buf[:])
+		h.Write(signer)
+	}
+	var out [32]byte
+	copy(out[:], h.Sum(nil))
+	return out
+}
+
+// resolvePredecessorRetirement agrees on the predecessor's signer set from
+// this round's votes, then verifies this round's attested retirement reports
+// against it.
+//
+// Agreement holds for this round only and is never stored. More than f votes
+// for the same set means at least one honest oracle vouches for it, and that
+// argument is per round: a coalition of f can never elect a set of its own, in
+// this round or any later one, and nothing accumulates between rounds for it
+// to build on.
+//
+// Everything here reads the round's observations only, so every oracle reaches
+// the same verdict. A report that fails verification is ignored, not fatal:
+// the bytes are the same everywhere, so ignoring them is deterministic too.
+func (p *Plugin) resolvePredecessorRetirement(
+	seqNr uint64,
+	stage llotypes.LifeCycleStage,
+	tally observationTally,
+) *protocol.RetirementReport {
+	// Only a staging instance with a predecessor has a handover to complete.
+	if p.PredecessorConfigDigest == nil || stage != protocol.LifeCycleStageStaging {
+		return nil
+	}
+
+	agreed := electPredecessorConfig(tally.predConfigsByHash, tally.predConfigVotesByHash, p.F)
+	if agreed == nil {
+		if len(tally.attestedRetirements) > 0 {
+			p.Logger.Warnw("Ignoring attested predecessor retirement reports: the predecessor config is not agreed this round", "seqNr", seqNr, "reports", len(tally.attestedRetirements))
+		}
+		return nil
+	}
+
+	for _, attested := range tally.attestedRetirements {
+		retirementReport, verr := p.PredecessorRetirementReportCache.VerifyAttestedRetirementReport(*p.PredecessorConfigDigest, agreed.signers, agreed.f, attested)
+		if verr != nil {
+			p.Logger.Warnw("Ignoring invalid attested predecessor retirement", "seqNr", seqNr, "error", verr, "predecessorConfigDigest", *p.PredecessorConfigDigest)
+			continue
+		}
+		return &retirementReport
+	}
+	return nil
+}
+
+// electPredecessorConfig returns the candidate with more than f votes, or nil.
+//
+// More than f votes means at least one honest oracle voted for the winner, and
+// honest oracles read the set from the predecessor's onchain config, which is
+// immutable for a given config digest. So the winner is always the real signer
+// set: the f byzantine oracles cannot reach the threshold on their own, and
+// there is no honest set for them to outvote.
+//
+// Candidates are still considered in hash order, so that a tie, which needs
+// honest oracles to disagree and therefore should not happen, resolves the same
+// way on every oracle instead of following map iteration.
+func electPredecessorConfig(byHash map[[32]byte]predecessorConfig, votesByHash map[[32]byte]int, f int) *predecessorConfig {
+	hashes := make([][32]byte, 0, len(byHash))
+	for h := range byHash {
+		hashes = append(hashes, h)
+	}
+	sort.Slice(hashes, func(i, j int) bool { return bytes.Compare(hashes[i][:], hashes[j][:]) < 0 })
+	for _, h := range hashes {
+		if votesByHash[h] > f {
+			pc := byHash[h]
+			return &pc
+		}
+	}
+	return nil
+}
+
 func makeChannelHash(cd protocol.ChannelDefinitionWithID) [32]byte {
 	return protocol.ChannelHashV2(cd)
 }

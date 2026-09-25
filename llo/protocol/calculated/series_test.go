@@ -481,3 +481,45 @@ func TestProcessCalculatedStreamsDryRun_History(t *testing.T) {
 	require.Error(t, ProcessCalculatedStreamsDryRun("Count(History(s1_timestamp, 10))"))
 	require.Error(t, ProcessCalculatedStreamsDryRun(fmt.Sprintf("Count(History(s1, %d))", protocol.MaxHistoryRecordsPerPair+1)))
 }
+
+func TestProcessCalculatedStreams_CoefficientBound(t *testing.T) {
+	t.Parallel()
+
+	// Two inputs at opposite ends of the exponent range. Each is one digit
+	// wide, but their sum spans both exponents, so addition alone produces a
+	// coefficient far past MaxDecimalCoefficientBits.
+	wide := protocol.StreamAggregates{
+		1: {llotypes.AggregatorMedian: protocol.ToDecimal(decimal.New(1, 600))},
+		2: {llotypes.AggregatorMedian: protocol.ToDecimal(decimal.New(1, -600))},
+	}
+
+	t.Run("an over-wide value writes no aggregate", func(t *testing.T) {
+		t.Parallel()
+
+		defs := llotypes.ChannelDefinitions{
+			1: historyChannel(medianStreams(1, 2), "Add(s1, s2)"),
+		}
+		ProcessCalculatedStreams(logger.Test(t), defs, wide, 1_000, protocol.NewOptsCache(), newStubHistoryReader())
+
+		assert.Empty(t, wide[999], "an unbounded coefficient must not reach the aggregates")
+	})
+
+	t.Run("a value within the bound is written", func(t *testing.T) {
+		t.Parallel()
+
+		defs := llotypes.ChannelDefinitions{
+			1: historyChannel(medianStreams(1, 2), "Add(s1, s2)"),
+		}
+		aggregates := protocol.StreamAggregates{
+			1: {llotypes.AggregatorMedian: protocol.ToDecimal(decimal.NewFromInt(2))},
+			2: {llotypes.AggregatorMedian: protocol.ToDecimal(decimal.NewFromInt(3))},
+		}
+		ProcessCalculatedStreams(logger.Test(t), defs, aggregates, 1_000, protocol.NewOptsCache(), newStubHistoryReader())
+
+		got := aggregates[999][llotypes.AggregatorCalculated]
+		require.NotNil(t, got)
+		value, ok := got.(*protocol.Decimal)
+		require.True(t, ok)
+		assert.True(t, decimal.NewFromInt(5).Equal(value.Decimal()), "got %s", value.Decimal())
+	})
+}

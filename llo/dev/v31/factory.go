@@ -2,6 +2,7 @@ package llo
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -35,19 +36,36 @@ type PluginFactoryParams struct {
 	ReportTelemetryCh chan<- *protocol.LLOReportTelemetry
 	// DonID is optional and used only for telemetry and logging.
 	DonID uint32
-	// BlobLifetimeRounds overrides DefaultBlobLifetimeRounds if non-zero. Must
-	// be >1, since a snapshot gathered for one sequence number is consumed by a
-	// later one.
+	// MaxSnapshotRounds overrides DefaultMaxSnapshotRounds if non-zero. Bounds
+	// how stale this node's own stream values may be when it references them,
+	// and nothing else; it does not affect what peers can fetch. Must be >0,
+	// since a snapshot gathered for one sequence number is consumed by a later
+	// one, and must leave BlobFetchMarginRounds below BlobLifetimeRounds.
+	MaxSnapshotRounds uint64
+	// BlobLifetimeRounds overrides DefaultBlobLifetimeRounds if non-zero. Bounds
+	// how long peers can still fetch a broadcast blob, and nothing else; it does
+	// not bound staleness, MaxSnapshotRounds does.
 	BlobLifetimeRounds uint64
 	// MaxDurationBlobObservation overrides the pump's per-cycle observation
 	// budget (default: DefaultBlobObservationDurationMultiplier *
 	// cfg.MaxDurationObservation).
 	MaxDurationBlobObservation time.Duration
-	// MaxBlobSnapshotAge overrides the wall-clock age at which a parked snapshot
-	// is discarded (default: DefaultBlobSnapshotAgeMultiplier *
-	// cfg.MaxDurationObservation). A negative value disables the age check,
-	// leaving blob expiry as the only staleness bound.
+	// BlobInFlightWaitFactor overrides defaultBlobInFlightWaitFactor if
+	// non-zero. Divides cfg.MaxDurationObservation into how long Take waits for
+	// a cycle already in flight to park, so a larger factor waits less. Must
+	// be >0.
+	BlobInFlightWaitFactor uint64
+	// MaxBlobSnapshotAge pins the wall-clock age at which a parked snapshot is
+	// discarded. Left at zero the pump derives it from the round period it
+	// measures, which is the only safe default: any bound derived from
+	// MaxDurationObservation is unrelated to the round cadence and can reject
+	// every snapshot. A negative value disables the check, leaving
+	// MaxSnapshotRounds as the only staleness bound.
 	MaxBlobSnapshotAge time.Duration
+	// MaxRoundPeriod overrides DefaultMaxRoundPeriod if non-zero. Bounds the
+	// round period the pump measures, so a stalled round cannot inflate the
+	// derived snapshot age bound. Must be set above the DON real round cadence.
+	MaxRoundPeriod time.Duration
 }
 
 func NewPluginFactory(p PluginFactoryParams) *PluginFactory {
@@ -69,28 +87,51 @@ func (f *PluginFactory) NewReportingPlugin(ctx context.Context, cfg ocr3types.Re
 	}
 
 	l := logger.Sugared(f.Logger).With("lloProtocolVersion", offchainConfig.ProtocolVersion, "configDigest", cfg.ConfigDigest, "lloOCRVersion", "3.1")
-	l.Infow("llo/dev/v31.NewReportingPlugin", "onchainConfig", onchainConfig, "offchainConfig", offchainConfig)
+	l.Infow("llo/dev/v31.NewReportingPlugin", "onchainConfig", onchainConfig, "offchainConfig", offchainConfig, "f", cfg.F, "n", cfg.N)
 
 	// Initialize the memory ballast
 	protocol.InitMemoryBallast()
 
+	maxSnapshotRounds := f.MaxSnapshotRounds
+	if maxSnapshotRounds == 0 {
+		maxSnapshotRounds = DefaultMaxSnapshotRounds
+	}
 	blobLifetimeRounds := f.BlobLifetimeRounds
-	if blobLifetimeRounds <= 1 {
+	if blobLifetimeRounds == 0 {
 		blobLifetimeRounds = DefaultBlobLifetimeRounds
 	}
 	if blobLifetimeRounds > MaxBlobLifetimeRounds {
 		return nil, nil, fmt.Errorf("BlobLifetimeRounds (%d) exceeds MaxBlobLifetimeRounds (%d)", blobLifetimeRounds, MaxBlobLifetimeRounds)
 	}
+	// A snapshot is last referenced at forSeqNr+maxSnapshotRounds-1 and its blob
+	// expires at forSeqNr+blobLifetimeRounds, so this is the fetch margin.
+	if blobLifetimeRounds+1 < maxSnapshotRounds+BlobFetchMarginRounds {
+		return nil, nil, fmt.Errorf("BlobLifetimeRounds (%d) leaves less than %d rounds of fetch margin past MaxSnapshotRounds (%d)", blobLifetimeRounds, BlobFetchMarginRounds, maxSnapshotRounds)
+	}
+	// The contribution floor is a replicated state transition parameter, it
+	// must come from the offchainConfig and set explicitly.
+	if offchainConfig.AggregationFaultTolerance == nil {
+		return nil, nil, errors.New("NewReportingPlugin: offchain config must set aggregationFaultTolerance explicitly")
+	}
+	aggregationFaultTolerance := int(*offchainConfig.AggregationFaultTolerance)
+	if aggregationFaultTolerance > cfg.F {
+		return nil, nil, fmt.Errorf("aggregationFaultTolerance (%d) must not exceed consensus F (%d): a floor of %d contributions can never be met from %d observations",
+			aggregationFaultTolerance, cfg.F, 2*aggregationFaultTolerance+1, 2*cfg.F+1)
+	}
+
+	blobInFlightWaitFactor := f.BlobInFlightWaitFactor
+	if blobInFlightWaitFactor == 0 {
+		blobInFlightWaitFactor = defaultBlobInFlightWaitFactor
+	}
+
+	maxRoundPeriod := f.MaxRoundPeriod
+	if maxRoundPeriod <= 0 {
+		maxRoundPeriod = DefaultMaxRoundPeriod
+	}
+
 	blobObservationTimeout := f.MaxDurationBlobObservation
 	if blobObservationTimeout <= 0 {
 		blobObservationTimeout = DefaultBlobObservationDurationMultiplier * cfg.MaxDurationObservation
-	}
-	maxSnapshotAge := f.MaxBlobSnapshotAge
-	switch {
-	case maxSnapshotAge == 0:
-		maxSnapshotAge = DefaultBlobSnapshotAgeMultiplier * cfg.MaxDurationObservation
-	case maxSnapshotAge < 0:
-		maxSnapshotAge = 0 // disabled; blob expiry still bounds staleness
 	}
 
 	p := &Plugin{
@@ -111,17 +152,62 @@ func (f *PluginFactory) NewReportingPlugin(ctx context.Context, cfg ocr3types.Re
 		ReportTelemetryCh:                   f.ReportTelemetryCh,
 		ProtocolVersion:                     offchainConfig.ProtocolVersion,
 		DefaultMinReportIntervalNanoseconds: offchainConfig.DefaultMinReportIntervalNanoseconds,
+		AggregationFaultTolerance:           aggregationFaultTolerance,
 	}
 
 	// Definitions and the opts decoded from them are cached together, as one
 	// immutable generation per c/seqnr, so a round can never mix the two.
 	p.ChannelCache = protocol.NewChannelCache()
+	p.ChannelAnalysisCache = protocol.NewChannelAnalysisCache()
+	p.BlobPayloads = newBlobPayloadCache()
 
 	// Setup the blobpump
-	p.pump = newBlobPump(bbf, f.DataSource, l, cfg.ConfigDigest, f.Config.VerboseLogging, blobObservationTimeout, maxSnapshotAge, blobLifetimeRounds)
+	p.pump = newBlobPump(l, blobPumpParams{
+		bbf:                bbf,
+		ds:                 f.DataSource,
+		configDigest:       cfg.ConfigDigest,
+		verboseLogging:     f.Config.VerboseLogging,
+		observationTimeout: blobObservationTimeout,
+		inFlightWait:       cfg.MaxDurationObservation / time.Duration(blobInFlightWaitFactor),
+		maxSnapshotAge:     f.MaxBlobSnapshotAge,
+		maxSnapshotRounds:  maxSnapshotRounds,
+		maxRoundPeriod:     maxRoundPeriod,
+		blobLifetimeRounds: blobLifetimeRounds,
+	})
 	p.pump.Start()
 
 	unexpiredBlobCount := perOracleUnexpiredBlobCount(blobLifetimeRounds)
+	// Declared limits. Each is the libocr maximum, which is only honest if the
+	// plugin's own admission rules keep what it produces underneath it: libocr
+	// rejects an oversized message or write set, which fails the round for every
+	// oracle. The derivations, and which of them are currently enforced, are:
+	//
+	//	MaxObservationBytes           bounded post-decompression by
+	//	                              protocol.MaxDecompressedObservationLength,
+	//	                              itself derived from
+	//	                              MaxObservationStreamValuesLength stream
+	//	                              values plus
+	//	                              MaxObservationUpdateChannelDefinitionsLength
+	//	                              definitions.
+	//	MaxReportsPlusPrecursorBytes  the precursor embeds every definition plus
+	//	                              every stream aggregate. Admission bounds
+	//	                              the aggregate count by
+	//	                              protocol.MaxPersistedAggregates, and the
+	//	                              definition set by channel count
+	//	                              (MaxOutcomeChannelDefinitionsLength), total
+	//	                              stream entries (MaxTotalStreamEntries) and
+	//	                              opts bytes (MaxTotalOptsBytes). Calculated
+	//	                              streams are counted separately, by
+	//	                              MaxTotalCalculatedStreams. A stream value's
+	//	                              decimal coefficient is bounded on
+	//	                              observation decode, and a calculated one
+	//	                              where it is written into the aggregates.
+	//	MaxKeyValueModifiedKeys*      the per-round write set is c/defs plus r/agg
+	//	                              plus the history windows, and history is
+	//	                              held to protocol.MaxHistoryTotalBytes so it
+	//	                              cannot consume the whole budget on its own.
+	//	MaxBlobPayloadBytes           enforced on the write side by
+	//	                              encodeBlobPayload.
 	info := ocr3_1types.ReportingPluginInfo1{
 		Name: "LLO-3.1",
 		Limits: ocr3_1types.ReportingPluginLimits{
@@ -134,13 +220,13 @@ func (f *PluginFactory) NewReportingPlugin(ctx context.Context, cfg ocr3types.Re
 			MaxKeyValueModifiedKeys:                ocr3_1types.MaxMaxKeyValueModifiedKeys,
 			MaxKeyValueModifiedKeysPlusValuesBytes: ocr3_1types.MaxMaxKeyValueModifiedKeysPlusValuesBytes,
 
-			MaxBlobPayloadBytes: ocr3_1types.MaxMaxBlobPayloadBytes,
+			MaxBlobPayloadBytes: MaxBlobPayloadBytes,
 			// Blobs live for blobLifetimeRounds sequence numbers and the pump
 			// broadcasts about one per round, so both budgets are derived from
 			// the configured lifetime plus a margin for asynchronous reaping
 			// (see the libocr docs).
 			MaxPerOracleUnexpiredBlobCount:                  unexpiredBlobCount,
-			MaxPerOracleUnexpiredBlobCumulativePayloadBytes: unexpiredBlobCount * ocr3_1types.MaxMaxBlobPayloadBytes,
+			MaxPerOracleUnexpiredBlobCumulativePayloadBytes: unexpiredBlobCount * MaxBlobPayloadBytes,
 		},
 	}
 	if err := info.Validate(); err != nil {

@@ -129,6 +129,12 @@ func (c *ChannelCache) store(gen *ChannelGeneration) *ChannelGeneration {
 		c.gens = make(map[uint64]*ChannelGeneration, channelGenerationsRetained)
 	}
 	c.gens[gen.seqNr] = gen
+	// Evict by insertion order, not by sequence number: what a round asks for
+	// next is the record it is replaying, which for a node restoring from a
+	// snapshot is an older one than the cache already holds (see the type doc).
+	// Retaining the highest sequence numbers instead would evict exactly the
+	// generations such a node keeps asking for. In steady state the two agree,
+	// insertion being monotonic there.
 	c.order = append(c.order, gen.seqNr)
 	for len(c.order) > channelGenerationsRetained {
 		delete(c.gens, c.order[0])
@@ -143,9 +149,15 @@ func (c *ChannelCache) store(gen *ChannelGeneration) *ChannelGeneration {
 func CloneChannelDefinitions(in llotypes.ChannelDefinitions) llotypes.ChannelDefinitions {
 	out := make(llotypes.ChannelDefinitions, len(in))
 	for id, cd := range in {
-		cd.Streams = slices.Clone(cd.Streams)
-		cd.Opts = slices.Clone(cd.Opts)
-		out[id] = cd
+		out[id] = cloneChannelDefinition(cd)
 	}
 	return out
+}
+
+// cloneChannelDefinition deep-copies one definition: the Streams slice and the
+// raw opts bytes are copied, so the copy shares no memory with the original.
+func cloneChannelDefinition(cd llotypes.ChannelDefinition) llotypes.ChannelDefinition {
+	cd.Streams = slices.Clone(cd.Streams)
+	cd.Opts = slices.Clone(cd.Opts)
+	return cd
 }

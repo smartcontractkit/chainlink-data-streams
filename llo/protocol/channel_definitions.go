@@ -11,7 +11,13 @@ import (
 // VerifyChannelDefinitions applies the checks that any definition set must
 // satisfy, whether it is being admitted or has already been committed.
 func VerifyChannelDefinitions(codecs map[llotypes.ReportFormat]ReportCodec, channelDefs llotypes.ChannelDefinitions) error {
-	return verifyChannelDefinitions(codecs, channelDefs, nil)
+	return verifyChannelDefinitions(codecs, channelDefs, nil, nil)
+}
+
+// VerifyChannelDefinitionsWithCache is VerifyChannelDefinitions, memoizing the
+// per-definition checks in cache. A nil cache memoizes nothing.
+func VerifyChannelDefinitionsWithCache(codecs map[llotypes.ReportFormat]ReportCodec, channelDefs llotypes.ChannelDefinitions, cache *ChannelAnalysisCache) error {
+	return verifyChannelDefinitions(codecs, channelDefs, nil, cache)
 }
 
 // VerifyChannelDefinitionsForAdmission additionally applies the admission-only
@@ -34,7 +40,14 @@ func VerifyChannelDefinitions(codecs map[llotypes.ReportFormat]ReportCodec, chan
 // -- not a consensus-critical one, so oracles running different versions of the
 // admission-only checks disagree only about what they vote for.
 func VerifyChannelDefinitionsForAdmission(codecs map[llotypes.ReportFormat]ReportCodec, channelDefs llotypes.ChannelDefinitions, admitting map[llotypes.ChannelID]struct{}) error {
-	return verifyChannelDefinitions(codecs, channelDefs, admitting)
+	return verifyChannelDefinitions(codecs, channelDefs, admitting, nil)
+}
+
+// VerifyChannelDefinitionsForAdmissionWithCache is
+// VerifyChannelDefinitionsForAdmission, memoizing the per-definition checks in
+// cache. A nil cache memoizes nothing.
+func VerifyChannelDefinitionsForAdmissionWithCache(codecs map[llotypes.ReportFormat]ReportCodec, channelDefs llotypes.ChannelDefinitions, admitting map[llotypes.ChannelID]struct{}, cache *ChannelAnalysisCache) error {
+	return verifyChannelDefinitions(codecs, channelDefs, admitting, cache)
 }
 
 // ChangedChannelIDs returns the IDs of the channels desired holds that current
@@ -53,12 +66,23 @@ func ChangedChannelIDs(current, desired llotypes.ChannelDefinitions) map[llotype
 
 // admissionFinding is an admission-only check failure, together with every
 // channel it implicates, so that it can be filtered by the admitting set.
+//
+// A whole-set finding (a budget summed over every channel) implicates no
+// particular channel: it is a property of the set as a whole, and the channels
+// that made it exceed the budget are not distinguishable from the ones that did
+// not. Such a finding sets wholeSet and applies whenever anything is being
+// admitted, which is what stops a set already over budget from growing while
+// leaving a set that is merely already over it alone.
 type admissionFinding struct {
 	channels []llotypes.ChannelID
+	wholeSet bool
 	err      error
 }
 
 func (f admissionFinding) appliesTo(admitting map[llotypes.ChannelID]struct{}) bool {
+	if f.wholeSet {
+		return len(admitting) > 0
+	}
 	for _, channelID := range f.channels {
 		if _, ok := admitting[channelID]; ok {
 			return true
@@ -67,9 +91,117 @@ func (f admissionFinding) appliesTo(admitting map[llotypes.ChannelID]struct{}) b
 	return false
 }
 
-func verifyChannelDefinitions(codecs map[llotypes.ReportFormat]ReportCodec, channelDefs llotypes.ChannelDefinitions, admitting map[llotypes.ChannelID]struct{}) (merr error) {
+// UnverifiableChannelIDs returns the channels of an already-committed
+// definition set that fail a baseline check, so that a node can skip them
+// instead of halting.
+//
+// Baseline checks are the ones every definition set must satisfy, admitted or
+// committed, and VerifyChannelDefinitions reports them as a single error. That
+// is the right answer on the admission path, where the set can simply be
+// rejected.
+// Committed state is replicated, so failing verification on every
+// node would halt the DON with no way out, as the nodes would never vote
+// to remove offending channels.
+// For a DON where all participants share the same version this is unreachable,
+// as ValidateObservation runs the same baseline checks over the merged set,
+// but a version skew can make it reachable.
+// Report the finding and carry on, which is the same treatment the
+// admission-only findings get in voteOnChannels.
+//
+// Attributing the findings instead lets the caller drop just those channels and
+// keep going, which is the same treatment the admission-only findings already
+// get. The returned error carries the whole-set baseline findings, which
+// implicate no particular channel and so cannot be skipped selectively.
+func UnverifiableChannelIDs(codecs map[llotypes.ReportFormat]ReportCodec, channelDefs llotypes.ChannelDefinitions) (map[llotypes.ChannelID]struct{}, error) {
+	return UnverifiableChannelIDsWithCache(codecs, channelDefs, nil)
+}
+
+// UnverifiableChannelIDsWithCache is UnverifiableChannelIDs, memoizing the
+// per-definition checks in cache. A nil cache memoizes nothing.
+func UnverifiableChannelIDsWithCache(codecs map[llotypes.ReportFormat]ReportCodec, channelDefs llotypes.ChannelDefinitions, cache *ChannelAnalysisCache) (map[llotypes.ChannelID]struct{}, error) {
+	res := analyzeChannelDefinitions(codecs, channelDefs, cache)
+	ids := make(map[llotypes.ChannelID]struct{}, len(res.channelErrs))
+	for channelID := range res.channelErrs {
+		ids[channelID] = struct{}{}
+	}
+	return ids, res.setErr()
+}
+
+// verifyResult is the outcome of analyzing a definition set: baseline findings
+// attributed to the channel that produced them, baseline findings that belong
+// to the set as a whole, and the admission-only findings, which are filtered by
+// the admitting set only when an error is materialized.
+type verifyResult struct {
+	channelErrs       map[llotypes.ChannelID]error
+	wholeSetErr       error
+	uniqueStreamIDs   int
+	admissionFindings []admissionFinding
+}
+
+// setErr reports the baseline findings that implicate no particular channel.
+// The unique-stream-ID budget is one of them, but it is only meaningful once
+// the per-channel findings are clear (a definition that failed verification may
+// have contributed stream IDs that a corrected one would not), so it is
+// reported only when nothing else failed.
+func (r verifyResult) setErr() error {
+	if r.wholeSetErr != nil {
+		return r.wholeSetErr
+	}
+	if len(r.channelErrs) == 0 && r.uniqueStreamIDs > MaxObservationStreamValuesLength {
+		return fmt.Errorf("too many unique stream IDs, got: %d/%d", r.uniqueStreamIDs, MaxObservationStreamValuesLength)
+	}
+	return nil
+}
+
+// err joins every finding that applies into the single error the verification
+// entry points return. Channel findings are joined in ascending channel ID
+// order so that a rejected definitions file produces the same error on every
+// oracle.
+func (r verifyResult) err(admitting map[llotypes.ChannelID]struct{}) error {
+	if r.wholeSetErr != nil {
+		return r.wholeSetErr
+	}
+
+	var merr error
+	channelIDs := make([]llotypes.ChannelID, 0, len(r.channelErrs))
+	for channelID := range r.channelErrs {
+		channelIDs = append(channelIDs, channelID)
+	}
+	sort.Slice(channelIDs, func(i, j int) bool { return channelIDs[i] < channelIDs[j] })
+	for _, channelID := range channelIDs {
+		merr = errors.Join(merr, r.channelErrs[channelID])
+	}
+
+	for _, finding := range r.admissionFindings {
+		if finding.appliesTo(admitting) {
+			merr = errors.Join(merr, finding.err)
+		}
+	}
+
+	if merr != nil {
+		return merr
+	}
+	if r.uniqueStreamIDs > MaxObservationStreamValuesLength {
+		return fmt.Errorf("too many unique stream IDs, got: %d/%d", r.uniqueStreamIDs, MaxObservationStreamValuesLength)
+	}
+	return nil
+}
+
+func verifyChannelDefinitions(codecs map[llotypes.ReportFormat]ReportCodec, channelDefs llotypes.ChannelDefinitions, admitting map[llotypes.ChannelID]struct{}, cache *ChannelAnalysisCache) error {
+	return analyzeChannelDefinitions(codecs, channelDefs, cache).err(admitting)
+}
+
+// analyzeChannelDefinitions applies every check to the set. The checks that
+// need nothing but a single definition are taken from cache when it already
+// holds them for that exact definition (see ChannelAnalysisCache); everything
+// that involves more than one definition is computed here on every call, so
+// that a finding never depends on what was analyzed before.
+func analyzeChannelDefinitions(codecs map[llotypes.ReportFormat]ReportCodec, channelDefs llotypes.ChannelDefinitions, cache *ChannelAnalysisCache) (res verifyResult) {
+	res.channelErrs = make(map[llotypes.ChannelID]error)
+
 	if len(channelDefs) > MaxOutcomeChannelDefinitionsLength {
-		return fmt.Errorf("too many channels, got: %d/%d", len(channelDefs), MaxOutcomeChannelDefinitionsLength)
+		res.wholeSetErr = fmt.Errorf("too many channels, got: %d/%d", len(channelDefs), MaxOutcomeChannelDefinitionsLength)
+		return res
 	}
 
 	// Verify in ascending channel ID order so that the errors a rejected
@@ -80,14 +212,39 @@ func verifyChannelDefinitions(codecs map[llotypes.ReportFormat]ReportCodec, chan
 	}
 	sort.Slice(channelIDs, func(i, j int) bool { return channelIDs[i] < channelIDs[j] })
 
+	// Baseline findings are attributed to the channel that produced them; a
+	// cross-definition baseline finding is attributed to every channel it
+	// implicates, so that skipping any one of them clears it.
+	base := func(err error, channels ...llotypes.ChannelID) {
+		for _, channelID := range channels {
+			res.channelErrs[channelID] = errors.Join(res.channelErrs[channelID], err)
+		}
+	}
 	// Admission-only findings are collected as they are discovered and filtered
 	// against admitting once at the end. The bookkeeping the cross-definition
 	// checks rely on is built for the whole set either way, so that a finding
 	// does not depend on which channels are being admitted.
-	var admissionFindings []admissionFinding
 	admit := func(err error, channels ...llotypes.ChannelID) {
-		admissionFindings = append(admissionFindings, admissionFinding{channels: channels, err: err})
+		res.admissionFindings = append(res.admissionFindings, admissionFinding{channels: channels, err: err})
 	}
+	admitSet := func(err error) {
+		res.admissionFindings = append(res.admissionFindings, admissionFinding{wholeSet: true, err: err})
+	}
+
+	// Whole-set budgets, accumulated over the channels the loop below visits
+	// (tombstones excluded: they carry neither streams nor opts that anything
+	// reads) and checked once at the end.
+	var totalStreamEntries, totalOptsBytes int
+
+	// Every (streamID, aggregator) pair that will hold an aggregate. Distinct
+	// pairs, not stream entries: several channels naming the same pair cost one
+	// aggregate between them. Bounded by MaxPersistedAggregates, which is what
+	// the r/agg record can carry.
+	aggregatedPairs := make(map[streamAggregatorPair]struct{}, len(channelDefs))
+	// Calculated streams declared across the set. Counted separately from the
+	// pairs above because they are recomputed each round rather than carried
+	// forward, so they cost precursor bytes but no r/agg bytes.
+	var totalCalculatedStreams int
 
 	uniqueStreamIDs := make(map[llotypes.StreamID]struct{}, len(channelDefs))
 	// Owners of every stream ID that will hold an aggregate: observed streams
@@ -108,19 +265,42 @@ func verifyChannelDefinitions(codecs map[llotypes.ReportFormat]ReportCodec, chan
 		}
 
 		if len(cd.Streams) == 0 {
-			merr = errors.Join(merr, fmt.Errorf("ChannelDefinition with ID %d has no streams", channelID))
+			base(fmt.Errorf("ChannelDefinition with ID %d has no streams", channelID), channelID)
 			continue
 		}
 		if len(cd.Streams) > MaxStreamsPerChannel {
-			merr = errors.Join(merr, fmt.Errorf("ChannelDefinition with ID %d has too many streams, got: %d/%d", channelID, len(cd.Streams), MaxStreamsPerChannel))
+			base(fmt.Errorf("ChannelDefinition with ID %d has too many streams, got: %d/%d", channelID, len(cd.Streams), MaxStreamsPerChannel), channelID)
 			continue
 		}
+		totalStreamEntries += len(cd.Streams)
+		// Opts are opaque bytes, so length is the only thing that can be
+		// checked here. Admission-only: a committed definition carrying an
+		// oversized blob is left alone rather than failing verification on every
+		// oracle, every round.
+		if len(cd.Opts) > MaxChannelOptsBytes {
+			admit(fmt.Errorf("ChannelDefinition with ID %d has opts that are too long, got: %d/%d", channelID, len(cd.Opts), MaxChannelOptsBytes), channelID)
+		}
+		totalOptsBytes += len(cd.Opts)
 		for _, strm := range cd.Streams {
 			if strm.Aggregator == 0 {
-				merr = errors.Join(merr, fmt.Errorf("ChannelDefinition with ID %d has stream %d with zero aggregator (this may indicate an uninitialized struct)", channelID, strm.StreamID))
+				base(fmt.Errorf("ChannelDefinition with ID %d has stream %d with zero aggregator (this may indicate an uninitialized struct)", channelID, strm.StreamID), channelID)
 				continue
 			}
+			// An aggregator this binary does not know has no aggregator
+			// function, so the pair can never produce an aggregate. Rejected at
+			// admission only: a committed definition carrying one is left alone
+			// (aggregation skips the pair) rather than failing verification on
+			// every oracle, every round.
+			if strm.Aggregator != llotypes.AggregatorCalculated && GetAggregatorFunc(strm.Aggregator) == nil {
+				admit(fmt.Errorf("ChannelDefinition with ID %d has stream %d with unknown aggregator %d", channelID, strm.StreamID, strm.Aggregator), channelID)
+			}
 			uniqueStreamIDs[strm.StreamID] = struct{}{}
+			// Pairs that aggregation actually produces a value for: calculated
+			// streams are recomputed each round rather than aggregated, and
+			// history backfill channels are not aggregated at all.
+			if strm.Aggregator != llotypes.AggregatorCalculated && cd.ReportFormat != llotypes.ReportFormatHistoryBackfill {
+				aggregatedPairs[streamAggregatorPair{streamID: strm.StreamID, aggregator: strm.Aggregator}] = struct{}{}
+			}
 			// Calculated streams are derived from the opts that declare them and
 			// are not stored on the definition, so anything listed here is
 			// observed. Definitions written by older code may still carry their
@@ -132,12 +312,14 @@ func verifyChannelDefinitions(codecs map[llotypes.ReportFormat]ReportCodec, chan
 				}
 			}
 		}
+		facts := channelFactsFor(cache, codecs, channelID, cd)
+
 		if HasCalculatedStreams(cd) {
-			ids, err := CalculatedStreamIDs(nil, cd, channelID)
-			if err != nil {
-				admit(fmt.Errorf("invalid ChannelDefinition with ID %d: %w", channelID, err), channelID)
+			if facts.calculatedErr != nil {
+				admit(fmt.Errorf("invalid ChannelDefinition with ID %d: %w", channelID, facts.calculatedErr), channelID)
 			}
-			for _, streamID := range ids {
+			totalCalculatedStreams += len(facts.calculatedIDs)
+			for _, streamID := range facts.calculatedIDs {
 				if owner, ok := calculatedBy[streamID]; ok {
 					admit(fmt.Errorf("ChannelDefinition with ID %d declares calculated stream %d already declared by channel %d", channelID, streamID, owner), channelID, owner)
 					continue
@@ -145,42 +327,30 @@ func verifyChannelDefinitions(codecs map[llotypes.ReportFormat]ReportCodec, chan
 				calculatedBy[streamID] = channelID
 			}
 		}
-		var verifyErr error
-		if codec, ok := codecs[cd.ReportFormat]; ok {
-			verifyErr = codec.Verify(cd)
-			if verifyErr != nil {
-				merr = errors.Join(merr, fmt.Errorf("invalid ChannelDefinition with ID %d: %w", channelID, verifyErr))
-			}
-			if av, ok := codec.(AdmissionVerifier); ok && verifyErr == nil {
-				if err := av.VerifyForAdmission(cd); err != nil {
-					admit(fmt.Errorf("invalid ChannelDefinition with ID %d: %w", channelID, err), channelID)
-				}
-			}
+		if facts.verifyErr != nil {
+			base(fmt.Errorf("invalid ChannelDefinition with ID %d: %w", channelID, facts.verifyErr), channelID)
 		}
-		if feedIDer, ok := codecs[cd.ReportFormat].(FeedIDer); ok && verifyErr == nil {
-			feedID, hasFeedID, err := feedIDer.FeedID(cd)
-			switch {
-			case err != nil:
-				admit(fmt.Errorf("invalid ChannelDefinition with ID %d: failed to resolve feed ID: %w", channelID, err), channelID)
-			case !hasFeedID:
-			default:
-				if owner, ok := feedIDBy[feedID]; ok {
-					admit(fmt.Errorf("ChannelDefinition with ID %d has feed ID 0x%x already used by channel %d", channelID, feedID, owner), channelID, owner)
-				} else {
-					feedIDBy[feedID] = channelID
-				}
+		if facts.admissionErr != nil {
+			admit(fmt.Errorf("invalid ChannelDefinition with ID %d: %w", channelID, facts.admissionErr), channelID)
+		}
+		switch {
+		case facts.feedIDErr != nil:
+			admit(fmt.Errorf("invalid ChannelDefinition with ID %d: failed to resolve feed ID: %w", channelID, facts.feedIDErr), channelID)
+		case !facts.hasFeedID:
+		default:
+			if owner, ok := feedIDBy[facts.feedID]; ok {
+				admit(fmt.Errorf("ChannelDefinition with ID %d has feed ID 0x%x already used by channel %d", channelID, facts.feedID, owner), channelID, owner)
+			} else {
+				feedIDBy[facts.feedID] = channelID
 			}
 		}
 		if cd.ReportFormat == llotypes.ReportFormatHistoryBackfill {
 			if err := ValidateHistoryBackfillAgainstDefinitions(cd, channelDefs, 0); err != nil {
-				merr = errors.Join(merr, fmt.Errorf("invalid history backfill channel %d: %w", channelID, err))
+				base(fmt.Errorf("invalid history backfill channel %d: %w", channelID, err), channelID)
 			}
 			if err := ValidateHistoryBackfillTarget(cd, channelDefs); err != nil {
 				admit(fmt.Errorf("invalid history backfill channel %d: %w", channelID, err), channelID)
 			}
-		}
-		if verifyErr != nil {
-			continue
 		}
 	}
 
@@ -196,19 +366,32 @@ func verifyChannelDefinitions(codecs map[llotypes.ReportFormat]ReportCodec, chan
 		}
 	}
 
-	for _, finding := range admissionFindings {
-		if finding.appliesTo(admitting) {
-			merr = errors.Join(merr, finding.err)
-		}
+	// Whole-set budgets. Each is what the sizes of the channel-definitions
+	// record, the precursor and the carry-forward record actually depend on;
+	// see the limits they name.
+	if totalStreamEntries > MaxTotalStreamEntries {
+		admitSet(fmt.Errorf("too many stream entries across all channels, got: %d/%d", totalStreamEntries, MaxTotalStreamEntries))
+	}
+	if len(aggregatedPairs) > MaxPersistedAggregates {
+		admitSet(fmt.Errorf("too many aggregated (stream, aggregator) pairs across all channels, got: %d/%d", len(aggregatedPairs), MaxPersistedAggregates))
+	}
+	if totalCalculatedStreams > MaxTotalCalculatedStreams {
+		admitSet(fmt.Errorf("too many calculated streams across all channels, got: %d/%d", totalCalculatedStreams, MaxTotalCalculatedStreams))
+	}
+	if totalOptsBytes > MaxTotalOptsBytes {
+		admitSet(fmt.Errorf("too many opts bytes across all channels, got: %d/%d", totalOptsBytes, MaxTotalOptsBytes))
 	}
 
-	if merr != nil {
-		return merr
-	}
-	if len(uniqueStreamIDs) > MaxObservationStreamValuesLength {
-		return fmt.Errorf("too many unique stream IDs, got: %d/%d", len(uniqueStreamIDs), MaxObservationStreamValuesLength)
-	}
-	return nil
+	res.uniqueStreamIDs = len(uniqueStreamIDs)
+	return res
+}
+
+// streamAggregatorPair identifies one aggregate. The aggregator is part of the
+// identity because the same stream can be aggregated differently by different
+// channels, and each way costs its own carried-forward value.
+type streamAggregatorPair struct {
+	streamID   llotypes.StreamID
+	aggregator llotypes.Aggregator
 }
 
 func sortedStreamIDs(m map[llotypes.StreamID]llotypes.ChannelID) []llotypes.StreamID {

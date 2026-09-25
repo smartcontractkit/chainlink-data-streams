@@ -27,6 +27,19 @@ message LLOObservationProto {
     // uniqueness.
     map<uint32, LLOChannelDefinitionProto> updateChannelDefinitions = 5;
     map<uint32, LLOStreamValue> streamValues = 6;
+    // Report formats this oracle has a report codec for. Advertised so that
+    // reportability can require enough oracles to be able to encode a channel
+    // before validAfter advances over it. Encoding is node-local state and
+    // cannot be read in the state transition; this carries it as a replicated
+    // fact instead.
+    repeated uint32 supportedReportFormats = 8;
+    // The predecessor instance's signer set and f, read from the node-local
+    // retirement report cache. Carried by a v31 staging instance alongside an
+    // attested retirement report, so the state transition can agree on the set
+    // by vote and verify the report against it instead of reading node-local
+    // state. Order is significant: a signature names its signer by index.
+    repeated bytes predecessorSigners = 9;
+    uint32 predecessorF = 10;
 }
 
 message LLOStreamValue {
@@ -211,4 +224,28 @@ message LLOPrecursorProto {
     repeated LLOChannelIDAndValidAfterNanosecondsProto validAfterNanoseconds = 4;
     repeated LLOStreamAggregate streamAggregates = 5;
     uint64 channelStateSeqNr = 6;
+    // supportByFormat MUST be sorted ascending by reportFormat.
+    repeated LLOReportFormatSupportProto supportByFormat = 7;
+}
+
+// LLOReportFormatSupportProto is the number of oracles that advertised a report
+// codec for one report format in the round that produced the precursor.
+message LLOReportFormatSupportProto {
+    uint32 reportFormat = 1;
+    uint32 oracleCount = 2;
+}
+
+// LLOCodecSupportProto is the v31 KeyValueState record (c/codecs) holding the
+// report formats each oracle last advertised a codec for.
+// NOTE: must serialize deterministically. oracles MUST be sorted ascending by
+// oracleID, and each oracle's reportFormats MUST be sorted ascending.
+message LLOCodecSupportProto {
+    repeated LLOOracleCodecSupportProto oracles = 1;
+}
+
+// LLOOracleCodecSupportProto is one oracle's last advertised set of report
+// formats.
+message LLOOracleCodecSupportProto {
+    uint32 oracleID = 1;
+    repeated uint32 reportFormats = 2;
 }

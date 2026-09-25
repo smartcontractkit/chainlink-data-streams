@@ -18,17 +18,19 @@ func Test_MedianAggregator(t *testing.T) {
 		ToDecimal(decimal.NewFromFloat(5.5)),
 	}
 
-	f := 1
+	// Contribution floor, expressed directly: v3.0 passes F+1, v3.1 passes
+	// 2*AggregationFaultTolerance+1.
+	minContributions := 2
 
 	t.Run("returns median with even number of values", func(t *testing.T) {
-		sv, err := MedianAggregator(values, f)
+		sv, err := MedianAggregator(values, minContributions)
 		require.NoError(t, err)
 		assert.IsType(t, &Decimal{}, sv)
 		assert.Equal(t, "4.4", sv.(*Decimal).String())
 	})
 
 	t.Run("returns higher value with odd number of values", func(t *testing.T) {
-		sv, err := MedianAggregator(values[:5], f)
+		sv, err := MedianAggregator(values[:5], minContributions)
 		require.NoError(t, err)
 		assert.IsType(t, &Decimal{}, sv)
 		assert.Equal(t, "3.3", sv.(*Decimal).String())
@@ -44,7 +46,7 @@ func Test_MedianAggregator(t *testing.T) {
 			ToDecimal(decimal.NewFromFloat(5.5)),
 		}
 
-		sv, err := MedianAggregator(mixedValues, f)
+		sv, err := MedianAggregator(mixedValues, minContributions)
 		require.NoError(t, err)
 		assert.IsType(t, &Decimal{}, sv)
 		assert.Equal(t, "4.4", sv.(*Decimal).String())
@@ -60,31 +62,31 @@ func Test_MedianAggregator(t *testing.T) {
 			&TimestampedStreamValue{ObservedAtNanoseconds: 106, StreamValue: ToDecimal(decimal.NewFromFloat(5.6))},
 		}
 
-		sv, err := MedianAggregator(mixedValues, f)
+		sv, err := MedianAggregator(mixedValues, minContributions)
 		require.NoError(t, err)
 		assert.IsType(t, &TimestampedStreamValue{}, sv)
 		assert.Equal(t, "5.6", sv.(*TimestampedStreamValue).StreamValue.(*Decimal).String())
 		assert.Equal(t, uint64(102), sv.(*TimestampedStreamValue).ObservedAtNanoseconds)
 	})
 
-	t.Run("fails with fewer than f+1 values", func(t *testing.T) {
-		_, err := MedianAggregator(values[:2], 3)
-		require.EqualError(t, err, "not enough observations to calculate median, expected at least f+1, got 2")
+	t.Run("fails below the contribution floor", func(t *testing.T) {
+		_, err := MedianAggregator(values[:2], 4)
+		require.EqualError(t, err, "not enough contributions to calculate median: got 2, need 4")
 	})
 
 	t.Run("fails with unsupported StreamValue type", func(t *testing.T) {
-		_, err := MedianAggregator([]StreamValue{nil, nil, nil}, 1)
-		require.EqualError(t, err, "not enough observations to calculate median, expected at least f+1, got 0")
+		_, err := MedianAggregator([]StreamValue{nil, nil, nil}, 2)
+		require.EqualError(t, err, "not enough contributions to calculate median: got 0, need 2")
 	})
 }
 
 func Test_ModeAggregator(t *testing.T) {
 	tcs := []struct {
-		name   string
-		values []StreamValue
-		f      int
-		output StreamValue
-		errStr string
+		name             string
+		values           []StreamValue
+		minContributions int
+		output           StreamValue
+		errStr           string
 	}{
 		{
 			name: "returns mode value with 3f+1 values in agreement",
@@ -94,8 +96,8 @@ func Test_ModeAggregator(t *testing.T) {
 				ToDecimal(decimal.NewFromFloat(1.1)),
 				ToDecimal(decimal.NewFromFloat(1.1)),
 			},
-			f:      1,
-			output: ToDecimal(decimal.NewFromFloat(1.1)),
+			minContributions: 2,
+			output:           ToDecimal(decimal.NewFromFloat(1.1)),
 		},
 		{
 			name: "returns mode value with 3f values in agreement",
@@ -105,8 +107,8 @@ func Test_ModeAggregator(t *testing.T) {
 				ToDecimal(decimal.NewFromFloat(1.1)),
 				ToDecimal(decimal.NewFromFloat(2.2)),
 			},
-			f:      1,
-			output: ToDecimal(decimal.NewFromFloat(1.1)),
+			minContributions: 2,
+			output:           ToDecimal(decimal.NewFromFloat(1.1)),
 		},
 		{
 			name: "returns mode value using tie-breaker with split agreement",
@@ -116,25 +118,25 @@ func Test_ModeAggregator(t *testing.T) {
 				ToDecimal(decimal.NewFromFloat(2.2)),
 				ToDecimal(decimal.NewFromFloat(2.2)),
 			},
-			f:      1,
-			output: ToDecimal(decimal.NewFromFloat(1.1)),
+			minContributions: 2,
+			output:           ToDecimal(decimal.NewFromFloat(1.1)),
 		},
 		{
-			name:   "returns error if not enough observations",
-			values: []StreamValue{},
-			f:      1,
-			errStr: "not enough observations in agreement to calculate mode, expected at least f+1, most common value had 0",
+			name:             "returns error if not enough observations",
+			values:           []StreamValue{},
+			minContributions: 2,
+			errStr:           "not enough contributions in agreement to calculate mode: most common value had 0, need 2",
 		},
 		{
-			name: "returns error if less than f in agreement",
+			name: "returns error if fewer than the floor agree",
 			values: []StreamValue{
 				ToDecimal(decimal.NewFromFloat(1.1)),
 				ToDecimal(decimal.NewFromFloat(1.2)),
 				ToDecimal(decimal.NewFromFloat(2.2)),
 				ToDecimal(decimal.NewFromFloat(3.2)),
 			},
-			f:      1,
-			errStr: "not enough observations in agreement to calculate mode, expected at least f+1, most common value had 1",
+			minContributions: 2,
+			errStr:           "not enough contributions in agreement to calculate mode: most common value had 1, need 2",
 		},
 		{
 			name: "handles mixed types, tie-breaking on first type",
@@ -144,8 +146,8 @@ func Test_ModeAggregator(t *testing.T) {
 				&Quote{Benchmark: decimal.NewFromFloat(1.2)},
 				&Quote{Benchmark: decimal.NewFromFloat(1.2)},
 			},
-			f:      1,
-			output: ToDecimal(decimal.NewFromFloat(1.1)),
+			minContributions: 2,
+			output:           ToDecimal(decimal.NewFromFloat(1.1)),
 		},
 		{
 			name: "handles mixed types where Quote is most common",
@@ -155,8 +157,8 @@ func Test_ModeAggregator(t *testing.T) {
 				&Quote{Bid: decimal.NewFromFloat(1.2), Benchmark: decimal.NewFromFloat(2.2), Ask: decimal.NewFromFloat(3.2)},
 				&Quote{Bid: decimal.NewFromFloat(1.2), Benchmark: decimal.NewFromFloat(2.2), Ask: decimal.NewFromFloat(3.2)},
 			},
-			f:      1,
-			output: &Quote{Bid: decimal.NewFromFloat(1.2), Benchmark: decimal.NewFromFloat(2.2), Ask: decimal.NewFromFloat(3.2)},
+			minContributions: 2,
+			output:           &Quote{Bid: decimal.NewFromFloat(1.2), Benchmark: decimal.NewFromFloat(2.2), Ask: decimal.NewFromFloat(3.2)},
 		},
 		{
 			name: "nils are not counted",
@@ -169,13 +171,13 @@ func Test_ModeAggregator(t *testing.T) {
 				nil,
 				nil,
 			},
-			f:      2,
-			output: ToDecimal(decimal.NewFromFloat(1.1)),
+			minContributions: 3,
+			output:           ToDecimal(decimal.NewFromFloat(1.1)),
 		},
 	}
 	for _, tc := range tcs {
 		t.Run(tc.name, func(t *testing.T) {
-			sv, err := ModeAggregator(tc.values, tc.f)
+			sv, err := ModeAggregator(tc.values, tc.minContributions)
 			if tc.errStr == "" {
 				require.NoError(t, err)
 				assert.Equal(t, tc.output, sv)
@@ -195,7 +197,7 @@ func Test_QuoteAggregator(t *testing.T) {
 			&Quote{Bid: (decimal.NewFromFloat(10.01)), Benchmark: (decimal.NewFromFloat(10.03)), Ask: (decimal.NewFromFloat(10.10))},
 		}
 
-		sv, err := QuoteAggregator(values, 1)
+		sv, err := QuoteAggregator(values, 2)
 		require.NoError(t, err)
 		assert.IsType(t, &Quote{}, sv)
 		q := sv.(*Quote)
@@ -211,7 +213,7 @@ func Test_QuoteAggregator(t *testing.T) {
 			&Quote{Bid: (decimal.NewFromFloat(7.7)), Benchmark: (decimal.NewFromFloat(8.8)), Ask: (decimal.NewFromFloat(8.7))},       // invalid
 			&Quote{Bid: (decimal.NewFromFloat(12.12)), Benchmark: (decimal.NewFromFloat(11.11)), Ask: (decimal.NewFromFloat(12.12))}, // invalid
 		}
-		sv, err := QuoteAggregator(values, 1)
+		sv, err := QuoteAggregator(values, 2)
 		require.NoError(t, err)
 		assert.IsType(t, &Quote{}, sv)
 		q := sv.(*Quote)
@@ -220,9 +222,9 @@ func Test_QuoteAggregator(t *testing.T) {
 		assert.Equal(t, "6.6", q.Ask.String())
 	})
 
-	t.Run("fails with fewer than f+1 values", func(t *testing.T) {
-		_, err := QuoteAggregator([]StreamValue{&Quote{}, &Quote{}}, 2)
-		require.EqualError(t, err, "not enough valid observations to aggregate quote, expected at least f+1, got 2")
+	t.Run("fails below the contribution floor", func(t *testing.T) {
+		_, err := QuoteAggregator([]StreamValue{&Quote{}, &Quote{}}, 3)
+		require.EqualError(t, err, "not enough valid contributions to aggregate quote: got 2, need 3")
 	})
 
 	t.Run("ignores non-Quote type", func(t *testing.T) {
@@ -232,7 +234,7 @@ func Test_QuoteAggregator(t *testing.T) {
 			ToDecimal(decimal.NewFromFloat(7.7)),
 			ToDecimal(decimal.NewFromFloat(8.8)),
 		}
-		sv, err := QuoteAggregator(values, 1)
+		sv, err := QuoteAggregator(values, 2)
 		require.NoError(t, err)
 		assert.IsType(t, &Quote{}, sv)
 		q := sv.(*Quote)

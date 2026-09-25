@@ -45,6 +45,23 @@ type PredecessorRetirementReportCache interface {
 	AttestedRetirementReport(predecessorConfigDigest ocr2types.ConfigDigest) ([]byte, error)
 	// CheckAttestedRetirementReport verifies that an attested retirement
 	// report, which may have come from another node, is valid (signed) with
-	// signers corresponding to the given config digest
+	// signers corresponding to the given config digest.
+	//
+	// The signer set is read from the local cache, which the config poller
+	// fills asynchronously, so the verdict is node-local: a caller that must
+	// reach the same verdict on every node should agree on the signer set
+	// first and use VerifyAttestedRetirementReport instead.
 	CheckAttestedRetirementReport(predecessorConfigDigest ocr2types.ConfigDigest, attestedRetirementReport []byte) (RetirementReport, error)
+	// PredecessorConfig returns the predecessor's signer set and f from the
+	// local cache. exists is false while the config poller has not stored the
+	// config yet.
+	//
+	// The order of signers is significant: a signature in an attested
+	// retirement report names its signer by index into this slice.
+	PredecessorConfig(predecessorConfigDigest ocr2types.ConfigDigest) (signers [][]byte, f uint8, exists bool)
+	// VerifyAttestedRetirementReport verifies an attested retirement report
+	// against an explicitly supplied signer set, reading no local state. Given
+	// the same arguments it returns the same result on every node, so callers
+	// that have agreed on the signer set can use it inside a state transition.
+	VerifyAttestedRetirementReport(predecessorConfigDigest ocr2types.ConfigDigest, signers [][]byte, f uint8, attestedRetirementReport []byte) (RetirementReport, error)
 }

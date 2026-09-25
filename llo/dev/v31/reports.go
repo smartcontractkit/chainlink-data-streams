@@ -3,6 +3,7 @@ package llo
 import (
 	"context"
 	"fmt"
+	"math"
 	"sort"
 
 	"github.com/smartcontractkit/chainlink-common/pkg/logger"
@@ -62,7 +63,9 @@ func (p *Plugin) Reports(ctx context.Context, seqNr uint64, rawPrecursor ocr3_1t
 		})
 	}
 
-	for _, cid := range out.reportableChannels(p.DefaultMinReportIntervalNanoseconds, channelOpts, p.Logger) {
+	unreportable := &unreportableTally{}
+	defer unreportable.log(p.Logger, "Report", seqNr)
+	for _, cid := range out.reportableChannels(p.DefaultMinReportIntervalNanoseconds, p.F, channelOpts, unreportable) {
 		cd := out.ChannelDefinitions[cid]
 
 		if cd.ReportFormat == llotypes.ReportFormatHistoryBackfill {
@@ -177,12 +180,100 @@ func (p *Plugin) Reports(ctx context.Context, seqNr uint64, rawPrecursor ocr3_1t
 	return rwis, nil
 }
 
+// maxUnreportableSamples bounds the channel IDs carried per reason, so one
+// summary line stays readable on a DON with hundreds of channels.
+const maxUnreportableSamples = 10
+
+// unreportableTally aggregates the reasons a round found channels unreportable.
+// A nil tally records nothing. flushKV passes one: it runs the same predicate
+// over the same precursor to persist reportedLastRound, so letting it log too
+// would only report every reason twice per round.
+type unreportableTally struct {
+	reasons map[string]*unreportableReason
+}
+
+// unreportableReason is one reason's aggregate: how many channels hit it, a
+// bounded sample of which, and the structured fields of the first occurrence as
+// a worked example.
+type unreportableReason struct {
+	count    int
+	channels []llotypes.ChannelID
+	detail   []any
+}
+
+func (t *unreportableTally) note(reason string, channelID llotypes.ChannelID, detail ...any) {
+	if t == nil {
+		return
+	}
+	if t.reasons == nil {
+		t.reasons = map[string]*unreportableReason{}
+	}
+	r := t.reasons[reason]
+	if r == nil {
+		r = &unreportableReason{detail: detail}
+		t.reasons[reason] = r
+	}
+	r.count++
+	if len(r.channels) < maxUnreportableSamples {
+		r.channels = append(r.channels, channelID)
+	}
+}
+
+// log emits one warning per distinct reason, in a stable order.
+func (t *unreportableTally) log(lggr logger.Logger, stage string, seqNr uint64) {
+	if t == nil || len(t.reasons) == 0 {
+		return
+	}
+	reasons := make([]string, 0, len(t.reasons))
+	for reason := range t.reasons {
+		reasons = append(reasons, reason)
+	}
+	sort.Strings(reasons)
+	for _, reason := range reasons {
+		r := t.reasons[reason]
+		kv := []any{"stage", stage, "seqNr", seqNr, "channels", r.count, "sampleChannelIDs", r.channels}
+		kv = append(kv, r.detail...)
+		lggr.Warnw("IsReportable=false; "+reason, kv...)
+	}
+}
+
+// formatIsEncodable reports whether enough oracles advertised a report codec
+// for format that a report encoded with it would actually be certified.
+//
+// The tally is read from the precursor, not from p.ReportCodecs, so this stays
+// a pure function of replicated state. An oracle that cannot encode still
+// computes reportable=true when enough peers can.
+func (o precursor) formatIsEncodable(format llotypes.ReportFormat, f int, channelID llotypes.ChannelID, tally *unreportableTally) bool {
+	if supporters := o.SupportByFormat[format]; supporters < 2*f+1 {
+		tally.note("too few oracles advertise a report codec for this format", channelID,
+			"reportFormat", format, "supporters", supporters, "required", 2*f+1)
+		return false
+	}
+	return true
+}
+
 // reportableChannels returns the sorted set of channels reportable in this
 // (current) round (see isReportable).
-func (o precursor) reportableChannels(minReportInterval uint64, optsCache *protocol.OptsCache, lggr logger.Logger) []llotypes.ChannelID {
+// saturatingAdd returns a+b, clamped to MaxUint64 instead of wrapping.
+//
+// validAfter is a nanosecond wall-clock timestamp, so it already sits around
+// 1.7e18, and the offchain config bounds DefaultMinReportIntervalNanoseconds
+// only away from zero (see protocol.OffchainConfig.Validate). A large enough
+// interval would wrap the sum to a small number, the cadence comparison would
+// then always pass, and the interval would silently stop gating anything. The
+// config is replicated, so every oracle would do it identically: a silent loss
+// of the cadence, not a fork.
+func saturatingAdd(a, b uint64) uint64 {
+	if sum := a + b; sum >= a {
+		return sum
+	}
+	return math.MaxUint64
+}
+
+func (o precursor) reportableChannels(minReportInterval uint64, f int, optsCache *protocol.OptsCache, tally *unreportableTally) []llotypes.ChannelID {
 	reportable := make([]llotypes.ChannelID, 0, len(o.ChannelDefinitions))
 	for channelID := range o.ChannelDefinitions {
-		if o.isReportable(channelID, minReportInterval, optsCache, lggr) {
+		if o.isReportable(channelID, minReportInterval, f, optsCache, tally) {
 			reportable = append(reportable, channelID)
 		}
 	}
@@ -190,7 +281,7 @@ func (o precursor) reportableChannels(minReportInterval uint64, optsCache *proto
 	return reportable
 }
 
-func (o precursor) isReportable(channelID llotypes.ChannelID, minReportInterval uint64, optsCache *protocol.OptsCache, lggr logger.Logger) bool {
+func (o precursor) isReportable(channelID llotypes.ChannelID, minReportInterval uint64, f int, optsCache *protocol.OptsCache, tally *unreportableTally) bool {
 	if o.LifeCycleStage == protocol.LifeCycleStageRetired {
 		return false
 	}
@@ -199,8 +290,14 @@ func (o precursor) isReportable(channelID llotypes.ChannelID, minReportInterval 
 		return false
 	}
 	if cd.ReportFormat == llotypes.ReportFormatHistoryBackfill {
-		_, _, _, ok := selectBackfillCandidate(o.ChannelDefinitions, o.ValidAfterNanoseconds, o.ObservationTimestampNanoseconds, channelID, optsCache)
-		return ok
+		_, _, opts, ok := selectBackfillCandidate(o.ChannelDefinitions, o.ValidAfterNanoseconds, o.ObservationTimestampNanoseconds, channelID, optsCache)
+		if !ok {
+			return false
+		}
+		// Backfill reports are encoded with the target channel's codec, so the
+		// target's format is the one that must be encodable DON-wide. Selection
+		// above already established the target exists.
+		return o.formatIsEncodable(o.ChannelDefinitions[opts.TargetChannelID].ReportFormat, f, channelID, tally)
 	}
 	// When DisableNilStreamValues is set, every stream must have a (non-nil)
 	// aggregate value for the channel to be reportable.
@@ -211,35 +308,43 @@ func (o precursor) isReportable(channelID llotypes.ChannelID, minReportInterval 
 			}
 		}
 	}
-	// Calculated streams are derived state, and unlike observed streams a
-	// missing one cannot be reported around: the codec has nothing to encode, so
-	// Reports skips the report. Without this check the channel would still be
-	// counted as reported and validAfter would advance over a round that emitted
-	// nothing — a silent coverage gap. This is independent of
-	// DisableNilStreamValues, which is about observed values.
+	// Reportability and emission must agree on what the report carries. Reports
+	// derives the report's values from protocol.EffectiveStreams, so the same
+	// derivation has to succeed here: if it fails there, the report is skipped
+	// while the channel is still counted as reported and validAfter advances
+	// over a round that emitted nothing — a silent coverage gap.
 	//
-	// The check is against the streams the channel's opts declare, which is also
-	// what protocol.EffectiveStreams derives the report's trailing values from.
-	// A channel whose expressions failed (bad input, undecodable opts, eval
-	// error, or history still warming up) has no aggregate for them.
-	if protocol.HasCalculatedStreams(cd) {
-		calculatedStreamIDs, err := protocol.CalculatedStreamIDs(optsCache, cd, channelID)
-		if err != nil {
-			lggr.Warnw("IsReportable=false; cannot resolve calculated stream IDs", "channelID", channelID, "err", err)
+	// EffectiveStreams is a pure function of (definition, opts), so it is safe
+	// in the state transition. Codec lookup and Encode are not: p.ReportCodecs
+	// is node-local, and reading it here would make the state transition
+	// node-dependent. Those failure modes remain outside this predicate.
+	streams, err := protocol.EffectiveStreams(optsCache, cd, channelID)
+	if err != nil {
+		tally.note("cannot derive effective streams", channelID, "err", err)
+		return false
+	}
+	// Calculated streams are derived state, and unlike observed streams a
+	// missing one cannot be reported around: the codec has nothing to encode.
+	// A channel whose expressions failed (bad input, eval error, or history
+	// still warming up) has no aggregate for them. Observed streams stay
+	// nil-permitted here; that is what DisableNilStreamValues above governs.
+	for _, strm := range streams {
+		if strm.Aggregator != llotypes.AggregatorCalculated {
+			continue
+		}
+		if o.StreamAggregates[strm.StreamID][strm.Aggregator] == nil {
+			tally.note("nil calculated stream value", channelID, "streamID", strm.StreamID)
 			return false
 		}
-		for _, sid := range calculatedStreamIDs {
-			if o.StreamAggregates[sid][llotypes.AggregatorCalculated] == nil {
-				lggr.Warnw("IsReportable=false; nil calculated stream value", "channelID", channelID, "streamID", sid)
-				return false
-			}
-		}
+	}
+	if !o.formatIsEncodable(cd.ReportFormat, f, channelID, tally) {
+		return false
 	}
 	validAfter, ok := o.ValidAfterNanoseconds[channelID]
 	if !ok {
 		return false
 	}
-	if o.ObservationTimestampNanoseconds < validAfter+minReportInterval || o.ObservationTimestampNanoseconds <= validAfter {
+	if o.ObservationTimestampNanoseconds < saturatingAdd(validAfter, minReportInterval) || o.ObservationTimestampNanoseconds <= validAfter {
 		return false
 	}
 	// For seconds-resolution report formats, also require a full second between
