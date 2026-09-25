@@ -699,6 +699,51 @@ func Test_TimestampedAggregate_CarryForward(t *testing.T) {
 	require.Equal(t, uint64(200), persisted.ObservedAtNanoseconds)
 }
 
+func Test_TimestampedAggregate_CarryForwardOnAggregationFailure(t *testing.T) {
+	p := testPlugin(t) // F=1, contribution floor of 3
+	defs := llotypes.ChannelDefinitions{1: {ReportFormat: llotypes.ReportFormatJSON, Streams: []llotypes.Stream{{StreamID: 100, Aggregator: llotypes.AggregatorMedian}}}}
+
+	tsv := func(ts uint64, v int64) protocol.StreamValue {
+		return &protocol.TimestampedStreamValue{ObservedAtNanoseconds: ts, StreamValue: protocol.ToDecimal(decimal.NewFromInt(v))}
+	}
+
+	// A single contribution is below the floor, so the median aggregator fails.
+	starved := map[llotypes.StreamID][]protocol.StreamValue{100: {tsv(200, 9)}}
+
+	t.Run("carried value is republished into the precursor", func(t *testing.T) {
+		carry := map[llotypes.StreamID]map[llotypes.Aggregator]*protocol.TimestampedStreamValue{}
+		next := map[llotypes.StreamID]map[llotypes.Aggregator]*protocol.TimestampedStreamValue{}
+		out := protocol.StreamAggregates{}
+
+		// Round 1: enough contributions, establishes ts=100.
+		healthy := map[llotypes.StreamID][]protocol.StreamValue{100: {tsv(100, 5), tsv(100, 5), tsv(100, 5)}}
+		require.NoError(t, p.aggregate(carry, next, defs, healthy, out, nil, historyRequirements{}, 100))
+		// Round 2: aggregation fails, the carried value stands in for it.
+		carry = next
+		next = map[llotypes.StreamID]map[llotypes.Aggregator]*protocol.TimestampedStreamValue{}
+		out = protocol.StreamAggregates{}
+		require.NoError(t, p.aggregate(carry, next, defs, starved, out, nil, historyRequirements{}, 200))
+
+		got, ok := out[100][llotypes.AggregatorMedian].(*protocol.TimestampedStreamValue)
+		require.True(t, ok, "failed aggregation must still publish the carried value")
+		require.Equal(t, uint64(100), got.ObservedAtNanoseconds)
+
+		persisted := next[100][llotypes.AggregatorMedian]
+		require.NotNil(t, persisted, "the carry must survive into the next round")
+		require.Equal(t, uint64(100), persisted.ObservedAtNanoseconds)
+	})
+
+	t.Run("without a carry the pair is absent", func(t *testing.T) {
+		carry := map[llotypes.StreamID]map[llotypes.Aggregator]*protocol.TimestampedStreamValue{}
+		next := map[llotypes.StreamID]map[llotypes.Aggregator]*protocol.TimestampedStreamValue{}
+		out := protocol.StreamAggregates{}
+
+		require.NoError(t, p.aggregate(carry, next, defs, starved, out, nil, historyRequirements{}, 200))
+		require.NotContains(t, out[100], llotypes.AggregatorMedian)
+		require.Empty(t, next)
+	})
+}
+
 func Test_Telemetry(t *testing.T) {
 	ctx := tests.Context(t)
 	otCh := make(chan *protocol.LLOOutcomeTelemetry, 8)

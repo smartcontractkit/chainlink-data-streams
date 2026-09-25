@@ -522,17 +522,29 @@ func (p *Plugin) aggregate(
 				continue
 			}
 			result, aerr := aggF(streamObservations[sid], p.minContributions())
+			if aerr != nil {
+				// Aggregation failed: republish and keep the carried-forward
+				// value (if any) so a transient failure does not discard it.
+				// Without a carry the pair is simply absent from the precursor.
+				if prevTSV != nil {
+					m[agg] = prevTSV
+					keep(sid, agg, prevTSV)
+				}
+				continue
+			}
+			if result == nil {
+				// An aggregator may agree on no value at all, e.g. mode with an
+				// empty bucket. Leave the pair absent rather than writing a nil
+				// into the precursor, and keep any carried value.
+				if prevTSV != nil {
+					m[agg] = prevTSV
+					keep(sid, agg, prevTSV)
+				}
+				continue
+			}
 
 			switch v := result.(type) {
 			case *protocol.TimestampedStreamValue:
-				if aerr != nil {
-					// Aggregation failed: keep the carried-forward value (if any).
-					if prevTSV != nil {
-						m[agg] = prevTSV
-						keep(sid, agg, prevTSV)
-					}
-					continue
-				}
 				if prevTSV == nil || v.ObservedAtNanoseconds > prevTSV.ObservedAtNanoseconds {
 					// Strictly newer: adopt and persist.
 					m[agg] = v
@@ -543,16 +555,6 @@ func (p *Plugin) aggregate(
 					keep(sid, agg, prevTSV)
 				}
 			default:
-				if aerr != nil {
-					// Ignore streams that cannot be aggregated; absent from the
-					// precursor. A previously-carried value for this pair is
-					// preserved so a transient aggregation failure does not
-					// discard it.
-					if prevTSV != nil {
-						keep(sid, agg, prevTSV)
-					}
-					continue
-				}
 				m[agg] = result
 				// Defensive: if this pair was previously timestamped but now
 				// yields a non-timestamped value, drop the stale carry-forward
