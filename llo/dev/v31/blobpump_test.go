@@ -368,6 +368,10 @@ func Test_observableStreams(t *testing.T) {
 		// Duplicate stream across channels must be listed once.
 		2: {ReportFormat: llotypes.ReportFormatJSON, Streams: []llotypes.Stream{{StreamID: 100, Aggregator: llotypes.AggregatorMedian}}},
 		3: {ReportFormat: llotypes.ReportFormatJSON, Tombstone: true, Streams: []llotypes.Stream{{StreamID: 102, Aggregator: llotypes.AggregatorMedian}}},
+		// Backfill reports are built from the channel opts, so its streams are
+		// not observed. Here the target (3) is tombstoned, which is the case
+		// where the backfill channel would otherwise keep 102 observed.
+		4: {ReportFormat: llotypes.ReportFormatHistoryBackfill, Streams: []llotypes.Stream{{StreamID: 102, Aggregator: llotypes.AggregatorMedian}}},
 	}}
 	require.ElementsMatch(t, []llotypes.StreamID{100}, observableStreams(state))
 	require.Empty(t, observableStreams(&kvState{}))

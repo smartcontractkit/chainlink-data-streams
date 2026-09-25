@@ -224,8 +224,8 @@ func supportedReportFormats(codecs map[llotypes.ReportFormat]protocol.ReportCode
 }
 
 // observableStreams lists the streams a round should observe: every stream of
-// every live channel, minus calculated streams (which are derived in
-// StateTransition rather than observed).
+// every live channel, minus calculated streams (which are derived in StateTransition)
+// and history backfill channels (values come from their opts, not observed).
 func observableStreams(state *kvState) []llotypes.StreamID {
 	if len(state.channelDefinitions) == 0 {
 		return nil
@@ -233,7 +233,7 @@ func observableStreams(state *kvState) []llotypes.StreamID {
 	seen := make(map[llotypes.StreamID]struct{})
 	streams := make([]llotypes.StreamID, 0, len(state.channelDefinitions))
 	for _, cd := range state.channelDefinitions {
-		if cd.Tombstone {
+		if cd.Tombstone || cd.ReportFormat == llotypes.ReportFormatHistoryBackfill {
 			continue
 		}
 		for _, strm := range cd.Streams {
