@@ -16,8 +16,6 @@ import (
 // racing with a read can yield a corrupted value rather than merely a stale one —
 // which in a consensus path means two nodes disagreeing, or a panic.
 //
-// TWAP makes it far more likely by calling ln and exp once per bucket.
-//
 // The lock is taken per call rather than per evaluation to keep hold times short.
 // The cost is negligible against the arithmetic it guards.
 var transcendentalMu sync.Mutex
@@ -173,8 +171,7 @@ func decimalToInt(name string, d decimal.Decimal, minimum, maximum int64) (int, 
 //
 //  1. No float64. math.Log and math.Exp are not guaranteed bit-identical across
 //     architectures or Go versions, so all logarithms and exponentials go through
-//     decimal.Ln and decimal.ExpTaylor at a fixed precision. This is why the TWAP
-//     implementation here is a port of the mercury float-based one, not a reuse.
+//     decimal.Ln and decimal.ExpTaylor at a fixed precision.
 //  2. No reliance on decimal.DivisionPrecision. That is a mutable package-level
 //     global: anything in the process can change it and silently move every Div
 //     result. Every division here passes an explicit precision (divRound).
@@ -227,7 +224,7 @@ func ln(x decimal.Decimal) (decimal.Decimal, error) {
 // result, not of the input: exp(1e6) has ~434,000 digits and does not complete in
 // any useful time. Callers currently only pass logarithms of stored values, which
 // MaxDecimalExponent already bounds to about ±2302, so the limit is not reachable
-// through TWAP today — it is here so that stays true if another caller appears.
+// today — it is here so that stays true if a caller appears.
 func exp(x decimal.Decimal) (decimal.Decimal, error) {
 	if x.Abs().GreaterThan(decimal.NewFromInt(maxExpArgument)) {
 		return decimal.Decimal{}, fmt.Errorf("exponential argument %s exceeds the maximum magnitude of %d", x, maxExpArgument)

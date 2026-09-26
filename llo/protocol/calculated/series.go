@@ -187,7 +187,7 @@ type HistoryReader interface {
 type syntheticHistoryReader struct {
 	// endNanoseconds is the exclusive upper bound of the synthesized
 	// timestamps, which must be the round's observation timestamp: functions
-	// that place records into a window relative to it (TWAP) would otherwise see
+	// that place records into a window relative to it would otherwise see
 	// every record fall outside the window.
 	endNanoseconds uint64
 	// intervalNanoseconds is the spacing between synthesized records.
