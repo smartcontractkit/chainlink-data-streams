@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/expr-lang/expr/conf"
+	"github.com/expr-lang/expr/parser"
 	"github.com/expr-lang/expr/vm"
 
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
@@ -18,6 +20,19 @@ import (
 // expressions ever seen; a few hundred live expressions is already far more than
 // any real configuration.
 const maxAnalysisCacheEntries = 1024
+
+// parseExpression is the single parse of the DSL: it applies the expression
+// size and node limits, which bound parse work and the recursion of the AST
+// walks that follow it. Both limits are consensus-relevant, so they are passed
+// explicitly rather than left to expr-lang's own defaults.
+func parseExpression(expression string) (*parser.Tree, error) {
+	if len(expression) > protocol.MaxExpressionBytes {
+		return nil, fmt.Errorf("expression of %d bytes exceeds the maximum of %d", len(expression), protocol.MaxExpressionBytes)
+	}
+	config := conf.CreateNew()
+	config.MaxNodes = protocol.MaxExpressionNodes
+	return parser.ParseWithConfig(expression, config)
+}
 
 // analysisCache memoizes expression analysis, keyed by the raw expression
 // string.

@@ -8,7 +8,6 @@ import (
 	"strconv"
 
 	"github.com/expr-lang/expr/ast"
-	"github.com/expr-lang/expr/parser"
 
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
 
@@ -454,7 +453,7 @@ func (p *historyPatcher) sortedRefs() []HistoryRef {
 //
 // An expression with no History calls returns no references and no error.
 func analyzeHistoryExpression(expression string) ([]HistoryRef, error) {
-	tree, err := parser.Parse(expression)
+	tree, err := parseExpression(expression)
 	if err != nil {
 		return nil, fmt.Errorf("%w: failed to parse expression: %s", ErrHistoryExpression, err)
 	}
