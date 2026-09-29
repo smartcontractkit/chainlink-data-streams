@@ -129,7 +129,7 @@ const (
 	// MaxExpressionBytes bounds the length of one expression. The opts caps
 	// bound the blob that carries it, not the expression itself, and parsing is
 	// what turns those bytes into work. 2 KiB is an order of magnitude above
-	// real shapes it while still leaving room for several expressions plus
+	// real shapes while still leaving room for several expressions plus
 	// the ABI inside MaxChannelOptsBytes.
 	MaxExpressionBytes = 2 << 10
 	// MaxExpressionNodes bounds the AST node count of one expression, which is

@@ -25,7 +25,7 @@ func v31Base() PluginConfig {
 func Test_V31Config_Unmarshal(t *testing.T) {
 	t.Run("from toml", func(t *testing.T) {
 		rawToml := `
-			ocrVersion = "3.1"
+			pluginVersion = "v31"
 			[v31]
 			verboseLogging = true
 			maxSnapshotRounds = 2
@@ -38,6 +38,7 @@ func Test_V31Config_Unmarshal(t *testing.T) {
 		var pc PluginConfig
 		require.NoError(t, toml.Unmarshal([]byte(rawToml), &pc))
 
+		assert.True(t, pc.IsV31())
 		assert.True(t, pc.V31.VerboseLogging)
 		assert.Equal(t, uint64(2), pc.V31.MaxSnapshotRounds)
 		assert.Equal(t, uint64(8), pc.V31.BlobLifetimeRounds)

@@ -114,7 +114,10 @@ func ResolveBlobRounds(maxSnapshotRounds, blobLifetimeRounds uint64) (uint64, ui
 	}
 	// A snapshot is last referenced at forSeqNr+maxSnapshotRounds-1 and its blob
 	// expires at forSeqNr+blobLifetimeRounds, so this is the fetch margin.
-	if blobLifetimeRounds+1 < maxSnapshotRounds+BlobFetchMarginRounds {
+	// Subtract from the already bounded lifetime rather than adding to
+	// maxSnapshotRounds, whose sum would wrap and pass the check, leaving the
+	// pump to overflow usableBefore and call every snapshot stale.
+	if blobLifetimeRounds+1 < BlobFetchMarginRounds || maxSnapshotRounds > blobLifetimeRounds+1-BlobFetchMarginRounds {
 		return 0, 0, fmt.Errorf("BlobLifetimeRounds (%d) leaves less than %d rounds of fetch margin past MaxSnapshotRounds (%d)", blobLifetimeRounds, BlobFetchMarginRounds, maxSnapshotRounds)
 	}
 	return maxSnapshotRounds, blobLifetimeRounds, nil
