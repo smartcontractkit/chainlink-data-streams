@@ -84,8 +84,7 @@ func AnalyzeExpressionHistory(expression string) ([]HistoryRef, error) {
 //
 // It is the check to run before a channel definition reaches consensus: it
 // parses, rewrites History calls, and applies every static rule (argument
-// shapes, depth caps, per-expression fan-out, window positions, reserved names,
-// TWAP configuration satisfiability). It does not evaluate, so it needs no
+// shapes, depth caps, per-expression fan-out, window positions, reserved names). It does not evaluate, so it needs no
 // stream values and no persisted state, and it is a pure function of the
 // expression string.
 //

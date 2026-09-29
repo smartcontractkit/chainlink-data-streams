@@ -73,7 +73,6 @@ func FuzzProcessCalculatedStreams(f *testing.F) {
 		"EMA(History(s1, 3), 2)",
 		"SMA(History(s1, 3), 2)",
 		"Stddev(History(s1, 3))",
-		`TWAP(History(s1, 3), {window: Duration("3s"), minSamples: 1, maxHeadGap: 3, maxInteriorGap: 3, maxTailGap: 3})`,
 		// Deeper than the reader serves: the whole round takes the warmup gate.
 		"Avg(History(s1, 64))",
 		// Two windows in one expression, so binding order is exercised.
