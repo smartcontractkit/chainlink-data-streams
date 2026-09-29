@@ -144,41 +144,41 @@ func Test_Config(t *testing.T) {
 	})
 }
 
-func Test_PluginConfig_OCRVersion(t *testing.T) {
+func Test_PluginConfig_PluginVersion(t *testing.T) {
 	base := PluginConfig{
 		DonID:                             12345,
 		Servers:                           map[string]hex.PlainHexBytes{"example.com:80": make(hex.PlainHexBytes, 32)},
 		ChannelDefinitionsContractAddress: common.HexToAddress("0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef"),
 	}
 
-	t.Run("defaults to OCR3.0 when empty", func(t *testing.T) {
+	t.Run("defaults to v30 when empty", func(t *testing.T) {
 		pc := base
 		require.NoError(t, pc.Validate())
-		assert.False(t, pc.IsOCR31())
+		assert.False(t, pc.IsV31())
 	})
-	t.Run("explicit 3.0 is not OCR3.1", func(t *testing.T) {
+	t.Run("explicit v30 is not v31", func(t *testing.T) {
 		pc := base
-		pc.OCRVersion = OCRVersionOCR3
+		pc.PluginVersion = PluginVersionV30
 		require.NoError(t, pc.Validate())
-		assert.False(t, pc.IsOCR31())
+		assert.False(t, pc.IsV31())
 	})
-	t.Run("3.1 selects OCR3.1", func(t *testing.T) {
+	t.Run("v31 selects v31", func(t *testing.T) {
 		pc := base
-		pc.OCRVersion = OCRVersionOCR31
+		pc.PluginVersion = PluginVersionV31
 		require.NoError(t, pc.Validate())
-		assert.True(t, pc.IsOCR31())
+		assert.True(t, pc.IsV31())
 	})
-	t.Run("unmarshals ocrVersion from toml", func(t *testing.T) {
+	t.Run("unmarshals pluginVersion from toml", func(t *testing.T) {
 		var pc PluginConfig
-		require.NoError(t, toml.Unmarshal([]byte(`ocrVersion = "3.1"`), &pc))
-		assert.True(t, pc.IsOCR31())
+		require.NoError(t, toml.Unmarshal([]byte(`pluginVersion = "v31"`), &pc))
+		assert.True(t, pc.IsV31())
 	})
 	t.Run("rejects unknown version", func(t *testing.T) {
 		pc := base
-		pc.OCRVersion = "9.9"
+		pc.PluginVersion = "9.9"
 		err := pc.Validate()
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "OCRVersion must be one of")
+		assert.Contains(t, err.Error(), "PluginVersion must be one of")
 	})
 }
 

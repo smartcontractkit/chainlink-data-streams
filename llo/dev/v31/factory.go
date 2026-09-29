@@ -86,27 +86,15 @@ func (f *PluginFactory) NewReportingPlugin(ctx context.Context, cfg ocr3types.Re
 		return nil, nil, fmt.Errorf("NewReportingPlugin failed to decode offchain config; got: 0x%x (len: %d); %w", cfg.OffchainConfig, len(cfg.OffchainConfig), err)
 	}
 
-	l := logger.Sugared(f.Logger).With("lloProtocolVersion", offchainConfig.ProtocolVersion, "configDigest", cfg.ConfigDigest, "lloOCRVersion", "3.1")
+	l := logger.Sugared(f.Logger).With("lloProtocolVersion", offchainConfig.ProtocolVersion, "configDigest", cfg.ConfigDigest, "lloPluginVersion", "v31")
 	l.Infow("llo/dev/v31.NewReportingPlugin", "onchainConfig", onchainConfig, "offchainConfig", offchainConfig, "f", cfg.F, "n", cfg.N)
 
 	// Initialize the memory ballast
 	protocol.InitMemoryBallast()
 
-	maxSnapshotRounds := f.MaxSnapshotRounds
-	if maxSnapshotRounds == 0 {
-		maxSnapshotRounds = DefaultMaxSnapshotRounds
-	}
-	blobLifetimeRounds := f.BlobLifetimeRounds
-	if blobLifetimeRounds == 0 {
-		blobLifetimeRounds = DefaultBlobLifetimeRounds
-	}
-	if blobLifetimeRounds > MaxBlobLifetimeRounds {
-		return nil, nil, fmt.Errorf("BlobLifetimeRounds (%d) exceeds MaxBlobLifetimeRounds (%d)", blobLifetimeRounds, MaxBlobLifetimeRounds)
-	}
-	// A snapshot is last referenced at forSeqNr+maxSnapshotRounds-1 and its blob
-	// expires at forSeqNr+blobLifetimeRounds, so this is the fetch margin.
-	if blobLifetimeRounds+1 < maxSnapshotRounds+BlobFetchMarginRounds {
-		return nil, nil, fmt.Errorf("BlobLifetimeRounds (%d) leaves less than %d rounds of fetch margin past MaxSnapshotRounds (%d)", blobLifetimeRounds, BlobFetchMarginRounds, maxSnapshotRounds)
+	maxSnapshotRounds, blobLifetimeRounds, err := ResolveBlobRounds(f.MaxSnapshotRounds, f.BlobLifetimeRounds)
+	if err != nil {
+		return nil, nil, err
 	}
 	// The contribution floor is a replicated state transition parameter, it
 	// must come from the offchainConfig and set explicitly.
