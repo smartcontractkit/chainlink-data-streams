@@ -98,6 +98,31 @@ func perOracleUnexpiredBlobCount(blobLifetimeRounds uint64) int {
 	return max(n, MinPerOracleUnexpiredBlobCount)
 }
 
+// ResolveBlobRounds applies the defaults to the snapshot and blob lifetime
+// knobs and checks the resulting pair leaves BlobFetchMarginRounds of fetch
+// margin. Shared with plugin config validation so a job spec is rejected at
+// create time rather than at plugin startup.
+func ResolveBlobRounds(maxSnapshotRounds, blobLifetimeRounds uint64) (uint64, uint64, error) {
+	if maxSnapshotRounds == 0 {
+		maxSnapshotRounds = DefaultMaxSnapshotRounds
+	}
+	if blobLifetimeRounds == 0 {
+		blobLifetimeRounds = DefaultBlobLifetimeRounds
+	}
+	if blobLifetimeRounds > MaxBlobLifetimeRounds {
+		return 0, 0, fmt.Errorf("BlobLifetimeRounds (%d) exceeds MaxBlobLifetimeRounds (%d)", blobLifetimeRounds, MaxBlobLifetimeRounds)
+	}
+	// A snapshot is last referenced at forSeqNr+maxSnapshotRounds-1 and its blob
+	// expires at forSeqNr+blobLifetimeRounds, so this is the fetch margin.
+	// Subtract from the already bounded lifetime rather than adding to
+	// maxSnapshotRounds, whose sum would wrap and pass the check, leaving the
+	// pump to overflow usableBefore and call every snapshot stale.
+	if blobLifetimeRounds+1 < BlobFetchMarginRounds || maxSnapshotRounds > blobLifetimeRounds+1-BlobFetchMarginRounds {
+		return 0, 0, fmt.Errorf("BlobLifetimeRounds (%d) leaves less than %d rounds of fetch margin past MaxSnapshotRounds (%d)", blobLifetimeRounds, BlobFetchMarginRounds, maxSnapshotRounds)
+	}
+	return maxSnapshotRounds, blobLifetimeRounds, nil
+}
+
 // pumpInput is the round context the pump needs, published by Observation.
 type pumpInput struct {
 	streams        []llotypes.StreamID

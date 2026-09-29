@@ -17,7 +17,6 @@ import (
 
 	"github.com/expr-lang/expr"
 	"github.com/expr-lang/expr/ast"
-	"github.com/expr-lang/expr/parser"
 	"github.com/shopspring/decimal"
 
 	"github.com/smartcontractkit/chainlink-common/pkg/logger"
@@ -583,7 +582,8 @@ func evalDecimal(stmt string, env map[string]any) (decimal.Decimal, error) {
 		// compile with the environment for type checking, disable all builtins
 		// to avoid unexpected behaviors, and patch History calls into the
 		// window identifiers bound by the caller.
-		program, err = expr.Compile(stmt, expr.Env(env), expr.DisableAllBuiltins(), expr.Patch(newHistoryPatcher()))
+		program, err = expr.Compile(stmt, expr.Env(env), expr.DisableAllBuiltins(),
+			expr.MaxNodes(protocol.MaxExpressionNodes), expr.Patch(newHistoryPatcher()))
 		if err != nil {
 			// Not cached: unlike analysis, a compile failure can be caused by
 			// the environment (a stream missing from this channel), so it is
@@ -1073,6 +1073,9 @@ func Expressions(optsCache *protocol.OptsCache, cd llotypes.ChannelDefinition, c
 	if err != nil {
 		return nil, err
 	}
+	if len(o.ABI) > protocol.MaxExpressionsPerChannel {
+		return nil, fmt.Errorf("channel %d declares %d expressions, exceeding the maximum of %d", cid, len(o.ABI), protocol.MaxExpressionsPerChannel)
+	}
 	expressions := make([]string, 0, len(o.ABI))
 	for i, abi := range o.ABI {
 		if abi.Expression == "" {
@@ -1087,7 +1090,7 @@ func Expressions(optsCache *protocol.OptsCache, cd llotypes.ChannelDefinition, c
 // against synthetic inputs and returns an error if it cannot be evaluated. Useful for
 // validating expressions.
 func ProcessCalculatedStreamsDryRun(expression string) error {
-	tree, err := parser.Parse(expression)
+	tree, err := parseExpression(expression)
 	if err != nil {
 		return fmt.Errorf("failed to parse expression: %w", err)
 	}

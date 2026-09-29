@@ -2,6 +2,7 @@ package calculated
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -225,4 +226,69 @@ func sumExpressions(expressions []string) string {
 		summed = fmt.Sprintf("Add(%s, %s)", summed, expression)
 	}
 	return summed
+}
+
+// TestValidateExpression_SizeLimits covers the two limits that bound parse work
+// and the recursion of the AST walks after it. Both are consensus-relevant, so
+// they must be rejected by validation rather than left to the evaluator.
+func TestValidateExpression_SizeLimits(t *testing.T) {
+	t.Parallel()
+
+	// A long but well formed expression: nested Add calls, each adding a
+	// constant. Two nodes per level plus the innermost identifier.
+	nested := func(levels int) string {
+		expression := "s1"
+		for range levels {
+			expression = "Add(" + expression + ", 1)"
+		}
+		return expression
+	}
+
+	within := nested(100)
+	require.LessOrEqual(t, len(within), protocol.MaxExpressionBytes)
+	require.NoError(t, ValidateExpression(within))
+
+	// 200 levels is ~600 nodes, past the node cap while still inside the byte
+	// cap, so the node limit is what rejects it.
+	overNodes := nested(200)
+	require.LessOrEqual(t, len(overNodes), protocol.MaxExpressionBytes)
+	err := ValidateExpression(overNodes)
+	require.ErrorIs(t, err, ErrHistoryExpression)
+	assert.Contains(t, err.Error(), "maximum allowed nodes")
+
+	// Length is rejected on its own, before parsing.
+	err = ValidateExpression("Add(s1, " + strings.Repeat("0", protocol.MaxExpressionBytes) + ")")
+	require.ErrorIs(t, err, ErrHistoryExpression)
+	assert.Contains(t, err.Error(), "exceeds the maximum")
+}
+
+// TestValidateChannelExpressions_CountLimit covers the per-channel expression
+// count. The opts byte caps bound the blob, not the number of evaluations a
+// channel costs every round.
+func TestValidateChannelExpressions_CountLimit(t *testing.T) {
+	t.Parallel()
+
+	channel := func(count int) llotypes.ChannelDefinition {
+		abi := ""
+		for i := range count {
+			if i > 0 {
+				abi += ","
+			}
+			abi += fmt.Sprintf(`{"type":"int256","expression":"Add(s1, s2)","expressionStreamID":%d}`, 900+i)
+		}
+		return llotypes.ChannelDefinition{
+			ReportFormat: llotypes.ReportFormatEVMABIEncodeUnpackedExpr,
+			Streams: []llotypes.Stream{
+				{StreamID: 1, Aggregator: llotypes.AggregatorMedian},
+				{StreamID: 2, Aggregator: llotypes.AggregatorMedian},
+			},
+			Opts: []byte(fmt.Sprintf(`{"abi":[%s]}`, abi)),
+		}
+	}
+
+	require.NoError(t, ValidateChannelExpressions(nil, channel(protocol.MaxExpressionsPerChannel), 1))
+
+	err := ValidateChannelExpressions(nil, channel(protocol.MaxExpressionsPerChannel+1), 1)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "exceeding the maximum")
 }

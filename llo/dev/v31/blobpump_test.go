@@ -3,6 +3,7 @@ package llo
 import (
 	"context"
 	"errors"
+	"math"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -685,4 +686,44 @@ func Test_blobPump_BroadcastRetriesAreBounded(t *testing.T) {
 	require.Zero(t, p.Cycles())
 	snap, _ := p.Take(t.Context(), 3)
 	require.Nil(t, snap)
+}
+
+func Test_ResolveBlobRounds(t *testing.T) {
+	t.Run("applies the defaults", func(t *testing.T) {
+		snap, life, err := ResolveBlobRounds(0, 0)
+		require.NoError(t, err)
+		assert.Equal(t, uint64(DefaultMaxSnapshotRounds), snap)
+		assert.Equal(t, uint64(DefaultBlobLifetimeRounds), life)
+	})
+
+	t.Run("rejects a lifetime past the maximum", func(t *testing.T) {
+		_, _, err := ResolveBlobRounds(0, MaxBlobLifetimeRounds+1)
+		require.ErrorContains(t, err, "exceeds MaxBlobLifetimeRounds")
+	})
+
+	t.Run("rejects too little fetch margin", func(t *testing.T) {
+		_, _, err := ResolveBlobRounds(8, 8)
+		require.ErrorContains(t, err, "rounds of fetch margin")
+	})
+
+	t.Run("rejects a lifetime shorter than the margin", func(t *testing.T) {
+		_, _, err := ResolveBlobRounds(1, 1)
+		require.ErrorContains(t, err, "rounds of fetch margin")
+	})
+
+	t.Run("rejects a snapshot window that would wrap the margin sum", func(t *testing.T) {
+		// maxSnapshotRounds+BlobFetchMarginRounds wraps to a small number, so
+		// comparing the sum would accept this and overflow usableBefore.
+		_, _, err := ResolveBlobRounds(math.MaxUint64, 0)
+		require.ErrorContains(t, err, "rounds of fetch margin")
+		_, _, err = ResolveBlobRounds(math.MaxUint64-BlobFetchMarginRounds+1, 0)
+		require.ErrorContains(t, err, "rounds of fetch margin")
+	})
+
+	t.Run("accepts the margin boundary", func(t *testing.T) {
+		snap, life, err := ResolveBlobRounds(MaxBlobLifetimeRounds+1-BlobFetchMarginRounds, MaxBlobLifetimeRounds)
+		require.NoError(t, err)
+		assert.Equal(t, uint64(MaxBlobLifetimeRounds+1-BlobFetchMarginRounds), snap)
+		assert.Equal(t, uint64(MaxBlobLifetimeRounds), life)
+	})
 }

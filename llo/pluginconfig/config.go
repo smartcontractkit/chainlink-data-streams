@@ -46,22 +46,26 @@ type PluginConfig struct {
 
 	Transmitters []TransmitterConfig `json:"transmitters" toml:"transmitters"`
 
-	// OCRVersion selects the libocr protocol version the plugin runs on:
-	//   "" or "3.0" => OCR3.0 (llo/v30)
-	//   "3.1"       => OCR3.1 (llo/dev/v31)
-	// NOTE: this is the OCR protocol version, distinct from the LLO offchain
-	// ProtocolVersion (0/1/2) carried in the offchain config.
-	OCRVersion string `json:"ocrVersion" toml:"ocrVersion"`
+	// PluginVersion selects the LLO plugin the job runs on:
+	//   "" or "v30" => llo/v30, on libocr OCR3.0
+	//   "v31"       => llo/dev/v31, on libocr OCR3.1
+	// NOTE: this names the plugin package, not the LLO offchain ProtocolVersion
+	// (0/1/2) carried in the offchain config, nor the ocr2 job spec's own
+	// OCRVersion.
+	PluginVersion string `json:"pluginVersion" toml:"pluginVersion"`
+
+	// V31 carries the v31 plugin knobs. Only read when PluginVersion is "v31".
+	V31 V31Config `json:"v31" toml:"v31"`
 }
 
 const (
-	OCRVersionOCR3  = "3.0"
-	OCRVersionOCR31 = "3.1"
+	PluginVersionV30 = "v30"
+	PluginVersionV31 = "v31"
 )
 
-// IsOCR31 reports whether the job should run on the OCR3.1 (llo/dev/v31) plugin.
-func (p PluginConfig) IsOCR31() bool {
-	return p.OCRVersion == OCRVersionOCR31
+// IsV31 reports whether the job should run on the v31 (libocr OCR3.1) plugin.
+func (p PluginConfig) IsV31() bool {
+	return p.PluginVersion == PluginVersionV31
 }
 
 type TransmitterType int
@@ -153,10 +157,15 @@ func (p PluginConfig) Validate() (merr error) {
 
 	merr = errors.Join(merr, validateKeyBundleIDs(p.KeyBundleIDs))
 
-	switch p.OCRVersion {
-	case "", OCRVersionOCR3, OCRVersionOCR31:
+	switch p.PluginVersion {
+	case "", PluginVersionV30:
+		if !p.V31.IsZero() {
+			merr = errors.Join(merr, fmt.Errorf("llo: V31 config is only allowed when PluginVersion is %q", PluginVersionV31))
+		}
+	case PluginVersionV31:
+		merr = errors.Join(merr, p.V31.Validate())
 	default:
-		merr = errors.Join(merr, fmt.Errorf("llo: OCRVersion must be one of %q, %q or empty, got: %q", OCRVersionOCR3, OCRVersionOCR31, p.OCRVersion))
+		merr = errors.Join(merr, fmt.Errorf("llo: PluginVersion must be one of %q, %q or empty, got: %q", PluginVersionV30, PluginVersionV31, p.PluginVersion))
 	}
 
 	return merr

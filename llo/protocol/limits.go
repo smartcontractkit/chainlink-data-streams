@@ -123,6 +123,21 @@ const (
 	// the expression count too.
 	MaxTotalCalculatedStreams = MaxPersistedAggregates
 
+	// MaxExpressionsPerChannel bounds how many expressions one channel's opts
+	// may declare. 32 is an order of magnitude above the real shapes.
+	MaxExpressionsPerChannel = 32
+	// MaxExpressionBytes bounds the length of one expression. The opts caps
+	// bound the blob that carries it, not the expression itself, and parsing is
+	// what turns those bytes into work. 2 KiB is an order of magnitude above
+	// real shapes while still leaving room for several expressions plus
+	// the ABI inside MaxChannelOptsBytes.
+	MaxExpressionBytes = 2 << 10
+	// MaxExpressionNodes bounds the AST node count of one expression, which is
+	// also what bounds recursion: parsing and the two AST walks are recursive,
+	// so the node count is the frame count in the worst case. 512 is an order
+	// of magnitude above real shapes
+	MaxExpressionNodes = 512
+
 	// Stream history limits.
 	//
 	// A history "pair" is a (streamID, aggregator) tuple: the identity of one

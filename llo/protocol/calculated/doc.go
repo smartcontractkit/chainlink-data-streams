@@ -91,6 +91,13 @@
 // llo/protocol/limits.go. They are hardcoded because they determine persisted
 // state and so must not vary per node.
 //
+// An expression is itself bounded: its length, its AST node count and how many
+// a channel may declare (MaxExpressionBytes, MaxExpressionNodes,
+// MaxExpressionsPerChannel). The node count is what bounds recursion, since
+// parsing and the AST walks over it are recursive. These are passed explicitly
+// to the parser and compiler rather than left to expr-lang's own defaults,
+// because every node must reject the same expression.
+//
 // A pair denied history because a cap was reached gets none at all, and channels
 // reading it do not report. There is no silently shortened window.
 //
