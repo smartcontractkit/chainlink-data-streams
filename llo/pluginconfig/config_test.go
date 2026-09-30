@@ -213,7 +213,7 @@ func Test_PluginConfig_PluginVersions(t *testing.T) {
 	t.Run("takes precedence over the scalar when set", func(t *testing.T) {
 		pc := base
 		pc.PluginVersion = PluginVersionV31
-		pc.PluginVersions = []string{PluginVersionV30}
+		pc.PluginVersions = []PluginVersion{PluginVersionV30}
 		require.NoError(t, pc.Validate())
 		assert.Equal(t, PluginVersionV30, pc.PluginVersionForInstance(0))
 		assert.False(t, pc.AnyV31())
@@ -221,7 +221,7 @@ func Test_PluginConfig_PluginVersions(t *testing.T) {
 
 	t.Run("mixed list selects per instance", func(t *testing.T) {
 		pc := base
-		pc.PluginVersions = []string{PluginVersionV30, PluginVersionV31}
+		pc.PluginVersions = []PluginVersion{PluginVersionV30, PluginVersionV31}
 		require.NoError(t, pc.Validate())
 
 		assert.Equal(t, PluginVersionV30, pc.PluginVersionForInstance(0))
@@ -237,7 +237,7 @@ func Test_PluginConfig_PluginVersions(t *testing.T) {
 	t.Run("an empty entry means v30", func(t *testing.T) {
 		pc := base
 		pc.PluginVersion = PluginVersionV31
-		pc.PluginVersions = []string{"", PluginVersionV31}
+		pc.PluginVersions = []PluginVersion{"", PluginVersionV31}
 		require.NoError(t, pc.Validate())
 		assert.Equal(t, PluginVersionV30, pc.PluginVersionForInstance(0))
 		assert.Equal(t, PluginVersionV31, pc.PluginVersionForInstance(1))
@@ -246,7 +246,7 @@ func Test_PluginConfig_PluginVersions(t *testing.T) {
 	t.Run("an index past the list falls back to the scalar", func(t *testing.T) {
 		pc := base
 		pc.PluginVersion = PluginVersionV31
-		pc.PluginVersions = []string{PluginVersionV30}
+		pc.PluginVersions = []PluginVersion{PluginVersionV30}
 		require.NoError(t, pc.Validate())
 		assert.Equal(t, PluginVersionV30, pc.PluginVersionForInstance(0))
 		assert.Equal(t, PluginVersionV31, pc.PluginVersionForInstance(1))
@@ -257,7 +257,7 @@ func Test_PluginConfig_PluginVersions(t *testing.T) {
 	t.Run("unmarshals pluginVersions from toml", func(t *testing.T) {
 		var pc PluginConfig
 		require.NoError(t, toml.Unmarshal([]byte(`pluginVersions = ["v30", "v31"]`), &pc))
-		assert.Equal(t, []string{PluginVersionV30, PluginVersionV31}, pc.PluginVersions)
+		assert.Equal(t, []PluginVersion{PluginVersionV30, PluginVersionV31}, pc.PluginVersions)
 		assert.False(t, pc.IsV31Instance(0))
 		assert.True(t, pc.IsV31Instance(1))
 	})
@@ -265,12 +265,12 @@ func Test_PluginConfig_PluginVersions(t *testing.T) {
 	t.Run("unmarshals pluginVersions from json", func(t *testing.T) {
 		var pc PluginConfig
 		require.NoError(t, pc.Unmarshal([]byte(`{"pluginVersions": ["v30", "v31"]}`)))
-		assert.Equal(t, []string{PluginVersionV30, PluginVersionV31}, pc.PluginVersions)
+		assert.Equal(t, []PluginVersion{PluginVersionV30, PluginVersionV31}, pc.PluginVersions)
 	})
 
 	t.Run("rejects an unknown entry", func(t *testing.T) {
 		pc := base
-		pc.PluginVersions = []string{PluginVersionV30, "9.9"}
+		pc.PluginVersions = []PluginVersion{PluginVersionV30, "9.9"}
 		err := pc.Validate()
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), `PluginVersions[1] must be one of`)
@@ -278,7 +278,7 @@ func Test_PluginConfig_PluginVersions(t *testing.T) {
 
 	t.Run("rejects more entries than protocol instances", func(t *testing.T) {
 		pc := base
-		pc.PluginVersions = []string{PluginVersionV30, PluginVersionV31, PluginVersionV31}
+		pc.PluginVersions = []PluginVersion{PluginVersionV30, PluginVersionV31, PluginVersionV31}
 		err := pc.Validate()
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "PluginVersions must have at most 2 entries")

@@ -56,7 +56,7 @@ type PluginConfig struct {
 	// It applies to every protocol instance in the job. To run the instances on
 	// different plugins, which is what a v30 -> v31 blue/green handover needs,
 	// use PluginVersions instead.
-	PluginVersion string `json:"pluginVersion" toml:"pluginVersion"`
+	PluginVersion PluginVersion `json:"pluginVersion" toml:"pluginVersion"`
 
 	// PluginVersions selects the plugin per protocol instance, positionally
 	// aligned with the job's contract config trackers (index 0 is "Blue", index
@@ -72,16 +72,20 @@ type PluginConfig struct {
 	// precedence, and its length must match the number of trackers: that check
 	// belongs to the consumer, which is the only side that knows how many there
 	// are. Validate here only bounds the length and checks each entry.
-	PluginVersions []string `json:"pluginVersions" toml:"pluginVersions"`
+	PluginVersions []PluginVersion `json:"pluginVersions" toml:"pluginVersions"`
 
 	// V31 carries the v31 plugin knobs. Only read when the job runs any v31
 	// instance.
 	V31 V31Config `json:"v31" toml:"v31"`
 }
 
+// PluginVersion names an LLO plugin package. The empty value means
+// PluginVersionV30, so that a job spec predating the field keeps working.
+type PluginVersion string
+
 const (
-	PluginVersionV30 = "v30"
-	PluginVersionV31 = "v31"
+	PluginVersionV30 PluginVersion = "v30"
+	PluginVersionV31 PluginVersion = "v31"
 )
 
 // MaxProtocolInstances is the number of protocol instances one LLO job may run:
@@ -106,7 +110,7 @@ func (p PluginConfig) IsV31() bool {
 // does not reach index i. A short list is not an error here: Validate bounds
 // its length, and matching it against the actual tracker count is the
 // consumer's job.
-func (p PluginConfig) PluginVersionForInstance(i int) string {
+func (p PluginConfig) PluginVersionForInstance(i int) PluginVersion {
 	v := p.PluginVersion
 	if i >= 0 && i < len(p.PluginVersions) {
 		v = p.PluginVersions[i]
@@ -247,7 +251,7 @@ func (p PluginConfig) Validate() (merr error) {
 	return merr
 }
 
-func validatePluginVersion(field, v string) error {
+func validatePluginVersion(field string, v PluginVersion) error {
 	switch v {
 	case "", PluginVersionV30, PluginVersionV31:
 		return nil
