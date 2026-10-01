@@ -268,20 +268,22 @@
 // migration is the ordinary blue/green flow with the two instances running
 // DIFFERENT plugin versions; it does not need, and should not use, a second job.
 //
-// Consumer prerequisite (out of this repo): the OCR version must be selected per
-// instance rather than per job. As of writing, chainlink resolves it once for the
-// whole job (core/services/llo/delegate.go takes a single OCR31 bool, set from
-// pluginconfig.PluginConfig.IsOCR31), so both instances necessarily run the same
-// plugin. Making it per-instance means:
+// Consumer prerequisite: the plugin version is selected per protocol instance,
+// not per job. pluginconfig.PluginConfig carries a PluginVersions list aligned
+// positionally with the job's contract config trackers, falling back to the
+// scalar PluginVersion for every instance when empty, so job specs predating it
+// stay valid:
 //
-//   - a per-instance version in the job's pluginConfig, aligned with the tracker
-//     list and defaulting to the existing scalar ocrVersion for every instance
-//     when absent, so current job specs stay valid;
-//   - the delegate's oracle-construction loop choosing the OCR3.0 or OCR3.1
-//     oracle by instance index;
-//   - the OCR3.1-only dependencies (the "2" network endpoint factory and the
-//     KeyValueDatabaseFactory) built when ANY instance is 3.1, not when the job
-//     is.
+//	"pluginVersions": ["v30", "v31"]
+//
+// The chainlink side of it is wired: core/services/ocr2/delegate.go resolves
+// one version per tracker with PluginConfig.PluginVersionForInstance, builds the
+// OCR3.1-only dependencies (the "2" network endpoint factory and the
+// KeyValueDatabaseFactory) on PluginConfig.AnyV31 rather than per job, and
+// core/services/llo/delegate.go picks the OCR3.0 or OCR3.1 oracle by instance
+// index. It also checks the list length against the actual tracker count, which
+// Validate here cannot: it only bounds the length, because the consumer is the
+// only side that knows how many trackers there are.
 //
 // Two things need no work: ocr3_1types.KeyValueDatabaseFactory takes the config
 // digest (NewKeyValueDatabase(configDigest)), so one factory shared by both
@@ -331,9 +333,9 @@
 //     digest. A staging instance REQUIRES a predecessor; with none it starts
 //     straight in production and inherits no watermarks.
 //  2. Update the job spec on every node: add the new config tracker as instance
-//     1 (Green) and mark instance 1 as OCR version "3.1"
-//     (pluginconfig.OCRVersionOCR31) while instance 0 stays "3.0". Green
-//     bootstraps into the staging stage.
+//     1 (Green) and set pluginVersions to ["v30", "v31"], so instance 1 runs
+//     pluginconfig.PluginVersionV31 while instance 0 stays on
+//     PluginVersionV30. Green bootstraps into the staging stage.
 //  3. Let it run, and verify Green from TELEMETRY, not from the Mercury server.
 //     A staging instance marks its reports Specimen = true and the EVM codecs
 //     refuse to encode those, so nothing it produces is transmitted and transmit
