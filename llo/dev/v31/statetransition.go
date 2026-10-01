@@ -150,6 +150,14 @@ func (p *Plugin) StateTransition(ctx context.Context, seqNr uint64, _ ocrtypes.A
 				continue
 			}
 			if cd.ReportFormat == llotypes.ReportFormatHistoryBackfill {
+				if prev.lifeCycleStage != protocol.LifeCycleStageProduction {
+					// The previous round was staging, so it emitted no backfill
+					// report (see isReportable) and the watermark must not move.
+					// Advancing it here would silently consume backfill
+					// observations that were never emitted.
+					out.ValidAfterNanoseconds[channelID] = prevValidAfter
+					continue
+				}
 				// Backfill: prevReportable and selection conditions must be met, or stays put.
 				out.ValidAfterNanoseconds[channelID] = prevValidAfter
 				if prevReportable(prev, channelID) {
@@ -770,6 +778,10 @@ func (p *Plugin) resolvePredecessorRetirement(
 		retirementReport, verr := p.PredecessorRetirementReportCache.VerifyAttestedRetirementReport(*p.PredecessorConfigDigest, agreed.signers, agreed.f, attested)
 		if verr != nil {
 			p.Logger.Warnw("Ignoring invalid attested predecessor retirement", "seqNr", seqNr, "error", verr, "predecessorConfigDigest", *p.PredecessorConfigDigest)
+			continue
+		}
+		if verr = retirementReport.CheckCompatible(p.ProtocolVersion); verr != nil {
+			p.Logger.Warnw("Ignoring incompatible attested predecessor retirement", "seqNr", seqNr, "error", verr, "predecessorConfigDigest", *p.PredecessorConfigDigest)
 			continue
 		}
 		return &retirementReport

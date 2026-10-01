@@ -1,6 +1,8 @@
 package protocol
 
 import (
+	"fmt"
+
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
 
 	ocr2types "github.com/smartcontractkit/libocr/offchainreporting2/types"
@@ -64,4 +66,32 @@ type PredecessorRetirementReportCache interface {
 	// the same arguments it returns the same result on every node, so callers
 	// that have agreed on the signer set can use it inside a state transition.
 	VerifyAttestedRetirementReport(predecessorConfigDigest ocr2types.ConfigDigest, signers [][]byte, f uint8, attestedRetirementReport []byte) (RetirementReport, error)
+}
+
+// MaxSupportedProtocolVersion is the highest LLO protocol version this build
+// understands. See [OffchainConfig.Validate].
+const MaxSupportedProtocolVersion uint32 = 1
+
+// CheckCompatible reports whether this retirement report, produced by a
+// predecessor protocol instance, may be consumed by a successor running the
+// given LLO protocol version.
+//
+// Retirement reports are deliberately agnostic to the *OCR* version: a v3.0
+// (OCR3.0) instance and a v3.1 (OCR3.1) instance exchange the same bytes, signed
+// with the same onchain keyring, so either can hand over to the other. They are
+// NOT guaranteed to be compatible across LLO *protocol* versions: a future
+// version may change the meaning of ValidAfterNanoseconds or add state a
+// successor must honour. A successor that cannot interpret a report must refuse
+// to promote rather than silently seed watermarks it has misread.
+//
+// Only the report's own contents and the successor's configured version are
+// read, so every oracle reaches the same verdict for the same bytes.
+func (r RetirementReport) CheckCompatible(successorProtocolVersion uint32) error {
+	if r.ProtocolVersion > MaxSupportedProtocolVersion {
+		return fmt.Errorf("predecessor retirement report has unsupported protocol version %d (max supported: %d)", r.ProtocolVersion, MaxSupportedProtocolVersion)
+	}
+	if successorProtocolVersion > MaxSupportedProtocolVersion {
+		return fmt.Errorf("this instance has unsupported protocol version %d (max supported: %d)", successorProtocolVersion, MaxSupportedProtocolVersion)
+	}
+	return nil
 }

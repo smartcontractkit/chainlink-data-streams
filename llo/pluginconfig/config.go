@@ -52,20 +52,96 @@ type PluginConfig struct {
 	// NOTE: this names the plugin package, not the LLO offchain ProtocolVersion
 	// (0/1/2) carried in the offchain config, nor the ocr2 job spec's own
 	// OCRVersion.
-	PluginVersion string `json:"pluginVersion" toml:"pluginVersion"`
+	//
+	// It applies to every protocol instance in the job. To run the instances on
+	// different plugins, which is what a v30 -> v31 blue/green handover needs,
+	// use PluginVersions instead.
+	PluginVersion PluginVersion `json:"pluginVersion" toml:"pluginVersion"`
 
-	// V31 carries the v31 plugin knobs. Only read when PluginVersion is "v31".
+	// PluginVersions selects the plugin per protocol instance, positionally
+	// aligned with the job's contract config trackers (index 0 is "Blue", index
+	// 1 is "Green"). Entries take the same values as PluginVersion.
+	//
+	// This exists for the blue/green handover between the v30 and v31 plugins,
+	// where the two instances of one job deliberately run different versions:
+	//
+	//	"pluginVersions": ["v30", "v31"]
+	//
+	// When empty, every instance falls back to the scalar PluginVersion, so job
+	// specs predating this field are unaffected. When non-empty it takes
+	// precedence, and its length must match the number of trackers: that check
+	// belongs to the consumer, which is the only side that knows how many there
+	// are. Validate here only bounds the length and checks each entry.
+	PluginVersions []PluginVersion `json:"pluginVersions" toml:"pluginVersions"`
+
+	// V31 carries the v31 plugin knobs. Only read when the job runs any v31
+	// instance.
 	V31 V31Config `json:"v31" toml:"v31"`
 }
 
+// PluginVersion names an LLO plugin package. The empty value means
+// PluginVersionV30, so that a job spec predating the field keeps working.
+type PluginVersion string
+
 const (
-	PluginVersionV30 = "v30"
-	PluginVersionV31 = "v31"
+	PluginVersionV30 PluginVersion = "v30"
+	PluginVersionV31 PluginVersion = "v31"
 )
 
+// MaxProtocolInstances is the number of protocol instances one LLO job may run:
+// one production instance, plus one staging instance during a blue/green
+// handover. It bounds PluginVersions.
+const MaxProtocolInstances = 2
+
 // IsV31 reports whether the job should run on the v31 (libocr OCR3.1) plugin.
+//
+// NOTE: this reads the scalar PluginVersion only, so it is wrong for a job with
+// a mixed PluginVersions list. Prefer IsV31Instance for selecting a plugin and
+// AnyV31 for deciding whether to build the OCR3.1-only dependencies. It is kept
+// for consumers that have not moved to the per-instance accessors yet.
 func (p PluginConfig) IsV31() bool {
 	return p.PluginVersion == PluginVersionV31
+}
+
+// PluginVersionForInstance returns the plugin version for protocol instance i,
+// normalized so that the empty value is reported as PluginVersionV30.
+//
+// It falls back to the scalar PluginVersion when PluginVersions is empty or
+// does not reach index i. A short list is not an error here: Validate bounds
+// its length, and matching it against the actual tracker count is the
+// consumer's job.
+func (p PluginConfig) PluginVersionForInstance(i int) PluginVersion {
+	v := p.PluginVersion
+	if i >= 0 && i < len(p.PluginVersions) {
+		v = p.PluginVersions[i]
+	}
+	if v == "" {
+		return PluginVersionV30
+	}
+	return v
+}
+
+// IsV31Instance reports whether protocol instance i runs on the v31
+// (libocr OCR3.1) plugin.
+func (p PluginConfig) IsV31Instance(i int) bool {
+	return p.PluginVersionForInstance(i) == PluginVersionV31
+}
+
+// AnyV31 reports whether any protocol instance runs on v31.
+//
+// This is the predicate for building the OCR3.1-only dependencies (the 3.1
+// network endpoint factory, the key-value database factory): during a handover
+// only one of the two instances is v31, but the dependencies are per job.
+func (p PluginConfig) AnyV31() bool {
+	if len(p.PluginVersions) == 0 {
+		return p.PluginVersion == PluginVersionV31
+	}
+	for _, v := range p.PluginVersions {
+		if v == PluginVersionV31 {
+			return true
+		}
+	}
+	return false
 }
 
 type TransmitterType int
@@ -157,18 +233,31 @@ func (p PluginConfig) Validate() (merr error) {
 
 	merr = errors.Join(merr, validateKeyBundleIDs(p.KeyBundleIDs))
 
-	switch p.PluginVersion {
-	case "", PluginVersionV30:
-		if !p.V31.IsZero() {
-			merr = errors.Join(merr, fmt.Errorf("llo: V31 config is only allowed when PluginVersion is %q", PluginVersionV31))
-		}
-	case PluginVersionV31:
+	merr = errors.Join(merr, validatePluginVersion("PluginVersion", p.PluginVersion))
+
+	if len(p.PluginVersions) > MaxProtocolInstances {
+		merr = errors.Join(merr, fmt.Errorf("llo: PluginVersions must have at most %d entries, one per protocol instance, got: %d", MaxProtocolInstances, len(p.PluginVersions)))
+	}
+	for i, v := range p.PluginVersions {
+		merr = errors.Join(merr, validatePluginVersion(fmt.Sprintf("PluginVersions[%d]", i), v))
+	}
+
+	if p.AnyV31() {
 		merr = errors.Join(merr, p.V31.Validate())
-	default:
-		merr = errors.Join(merr, fmt.Errorf("llo: PluginVersion must be one of %q, %q or empty, got: %q", PluginVersionV30, PluginVersionV31, p.PluginVersion))
+	} else if !p.V31.IsZero() {
+		merr = errors.Join(merr, fmt.Errorf("llo: V31 config is only allowed when a protocol instance runs %q", PluginVersionV31))
 	}
 
 	return merr
+}
+
+func validatePluginVersion(field string, v PluginVersion) error {
+	switch v {
+	case "", PluginVersionV30, PluginVersionV31:
+		return nil
+	default:
+		return fmt.Errorf("llo: %s must be one of %q, %q or empty, got: %q", field, PluginVersionV30, PluginVersionV31, v)
+	}
 }
 
 func validateURL(rawServerURL string) error {

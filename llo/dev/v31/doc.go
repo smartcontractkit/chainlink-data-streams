@@ -246,4 +246,137 @@
 // that run this plugin outside libocr (benchmarks, simulation harnesses) must
 // pass llotest.NewBlobBroadcastFetcher() rather than a nil fetcher: with a nil
 // fetcher the pump stays inert and no observation ever carries stream values.
+//
+// # Blue/green handover from v30
+//
+// A live DON migrates from the OCR3.0 plugin (llo/v30) to this one without a
+// reporting gap by running the two as separate protocol instances and handing
+// over through the retirement machinery in llo/protocol and llo/retirement.
+// Nothing in that machinery is OCR-version specific: the retirement report is
+// the same JSON (protocol.StandardRetirementReportCodec), and OCR3.1 reuses
+// ocr3types.OnchainKeyring verbatim, so a v3.1 successor verifies a v3.0
+// predecessor's attested report with the same signature scheme, and vice versa.
+// llo/dev/v31/handover_test.go drives both plugins through the handover in both
+// directions and asserts the report intervals are gapless and non-overlapping
+// across the boundary.
+//
+// The handover is INTRA-JOB. The chainlink LLO delegate already runs blue/green
+// as one job with one or two ContractConfigTrackers (index 0 "Blue", index 1
+// "Green"), each its own protocol instance with its own config digest, sharing
+// one ChannelDefinitionCache, one ShouldRetireCache, one DataSource, one
+// telemetry pipeline and one plugin-scoped retirement report cache. A v30 -> v31
+// migration is the ordinary blue/green flow with the two instances running
+// DIFFERENT plugin versions; it does not need, and should not use, a second job.
+//
+// Consumer prerequisite: the plugin version is selected per protocol instance,
+// not per job. pluginconfig.PluginConfig carries a PluginVersions list aligned
+// positionally with the job's contract config trackers, falling back to the
+// scalar PluginVersion for every instance when empty, so job specs predating it
+// stay valid:
+//
+//	"pluginVersions": ["v30", "v31"]
+//
+// The chainlink side of it is wired: core/services/ocr2/delegate.go resolves
+// one version per tracker with PluginConfig.PluginVersionForInstance, builds the
+// OCR3.1-only dependencies (the "2" network endpoint factory and the
+// KeyValueDatabaseFactory) on PluginConfig.AnyV31 rather than per job, and
+// core/services/llo/delegate.go picks the OCR3.0 or OCR3.1 oracle by instance
+// index. It also checks the list length against the actual tracker count, which
+// Validate here cannot: it only bounds the length, because the consumer is the
+// only side that knows how many trackers there are.
+//
+// Two things need no work: ocr3_1types.KeyValueDatabaseFactory takes the config
+// digest (NewKeyValueDatabase(configDigest)), so one factory shared by both
+// instances already gives them separate keyspaces; and the OCR3.0 and OCR3.1
+// network endpoint factories are independent, so one peer can serve both
+// transports at once.
+//
+// Wiring requirements for the handover itself:
+//
+//   - The SAME retirement.RetirementReportCache must back both instances. The
+//     retiring instance's transmitter writes its attested report into it (keyed
+//     by the retiring instance's config digest) and the successor's plugin-scoped
+//     cache reads it back. Sharing it is automatic within one job; a successor
+//     that starts before the predecessor's ConfigSet row is stored simply cannot
+//     verify the report yet and stays in staging.
+//   - The successor's retirement.NewPluginScopedRetirementReportCache takes a
+//     verifier for the PREDECESSOR's keyring. Because both OCR versions sign
+//     reports through ocr3types.OnchainKeyring, the one keyring the job already
+//     holds serves both; no version-specific casing is needed.
+//
+// History-backfill channels need no special handling. Both instances share one
+// ChannelDefinitionCache, so a backfill channel is present on the staging
+// instance too, where it would be a NEW channel with a watermark of 0 and would
+// replay the whole backfill from the beginning for the length of the overlap.
+// Both plugins therefore skip backfill entirely while not in the production
+// stage: isReportable returns false and the watermark does not advance.
+//
+// Skipping costs nothing, because promotion seeds ValidAfterNanoseconds
+// wholesale from the predecessor's retirement report: a staging instance's
+// backfill watermark is discarded unread, so the replay could never have
+// counted. The backfill simply pauses for the overlap and resumes at the
+// predecessor's position. A backfill channel the predecessor never reported is
+// absent from the report and starts from the beginning after promotion, which
+// is the correct reading.
+//
+// Nothing else needs to warm up. Only validAfter watermarks are handed over, and
+// that is all a v3.0 predecessor has: v30 passes a nil HistoryReader
+// (v30/stream_calculated.go), so History() and TWAP fail closed there and no
+// live v3.0 channel can be using them. There are no stream history windows to
+// rebuild. Backfill watermarks live in validAfter and so transfer with it.
+//
+// Operator sequence (v30 -> v31), assuming instance 0 is the live v3.0
+// production instance:
+//
+//  1. Publish a new OCR3.1 config instance on the ConfigurationStore, with
+//     onchainConfig.predecessorConfigDigest set to the v3.0 instance's config
+//     digest. A staging instance REQUIRES a predecessor; with none it starts
+//     straight in production and inherits no watermarks.
+//  2. Update the job spec on every node: add the new config tracker as instance
+//     1 (Green) and set pluginVersions to ["v30", "v31"], so instance 1 runs
+//     pluginconfig.PluginVersionV31 while instance 0 stays on
+//     PluginVersionV30. Green bootstraps into the staging stage.
+//  3. Let it run, and verify Green from TELEMETRY, not from the Mercury server.
+//     A staging instance marks its reports Specimen = true and the EVM codecs
+//     refuse to encode those, so nothing it produces is transmitted and transmit
+//     volume does not rise. captureReportTelemetry runs before the encode, so
+//     ReportTelemetryCh and OutcomeTelemetryCh do see what Green would have
+//     emitted. The readiness gate is Green's report telemetry covering the same
+//     channel set as Blue's production output, with sane values, plus the blob
+//     pump's Misses/Cycles low and uncorrelated. There is no warm-up minimum to
+//     wait out (see above), so the overlap is however many rounds of that
+//     evidence you want.
+//  4. Vote to retire v3.0: set shouldRetire for the v3.0 config digest in the
+//     ConfigurationStore. Once more than f oracles observe it, instance 0 moves
+//     to the retired stage in the round it is agreed (retirement is NOT
+//     deferred), stops reporting, and emits its retirement report.
+//  5. Watch the Green logs for "Promoting protocol instance from staging to
+//     production". Its validAfter watermarks are then seeded verbatim from the
+//     predecessor's report, so its first production report resumes exactly where
+//     v3.0 stopped: one wide report closing the overlap window, no gap and no
+//     overlap. Channels the staging instance added itself, which the predecessor
+//     never reported, are treated as new (validAfter = the promotion round's
+//     observation timestamp) rather than keeping a staging watermark.
+//  6. Once the retirement report is stored and Green is producing, drop the
+//     retired instance from the job spec, moving the v3.1 instance to position 0
+//     so the second slot is free for the next migration.
+//
+// Rollback is symmetric: add a v3.0 config instance whose
+// predecessorConfigDigest is the v3.1 instance's digest, run it as the staging
+// instance, and retire v3.1. The v3.1 instance emits the same retirement report
+// format, so nothing special is needed on the way back.
+//
+// Two behaviours to expect while a handover is in flight:
+//
+//   - An attested retirement report the successor cannot verify (for example
+//     because the predecessor's ConfigSet row has not been loaded into the local
+//     RetirementReportCache yet) only drops the retirement field from that
+//     observation. The round still completes on the rest of it and the instance
+//     stays in staging, retrying every round until the report verifies.
+//   - Promotion additionally requires the predecessor's report to pass
+//     RetirementReport.CheckCompatible: retirement reports carry an LLO protocol
+//     version and are not guaranteed to be compatible across LLO protocol
+//     versions (as distinct from OCR versions, which are interchangeable here).
+//     A report from a version this build does not understand is logged and
+//     ignored rather than promoting on watermarks it may have misread.
 package llo

@@ -182,6 +182,14 @@ func (p *Plugin) outcome(outctx ocr3types.OutcomeContext, query types.Query, aos
 		for channelID, previousValidAfterNanoseconds := range previousOutcome.ValidAfterNanoseconds {
 			cd, ok := previousOutcome.ChannelDefinitions[channelID]
 			if ok && cd.ReportFormat == llotypes.ReportFormatHistoryBackfill {
+				if previousOutcome.LifeCycleStage != protocol.LifeCycleStageProduction {
+					// The previous round was staging, so it emitted no backfill
+					// report (see IsReportable) and the watermark must not move.
+					// Advancing it here would silently consume backfill
+					// observations that were never emitted.
+					outcome.ValidAfterNanoseconds[channelID] = previousValidAfterNanoseconds
+					continue
+				}
 				tsNanos, _, _, uerr := SelectBackfillCandidate(&previousOutcome, channelID, p.OptsCache)
 				if uerr != nil {
 					if p.Config.VerboseLogging {
@@ -379,15 +387,25 @@ func (p *Plugin) decodeObservations(aos []types.AttributedObservation, outctx oc
 			continue
 		}
 
-		if len(observation.AttestedPredecessorRetirement) != 0 && validPredecessorRetirementReport == nil {
+		if len(observation.AttestedPredecessorRetirement) != 0 && validPredecessorRetirementReport == nil && p.PredecessorConfigDigest != nil {
 			// a single valid retirement report is enough
+			//
+			// NOTE: only the retirement field is dropped on failure, never the
+			// whole observation: its timestamp, channel votes and stream values
+			// are still counted. Dropping the observation would stall the round
+			// entirely whenever every oracle attaches a report that cannot be
+			// verified locally (e.g. the predecessor's ConfigSet row has not
+			// been loaded into the RetirementReportCache yet), since every
+			// honest oracle attaches the same bytes.
 			pcd := *p.PredecessorConfigDigest
 			retirementReport, err3 := p.PredecessorRetirementReportCache.CheckAttestedRetirementReport(pcd, observation.AttestedPredecessorRetirement)
 			if err3 != nil {
-				p.Logger.Warnw("ignoring observation with invalid attested predecessor retirement", "oracleID", ao.Observer, "error", err3, "predecessorConfigDigest", pcd)
-				continue
+				p.Logger.Warnw("ignoring invalid attested predecessor retirement", "oracleID", ao.Observer, "error", err3, "predecessorConfigDigest", pcd)
+			} else if err3 = retirementReport.CheckCompatible(p.ProtocolVersion); err3 != nil {
+				p.Logger.Warnw("ignoring incompatible attested predecessor retirement", "oracleID", ao.Observer, "error", err3, "predecessorConfigDigest", pcd)
+			} else {
+				validPredecessorRetirementReport = &retirementReport
 			}
-			validPredecessorRetirementReport = &retirementReport
 		}
 
 		if observation.ShouldRetire {
@@ -482,6 +500,24 @@ func (out *Outcome) IsReportable(channelID llotypes.ChannelID, protocolVersion u
 	}
 
 	if cd.ReportFormat == llotypes.ReportFormatHistoryBackfill {
+		if out.LifeCycleStage != protocol.LifeCycleStageProduction {
+			// A staging instance does not backfill. It shares the job's
+			// ChannelDefinitionCache with the production instance, so the
+			// backfill channel is present here too, but as a new channel with a
+			// watermark of 0 — it would replay the whole backfill from the
+			// beginning for the length of the overlap window.
+			//
+			// That replay is not just wasted: promotion seeds
+			// ValidAfterNanoseconds wholesale from the predecessor's retirement
+			// report, so the staging watermark is discarded unread and the
+			// backfill resumes at the predecessor's position regardless.
+			// Skipping simply stops emitting reports that can never count.
+			//
+			// The stage is agreed, replicated state, so every oracle takes this
+			// branch in the same round. Outcome() applies the same condition to
+			// the watermark, so the two stay consistent.
+			return &UnreportableChannelError{nil, "IsReportable=false; backfill is not performed by a staging instance", channelID}
+		}
 		_, _, _, uerr := SelectBackfillCandidate(out, channelID, optsCache)
 		if uerr != nil {
 			return uerr

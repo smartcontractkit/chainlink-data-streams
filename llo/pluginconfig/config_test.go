@@ -182,6 +182,109 @@ func Test_PluginConfig_PluginVersion(t *testing.T) {
 	})
 }
 
+func Test_PluginConfig_PluginVersions(t *testing.T) {
+	base := PluginConfig{
+		DonID:                             12345,
+		Servers:                           map[string]hex.PlainHexBytes{"example.com:80": make(hex.PlainHexBytes, 32)},
+		ChannelDefinitionsContractAddress: common.HexToAddress("0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef"),
+	}
+
+	t.Run("falls back to the scalar PluginVersion when unset", func(t *testing.T) {
+		t.Run("empty scalar means v30 everywhere", func(t *testing.T) {
+			pc := base
+			require.NoError(t, pc.Validate())
+			for i := range MaxProtocolInstances {
+				assert.Equal(t, PluginVersionV30, pc.PluginVersionForInstance(i))
+				assert.False(t, pc.IsV31Instance(i))
+			}
+			assert.False(t, pc.AnyV31())
+		})
+		t.Run("v31 scalar means v31 everywhere", func(t *testing.T) {
+			pc := base
+			pc.PluginVersion = PluginVersionV31
+			require.NoError(t, pc.Validate())
+			for i := range MaxProtocolInstances {
+				assert.True(t, pc.IsV31Instance(i))
+			}
+			assert.True(t, pc.AnyV31())
+		})
+	})
+
+	t.Run("takes precedence over the scalar when set", func(t *testing.T) {
+		pc := base
+		pc.PluginVersion = PluginVersionV31
+		pc.PluginVersions = []PluginVersion{PluginVersionV30}
+		require.NoError(t, pc.Validate())
+		assert.Equal(t, PluginVersionV30, pc.PluginVersionForInstance(0))
+		assert.False(t, pc.AnyV31())
+	})
+
+	t.Run("mixed list selects per instance", func(t *testing.T) {
+		pc := base
+		pc.PluginVersions = []PluginVersion{PluginVersionV30, PluginVersionV31}
+		require.NoError(t, pc.Validate())
+
+		assert.Equal(t, PluginVersionV30, pc.PluginVersionForInstance(0))
+		assert.False(t, pc.IsV31Instance(0))
+
+		assert.Equal(t, PluginVersionV31, pc.PluginVersionForInstance(1))
+		assert.True(t, pc.IsV31Instance(1))
+
+		// The v31-only dependencies are per job, so one v31 instance is enough.
+		assert.True(t, pc.AnyV31())
+	})
+
+	t.Run("an empty entry means v30", func(t *testing.T) {
+		pc := base
+		pc.PluginVersion = PluginVersionV31
+		pc.PluginVersions = []PluginVersion{"", PluginVersionV31}
+		require.NoError(t, pc.Validate())
+		assert.Equal(t, PluginVersionV30, pc.PluginVersionForInstance(0))
+		assert.Equal(t, PluginVersionV31, pc.PluginVersionForInstance(1))
+	})
+
+	t.Run("an index past the list falls back to the scalar", func(t *testing.T) {
+		pc := base
+		pc.PluginVersion = PluginVersionV31
+		pc.PluginVersions = []PluginVersion{PluginVersionV30}
+		require.NoError(t, pc.Validate())
+		assert.Equal(t, PluginVersionV30, pc.PluginVersionForInstance(0))
+		assert.Equal(t, PluginVersionV31, pc.PluginVersionForInstance(1))
+		// A negative index cannot index the list either.
+		assert.Equal(t, PluginVersionV31, pc.PluginVersionForInstance(-1))
+	})
+
+	t.Run("unmarshals pluginVersions from toml", func(t *testing.T) {
+		var pc PluginConfig
+		require.NoError(t, toml.Unmarshal([]byte(`pluginVersions = ["v30", "v31"]`), &pc))
+		assert.Equal(t, []PluginVersion{PluginVersionV30, PluginVersionV31}, pc.PluginVersions)
+		assert.False(t, pc.IsV31Instance(0))
+		assert.True(t, pc.IsV31Instance(1))
+	})
+
+	t.Run("unmarshals pluginVersions from json", func(t *testing.T) {
+		var pc PluginConfig
+		require.NoError(t, pc.Unmarshal([]byte(`{"pluginVersions": ["v30", "v31"]}`)))
+		assert.Equal(t, []PluginVersion{PluginVersionV30, PluginVersionV31}, pc.PluginVersions)
+	})
+
+	t.Run("rejects an unknown entry", func(t *testing.T) {
+		pc := base
+		pc.PluginVersions = []PluginVersion{PluginVersionV30, "9.9"}
+		err := pc.Validate()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), `PluginVersions[1] must be one of`)
+	})
+
+	t.Run("rejects more entries than protocol instances", func(t *testing.T) {
+		pc := base
+		pc.PluginVersions = []PluginVersion{PluginVersionV30, PluginVersionV31, PluginVersionV31}
+		err := pc.Validate()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "PluginVersions must have at most 2 entries")
+	})
+}
+
 func Test_PluginConfig_Validate(t *testing.T) {
 	t.Run("with invalid URLs or keys", func(t *testing.T) {
 		servers := map[string]hex.PlainHexBytes{
