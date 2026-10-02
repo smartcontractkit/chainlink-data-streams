@@ -257,8 +257,9 @@ func (o precursor) formatIsEncodable(format llotypes.ReportFormat, f int, channe
 // saturatingAdd returns a+b, clamped to MaxUint64 instead of wrapping.
 //
 // validAfter is a nanosecond wall-clock timestamp, so it already sits around
-// 1.7e18, and the offchain config bounds DefaultMinReportIntervalNanoseconds
-// only away from zero (see protocol.OffchainConfig.Validate). A large enough
+// 1.7e18, and the offchain config puts no upper bound on
+// DefaultMinReportIntervalNanoseconds (see protocol.OffchainConfig.Validate).
+// A large enough
 // interval would wrap the sum to a small number, the cadence comparison would
 // then always pass, and the interval would silently stop gating anything. The
 // config is replicated, so every oracle would do it identically: a silent loss
