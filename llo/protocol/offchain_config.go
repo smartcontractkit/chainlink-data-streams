@@ -80,9 +80,17 @@ func (c OffchainConfig) Validate() error {
 		// Version 2 is version 1 with a channel vote hash that commits to every
 		// field of the channel definition (see protocol.ChannelHashV2).
 		// Nothing else differs, so the cadence rules are the same.
-		if c.DefaultMinReportIntervalNanoseconds == 0 {
-			return fmt.Errorf("default report cadence must be non-zero if protocol version is %d", c.ProtocolVersion)
-		}
+		//
+		// A zero cadence is accepted. Validate on v30 used to run on the
+		// zero-valued struct before the decoded fields were assigned, so
+		// this rule never fired and groups were configured on-chain with
+		// version 1 and a zero cadence. Those groups have been running with
+		// the minimum-interval gate inert, but using the channels report
+		// cadence. Rejecting the config now would stop every node in them.
+		// Zero keeps meaning zero so that an upgraded node reports exactly
+		// what its not-yet-upgraded peers report. Raising the cadence is a
+		// config change, which lands atomically on a new config digest.
+		// v31 Factory checks this strictly.
 	default:
 		return fmt.Errorf("unknown protocol version: %d", c.ProtocolVersion)
 	}

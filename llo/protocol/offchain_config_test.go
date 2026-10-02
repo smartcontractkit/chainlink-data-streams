@@ -123,15 +123,13 @@ func Test_OffchainConfig(t *testing.T) {
 			require.NoError(t, err)
 			assert.Equal(t, cfg, cfgDecoded)
 		})
-		t.Run("DefaultMinReportIntervalNanoseconds=0 is invalid", func(t *testing.T) {
+		t.Run("DefaultMinReportIntervalNanoseconds=0 is accepted and stays 0", func(t *testing.T) {
 			cfg := OffchainConfig{
 				ProtocolVersion:                     2,
 				DefaultMinReportIntervalNanoseconds: 0,
 			}
 
-			err := cfg.Validate()
-			require.Error(t, err)
-			assert.Contains(t, err.Error(), "default report cadence must be non-zero if protocol version is 2")
+			require.NoError(t, cfg.Validate())
 		})
 	})
 	t.Run("decoding rejects an unknown protocol version", func(t *testing.T) {
@@ -161,14 +159,34 @@ func Test_OffchainConfig(t *testing.T) {
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "default report cadence must be 0 if protocol version is 0")
 	})
-	t.Run("DefaultMinReportIntervalNanoseconds=0 is invalid", func(t *testing.T) {
+	t.Run("DefaultMinReportIntervalNanoseconds=0 decodes to 0", func(t *testing.T) {
+		// Groups are configured on-chain with version 1 and a zero cadence,
+		// from when Validate ran before the decoded fields were assigned. The
+		// value must survive decoding unchanged so an upgraded node reports
+		// exactly what its not-yet-upgraded peers report.
 		cfg := OffchainConfig{
 			ProtocolVersion:                     1,
 			DefaultMinReportIntervalNanoseconds: 0,
+			EnableObservationCompression:        true,
 		}
+		require.NoError(t, cfg.Validate())
 
-		err := cfg.Validate()
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "default report cadence must be non-zero if protocol version is 1")
+		b, err := cfg.Encode()
+		require.NoError(t, err)
+
+		decoded, err := DecodeOffchainConfig(b)
+		require.NoError(t, err)
+		assert.Equal(t, cfg, decoded)
+		assert.Zero(t, decoded.DefaultMinReportIntervalNanoseconds)
+	})
+
+	t.Run("the config observed on running v30 groups decodes", func(t *testing.T) {
+		// protocolVersion=1, defaultMinReportIntervalNanoseconds=0,
+		// enableObservationCompression=true, as written on-chain.
+		decoded, err := DecodeOffchainConfig([]byte{0x08, 0x01, 0x10, 0x00, 0x18, 0x01})
+		require.NoError(t, err)
+		assert.Equal(t, uint32(1), decoded.ProtocolVersion)
+		assert.Zero(t, decoded.DefaultMinReportIntervalNanoseconds)
+		assert.True(t, decoded.EnableObservationCompression)
 	})
 }

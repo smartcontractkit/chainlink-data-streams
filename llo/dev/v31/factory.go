@@ -107,6 +107,15 @@ func (f *PluginFactory) NewReportingPlugin(ctx context.Context, cfg ocr3types.Re
 			aggregationFaultTolerance, cfg.F, 2*aggregationFaultTolerance+1, 2*cfg.F+1)
 	}
 
+	// The report cadence is a replicated state transition parameter and gates
+	// every channel (see isReportable). protocol.OffchainConfig.Validate used to
+	// require it to be non-zero on protocol versions 1 and 2 and no longer does,
+	// because v30 could be configured with a zero cadence and fallback to the
+	// channel cadence. v31 enforces the the original rule rather than inheriting that leniency.
+	if offchainConfig.ProtocolVersion > 0 && offchainConfig.DefaultMinReportIntervalNanoseconds == 0 {
+		return nil, nil, fmt.Errorf("NewReportingPlugin: offchain config must set defaultMinReportIntervalNanoseconds to a non-zero value if protocol version is %d", offchainConfig.ProtocolVersion)
+	}
+
 	blobInFlightWaitFactor := f.BlobInFlightWaitFactor
 	if blobInFlightWaitFactor == 0 {
 		blobInFlightWaitFactor = defaultBlobInFlightWaitFactor

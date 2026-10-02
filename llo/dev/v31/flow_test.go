@@ -3,6 +3,7 @@ package llo
 import (
 	"context"
 	"errors"
+	"fmt"
 	"math"
 	"sync"
 	"testing"
@@ -233,6 +234,56 @@ func Test_Factory_NewReportingPlugin_aggregationFaultTolerance(t *testing.T) {
 		require.True(t, ok)
 		require.Equal(t, 1, pl.minContributions())
 		require.NoError(t, pl.Close())
+	})
+}
+
+func Test_Factory_NewReportingPlugin_reportCadence(t *testing.T) {
+	ctx := tests.Context(t)
+	f := NewPluginFactory(PluginFactoryParams{
+		OnchainConfigCodec: mockOnchainConfigCodec{},
+		Logger:             logger.Test(t),
+	})
+
+	encode := func(t *testing.T, protocolVersion uint32, cadence uint64) []byte {
+		t.Helper()
+		var aggregationFaultTolerance uint32 = 1
+		b, err := protocol.OffchainConfig{
+			ProtocolVersion:                     protocolVersion,
+			DefaultMinReportIntervalNanoseconds: cadence,
+			AggregationFaultTolerance:           &aggregationFaultTolerance,
+		}.Encode()
+		require.NoError(t, err)
+		return b
+	}
+
+	newPlugin := func(t *testing.T, offchainConfig []byte) error {
+		t.Helper()
+		p, _, err := f.NewReportingPlugin(ctx, ocr3types.ReportingPluginConfig{N: 4, F: 1, ConfigDigest: ocrtypes.ConfigDigest{9}, OffchainConfig: offchainConfig}, nil)
+		if err == nil {
+			require.NoError(t, p.Close())
+		}
+		return err
+	}
+
+	// protocol.OffchainConfig.Validate accepts a zero cadence so that v30 groups
+	// already configured that way keep running. v31 does not.
+	t.Run("refuses to start on a zero cadence", func(t *testing.T) {
+		for _, protocolVersion := range []uint32{1, 2} {
+			err := newPlugin(t, encode(t, protocolVersion, 0))
+			require.EqualError(t, err, fmt.Sprintf("NewReportingPlugin: offchain config must set defaultMinReportIntervalNanoseconds to a non-zero value if protocol version is %d", protocolVersion))
+		}
+	})
+
+	t.Run("accepts a non-zero cadence", func(t *testing.T) {
+		for _, protocolVersion := range []uint32{1, 2} {
+			require.NoError(t, newPlugin(t, encode(t, protocolVersion, 1000)))
+		}
+	})
+
+	// Validate requires a zero cadence on protocol version 0, so the v31 rule
+	// must not contradict it.
+	t.Run("accepts a zero cadence on protocol version 0", func(t *testing.T) {
+		require.NoError(t, newPlugin(t, encode(t, 0, 0)))
 	})
 }
 
