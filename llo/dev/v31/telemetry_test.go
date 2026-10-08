@@ -539,28 +539,42 @@ func Test_OutcomeTelemetry_Emitters(t *testing.T) {
 }
 
 func Test_ReportTelemetry_Lifecycle(t *testing.T) {
-	run := func(t *testing.T, predecessor *ocrtypes.ConfigDigest, stagingTelemetry bool, stage llotypes.LifeCycleStage) (*v31Instance, chan *protocol.LLOReportTelemetry) {
+	// runAs drives an instance through five rounds. With emitter, this oracle is
+	// one of the f+1 telemetry emitters of every round, otherwise of none.
+	runAs := func(t *testing.T, predecessor *ocrtypes.ConfigDigest, stagingTelemetry, emitter bool, stage llotypes.LifeCycleStage) (*v31Instance, chan *protocol.LLOReportTelemetry) {
 		t.Helper()
 		v := newV31Instance(t, ocrtypes.ConfigDigest{0xb1}, predecessor, newPredecessorCache(t, nil, true))
 		v.p.Config.CaptureStagingTelemetry = stagingTelemetry
 		rtCh := make(chan *protocol.LLOReportTelemetry, 16)
 		v.p.ReportTelemetryCh = rtCh
+		round := func(o Observation) {
+			offset := uint64(0)
+			if !emitter {
+				offset = uint64(v.p.F) + 1
+			}
+			v.p.OracleID = commontypes.OracleID((v.seqNr + 1 + offset) % uint64(v.p.N))
+			v.round(o)
+		}
 
 		ts := handoverTickNanos
-		v.round(Observation{})
+		round(Observation{})
 		require.Equal(t, stage, v.lifeCycleStage())
 		ts += handoverTickNanos
-		v.round(Observation{
+		round(Observation{
 			UnixTimestampNanoseconds: ts,
 			UpdateChannelDefinitions: llotypes.ChannelDefinitions{handoverChannelID: handoverChannel()},
 			StreamValues:             handoverStreamValues(),
 		})
 		for range 3 {
 			ts += handoverTickNanos
-			v.round(Observation{UnixTimestampNanoseconds: ts, StreamValues: handoverStreamValues()})
+			round(Observation{UnixTimestampNanoseconds: ts, StreamValues: handoverStreamValues()})
 		}
 		require.NotEmpty(t, v.reports, "the channel must be reporting")
 		return v, rtCh
+	}
+	run := func(t *testing.T, predecessor *ocrtypes.ConfigDigest, stagingTelemetry bool, stage llotypes.LifeCycleStage) (*v31Instance, chan *protocol.LLOReportTelemetry) {
+		t.Helper()
+		return runAs(t, predecessor, stagingTelemetry, true, stage)
 	}
 
 	// A staging instance emits specimen channel reports and a marker per round.
@@ -595,6 +609,12 @@ func Test_ReportTelemetry_Lifecycle(t *testing.T) {
 		for range len(v.reports) {
 			require.False(t, (<-rtCh).Specimen)
 		}
+	})
+
+	t.Run("a non emitter emits no report telemetry", func(t *testing.T) {
+		v, rtCh := runAs(t, nil, false, false, protocol.LifeCycleStageProduction)
+		require.NotEmpty(t, v.reports)
+		require.Empty(t, rtCh)
 	})
 }
 

@@ -35,7 +35,8 @@ type PluginFactoryParams struct {
 	// where this oracle is one of the f+1 rotating emitters.
 	OutcomeTelemetryCh chan<- *protocol.LLOOutcomeTelemetry
 	// ReportTelemetryCh, if set, receives one telemetry struct per emitted
-	// production report (and staging, with CaptureStagingTelemetry).
+	// production report (and staging, with CaptureStagingTelemetry) in rounds
+	// where this oracle is one of the f+1 rotating emitters.
 	ReportTelemetryCh chan<- *protocol.LLOReportTelemetry
 	// AttributedObservationTelemetryCh, if set, receives the decoded observation
 	// of every oracle in production rounds (and staging, with

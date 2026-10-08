@@ -76,9 +76,9 @@ func makeOutcomeTelemetry(out precursor, configDigest ocrtypes.ConfigDigest, seq
 }
 
 // captureReportTelemetry emits the telemetry of reports produced in a stage
-// that emits telemetry.
+// that emits telemetry, when this oracle is one telemetry emitter for the seqNr.
 func (p *Plugin) captureReportTelemetry(r protocol.Report, cd llotypes.ChannelDefinition, stage llotypes.LifeCycleStage) {
-	if p.ReportTelemetryCh == nil || !p.emitsTelemetry(stage) {
+	if p.ReportTelemetryCh == nil || !p.emitsTelemetry(stage) || !p.isTelemetryEmitter(r.SeqNr) {
 		return
 	}
 	rt, err := makeReportTelemetry(r, cd, p.DonID)
@@ -159,7 +159,7 @@ type attributedObservationRound struct {
 }
 
 // isTelemetryEmitter reports whether this oracle is one of the f+1 oracles
-// emitting outcome and attributed observation telemetry for this seqNr.
+// emitting plugin telemetry for this seqNr.
 func (p *Plugin) isTelemetryEmitter(seqNr uint64) bool {
 	if p.N <= 0 {
 		return false
