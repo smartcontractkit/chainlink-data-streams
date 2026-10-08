@@ -85,6 +85,20 @@ type V31Config struct {
 	// round cannot inflate the derived snapshot age bound. Must be set above the
 	// DON real round cadence.
 	MaxRoundPeriod Duration `json:"maxRoundPeriod" toml:"maxRoundPeriod"`
+
+	// Plugin telemetry. Each is decided here for v31, independently of
+	// the node CaptureEATelemetry parameter, which keeps driving data source telemetry.
+	//
+	// CaptureOutcomeTelemetry emits one outcome per StateTransition.
+	CaptureOutcomeTelemetry bool `json:"captureOutcomeTelemetry" toml:"captureOutcomeTelemetry"`
+	// CaptureReportTelemetry emits one telemetry per report.
+	CaptureReportTelemetry bool `json:"captureReportTelemetry" toml:"captureReportTelemetry"`
+	// CaptureAttributedObservationTelemetry emits the decoded oracle observations that made into
+	// the state transition.
+	CaptureAttributedObservationTelemetry bool `json:"captureAttributedObservationTelemetry" toml:"captureAttributedObservationTelemetry"`
+	// CaptureStagingTelemetry makes a staging instance emit the plugin telemetry
+	// enabled above. Off, only a production instance emits it.
+	CaptureStagingTelemetry bool `json:"captureStagingTelemetry" toml:"captureStagingTelemetry"`
 }
 
 // IsZero reports whether no knob is set, so the caller can tell an absent block

@@ -33,7 +33,11 @@ func Test_V31Config_Unmarshal(t *testing.T) {
 			maxDurationBlobObservation = "1s"
 			blobInFlightWaitFactor = 4
 			maxBlobSnapshotAge = "-1s"
-			maxRoundPeriod = "3s"`
+			maxRoundPeriod = "3s"
+			captureOutcomeTelemetry = true
+			captureReportTelemetry = true
+			captureAttributedObservationTelemetry = true
+			captureStagingTelemetry = true`
 
 		var pc PluginConfig
 		require.NoError(t, toml.Unmarshal([]byte(rawToml), &pc))
@@ -46,6 +50,10 @@ func Test_V31Config_Unmarshal(t *testing.T) {
 		assert.Equal(t, uint64(4), pc.V31.BlobInFlightWaitFactor)
 		assert.Equal(t, -time.Second, pc.V31.MaxBlobSnapshotAge.Duration())
 		assert.Equal(t, 3*time.Second, pc.V31.MaxRoundPeriod.Duration())
+		assert.True(t, pc.V31.CaptureOutcomeTelemetry)
+		assert.True(t, pc.V31.CaptureReportTelemetry)
+		assert.True(t, pc.V31.CaptureAttributedObservationTelemetry)
+		assert.True(t, pc.V31.CaptureStagingTelemetry)
 		require.NoError(t, pc.V31.Validate())
 	})
 
