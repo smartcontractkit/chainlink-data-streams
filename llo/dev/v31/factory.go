@@ -30,10 +30,17 @@ type PluginFactoryParams struct {
 	logger.Logger
 	protocol.OnchainConfigCodec
 	ReportCodecs map[llotypes.ReportFormat]protocol.ReportCodec
-	// OutcomeTelemetryCh, if set, receives one telemetry struct per StateTransition.
+	// OutcomeTelemetryCh, if set, receives one telemetry struct per production
+	// StateTransition (and staging, with CaptureStagingTelemetry) in rounds
+	// where this oracle is one of the f+1 rotating emitters.
 	OutcomeTelemetryCh chan<- *protocol.LLOOutcomeTelemetry
-	// ReportTelemetryCh, if set, receives one telemetry struct per emitted report.
+	// ReportTelemetryCh, if set, receives one telemetry struct per emitted
+	// production report (and staging, with CaptureStagingTelemetry).
 	ReportTelemetryCh chan<- *protocol.LLOReportTelemetry
+	// AttributedObservationTelemetryCh, if set, receives the decoded observation
+	// of every oracle in production rounds (and staging, with
+	// CaptureStagingTelemetry) where this oracle is one of emitter.
+	AttributedObservationTelemetryCh chan<- *protocol.LLOAttributedObservationTelemetry
 	// DonID is optional and used only for telemetry and logging.
 	DonID uint32
 	// MaxSnapshotRounds overrides DefaultMaxSnapshotRounds if non-zero. Bounds
@@ -142,6 +149,7 @@ func (f *PluginFactory) NewReportingPlugin(ctx context.Context, cfg ocr3types.Re
 		Logger:                              l,
 		N:                                   cfg.N,
 		F:                                   cfg.F,
+		OracleID:                            cfg.OracleID,
 		RetirementReportCodec:               f.RetirementReportCodec,
 		ReportCodecs:                        f.ReportCodecs,
 		DonID:                               f.DonID,
@@ -228,6 +236,11 @@ func (f *PluginFactory) NewReportingPlugin(ctx context.Context, cfg ocr3types.Re
 	}
 	if err := info.Validate(); err != nil {
 		return nil, nil, fmt.Errorf("invalid reporting plugin limits: %w", err)
+	}
+
+	if f.AttributedObservationTelemetryCh != nil {
+		p.attributedObservationTelemeter = newAttributedObservationTelemeter(l, f.AttributedObservationTelemetryCh, cfg.ConfigDigest, f.DonID, cfg.OracleID)
+		p.attributedObservationTelemeter.start()
 	}
 
 	return p, info, nil

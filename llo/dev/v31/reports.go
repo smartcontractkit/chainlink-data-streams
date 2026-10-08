@@ -107,7 +107,7 @@ func (p *Plugin) Reports(ctx context.Context, seqNr uint64, rawPrecursor ocr3_1t
 			reportForEncode := report
 			reportForEncode.ChannelID = opts.TargetChannelID
 
-			p.captureReportTelemetry(reportForEncode, targetCD)
+			p.captureReportTelemetry(reportForEncode, targetCD, out.LifeCycleStage)
 			codec, exists := p.ReportCodecs[targetCD.ReportFormat]
 			if !exists {
 				p.Logger.Warnw("Error encoding backfill report; codec missing for target ReportFormat", "reportFormat", targetCD.ReportFormat, "channelID", cid, "targetChannelID", opts.TargetChannelID, "stage", "Report", "seqNr", seqNr)
@@ -154,7 +154,7 @@ func (p *Plugin) Reports(ctx context.Context, seqNr uint64, rawPrecursor ocr3_1t
 			Specimen:                        out.LifeCycleStage != protocol.LifeCycleStageProduction,
 		}
 
-		p.captureReportTelemetry(report, cd)
+		p.captureReportTelemetry(report, cd, out.LifeCycleStage)
 
 		codec, exists := p.ReportCodecs[cd.ReportFormat]
 		if !exists {
@@ -177,7 +177,37 @@ func (p *Plugin) Reports(ctx context.Context, seqNr uint64, rawPrecursor ocr3_1t
 		})
 	}
 
+	// The staging marker goes last, so the other reports keep their positions,
+	// and only within the report count limit.
+	if out.LifeCycleStage == protocol.LifeCycleStageStaging && len(rwis) < protocol.MaxReportCount {
+		marker, err := p.stagingMarker(seqNr)
+		if err != nil {
+			return nil, err
+		}
+		rwis = append(rwis, marker)
+	}
+
 	return rwis, nil
+}
+
+// stagingMarker is the marker report of a staging round (see
+// protocol.EncodeStagingMarker). It is emitted in every staging round,
+// independent of node local config, so every oracle returns the same report
+// list.
+func (p *Plugin) stagingMarker(seqNr uint64) (ocr3types.ReportPlus[llotypes.ReportInfo], error) {
+	encoded, err := protocol.EncodeStagingMarker(p.ConfigDigest, seqNr)
+	if err != nil {
+		return ocr3types.ReportPlus[llotypes.ReportInfo]{}, fmt.Errorf("error encoding staging marker: %w", err)
+	}
+	return ocr3types.ReportPlus[llotypes.ReportInfo]{
+		ReportWithInfo: ocr3types.ReportWithInfo[llotypes.ReportInfo]{
+			Report: encoded,
+			Info: llotypes.ReportInfo{
+				LifeCycleStage: protocol.LifeCycleStageStaging,
+				ReportFormat:   llotypes.ReportFormatJSON,
+			},
+		},
+	}, nil
 }
 
 // maxUnreportableSamples bounds the channel IDs carried per reason, so one

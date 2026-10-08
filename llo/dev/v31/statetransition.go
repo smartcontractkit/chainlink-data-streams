@@ -74,7 +74,7 @@ func (p *Plugin) StateTransition(ctx context.Context, seqNr uint64, _ ocrtypes.A
 		return nil, fmt.Errorf("failed to load KV state: %w", err)
 	}
 
-	tally, err := p.decodeObservations(ctx, aos, bf, p.BlobPayloads.round(seqNr))
+	tally, err := p.decodeObservations(ctx, aos, bf, p.BlobPayloads.round(seqNr), p.collectAttributedObservations(seqNr))
 	if err != nil {
 		return nil, err
 	}
@@ -242,6 +242,7 @@ func (p *Plugin) StateTransition(ctx context.Context, seqNr uint64, _ ocrtypes.A
 	p.captureHistoryTelemetry(history, requirements)
 	p.captureInsufficientHistory(effective, prev.opts, history)
 	p.captureOutcomeTelemetry(out, seqNr)
+	p.captureAttributedObservationTelemetry(out, seqNr, tally.attributed)
 	return encodePrecursor(out)
 }
 
@@ -265,9 +266,12 @@ type observationTally struct {
 	// per-oracle record rather than counted here: see writeCodecSupport.
 	supportedFormatsByOracle map[commontypes.OracleID]map[llotypes.ReportFormat]struct{}
 	streamObservations       map[llotypes.StreamID][]protocol.StreamValue
+	// attributed is every observation as decoded, in aos order. Collected only
+	// for attributed observation telemetry.
+	attributed []attributedObservation
 }
 
-func (p *Plugin) decodeObservations(ctx context.Context, aos []ocrtypes.AttributedObservation, bf ocr3_1types.BlobFetcher, memo *roundBlobPayloads) (observationTally, error) {
+func (p *Plugin) decodeObservations(ctx context.Context, aos []ocrtypes.AttributedObservation, bf ocr3_1types.BlobFetcher, memo *roundBlobPayloads, collect bool) (observationTally, error) {
 	tally := observationTally{
 		predConfigsByHash:              make(map[[32]byte]predecessorConfig),
 		predConfigVotesByHash:          make(map[[32]byte]int),
@@ -309,7 +313,13 @@ func (p *Plugin) decodeObservations(ctx context.Context, aos []ocrtypes.Attribut
 			// Deterministic decode failure (same bytes on every oracle): safe to
 			// drop just this observation.
 			p.Logger.Warnw("ignoring invalid observation", "oracleID", ao.Observer, "error", derr)
+			if collect {
+				tally.attributed = append(tally.attributed, attributedObservation{observer: ao.Observer, decodeErr: derr})
+			}
 			continue
+		}
+		if collect {
+			tally.attributed = append(tally.attributed, attributedObservation{observer: ao.Observer, obs: observation})
 		}
 
 		if p.PredecessorConfigDigest != nil {
