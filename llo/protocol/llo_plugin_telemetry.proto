@@ -5,8 +5,7 @@ option go_package = ".;protocol";
 
 import "plugin_codecs.proto";
 
-// LLOOutcomeTelemetry sent on every call to Outcome (once per
-// round)
+// LLOOutcomeTelemetry sent on every call to Outcome (once per round)
 message LLOOutcomeTelemetry {
   string life_cycle_stage = 1;
   uint64 observation_timestamp_nanoseconds = 2;
@@ -44,4 +43,30 @@ message LLOReportTelemetry {
   uint64 seq_nr = 9;
   bytes config_digest = 10;
   uint32 don_id = 11;
+}
+
+// LLOAttributedObservationTelemetry carries the observation of one oracle in a
+// production round (or staging, when enabled), as decoded by StateTransition. Large observations are split
+// across several messages sharing (config_digest, seq_nr, observer), each with a
+// stream values subset. Channel votes and decode_error are set only in the first message.
+message LLOAttributedObservationTelemetry {
+  bytes  config_digest = 1;
+  uint64 seq_nr = 2;
+  uint32 don_id = 3;
+  uint32 observer = 4;          // oracle that made the observation
+  uint32 emitter = 5;           // oracle that emitted the telemetry
+
+  // the oracle and don observation_timestamps
+  uint64 oracle_observation_timestamp_nanoseconds = 7;
+  uint64 agreed_observation_timestamp_nanoseconds = 8;
+
+  // stream id => value as observed by this oracle
+  map<uint32, LLOStreamValue> stream_values = 9;
+
+  // observation votes to update channels
+  repeated uint32 remove_channel_ids = 11;
+  map<uint32, LLOChannelDefinitionProto> update_channel_definitions = 12;
+
+  // observation decode error if any
+  optional string decode_error = 16;
 }
