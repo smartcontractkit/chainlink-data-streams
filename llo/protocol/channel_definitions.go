@@ -357,8 +357,14 @@ func analyzeChannelDefinitions(codecs map[llotypes.ReportFormat]ReportCodec, cha
 			if err := ValidateHistoryBackfillAgainstDefinitions(cd, channelDefs, 0); err != nil {
 				base(fmt.Errorf("invalid history backfill channel %d: %w", channelID, err), channelID)
 			}
+			// The target report format decides this as much as the backfill
+			// channel does, so changing either one is what installs the pair.
 			if err := ValidateHistoryBackfillTarget(cd, channelDefs); err != nil {
-				admit(fmt.Errorf("invalid history backfill channel %d: %w", channelID, err), channelID)
+				implicated := []llotypes.ChannelID{channelID}
+				if opts, perr := ParseHistoryBackfillOpts(cd.Opts); perr == nil {
+					implicated = append(implicated, opts.TargetChannelID)
+				}
+				admit(fmt.Errorf("invalid history backfill channel %d: %w", channelID, err), implicated...)
 			}
 			if err := ValidateHistoryBackfillValues(cd, channelDefs); err != nil {
 				admit(fmt.Errorf("invalid history backfill channel %d: %w", channelID, err), channelID)

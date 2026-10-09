@@ -121,6 +121,16 @@ func Test_ValidateHistoryBackfillTarget(t *testing.T) {
 		err := VerifyChannelDefinitionsForAdmission(codecs, defs, map[llotypes.ChannelID]struct{}{1: {}})
 		require.ErrorContains(t, err, "is itself a history_backfill channel")
 	})
+
+	// Turning a committed backfill channel target into a backfill channel
+	// leaves the backfill channel own definition unchanged, so only the
+	// target is being admitted.
+	t.Run("admitting only the target is rejected", func(t *testing.T) {
+		defs := llotypes.ChannelDefinitions{1: backfill(2), 2: backfill(3), 3: reportable}
+		codecs := map[llotypes.ReportFormat]ReportCodec{}
+		err := VerifyChannelDefinitionsForAdmission(codecs, defs, map[llotypes.ChannelID]struct{}{2: {}})
+		require.ErrorContains(t, err, "invalid history backfill channel 1: target channel 2 is itself a history_backfill channel")
+	})
 }
 
 func Test_ValidateHistoryBackfillValues(t *testing.T) {
