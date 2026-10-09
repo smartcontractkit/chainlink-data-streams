@@ -56,6 +56,17 @@ type FeedIDer interface {
 	FeedID(llotypes.ChannelDefinition) (feedID [32]byte, ok bool, err error)
 }
 
+// TWAPCounter is optionally implemented by a ReportCodec whose channels
+// evaluate expressions. It exists so that admission can bound the TWAP calls of
+// the whole definition set (see MaxTotalTWAPCalls) without parsing expressions
+// itself.
+//
+// TWAPCalls must be a pure function of the definition, like Verify, and is only
+// consulted for definitions Verify accepted.
+type TWAPCounter interface {
+	TWAPCalls(llotypes.ChannelDefinition) int
+}
+
 type ChannelDefinitionWithID struct {
 	llotypes.ChannelDefinition
 	ChannelID llotypes.ChannelID

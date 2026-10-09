@@ -187,8 +187,8 @@ const (
 	// History depth is not a bound on TWAP work. A TWAP call needs only a
 	// depth-1 history window, so MaxHistoryRecordsPerExpression permits
 	// thousands of calls in one expression, and each is free to request the
-	// longest window allowed — one-second buckets allocated and filled every
-	// round, per channel, on the consensus path.
+	// longest window allowed — up to that many one-second buckets interpolated
+	// every round, per channel, on the consensus path.
 	//
 	// Capping the count rather than pricing each call by its window is
 	// deliberate: the count is syntactic, so it holds for a configuration built
@@ -202,6 +202,20 @@ const (
 	// oracle must reject the same expression, so it is never per-node
 	// configurable.
 	MaxTWAPCallsPerExpression = 4
+	// MaxTotalTWAPCalls bounds the TWAP calls across the whole definition set.
+	//
+	// MaxTWAPCallsPerExpression bounds one expression, but expressions are
+	// bounded only by MaxTotalCalculatedStreams and MaxTotalOptsBytes, which
+	// between them admit thousands of maximum-length TWAP calls, all evaluated
+	// every round on every oracle. Like the per-expression cap, this charges
+	// every call its worst case.
+	//
+	// The worst case is a maximum-length window over a maximum-depth history
+	// spread evenly across it, so every missing second is interior and is
+	// stepped through costing cpu time across the evaluation workers,
+	// while a window with a short gap, the realistic shape, costs tens of
+	// microseconds per call. Admission-only, like the other whole-set budgets.
+	MaxTotalTWAPCalls = 64
 	// MaxHistoryRecordBytes is the maximum serialized size of one history
 	// record, enforced on append (StreamHistory.Append) and used as the
 	// per-record size when admitting pairs against MaxHistoryTotalBytes.

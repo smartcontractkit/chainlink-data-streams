@@ -55,6 +55,7 @@ type analysisCache struct {
 type analysisEntry struct {
 	expression string
 	refs       []HistoryRef
+	twapCalls  int
 	err        error
 
 	// program is the compiled expression, filled in on first successful
@@ -93,6 +94,34 @@ var historyAnalysisCache = newAnalysisCache(maxAnalysisCacheEntries)
 // shared with the cache: callers must not modify it.
 func AnalyzeExpressionHistory(expression string) ([]HistoryRef, error) {
 	return historyAnalysisCache.analyze(expression)
+}
+
+// ChannelTWAPCalls counts the TWAP calls across every expression a channel's
+// opts declare. It is what admission charges the channel against
+// protocol.MaxTotalTWAPCalls, and like ValidateExpression it is a pure function
+// of the definition.
+//
+// Only expressions that analyze cleanly are counted: one that does not is never
+// evaluated, so it does no TWAP work. Rejecting such expressions is
+// ValidateChannelExpressions' job. Every declared expression is counted, not
+// just those within MaxExpressionsPerChannel, so that a committed definition
+// predating that limit is still charged for what it evaluates.
+func ChannelTWAPCalls(optsCache *protocol.OptsCache, cd llotypes.ChannelDefinition, cid llotypes.ChannelID) int {
+	o, err := getCalculatedStreamOpts(optsCache, cd, cid)
+	if err != nil {
+		return 0
+	}
+	calls := 0
+	for _, abi := range o.ABI {
+		if abi.Expression == "" {
+			continue
+		}
+		entry := historyAnalysisCache.entry(abi.Expression)
+		if entry.err == nil {
+			calls += entry.twapCalls
+		}
+	}
+	return calls
 }
 
 // ValidateExpression reports whether an expression is statically well formed.
@@ -159,13 +188,19 @@ func ValidateChannelExpressions(optsCache *protocol.OptsCache, cd llotypes.Chann
 }
 
 func (c *analysisCache) analyze(expression string) ([]HistoryRef, error) {
+	entry := c.entry(expression)
+	return entry.refs, entry.err
+}
+
+func (c *analysisCache) entry(expression string) *analysisEntry {
 	if entry, ok := c.get(expression); ok {
-		return entry.refs, entry.err
+		return entry
 	}
 
-	refs, err := analyzeHistoryExpression(expression)
-	c.put(&analysisEntry{expression: expression, refs: refs, err: err})
-	return refs, err
+	refs, twapCalls, err := analyzeHistoryExpression(expression)
+	entry := &analysisEntry{expression: expression, refs: refs, twapCalls: twapCalls, err: err}
+	c.put(entry)
+	return entry
 }
 
 func (c *analysisCache) get(expression string) (*analysisEntry, bool) {

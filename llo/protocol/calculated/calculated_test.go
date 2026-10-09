@@ -1840,3 +1840,25 @@ func Test_environment_SetStreamValue_NestedNil(t *testing.T) {
 	require.ErrorContains(t, err, "stream value is nil")
 	require.NotContains(t, env, "s1")
 }
+
+// TestEvaluationWeight_ChargesTWAPWindow checks that a TWAP call over a shallow
+// window still counts as heavy: two records a day apart are two values to read
+// but tens of thousands of seconds to interpolate.
+func TestEvaluationWeight_ChargesTWAPWindow(t *testing.T) {
+	t.Parallel()
+
+	shallow := []boundSeries{{name: "w", series: benchSeries(2, 1)}}
+	work := func(expression string) []channelWork {
+		return []channelWork{{
+			opts:    calculatedStreamOpts{ABI: []protocol.CalculatedStreamABI{{Expression: expression, ExpressionStreamID: 900}}},
+			windows: [][]boundSeries{shallow},
+		}}
+	}
+
+	assert.Equal(t, 3, evaluationWeight(work("Count(History(s1, 2))")))
+
+	twap := `TWAP(History(s1, 2), {window: Duration("24h"), minSamples: 1, maxHeadGap: 86400, maxInteriorGap: 86400, maxTailGap: 86400})`
+	weight := evaluationWeight(work(twap))
+	assert.Equal(t, 3+twapMaxWindowSeconds, weight)
+	assert.GreaterOrEqual(t, weight, minParallelEvaluationWeight)
+}

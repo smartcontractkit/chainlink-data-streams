@@ -827,17 +827,23 @@ func evaluateCalculatedStreams(works []channelWork) []channelResult {
 
 // evaluationWeight estimates how much evaluation a round holds, in values that
 // will be visited: one per expression, plus one per record in each window it
-// reads. It is the cheapest predictor of cost that distinguishes the two cases
-// that matter — a round of scalar arithmetic from a round of window functions —
-// and it is derived from prepared work, so it costs nothing to compute.
+// reads, plus the longest window each TWAP call may step through. It is the
+// cheapest predictor of cost that distinguishes the two cases that matter — a
+// round of scalar arithmetic from a round of window functions — and it is
+// derived from prepared work and cached analysis, so it costs next to nothing.
+//
+// TWAP is charged its worst case because its cost follows the window it is
+// configured with rather than the records it reads: two records a day apart
+// are two values here but tens of thousands of interpolated seconds.
 func evaluationWeight(works []channelWork) int {
 	weight := 0
 	for i := range works {
-		for _, window := range works[i].windows {
+		for j, window := range works[i].windows {
 			weight++
 			for _, bound := range window {
 				weight += bound.series.Len()
 			}
+			weight += historyAnalysisCache.entry(works[i].opts.ABI[j].Expression).twapCalls * twapMaxWindowSeconds
 		}
 	}
 	return weight

@@ -110,7 +110,7 @@ func TestAnalyzeHistoryExpression_Accepts(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			refs, err := analyzeHistoryExpression(tc.expression)
+			refs, _, err := analyzeHistoryExpression(tc.expression)
 			require.NoError(t, err)
 			assert.Equal(t, tc.want, refs)
 		})
@@ -223,7 +223,7 @@ func TestAnalyzeHistoryExpression_Rejects(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			refs, err := analyzeHistoryExpression(tc.expression)
+			refs, _, err := analyzeHistoryExpression(tc.expression)
 			require.Error(t, err)
 			require.ErrorIs(t, err, ErrHistoryExpression)
 			assert.Contains(t, err.Error(), tc.wantErr)
@@ -244,12 +244,12 @@ func TestAnalyzeHistoryExpression_FanOut(t *testing.T) {
 	for i := range calls {
 		within = append(within, fmt.Sprintf("Avg(History(s%d, %d))", i+1, perCall))
 	}
-	refs, err := analyzeHistoryExpression(strings.Join(within, " + "))
+	refs, _, err := analyzeHistoryExpression(strings.Join(within, " + "))
 	require.NoError(t, err)
 	assert.Len(t, refs, calls)
 
 	over := append(within, fmt.Sprintf("Avg(History(s%d, 1))", calls+1))
-	_, err = analyzeHistoryExpression(strings.Join(over, " + "))
+	_, _, err = analyzeHistoryExpression(strings.Join(over, " + "))
 	require.ErrorIs(t, err, ErrHistoryExpression)
 	assert.Contains(t, err.Error(), "total history depth")
 }
@@ -260,7 +260,7 @@ func TestAnalyzeHistoryExpression_FanOut(t *testing.T) {
 func TestAnalyzeHistoryExpression_ReportsEveryProblem(t *testing.T) {
 	t.Parallel()
 
-	_, err := analyzeHistoryExpression("Add(History(s1, 0), History(s2, x))")
+	_, _, err := analyzeHistoryExpression("Add(History(s1, 0), History(s2, x))")
 	require.ErrorIs(t, err, ErrHistoryExpression)
 	assert.Contains(t, err.Error(), "depth must be at least 1")
 	assert.Contains(t, err.Error(), "depth must be an integer literal")
@@ -273,20 +273,20 @@ func TestAnalyzeHistoryExpression_Deterministic(t *testing.T) {
 	t.Parallel()
 
 	expression := "Add(Avg(History(s7_bid, 10)), Add(Avg(History(s1, 300)), Avg(History(s7, 10))))"
-	first, err := analyzeHistoryExpression(expression)
+	first, _, err := analyzeHistoryExpression(expression)
 	require.NoError(t, err)
 	for range 20 {
-		again, err := analyzeHistoryExpression(expression)
+		again, _, err := analyzeHistoryExpression(expression)
 		require.NoError(t, err)
 		require.Equal(t, first, again)
 	}
 
 	errFirst := func() string {
-		_, err := analyzeHistoryExpression("Add(History(s1, 0), History(s2, x))")
+		_, _, err := analyzeHistoryExpression("Add(History(s1, 0), History(s2, x))")
 		return err.Error()
 	}()
 	for range 20 {
-		_, err := analyzeHistoryExpression("Add(History(s1, 0), History(s2, x))")
+		_, _, err := analyzeHistoryExpression("Add(History(s1, 0), History(s2, x))")
 		require.Equal(t, errFirst, err.Error(), "error text must be stable")
 	}
 }
@@ -451,7 +451,7 @@ func FuzzAnalyzeHistoryExpression(f *testing.F) {
 	}
 
 	f.Fuzz(func(t *testing.T, expression string) {
-		refs, err := analyzeHistoryExpression(expression)
+		refs, _, err := analyzeHistoryExpression(expression)
 		if err != nil {
 			require.Nil(t, refs, "a rejected expression must not yield references")
 			return

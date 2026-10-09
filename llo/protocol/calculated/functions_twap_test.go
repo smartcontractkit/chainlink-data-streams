@@ -219,11 +219,13 @@ func TestTWAP_GapStats(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			buckets := make([]twapBucket, len(tc.observed))
+			var observations []twapObservation
 			for i, observed := range tc.observed {
-				buckets[i] = twapBucket{observed: observed, price: decimal.NewFromInt(1)}
+				if observed {
+					observations = append(observations, twapObservation{offset: i, price: decimal.NewFromInt(1)})
+				}
 			}
-			m, head, interior, tail := twapGapStats(buckets)
+			m, head, interior, tail := twapGapStats(observations, len(tc.observed))
 			assert.Equal(t, tc.wantM, m, "M")
 			assert.Equal(t, tc.wantHead, head, "Ghead")
 			assert.Equal(t, tc.wantInt, interior, "Gint")

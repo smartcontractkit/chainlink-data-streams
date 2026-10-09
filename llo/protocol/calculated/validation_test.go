@@ -339,3 +339,40 @@ func TestValidateChannelExpressions_CountLimit(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "exceeding the maximum")
 }
+
+func TestChannelTWAPCalls(t *testing.T) {
+	t.Parallel()
+
+	const twapCall = `TWAP(History(s1, 3), {window: Duration("3s"), minSamples: 1, maxHeadGap: 3, maxInteriorGap: 3, maxTailGap: 3})`
+	channel := func(expressions ...string) llotypes.ChannelDefinition {
+		abi := ""
+		for i, expression := range expressions {
+			if i > 0 {
+				abi += ","
+			}
+			abi += fmt.Sprintf(`{"type":"int256","expression":%q,"expressionStreamID":%d}`, expression, 900+i)
+		}
+		return llotypes.ChannelDefinition{
+			ReportFormat: llotypes.ReportFormatEVMABIEncodeUnpackedExpr,
+			Streams:      []llotypes.Stream{{StreamID: 1, Aggregator: llotypes.AggregatorMedian}},
+			Opts:         []byte(fmt.Sprintf(`{"abi":[%s]}`, abi)),
+		}
+	}
+
+	assert.Equal(t, 0, ChannelTWAPCalls(nil, channel("Add(s1, 1)"), 1))
+	assert.Equal(t, 3, ChannelTWAPCalls(nil, channel(
+		twapCall,
+		"Add("+twapCall+", "+twapCall+")",
+		"Add(s1, 1)",
+	), 1), "calls are summed across expressions")
+
+	// An expression that fails analysis is never evaluated, so it is not
+	// charged, while the valid expressions beside it still are.
+	tooMany := strings.TrimSuffix(strings.Repeat(twapCall+" + ", protocol.MaxTWAPCallsPerExpression+1), " + ")
+	assert.Equal(t, 1, ChannelTWAPCalls(nil, channel(tooMany, twapCall), 1))
+
+	assert.Equal(t, 0, ChannelTWAPCalls(nil, llotypes.ChannelDefinition{
+		ReportFormat: llotypes.ReportFormatEVMABIEncodeUnpackedExpr,
+		Opts:         []byte(`not json`),
+	}, 1), "opts that do not decode declare no expressions")
+}

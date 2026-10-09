@@ -200,6 +200,11 @@ func (stubReportCodec) Encode(Report, llotypes.ChannelDefinition, *OptsCache) ([
 }
 func (stubReportCodec) Verify(llotypes.ChannelDefinition) error { return nil }
 
+// twapCodec charges every definition MaxTWAPCallsPerExpression TWAP calls.
+type twapCodec struct{ stubReportCodec }
+
+func (twapCodec) TWAPCalls(llotypes.ChannelDefinition) int { return MaxTWAPCallsPerExpression }
+
 // verifyAdmittingAll verifies channelDefs with every channel treated as being
 // admitted, which is what the admission-only checks are exercised against.
 func verifyAdmittingAll(codecs map[llotypes.ReportFormat]ReportCodec, channelDefs llotypes.ChannelDefinitions) error {
@@ -521,6 +526,32 @@ func Test_VerifyChannelDefinitions_SizeBudgets(t *testing.T) {
 		over := set(MaxTotalOptsBytes/MaxChannelOptsBytes + 1)
 		require.EqualError(t, verifyAdmittingAll(codecs, over),
 			fmt.Sprintf("too many opts bytes across all channels, got: %d/%d", MaxTotalOptsBytes+MaxChannelOptsBytes, MaxTotalOptsBytes))
+	})
+
+	t.Run("TWAP calls across the set", func(t *testing.T) {
+		twapCodecs := map[llotypes.ReportFormat]ReportCodec{0: twapCodec{}}
+		set := func(channels int) llotypes.ChannelDefinitions {
+			defs := llotypes.ChannelDefinitions{}
+			for c := range channels {
+				defs[llotypes.ChannelID(c+1)] = channel(1, 0)
+			}
+			return defs
+		}
+		perChannel := MaxTWAPCallsPerExpression
+		atLimit := set(MaxTotalTWAPCalls / perChannel)
+		require.NoError(t, verifyAdmittingAll(twapCodecs, atLimit))
+
+		over := set(MaxTotalTWAPCalls/perChannel + 1)
+		require.EqualError(t, verifyAdmittingAll(twapCodecs, over),
+			fmt.Sprintf("too many TWAP calls across all channels, got: %d/%d", MaxTotalTWAPCalls+perChannel, MaxTotalTWAPCalls))
+		// Admission-only, like the other budgets.
+		require.NoError(t, VerifyChannelDefinitions(twapCodecs, over))
+
+		// A tombstone is never evaluated, so it does no TWAP work.
+		tombstoned := over[1]
+		tombstoned.Tombstone = true
+		over[1] = tombstoned
+		require.NoError(t, verifyAdmittingAll(twapCodecs, over))
 	})
 
 	t.Run("budgets are admission-only", func(t *testing.T) {

@@ -246,6 +246,9 @@ func analyzeChannelDefinitions(codecs map[llotypes.ReportFormat]ReportCodec, cha
 	// pairs above because they are recomputed each round rather than carried
 	// forward, so they cost precursor bytes but no r/agg bytes.
 	var totalCalculatedStreams int
+	// TWAP calls across every expression in the set, each charged its worst
+	// case; see MaxTotalTWAPCalls.
+	var totalTWAPCalls int
 
 	uniqueStreamIDs := make(map[llotypes.StreamID]struct{}, len(channelDefs))
 	// Owners of every stream ID that will hold an aggregate: observed streams
@@ -322,6 +325,7 @@ func analyzeChannelDefinitions(codecs map[llotypes.ReportFormat]ReportCodec, cha
 			}
 		}
 		facts := channelFactsFor(cache, codecs, channelID, cd)
+		totalTWAPCalls += facts.twapCalls
 
 		if HasCalculatedStreams(cd) {
 			if facts.calculatedErr != nil {
@@ -385,8 +389,8 @@ func analyzeChannelDefinitions(codecs map[llotypes.ReportFormat]ReportCodec, cha
 	}
 
 	// Whole-set budgets. Each is what the sizes of the channel-definitions
-	// record, the precursor and the carry-forward record actually depend on;
-	// see the limits they name.
+	// record, the precursor and the carry-forward record, or the per-round
+	// evaluation work, actually depend on; see the limits they name.
 	if totalStreamEntries > MaxTotalStreamEntries {
 		admitSet(fmt.Errorf("too many stream entries across all channels, got: %d/%d", totalStreamEntries, MaxTotalStreamEntries))
 	}
@@ -398,6 +402,9 @@ func analyzeChannelDefinitions(codecs map[llotypes.ReportFormat]ReportCodec, cha
 	}
 	if totalOptsBytes > MaxTotalOptsBytes {
 		admitSet(fmt.Errorf("too many opts bytes across all channels, got: %d/%d", totalOptsBytes, MaxTotalOptsBytes))
+	}
+	if totalTWAPCalls > MaxTotalTWAPCalls {
+		admitSet(fmt.Errorf("too many TWAP calls across all channels, got: %d/%d", totalTWAPCalls, MaxTotalTWAPCalls))
 	}
 
 	res.uniqueStreamIDs = len(uniqueStreamIDs)

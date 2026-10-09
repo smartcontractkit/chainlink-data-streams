@@ -18,6 +18,7 @@ var (
 	_ protocol.ReportCodec       = ReportCodecEVMABIEncodeUnpackedExpr{}
 	_ protocol.FeedIDer          = ReportCodecEVMABIEncodeUnpackedExpr{}
 	_ protocol.AdmissionVerifier = ReportCodecEVMABIEncodeUnpackedExpr{}
+	_ protocol.TWAPCounter       = ReportCodecEVMABIEncodeUnpackedExpr{}
 )
 
 type ReportCodecEVMABIEncodeUnpackedExpr struct {
@@ -128,6 +129,14 @@ func (r ReportCodecEVMABIEncodeUnpackedExpr) VerifyForAdmission(cd llotypes.Chan
 		return fmt.Errorf("invalid calculated stream expressions: %w", err)
 	}
 	return nil
+}
+
+// TWAPCalls implements protocol.TWAPCounter: it counts the TWAP calls across
+// the channel's expressions, so admission can bound them over the whole set.
+//
+// nil opts cache, as in VerifyForAdmission.
+func (r ReportCodecEVMABIEncodeUnpackedExpr) TWAPCalls(cd llotypes.ChannelDefinition) int {
+	return calculated.ChannelTWAPCalls(nil, cd, 0)
 }
 
 func (r ReportCodecEVMABIEncodeUnpackedExpr) buildHeader(rf BaseReportFields, resolution protocol.TimeResolution) ([]byte, error) {

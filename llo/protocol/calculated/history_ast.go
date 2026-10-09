@@ -483,23 +483,23 @@ func (p *historyPatcher) sortedRefs() []HistoryRef {
 }
 
 // analyzeHistoryExpression parses an expression and recovers its History
-// references without compiling it. It is a pure function of the expression
-// string, which is what lets every node derive the same required depths from
-// replicated channel definitions.
+// references and its TWAP call count without compiling it. It is a pure
+// function of the expression string, which is what lets every node derive the
+// same required depths and TWAP budget from replicated channel definitions.
 //
 // An expression with no History calls returns no references and no error.
-func analyzeHistoryExpression(expression string) ([]HistoryRef, error) {
+func analyzeHistoryExpression(expression string) (refs []HistoryRef, twapCalls int, err error) {
 	tree, err := parseExpression(expression)
 	if err != nil {
-		return nil, fmt.Errorf("%w: failed to parse expression: %s", ErrHistoryExpression, err)
+		return nil, 0, fmt.Errorf("%w: failed to parse expression: %s", ErrHistoryExpression, err)
 	}
 
 	p := newHistoryPatcher()
 	ast.Walk(&tree.Node, p)
 	if err := p.err(); err != nil {
-		return nil, err
+		return nil, 0, err
 	}
-	return p.sortedRefs(), nil
+	return p.sortedRefs(), p.twapCalls, nil
 }
 
 func describeNode(node ast.Node) string {

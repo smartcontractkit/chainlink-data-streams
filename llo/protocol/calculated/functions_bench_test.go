@@ -176,6 +176,38 @@ func BenchmarkTWAPRealisticGaps(b *testing.B) {
 	}
 }
 
+// BenchmarkTWAPMaxWindow measures one TWAP call at the longest window allowed
+// over the deepest history allowed, which is what protocol.MaxTotalTWAPCalls
+// charges every call. Records one second apart leave a head gap that costs one
+// multiplication; records spread evenly across the window turn every missing
+// second into an interior one, the worst case.
+func BenchmarkTWAPMaxWindow(b *testing.B) {
+	const windowSeconds = twapMaxWindowSeconds
+	const depth = protocol.MaxHistoryRecordsPerPair
+
+	for _, spacing := range []int{1, windowSeconds / depth} {
+		window := benchSeries(depth, spacing)
+		anchorNs := uint64(depth*spacing+1) * uint64(time.Second)
+		cfg := map[string]any{
+			"window":         time.Duration(windowSeconds) * time.Second,
+			"minSamples":     1,
+			"maxHeadGap":     windowSeconds,
+			"maxInteriorGap": windowSeconds,
+			"maxTailGap":     windowSeconds,
+		}
+		twap := twapFunc(anchorNs)
+
+		b.Run(fmt.Sprintf("recordSpacing=%ds", spacing), func(b *testing.B) {
+			b.ReportAllocs()
+			for range b.N {
+				if _, err := twap(window, cfg); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
+
 // BenchmarkTWAPParallel shows what the transcendental lock costs when several
 // plugin instances evaluate TWAP at once. Compare ns/op against the serial
 // benchmark: no speedup means the lock is the limit.

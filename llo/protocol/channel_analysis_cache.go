@@ -24,6 +24,7 @@ type channelFacts struct {
 	feedIDErr     error
 	calculatedIDs []llotypes.StreamID
 	calculatedErr error
+	twapCalls     int
 }
 
 // ChannelAnalysisCache memoizes channelFacts so that an unchanged channel
@@ -167,6 +168,9 @@ func deriveChannelFacts(codecs map[llotypes.ReportFormat]ReportCodec, channelID 
 	}
 	if feedIDer, ok := codec.(FeedIDer); ok {
 		facts.feedID, facts.hasFeedID, facts.feedIDErr = feedIDer.FeedID(cd)
+	}
+	if counter, ok := codec.(TWAPCounter); ok {
+		facts.twapCalls = counter.TWAPCalls(cd)
 	}
 	return facts
 }

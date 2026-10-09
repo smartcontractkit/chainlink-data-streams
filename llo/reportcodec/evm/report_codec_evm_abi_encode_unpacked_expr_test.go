@@ -473,6 +473,17 @@ func TestReportCodecEVMABIEncodeUnpackedExpr_Verify(t *testing.T) {
 		require.NoError(t, c.Verify(cd))
 		require.NoError(t, c.VerifyForAdmission(cd))
 	})
+	t.Run("TWAP calls are counted across expressions", func(t *testing.T) {
+		cd := llotypes.ChannelDefinition{
+			Streams:      []llotypes.Stream{{StreamID: 1, Aggregator: llotypes.AggregatorMedian}},
+			ReportFormat: llotypes.ReportFormatEVMABIEncodeUnpackedExpr,
+			Opts: []byte(`{"baseUSDFee":"1","feedID":"0x1111111111111111111111111111111111111111111111111111111111111111","ABI":[` +
+				`{"type":"int192","expression":"TWAP(History(s1, 3), {window: Duration(\"3s\"), minSamples: 1, maxHeadGap: 3, maxInteriorGap: 3, maxTailGap: 3})","expressionStreamID":998},` +
+				`{"type":"int192","expression":"Add(s1, 1)","expressionStreamID":999}]}`),
+		}
+		require.NoError(t, c.VerifyForAdmission(cd))
+		assert.Equal(t, 1, c.TWAPCalls(cd))
+	})
 	t.Run("statically invalid expression is rejected", func(t *testing.T) {
 		// A window in a scalar position can never produce a value, so accepting
 		// this definition would install a channel that never reports.
