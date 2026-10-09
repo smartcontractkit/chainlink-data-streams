@@ -526,8 +526,21 @@ func ParseDuration(x string) (time.Duration, error) {
 	return time.ParseDuration(x)
 }
 
-// toDecimal converts x to a decimal.Decimal
+// toDecimal converts x to a decimal.Decimal, refusing an operand too large to
+// compute with. See checkOperand.
 func toDecimal(x any) (decimal.Decimal, error) {
+	d, err := convertToDecimal(x)
+	if err != nil {
+		return decimal.Decimal{}, err
+	}
+	if err := checkOperand(d); err != nil {
+		return decimal.Decimal{}, err
+	}
+	return d, nil
+}
+
+// convertToDecimal converts x to a decimal.Decimal.
+func convertToDecimal(x any) (decimal.Decimal, error) {
 	switch v := x.(type) {
 	case Series:
 		// Static analysis rejects windows in scalar positions, so this is a

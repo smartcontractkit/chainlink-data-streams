@@ -5,6 +5,8 @@ import (
 	"sync"
 
 	"github.com/shopspring/decimal"
+
+	"github.com/smartcontractkit/chainlink-data-streams/llo/protocol"
 )
 
 // transcendentalMu serializes every call into shopspring/decimal's
@@ -109,9 +111,14 @@ const maxPowExponent = 100_000
 // So the quantity exp() guards is checked here, ahead of the work: the magnitude
 // of exponent * ln(base), against maxExpArgument, which is the largest argument
 // whose result still fits MaxDecimalExponent. The logarithm needed to estimate it
-// is taken at low precision, and its input is a stored value, so it is cheap next
-// to the power it is protecting — and exact enough that its rounding error cannot
-// move a value across a bound of 2400.
+// is taken at low precision on an operand bounded by checkOperand, so it is cheap
+// next to the power it is protecting — and exact enough that its rounding error
+// cannot move a value across a bound of 2400.
+//
+// Magnitude does not bound digits. The integer part of the exponent is applied
+// by exact repeated multiplication before anything is rounded, so a base close
+// to 1 with a long coefficient has a tiny logarithm and a huge result.
+// That size is checked separately, against maxPowResultBits.
 //
 // Both operands come from consensus, so an unbounded power is not one node's
 // problem: every node computes it in the same round, inside StateTransition,
@@ -125,6 +132,12 @@ func checkPow(base, exponent decimal.Decimal) error {
 	if abs.IsZero() {
 		return nil
 	}
+	// An upper bound on the coefficient of base^|trunc(exponent)|.
+	resultBits := decimal.NewFromInt(int64(abs.Coefficient().BitLen())).Mul(exponent.Truncate(0).Abs())
+	if resultBits.GreaterThan(decimal.NewFromInt(maxPowResultBits)) {
+		return fmt.Errorf("power of %s by %s needs a coefficient of up to %s bits, which exceeds the maximum of %d",
+			base, exponent, resultBits, maxPowResultBits)
+	}
 	lnBase, err := decimalLn(abs, powEstimatePrecision)
 	if err != nil {
 		return fmt.Errorf("power of %s by %s could not be bounded: %w", base, exponent, err)
@@ -136,10 +149,48 @@ func checkPow(base, exponent decimal.Decimal) error {
 	return nil
 }
 
+// maxPowResultBits bounds the coefficient of the exact integer power computed
+// before a power is rounded. It admits Pow(1.0001, 100000), about 1.4 million
+// bits, which takes milliseconds. A 58 digit base near 1 raised to the same
+// exponent needs 19 million bits and takes most of a second.
+const maxPowResultBits = 1 << 21
+
 // powEstimatePrecision is the precision of the logarithm used to size a power's
 // result. It only has to place the result on the right side of maxExpArgument, so
 // it is deliberately far below the precision of the calculation itself.
 const powEstimatePrecision = 8
+
+// Operand bounds. Only the final result of an expression is held to the
+// stored value bounds (MaxDecimalCoefficientBits, MaxDecimalExponent), so
+// without these an intermediate grows without limit: each Mul of a value with
+// itself doubles its coefficient, and 17 of them bound with let produce a
+// 7.6 million digit operand whose logarithm took over four minutes. Every node
+// evaluates the same expression in the same round, so that stalls the DON.
+//
+// Checking every operand bounds the cost of each operation by the size of its
+// inputs, and each operation at most roughly doubles that size, so growth stops
+// at the next operation.
+//
+// Both leave room for the product of four stored values at their bounds.
+const (
+	maxOperandCoefficientBits = 4 * protocol.MaxDecimalCoefficientBits
+	// The exponent is bounded separately because adding operands rescales the
+	// one with the larger exponent: a value whose exponent has grown to -1e9
+	// has a one bit coefficient but turns Add(x, 1) into a billion digit one.
+	maxOperandExponent = 4 * protocol.MaxDecimalExponent
+)
+
+// checkOperand refuses an operand too large to compute with. See the operand
+// bounds above.
+func checkOperand(d decimal.Decimal) error {
+	if bits := d.Coefficient().BitLen(); bits > maxOperandCoefficientBits {
+		return fmt.Errorf("operand has a coefficient of %d bits, which exceeds the maximum of %d", bits, maxOperandCoefficientBits)
+	}
+	if exp := d.Exponent(); exp > maxOperandExponent || exp < -maxOperandExponent {
+		return fmt.Errorf("operand has an exponent of %d, which exceeds the maximum magnitude of %d", exp, maxOperandExponent)
+	}
+	return nil
+}
 
 // decimalToInt converts an integral decimal to an int, refusing anything outside
 // [minimum, maximum].

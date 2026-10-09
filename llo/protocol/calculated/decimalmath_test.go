@@ -1,6 +1,8 @@
 package calculated
 
 import (
+	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -159,6 +161,9 @@ func Test_checkPow(t *testing.T) {
 		{"absurd exponent is refused by the cheap gate", "2", "100001", "exceeds the maximum magnitude of 100000"},
 		{"largest storable result", "10", "1000", ""},
 		{"base near one with a large exponent", "1.0001", "100000", ""},
+		// The logarithm is tiny, so only the size bound refuses these.
+		{"long base near one", "1." + strings.Repeat("0", 56) + "1", "100000", "exceeds the maximum of 2097152"},
+		{"long base near one, negative exponent", "1." + strings.Repeat("0", 56) + "1", "-100000", "exceeds the maximum of 2097152"},
 		{"square root", "4", "0.5", ""},
 		{"zero base has no logarithm", "0", "3", ""},
 	} {
@@ -184,4 +189,43 @@ func Test_checkPow(t *testing.T) {
 			require.ErrorContains(t, err, tc.wantErr)
 		})
 	}
+}
+
+func Test_checkOperand(t *testing.T) {
+	t.Parallel()
+
+	// Squaring a stored value repeatedly doubles its coefficient each time. 17
+	// squarings took over four minutes in the logarithm before operands were
+	// bounded.
+	squarings := `let a0 = "1` + strings.Repeat("7", 57) + `"; `
+	for i := 1; i <= 17; i++ {
+		squarings += fmt.Sprintf("let a%d = Mul(a%d, a%d); ", i, i-1, i-1)
+	}
+
+	for _, tc := range []struct {
+		name    string
+		stmt    string
+		wantErr string
+	}{
+		{"coefficient grown by repeated squaring", squarings + "Ln(a17)", "exceeds the maximum of 768"},
+		{"long literal coefficient", `Ln("1` + strings.Repeat("7", 300) + `")`, "exceeds the maximum of 768"},
+		{"exponent grown by repeated squaring", `let a = Mul("1e-1000", "1e-1000"); let b = Mul(a, a); let c = Mul(b, b); Add(c, 1)`, "exceeds the maximum magnitude of 4000"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			start := time.Now()
+			_, err := evalDecimal(tc.stmt, NewEnv(1))
+			require.Less(t, time.Since(start), time.Second)
+			require.ErrorContains(t, err, tc.wantErr)
+		})
+	}
+
+	t.Run("product of four stored values", func(t *testing.T) {
+		t.Parallel()
+
+		v := `"1` + strings.Repeat("7", 57) + `e-1000"`
+		_, err := evalDecimal(fmt.Sprintf("Round(Mul(Mul(%[1]s, %[1]s), Mul(%[1]s, %[1]s)), 0)", v), NewEnv(1))
+		require.NoError(t, err)
+	})
 }
