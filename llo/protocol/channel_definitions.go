@@ -232,8 +232,9 @@ func analyzeChannelDefinitions(codecs map[llotypes.ReportFormat]ReportCodec, cha
 	}
 
 	// Whole-set budgets, accumulated over the channels the loop below visits
-	// (tombstones excluded: they carry neither streams nor opts that anything
-	// reads) and checked once at the end.
+	// and checked once at the end. Tombstones count: nothing reads their
+	// streams or opts, but they are persisted in the definitions record all the
+	// same.
 	var totalStreamEntries, totalOptsBytes int
 
 	// Every (streamID, aggregator) pair that will hold an aggregate. Distinct
@@ -260,7 +261,23 @@ func analyzeChannelDefinitions(codecs map[llotypes.ReportFormat]ReportCodec, cha
 
 	for _, channelID := range channelIDs {
 		cd := channelDefs[channelID]
+
+		// Opts are opaque bytes, so length is the only thing that can be
+		// checked here. Admission-only: a committed definition carrying an
+		// oversized blob is left alone rather than failing verification on every
+		// oracle, every round.
+		if len(cd.Opts) > MaxChannelOptsBytes {
+			admit(fmt.Errorf("ChannelDefinition with ID %d has opts that are too long, got: %d/%d", channelID, len(cd.Opts), MaxChannelOptsBytes), channelID)
+		}
+		totalOptsBytes += len(cd.Opts)
+
+		// A tombstone is persisted as is, so its streams are bounded like any
+		// other. Admission-only, so that a committed tombstone stays reapable.
 		if cd.Tombstone {
+			if len(cd.Streams) > MaxStreamsPerChannel {
+				admit(fmt.Errorf("ChannelDefinition with ID %d has too many streams, got: %d/%d", channelID, len(cd.Streams), MaxStreamsPerChannel), channelID)
+			}
+			totalStreamEntries += len(cd.Streams)
 			continue
 		}
 
@@ -273,14 +290,6 @@ func analyzeChannelDefinitions(codecs map[llotypes.ReportFormat]ReportCodec, cha
 			continue
 		}
 		totalStreamEntries += len(cd.Streams)
-		// Opts are opaque bytes, so length is the only thing that can be
-		// checked here. Admission-only: a committed definition carrying an
-		// oversized blob is left alone rather than failing verification on every
-		// oracle, every round.
-		if len(cd.Opts) > MaxChannelOptsBytes {
-			admit(fmt.Errorf("ChannelDefinition with ID %d has opts that are too long, got: %d/%d", channelID, len(cd.Opts), MaxChannelOptsBytes), channelID)
-		}
-		totalOptsBytes += len(cd.Opts)
 		for _, strm := range cd.Streams {
 			if strm.Aggregator == 0 {
 				base(fmt.Errorf("ChannelDefinition with ID %d has stream %d with zero aggregator (this may indicate an uninitialized struct)", channelID, strm.StreamID), channelID)

@@ -545,14 +545,36 @@ func Test_VerifyChannelDefinitions_SizeBudgets(t *testing.T) {
 		}
 	})
 
-	t.Run("tombstones cost nothing", func(t *testing.T) {
-		// A tombstone carries neither streams nor opts that anything reads, so
-		// it must not consume either budget.
+	t.Run("tombstones count toward the budgets", func(t *testing.T) {
+		// A tombstone is persisted in the definitions record like any other
+		// definition, so its streams and opts consume the same budgets.
 		defs := sharedStream(11, MaxTotalStreamEntries/10)
 		tombstoned := defs[11]
 		tombstoned.Tombstone = true
 		defs[11] = tombstoned
-		require.NoError(t, verifyAdmittingAll(codecs, defs))
+		require.EqualError(t, verifyAdmittingAll(codecs, defs),
+			fmt.Sprintf("too many stream entries across all channels, got: %d/%d", 11*(MaxTotalStreamEntries/10), MaxTotalStreamEntries))
+
+		over := channel(1, MaxChannelOptsBytes+1)
+		over.Tombstone = true
+		require.EqualError(t, verifyAdmittingAll(codecs, llotypes.ChannelDefinitions{1: over}),
+			fmt.Sprintf("ChannelDefinition with ID 1 has opts that are too long, got: %d/%d", MaxChannelOptsBytes+1, MaxChannelOptsBytes))
+
+		set := llotypes.ChannelDefinitions{}
+		for c := range MaxTotalOptsBytes/MaxChannelOptsBytes + 1 {
+			cd := channel(1, MaxChannelOptsBytes)
+			cd.Tombstone = c == 0
+			set[llotypes.ChannelID(c+1)] = cd
+		}
+		require.EqualError(t, verifyAdmittingAll(codecs, set),
+			fmt.Sprintf("too many opts bytes across all channels, got: %d/%d", MaxTotalOptsBytes+MaxChannelOptsBytes, MaxTotalOptsBytes))
+
+		manyStreams := channel(MaxStreamsPerChannel+1, 0)
+		manyStreams.Tombstone = true
+		require.EqualError(t, verifyAdmittingAll(codecs, llotypes.ChannelDefinitions{1: manyStreams}),
+			fmt.Sprintf("ChannelDefinition with ID 1 has too many streams, got: %d/%d", MaxStreamsPerChannel+1, MaxStreamsPerChannel))
+		// Admission-only: a committed tombstone over the limits still verifies.
+		require.NoError(t, VerifyChannelDefinitions(codecs, llotypes.ChannelDefinitions{1: manyStreams}))
 	})
 }
 
