@@ -752,6 +752,8 @@ func Test_Telemetry(t *testing.T) {
 	p.DonID = 7
 	p.OutcomeTelemetryCh = otCh
 	p.ReportTelemetryCh = rtCh
+	// Emitters with N=4, F=1: seqNr 2 is {2, 3}, seqNr 3 is {3, 0}, seqNr 4 is {0, 1}.
+	p.OracleID = 0
 	kv := newMemKV()
 
 	channelDef := llotypes.ChannelDefinition{ReportFormat: llotypes.ReportFormatJSON, Streams: []llotypes.Stream{{StreamID: 100, Aggregator: llotypes.AggregatorMedian}}}
@@ -780,7 +782,7 @@ func Test_Telemetry(t *testing.T) {
 	prec4, err := p.StateTransition(ctx, 4, ocrtypes.AttributedQuery{}, obs(3000, true), kv, testBlobs)
 	require.NoError(t, err)
 
-	require.Len(t, otCh, 3, "one outcome telemetry per non-bootstrap StateTransition")
+	require.Len(t, otCh, 2, "one outcome telemetry per non-bootstrap StateTransition this oracle emits for")
 	ot := <-otCh
 	require.Equal(t, uint32(7), ot.DonId)
 

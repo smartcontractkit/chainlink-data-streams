@@ -155,6 +155,8 @@ type v31Instance struct {
 	reports []emittedReport
 	// retirementRR is the raw retirement report, once retired.
 	retirementRR []byte
+	// markers counts the staging markers emitted.
+	markers int
 }
 
 func newV31Instance(t *testing.T, digest ocrtypes.ConfigDigest, predecessor *ocrtypes.ConfigDigest, prrc protocol.PredecessorRetirementReportCache) *v31Instance {
@@ -201,6 +203,10 @@ func (v *v31Instance) tryRound(obs ...Observation) error {
 	for _, rwi := range rwis {
 		if rwi.ReportWithInfo.Info.ReportFormat == llotypes.ReportFormatRetirement {
 			v.retirementRR = rwi.ReportWithInfo.Report
+			continue
+		}
+		if protocol.IsStagingMarker(rwi.ReportWithInfo.Info, rwi.ReportWithInfo.Report) {
+			v.markers++
 			continue
 		}
 		v.reports = append(v.reports, decodeJSONReport(v.t, "v31", v.seqNr, rwi))

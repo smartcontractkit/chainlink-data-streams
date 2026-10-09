@@ -18,6 +18,7 @@ import (
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
 
 	"github.com/smartcontractkit/chainlink-data-streams/llo/pluginconfig"
+	"github.com/smartcontractkit/chainlink-data-streams/llo/protocol"
 	mercurytransmitter "github.com/smartcontractkit/chainlink-data-streams/llo/transmitter/dataengine"
 )
 
@@ -174,6 +175,12 @@ func (t *transmitter) Transmit(
 		return nil
 	}
 	t.notify(digest, seqNr)
+
+	if protocol.IsStagingMarker(report.Info, report.Report) {
+		// The staging marker is never transmitted. It exists to drive the
+		// notification above, which flushes the telemetry buffered for seqNr.
+		return nil
+	}
 
 	g := new(errgroup.Group)
 	for _, st := range t.subTransmitters {

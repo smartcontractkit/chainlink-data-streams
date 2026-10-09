@@ -14,6 +14,7 @@ import (
 
 	"github.com/smartcontractkit/chainlink-data-streams/llo/protocol"
 
+	"github.com/smartcontractkit/libocr/commontypes"
 	"github.com/smartcontractkit/libocr/offchainreporting2plus/ocr3_1types"
 	"github.com/smartcontractkit/libocr/offchainreporting2plus/ocr3types"
 	ocrtypes "github.com/smartcontractkit/libocr/offchainreporting2plus/types"
@@ -24,6 +25,10 @@ import (
 type Config struct {
 	// VerboseLogging enables additional, potentially expensive logging.
 	VerboseLogging bool
+	// CaptureStagingTelemetry makes a staging instance emit plugin telemetry
+	// (outcome, report, attributed observation) as a production one does. Off,
+	// only production rounds emit.
+	CaptureStagingTelemetry bool
 }
 
 var _ ocr3_1types.ReportingPlugin[llotypes.ReportInfo] = &Plugin{}
@@ -40,6 +45,7 @@ type Plugin struct {
 	Logger                           logger.Logger
 	N                                int
 	F                                int
+	OracleID                         commontypes.OracleID
 	RetirementReportCodec            protocol.RetirementReportCodec
 	ReportCodecs                     map[llotypes.ReportFormat]protocol.ReportCodec
 	DonID                            uint32
@@ -69,6 +75,10 @@ type Plugin struct {
 	// Optional telemetry sinks; best-effort, non-blocking.
 	OutcomeTelemetryCh chan<- *protocol.LLOOutcomeTelemetry
 	ReportTelemetryCh  chan<- *protocol.LLOReportTelemetry
+
+	// attributedObservationTelemeter, if set, emits the decoded observation of
+	// every oracle in rounds that emit telemetry and this oracle is an emitter for.
+	attributedObservationTelemeter *attributedObservationTelemeter
 
 	// pump gathers stream observations and broadcasts them as blobs off the OCR
 	// critical path. Observation only picks up the handle it parked.
@@ -496,6 +506,9 @@ func (p *Plugin) ShouldTransmitAcceptedReport(context.Context, uint64, ocr3types
 }
 
 func (p *Plugin) Close() error {
+	if p.attributedObservationTelemeter != nil {
+		p.attributedObservationTelemeter.Close()
+	}
 	if p.pump != nil && !p.pump.Close() {
 		return fmt.Errorf("blob pump did not stop within %s", p.pump.closeTimeout)
 	}

@@ -335,17 +335,11 @@
 //  2. Update the job spec on every node: add the new config tracker as instance
 //     1 (Green) and set pluginVersions to ["v30", "v31"], so instance 1 runs
 //     pluginconfig.PluginVersionV31 while instance 0 stays on
-//     PluginVersionV30. Green bootstraps into the staging stage.
-//  3. Let it run, and verify Green from TELEMETRY, not from the Mercury server.
-//     A staging instance marks its reports Specimen = true and the EVM codecs
-//     refuse to encode those, so nothing it produces is transmitted and transmit
-//     volume does not rise. captureReportTelemetry runs before the encode, so
-//     ReportTelemetryCh and OutcomeTelemetryCh do see what Green would have
-//     emitted. The readiness gate is Green's report telemetry covering the same
-//     channel set as Blue's production output, with sane values, plus the blob
-//     pump's Misses/Cycles low and uncorrelated. There is no warm-up minimum to
-//     wait out (see above), so the overlap is however many rounds of that
-//     evidence you want.
+//     PluginVersionV30. Green bootstraps into the staging stage. Enable its
+//     telemetry in the job's [v31] block: captureStagingTelemetry plus the
+//     captureOutcomeTelemetry, captureReportTelemetry and
+//     captureAttributedObservationTelemetry types to verify it from.
+//  3. Let it run, and verify Green from TELEMETRY.
 //  4. Vote to retire v3.0: set shouldRetire for the v3.0 config digest in the
 //     ConfigurationStore. Once more than f oracles observe it, instance 0 moves
 //     to the retired stage in the round it is agreed (retirement is NOT
