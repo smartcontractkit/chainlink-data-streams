@@ -360,6 +360,9 @@ func analyzeChannelDefinitions(codecs map[llotypes.ReportFormat]ReportCodec, cha
 			if err := ValidateHistoryBackfillTarget(cd, channelDefs); err != nil {
 				admit(fmt.Errorf("invalid history backfill channel %d: %w", channelID, err), channelID)
 			}
+			if err := ValidateHistoryBackfillValues(cd, channelDefs); err != nil {
+				admit(fmt.Errorf("invalid history backfill channel %d: %w", channelID, err), channelID)
+			}
 		}
 	}
 

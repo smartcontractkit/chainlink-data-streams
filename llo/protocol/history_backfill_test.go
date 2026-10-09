@@ -3,6 +3,7 @@ package protocol
 import (
 	"fmt"
 	"math"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -119,5 +120,62 @@ func Test_ValidateHistoryBackfillTarget(t *testing.T) {
 		require.NoError(t, VerifyChannelDefinitions(codecs, defs))
 		err := VerifyChannelDefinitionsForAdmission(codecs, defs, map[llotypes.ChannelID]struct{}{1: {}})
 		require.ErrorContains(t, err, "is itself a history_backfill channel")
+	})
+}
+
+func Test_ValidateHistoryBackfillValues(t *testing.T) {
+	backfill := func(agg llotypes.Aggregator, value string) llotypes.ChannelDefinition {
+		return llotypes.ChannelDefinition{
+			ReportFormat: llotypes.ReportFormatHistoryBackfill,
+			Streams:      []llotypes.Stream{{StreamID: 1, Aggregator: agg}},
+			Opts:         llotypes.ChannelOpts(fmt.Sprintf(`{"targetChannelId":2,"observations":{"1700000000":{"1":%q}}}`, value)),
+		}
+	}
+	target := func(agg llotypes.Aggregator) llotypes.ChannelDefinition {
+		return llotypes.ChannelDefinition{
+			ReportFormat: llotypes.ReportFormatEVMPremiumLegacy,
+			Streams:      []llotypes.Stream{{StreamID: 1, Aggregator: agg}},
+		}
+	}
+	// 59 nines is 196 bits, one digit past what MaxDecimalCoefficientBits admits.
+	oversized := strings.Repeat("9", 59)
+
+	for _, tc := range []struct {
+		name    string
+		agg     llotypes.Aggregator
+		value   string
+		wantErr string
+	}{
+		{"a decimal is accepted", llotypes.AggregatorMedian, "1.5", ""},
+		{"a valid quote is accepted", llotypes.AggregatorQuote, "Q{Bid: 1, Benchmark: 2, Ask: 3}", ""},
+		{"an unparseable decimal is rejected", llotypes.AggregatorMedian, "not a number", "timestamp 1700000000: stream 1:"},
+		{"an oversized decimal coefficient is rejected", llotypes.AggregatorMedian, oversized, ErrDecimalCoefficientOutOfRange.Error()},
+		{"an oversized quote coefficient is rejected", llotypes.AggregatorQuote, fmt.Sprintf("Q{Bid: 1, Benchmark: 2, Ask: %s}", oversized), ErrDecimalCoefficientOutOfRange.Error()},
+		{"an inverted quote is rejected", llotypes.AggregatorQuote, "Q{Bid: 3, Benchmark: 2, Ask: 1}", "quote violates bid <= benchmark <= ask"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			defs := llotypes.ChannelDefinitions{1: backfill(tc.agg, tc.value), 2: target(tc.agg)}
+			err := ValidateHistoryBackfillValues(defs[1], defs)
+			if tc.wantErr == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.ErrorContains(t, err, tc.wantErr)
+		})
+	}
+
+	t.Run("a missing target is left to ValidateHistoryBackfillAgainstDefinitions", func(t *testing.T) {
+		defs := llotypes.ChannelDefinitions{1: backfill(llotypes.AggregatorMedian, "not a number")}
+		require.NoError(t, ValidateHistoryBackfillValues(defs[1], defs))
+	})
+
+	// The rule is admission-only: committed rows are left to the runtime path,
+	// but no new one is installable.
+	t.Run("committed definitions keep working", func(t *testing.T) {
+		defs := llotypes.ChannelDefinitions{1: backfill(llotypes.AggregatorQuote, "Q{Bid: 3, Benchmark: 2, Ask: 1}"), 2: target(llotypes.AggregatorQuote)}
+		codecs := map[llotypes.ReportFormat]ReportCodec{}
+		require.NoError(t, VerifyChannelDefinitions(codecs, defs))
+		err := VerifyChannelDefinitionsForAdmission(codecs, defs, map[llotypes.ChannelID]struct{}{1: {}})
+		require.ErrorContains(t, err, "quote violates bid <= benchmark <= ask")
 	})
 }

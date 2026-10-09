@@ -3,7 +3,9 @@ package protocol
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"math"
+	"slices"
 	"sort"
 	"strconv"
 
@@ -311,6 +313,43 @@ func ValidateHistoryBackfillTarget(cd llotypes.ChannelDefinition, defs llotypes.
 	}
 	if target.ReportFormat == llotypes.ReportFormatHistoryBackfill {
 		return fmt.Errorf("target channel %d is itself a history_backfill channel, whose reports cannot be encoded", opts.TargetChannelID)
+	}
+	return nil
+}
+
+// ValidateHistoryBackfillValues parses every observation of a backfill channel
+// the way Reports will, and holds each value to the bounds an observed value
+// meets: the decimal coefficient bound, and bid <= benchmark <= ask for quotes.
+//
+// Nothing else reads the values before Reports does, so without this an
+// unparseable row is only found at selection. There it stops the channel for
+// good, because selection keeps returning the same row and the watermark never
+// moves past it.
+func ValidateHistoryBackfillValues(cd llotypes.ChannelDefinition, defs llotypes.ChannelDefinitions) error {
+	opts, err := ParseHistoryBackfillOpts(cd.Opts)
+	if err != nil {
+		return err
+	}
+	target, ok := defs[opts.TargetChannelID]
+	if !ok {
+		return nil // reported by ValidateHistoryBackfillAgainstDefinitions
+	}
+	// Sorted so that a definition with more than one bad row always reports the
+	// same one.
+	for _, rawTS := range slices.Sorted(maps.Keys(opts.Observations)) {
+		values, err := BuildBackfillStreamValues(target, opts.Observations[rawTS])
+		if err != nil {
+			return fmt.Errorf("timestamp %d: %w", rawTS, err)
+		}
+		for i, v := range values {
+			streamID := target.Streams[i].StreamID
+			if err := checkObservedStreamValue(v); err != nil {
+				return fmt.Errorf("timestamp %d: stream %d: %w", rawTS, streamID, err)
+			}
+			if q, ok := v.(*Quote); ok && !q.IsValid() {
+				return fmt.Errorf("timestamp %d: stream %d: quote violates bid <= benchmark <= ask", rawTS, streamID)
+			}
+		}
 	}
 	return nil
 }
