@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -260,6 +261,52 @@ func TestValidateExpression_SizeLimits(t *testing.T) {
 	err = ValidateExpression("Add(s1, " + strings.Repeat("0", protocol.MaxExpressionBytes) + ")")
 	require.ErrorIs(t, err, ErrHistoryExpression)
 	assert.Contains(t, err.Error(), "exceeds the maximum")
+}
+
+// TestValidateExpression_LiteralBounds covers the static bounds on Round
+// precision and decimal string literals. Both drive a rescale to 10^p, so an
+// out of range literal is rejected at admission rather than costing every node
+// that time and memory each round.
+func TestValidateExpression_LiteralBounds(t *testing.T) {
+	t.Parallel()
+
+	t.Run("accepts", func(t *testing.T) {
+		t.Parallel()
+		for _, expression := range []string{
+			fmt.Sprintf("Round(s1, %d)", protocol.MaxDecimalExponent),
+			fmt.Sprintf("Round(s1, -%d)", protocol.MaxDecimalExponent),
+			fmt.Sprintf(`Sum(s1, "1e-%d")`, protocol.MaxDecimalExponent),
+			// Computed precision is left to the runtime bound.
+			"Round(s1, 2000000 * 1000)",
+		} {
+			assert.NoError(t, ValidateExpression(expression), "expression %q", expression)
+		}
+	})
+
+	t.Run("rejects", func(t *testing.T) {
+		t.Parallel()
+		for _, expression := range []string{
+			fmt.Sprintf("Round(s1, %d)", protocol.MaxDecimalExponent+1),
+			fmt.Sprintf("Round(s1, -%d)", protocol.MaxDecimalExponent+1),
+			"Round(s1, 2000000000)",
+			fmt.Sprintf(`Sum(s1, "1e-%d")`, protocol.MaxDecimalExponent+1),
+			`Sum(s1, "1e2000000000")`,
+		} {
+			err := ValidateExpression(expression)
+			require.ErrorIs(t, err, ErrHistoryExpression, "expression %q", expression)
+		}
+	})
+
+	t.Run("runtime bound on computed precision", func(t *testing.T) {
+		t.Parallel()
+		env := NewEnv(0)
+		defer env.release()
+		env["s1"] = decimal.RequireFromString("1.5")
+		_, err := evalDecimal("Round(s1, 2000000 * 1000)", env)
+		require.ErrorContains(t, err, "precision 2000000000 out of range")
+		_, err = evalDecimal(`Sum(s1, "1e-" + "2000000000")`, env)
+		require.ErrorIs(t, err, protocol.ErrDecimalExponentOutOfRange)
+	})
 }
 
 // TestValidateChannelExpressions_CountLimit covers the per-channel expression

@@ -491,8 +491,8 @@ func IsPositive(x any) (bool, error) {
 
 // Round returns the rounded value of x to the given precision
 func Round(x any, precision int) (decimal.Decimal, error) {
-	if precision > math.MaxInt32 {
-		return decimal.Decimal{}, fmt.Errorf("precision is too large")
+	if err := checkPrecision(precision); err != nil {
+		return decimal.Decimal{}, err
 	}
 	ad, err := toDecimal(x)
 	if err != nil {
@@ -503,14 +503,22 @@ func Round(x any, precision int) (decimal.Decimal, error) {
 
 // Truncate truncates off digits from the number, without rounding.
 func Truncate(x any, precision int) (decimal.Decimal, error) {
-	if precision > math.MaxInt32 {
-		return decimal.Decimal{}, fmt.Errorf("precision is too large")
+	if err := checkPrecision(precision); err != nil {
+		return decimal.Decimal{}, err
 	}
 	n, err := toDecimal(x)
 	if err != nil {
 		return decimal.Decimal{}, err
 	}
 	return n.Truncate(int32(precision)), nil
+}
+
+// checkPrecision bounds a rounding precision to the exponent range of stream values.
+func checkPrecision(precision int) error {
+	if precision > protocol.MaxDecimalExponent || precision < -protocol.MaxDecimalExponent {
+		return fmt.Errorf("precision %d out of range, expected absolute value <= %d", precision, protocol.MaxDecimalExponent)
+	}
+	return nil
 }
 
 // ParseDuration parses a duration string into a time.ParseDuration
@@ -526,7 +534,16 @@ func toDecimal(x any) (decimal.Decimal, error) {
 		// backstop for a bypassed analysis rather than an expected path.
 		return decimal.Decimal{}, fmt.Errorf("%w (length %d)", ErrSeriesAsScalar, v.Len())
 	case string:
-		return decimal.NewFromString(v)
+		// Bounded like an observed value: an operation on a literal such as
+		// "1e-2000000000" rescales its operands to the literal's exponent.
+		d, err := decimal.NewFromString(v)
+		if err != nil {
+			return decimal.Decimal{}, err
+		}
+		if err := protocol.CheckDecimalExponent(d); err != nil {
+			return decimal.Decimal{}, err
+		}
+		return d, nil
 	case int:
 		return decimal.NewFromInt(int64(v)), nil
 	case int32:

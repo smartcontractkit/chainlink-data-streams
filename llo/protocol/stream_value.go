@@ -121,6 +121,12 @@ func checkDecimalCoefficient(d decimal.Decimal) error {
 	return nil
 }
 
+// CheckDecimalExponent bounds the exponent of a decimal parsed from an
+// expression literal. See MaxDecimalExponent.
+func CheckDecimalExponent(d decimal.Decimal) error {
+	return checkDecimalExponent(d)
+}
+
 // checkDecimalExponent bounds the exponent of a decimal decoded from an
 // untrusted source. See MaxDecimalExponent.
 func checkDecimalExponent(d decimal.Decimal) error {

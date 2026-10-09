@@ -33,6 +33,21 @@ func TestToDecimal(t *testing.T) {
 			expectError: true,
 		},
 		{
+			name:     "string exponent at the bound",
+			input:    "1e-1000",
+			expected: decimal.New(1, -1000),
+		},
+		{
+			name:        "string exponent below the bound",
+			input:       "1e-1001",
+			expectError: true,
+		},
+		{
+			name:        "string exponent above the bound",
+			input:       "1e2000000000",
+			expectError: true,
+		},
+		{
 			name:     "int",
 			input:    123,
 			expected: decimal.NewFromInt(123),
@@ -1038,9 +1053,45 @@ func TestRound(t *testing.T) {
 			expected:  "120",
 		},
 		{
+			name:      "precision at the upper bound",
+			input:     "123.456",
+			precision: protocol.MaxDecimalExponent,
+			expected:  "123.456",
+		},
+		{
+			name:      "precision at the lower bound",
+			input:     "123.456",
+			precision: -protocol.MaxDecimalExponent,
+			expected:  "0",
+		},
+		{
+			name:        "precision above the bound",
+			input:       "123.456",
+			precision:   protocol.MaxDecimalExponent + 1,
+			expectError: true,
+		},
+		{
+			name:        "precision below the bound",
+			input:       "123.456",
+			precision:   -protocol.MaxDecimalExponent - 1,
+			expectError: true,
+		},
+		{
 			name:        "precision too large",
 			input:       "123.456",
 			precision:   math.MaxInt32 + 1,
+			expectError: true,
+		},
+		{
+			name:        "precision near MaxInt32",
+			input:       "123.456",
+			precision:   math.MaxInt32,
+			expectError: true,
+		},
+		{
+			name:        "precision near MinInt32",
+			input:       "123.456",
+			precision:   math.MinInt32,
 			expectError: true,
 		},
 		{
@@ -1086,6 +1137,21 @@ func TestTruncate(t *testing.T) {
 			name:      "pi 2",
 			precision: 2,
 			expected:  "3.14",
+		},
+		{
+			name:        "precision above the bound",
+			precision:   protocol.MaxDecimalExponent + 1,
+			expectError: true,
+		},
+		{
+			name:        "precision near MaxInt32",
+			precision:   math.MaxInt32,
+			expectError: true,
+		},
+		{
+			name:        "precision near MinInt32",
+			precision:   math.MinInt32,
+			expectError: true,
 		},
 	}
 

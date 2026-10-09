@@ -8,6 +8,7 @@ import (
 	"strconv"
 
 	"github.com/expr-lang/expr/ast"
+	"github.com/shopspring/decimal"
 
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
 
@@ -37,6 +38,10 @@ const HistoryFunctionName = "History"
 // twapFunctionName is the DSL name TWAP is registered under, shared with the
 // static analysis that validates its configuration.
 const twapFunctionName = "TWAP"
+
+// roundFunctionName is the DSL name Round is registered under, shared with the
+// static analysis that bounds its literal precision.
+const roundFunctionName = "Round"
 
 // Field selects which part of a stored stream value a window projects. One
 // stored window serves every field, so History(s1, 10), History(s1_bid, 10) and
@@ -212,6 +217,15 @@ func (p *historyPatcher) Visit(node *ast.Node) {
 			p.errorf("identifier %q uses the reserved history namespace (__h<N>); use %s(s<streamID>, <N>) instead", n.Value, HistoryFunctionName)
 		}
 
+	case *ast.StringNode:
+		// Strings that are not decimals (durations, configuration keys) are
+		// left to the functions that take them.
+		if d, err := decimal.NewFromString(n.Value); err == nil {
+			if err := protocol.CheckDecimalExponent(d); err != nil {
+				p.errorf("decimal literal %q: %s", n.Value, err)
+			}
+		}
+
 	case *ast.CallNode:
 		callee, ok := n.Callee.(*ast.IdentifierNode)
 		if !ok {
@@ -220,6 +234,14 @@ func (p *historyPatcher) Visit(node *ast.Node) {
 		if callee.Value == HistoryFunctionName {
 			p.rewrite(node, n)
 			return
+		}
+		if callee.Value == roundFunctionName && len(n.Arguments) == 2 {
+			// A computed precision is left to the runtime bound.
+			if precision, ok := integerLiteral(n.Arguments[1]); ok {
+				if err := checkPrecision(precision); err != nil {
+					p.errorf("%s: %s", roundFunctionName, err)
+				}
+			}
 		}
 		if rangeAcceptingFunctions[callee.Value] {
 			for _, arg := range n.Arguments {
@@ -373,6 +395,20 @@ func twapConfigLiteral(config *ast.MapNode, key string) (int64, bool) {
 			return 0, false
 		}
 		return int64(value.Value), true
+	}
+	return 0, false
+}
+
+// integerLiteral returns the value of an integer literal, including a negated
+// one, which the parser represents as a unary minus over the literal.
+func integerLiteral(node ast.Node) (int, bool) {
+	switch n := node.(type) {
+	case *ast.IntegerNode:
+		return n.Value, true
+	case *ast.UnaryNode:
+		if v, ok := n.Node.(*ast.IntegerNode); ok && n.Operator == "-" {
+			return -v.Value, true
+		}
 	}
 	return 0, false
 }
