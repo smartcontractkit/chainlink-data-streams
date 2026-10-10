@@ -2,6 +2,7 @@ package calculated
 
 import (
 	"fmt"
+	"math/big"
 	"sync"
 
 	"github.com/shopspring/decimal"
@@ -18,7 +19,8 @@ import (
 // racing with a read can yield a corrupted value rather than merely a stale one —
 // which in a consensus path means two nodes disagreeing, or a panic.
 //
-// TWAP makes it far more likely by calling ln and exp once per bucket.
+// Only Ln is called now: exponentials go through expDecimal, which shares no
+// state. TWAP still calls ln once per bucket.
 //
 // The lock is taken per call rather than per evaluation to keep hold times short.
 // The cost is negligible against the arithmetic it guards.
@@ -30,14 +32,6 @@ func decimalLn(x decimal.Decimal, prec int32) (result decimal.Decimal, err error
 	defer transcendentalMu.Unlock()
 	defer recoverTranscendental("logarithm", x, &result, &err)
 	return x.Ln(prec)
-}
-
-// decimalExpTaylor is decimal.ExpTaylor under the transcendental lock.
-func decimalExpTaylor(x decimal.Decimal, prec int32) (result decimal.Decimal, err error) {
-	transcendentalMu.Lock()
-	defer transcendentalMu.Unlock()
-	defer recoverTranscendental("exponential", x, &result, &err)
-	return x.ExpTaylor(prec)
 }
 
 // recoverTranscendental converts a panic from shopspring/decimal into an error.
@@ -53,9 +47,16 @@ func recoverTranscendental(operation string, input decimal.Decimal, result *deci
 	}
 }
 
-// decimalPow is decimal.PowWithPrecision under the transcendental lock. Powers
-// with a non-integer exponent are evaluated via the same logarithm and
-// exponential machinery.
+// decimalPow is decimal.PowWithPrecision with its exponential replaced by
+// expDecimal.
+//
+// The library evaluates base^(i+f), for the integer part i and fractional part
+// f of the exponent, as base^i * exp(f * ln(base)), with the logarithm and the
+// exponential taken at a precision raised to cover the operands. This keeps that
+// structure and those precisions, so a result changes only where ExpTaylor was
+// itself inaccurate. ExpTaylor sums the series on the full argument, needing
+// about e*|x| terms of growing size: Sqrt of a stored value near 1e-943 took 4.4
+// seconds under the transcendental lock. See expDecimal.
 //
 // The exponent is bounded first. shopspring/decimal PANICS on an exponent large
 // enough to overflow the result's int32 scale ("exponent ... overflows an
@@ -63,30 +64,66 @@ func recoverTranscendental(operation string, input decimal.Decimal, result *deci
 // Pow(s1, s2) with both values around 2.6e31 burned 22 seconds of CPU and then
 // panicked. Stream values come from consensus, so every node would hit that in
 // the same round — a panic in StateTransition takes the node down, and 22 seconds
-// blows the round budget even without one. The transcendental lock makes it worse
-// by serializing that work against every other plugin instance in the process.
+// blows the round budget even without one.
 //
 // A value beyond MaxDecimalExponent could not be stored or transmitted anyway, so
 // refusing it early costs nothing real.
-func decimalPow(base, exponent decimal.Decimal, prec int32) (result decimal.Decimal, err error) {
+func decimalPow(base, exponent decimal.Decimal, prec int32) (decimal.Decimal, error) {
 	if err := checkPow(base, exponent); err != nil {
 		return decimal.Decimal{}, err
 	}
 
-	transcendentalMu.Lock()
-	defer transcendentalMu.Unlock()
+	intPart := exponent.Truncate(0)
+	fracPart := exponent.Sub(intPart)
+	// A zero base never reaches the logarithm, so the library's own handling of
+	// it is kept as is.
+	if fracPart.IsZero() || base.IsZero() {
+		return decimalIntPow(base, exponent, prec)
+	}
+	if base.IsNegative() {
+		return decimal.Decimal{}, fmt.Errorf("cannot represent imaginary value of x ** y, where x < 0 and y is non-integer decimal")
+	}
 
-	// Backstop: the bound above covers the case seen in the wild, but the
-	// library reserves the right to panic on other extremes and an expression
-	// must never be able to bring the node down. Converting it to an error makes
-	// the channel unreportable, which is the correct fail-closed outcome.
+	intPow, err := decimalIntPow(base, intPart, prec)
+	if err != nil {
+		return decimal.Decimal{}, err
+	}
+
+	// The precision the library raises the fractional part to.
+	fracPrec := prec
+	if digits := int32(base.NumDigits()); digits > fracPrec {
+		fracPrec = digits
+	}
+	if digits := int32(exponent.NumDigits()); digits > fracPrec {
+		fracPrec += digits
+	}
+	fracPrec += 10
+
+	lnBase, err := decimalLn(base, fracPrec)
+	if err != nil {
+		return decimal.Decimal{}, err
+	}
+	fracPow, err := expDecimal(lnBase.Mul(fracPart), fracPrec)
+	if err != nil {
+		return decimal.Decimal{}, err
+	}
+	return intPow.Mul(fracPow), nil
+}
+
+// decimalIntPow is decimal.PowWithPrecision for an integer exponent or a zero
+// base, neither of which reaches a transcendental function.
+//
+// Backstop: checkPow covers the case seen in the wild, but the library reserves
+// the right to panic on other extremes and an expression must never be able to
+// bring the node down. Converting it to an error makes the channel
+// unreportable, which is the correct fail-closed outcome.
+func decimalIntPow(base, exponent decimal.Decimal, prec int32) (result decimal.Decimal, err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			result = decimal.Decimal{}
 			err = fmt.Errorf("power of %s by %s could not be computed: %v", base, exponent, r)
 		}
 	}()
-
 	return base.PowWithPrecision(exponent, prec)
 }
 
@@ -273,17 +310,8 @@ func ln(x decimal.Decimal) (decimal.Decimal, error) {
 }
 
 // exp is a deterministic exponential at double precision, the inverse of ln.
-//
-// The argument is bounded because ExpTaylor's cost grows with the size of the
-// result, not of the input: exp(1e6) has ~434,000 digits and does not complete in
-// any useful time. Callers currently only pass logarithms of stored values, which
-// MaxDecimalExponent already bounds to about ±2302, so the limit is not reachable
-// through TWAP today — it is here so that stays true if another caller appears.
 func exp(x decimal.Decimal) (decimal.Decimal, error) {
-	if x.Abs().GreaterThan(decimal.NewFromInt(maxExpArgument)) {
-		return decimal.Decimal{}, fmt.Errorf("exponential argument %s exceeds the maximum magnitude of %d", x, maxExpArgument)
-	}
-	return decimalExpTaylor(x, doublePrecision)
+	return expDecimal(x, doublePrecision)
 }
 
 // maxExpArgument bounds the argument to exp.
@@ -292,6 +320,73 @@ func exp(x decimal.Decimal) (decimal.Decimal, error) {
 // whose result is still within MaxDecimalExponent (1000) and therefore still
 // storable: 1000 * ln(10) is about 2302, rounded up for headroom.
 const maxExpArgument = 2400
+
+// expDecimal returns e^x rounded to places decimal places, the contract of
+// decimal.ExpTaylor, rounding a negative argument's result twice as it does.
+//
+// ExpTaylor sums the series on x itself, which takes about e*|x| terms whose
+// numerators are kept exact, so its cost grows steeply with |x|: exp(1085) took
+// seconds. Here the argument is halved k times until it is below 1/256, where
+// the series converges in a few digits per term, and the sum is squared k
+// times to undo the halving.
+//
+// All arithmetic is on integers scaled by 10^w and truncated, so the result is
+// a function of the inputs alone. Squaring doubles the relative error, so w
+// covers the digits of the result, the places asked for, k*log10(2) digits lost
+// to squaring, and a guard for the truncation in each term and step. That keeps
+// the error several orders below the last place, so rounding only differs from
+// the exact value's on a near tie.
+//
+// The argument is bounded because the result is not: exp(1e6) has ~434,000
+// digits. Callers pass logarithms of bounded operands, which checkPow and
+// MaxDecimalExponent keep within about ±2400.
+func expDecimal(x decimal.Decimal, places int32) (decimal.Decimal, error) {
+	if places < 0 {
+		return decimal.Decimal{}, fmt.Errorf("exponential precision %d must not be negative", places)
+	}
+	if x.Abs().GreaterThan(decimal.NewFromInt(maxExpArgument)) {
+		return decimal.Decimal{}, fmt.Errorf("exponential argument %s exceeds the maximum magnitude of %d", x, maxExpArgument)
+	}
+	if x.IsZero() {
+		return decimal.New(1, 0).Round(places), nil
+	}
+
+	a := x.Abs()
+	k := a.Ceil().BigInt().BitLen() + 8
+	// 0.4343 is just above 1/ln(10).
+	resultDigits := a.Mul(decimal.RequireFromString("0.4343")).Ceil().IntPart() + 1
+	w := int32(places) + int32(resultDigits) + int32(k)/3 + 1 + expGuardDigits
+	scale := new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(w)), nil)
+
+	// r = a / 2^k, as an integer scaled by 10^w.
+	r := a.DivRound(decimal.NewFromBigInt(new(big.Int).Lsh(big.NewInt(1), uint(k)), 0), w).Shift(w).BigInt()
+
+	sum := new(big.Int).Set(scale)
+	term := new(big.Int).Set(scale)
+	divisor := new(big.Int)
+	for i := int64(1); ; i++ {
+		term.Mul(term, r)
+		term.Quo(term, divisor.Mul(scale, big.NewInt(i)))
+		if term.Sign() == 0 {
+			break
+		}
+		sum.Add(sum, term)
+	}
+	for range k {
+		sum.Mul(sum, sum)
+		sum.Quo(sum, scale)
+	}
+
+	result := decimal.NewFromBigInt(sum, -w)
+	if x.IsNegative() {
+		return decimal.New(1, 0).DivRound(result, places+1).Round(places), nil
+	}
+	return result.Round(places), nil
+}
+
+// expGuardDigits covers the truncation error of expDecimal: one unit in the last
+// working place per series term and per squaring, under a thousand of each.
+const expGuardDigits = 10
 
 // sqrt is a deterministic square root, rounded to the package precision.
 func sqrt(x decimal.Decimal) (decimal.Decimal, error) {

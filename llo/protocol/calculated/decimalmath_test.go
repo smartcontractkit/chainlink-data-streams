@@ -229,3 +229,87 @@ func Test_checkOperand(t *testing.T) {
 		require.NoError(t, err)
 	})
 }
+
+func Test_expDecimal(t *testing.T) {
+	t.Parallel()
+
+	t.Run("correctly rounded", func(t *testing.T) {
+		t.Parallel()
+
+		// ExpTaylor is reliable given 30 spare places, and is cheap for these
+		// arguments. At the places asked for it is not: it misses the last place
+		// for a few percent of arguments, and is the reference only because the
+		// spare places absorb that.
+		for _, x := range []string{"0.0750760398084", "0.0275472644968", "7.28050264449", "12.4774569258", "1", "-1", "-0.5", "-12.4774569258"} {
+			for _, places := range []int32{18, 36, 50} {
+				d := decimal.RequireFromString(x)
+				got, err := expDecimal(d, places)
+				require.NoError(t, err)
+				// ExpTaylor shares its factorial cache with every other caller.
+				transcendentalMu.Lock()
+				want, err := d.Abs().ExpTaylor(places + 30)
+				transcendentalMu.Unlock()
+				require.NoError(t, err)
+				if d.IsNegative() {
+					// ExpTaylor's contract, kept: the reciprocal is rounded to
+					// one spare place before the final rounding.
+					want = decimal.New(1, 0).DivRound(want, places+1)
+				}
+				assertDecimal(t, want.Round(places).String(), got)
+			}
+		}
+	})
+
+	t.Run("large arguments are cheap", func(t *testing.T) {
+		t.Parallel()
+
+		// ExpTaylor needs about e*|x| terms for these, and took seconds for
+		// exp(1085).
+		for _, x := range []string{"2400", "-2400", "1085.5", "-1085.5"} {
+			d := decimal.RequireFromString(x)
+			start := time.Now()
+			got, err := expDecimal(d, 36)
+			require.Less(t, time.Since(start), time.Second)
+			require.NoError(t, err)
+
+			more, err := expDecimal(d, 66)
+			require.NoError(t, err)
+			if d.IsPositive() {
+				assertDecimal(t, more.Round(36).String(), got)
+			}
+		}
+	})
+
+	t.Run("zero", func(t *testing.T) {
+		t.Parallel()
+
+		got, err := expDecimal(decimal.Zero, 18)
+		require.NoError(t, err)
+		assertDecimal(t, "1", got)
+	})
+
+	t.Run("argument beyond the bound", func(t *testing.T) {
+		t.Parallel()
+
+		_, err := expDecimal(decimal.NewFromInt(2401), 18)
+		require.ErrorContains(t, err, "exceeds the maximum magnitude of 2400")
+	})
+}
+
+func TestPowFractionalExponentIsCheap(t *testing.T) {
+	t.Parallel()
+
+	// A stored value at the coefficient and exponent bounds. Its square root
+	// took 4.4 seconds when the exponential went through ExpTaylor.
+	stored := "1" + strings.Repeat("7", 57) + "e-1000"
+	start := time.Now()
+	got, err := Sqrt(stored)
+	require.Less(t, time.Since(start), time.Second)
+	require.NoError(t, err)
+	assertDecimal(t, "0", got)
+
+	start = time.Now()
+	_, err = Pow("1"+strings.Repeat("7", 57)+"e100", "0.75")
+	require.Less(t, time.Since(start), time.Second)
+	require.NoError(t, err)
+}
