@@ -6,6 +6,8 @@ import (
 	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
 )
 
 func Test_MedianAggregator(t *testing.T) {
@@ -67,6 +69,38 @@ func Test_MedianAggregator(t *testing.T) {
 		assert.IsType(t, &TimestampedStreamValue{}, sv)
 		assert.Equal(t, "5.6", sv.(*TimestampedStreamValue).StreamValue.(*Decimal).String())
 		assert.Equal(t, uint64(102), sv.(*TimestampedStreamValue).ObservedAtNanoseconds)
+	})
+
+	t.Run("for *TimestampedStreamValue with skipped inner values", func(t *testing.T) {
+		quote := &Quote{Bid: decimal.NewFromInt(1), Benchmark: decimal.NewFromInt(2), Ask: decimal.NewFromInt(3)}
+		mixedValues := []StreamValue{
+			&TimestampedStreamValue{ObservedAtNanoseconds: 100, StreamValue: ToDecimal(decimal.NewFromFloat(2.6))},
+			&TimestampedStreamValue{ObservedAtNanoseconds: 102, StreamValue: ToDecimal(decimal.NewFromFloat(4.6))},
+			&TimestampedStreamValue{ObservedAtNanoseconds: 104, StreamValue: ToDecimal(decimal.NewFromFloat(6.6))},
+			&TimestampedStreamValue{ObservedAtNanoseconds: 999, StreamValue: quote},
+			&TimestampedStreamValue{ObservedAtNanoseconds: 999, StreamValue: quote},
+			&TimestampedStreamValue{ObservedAtNanoseconds: 999, StreamValue: quote},
+			&TimestampedStreamValue{ObservedAtNanoseconds: 999, StreamValue: quote},
+		}
+
+		t.Run("v3.0 counts a zero timestamp for each skipped value", func(t *testing.T) {
+			sv, err := MedianAggregator(mixedValues, 3)
+			require.NoError(t, err)
+			assert.Equal(t, "4.6", sv.(*TimestampedStreamValue).StreamValue.(*Decimal).String())
+			assert.Equal(t, uint64(0), sv.(*TimestampedStreamValue).ObservedAtNanoseconds)
+		})
+
+		t.Run("v3.1 takes the median timestamp over used values only", func(t *testing.T) {
+			sv, err := MedianAggregatorV31(mixedValues, 3)
+			require.NoError(t, err)
+			assert.Equal(t, "4.6", sv.(*TimestampedStreamValue).StreamValue.(*Decimal).String())
+			assert.Equal(t, uint64(102), sv.(*TimestampedStreamValue).ObservedAtNanoseconds)
+		})
+
+		t.Run("v3.1 still enforces the floor on used values", func(t *testing.T) {
+			_, err := MedianAggregatorV31(mixedValues, 4)
+			require.EqualError(t, err, "not enough contributions to calculate median: got 3, need 4")
+		})
 	})
 
 	t.Run("fails below the contribution floor", func(t *testing.T) {
@@ -320,4 +354,19 @@ func Test_canonicalDecimal(t *testing.T) {
 		assert.Equal(t, a, b)
 		require.NoError(t, checkDecimalExponent(a))
 	})
+}
+
+func Test_GetAggregatorFuncV31(t *testing.T) {
+	values := []StreamValue{
+		&TimestampedStreamValue{ObservedAtNanoseconds: 100, StreamValue: ToDecimal(decimal.NewFromInt(1))},
+		&TimestampedStreamValue{ObservedAtNanoseconds: 999, StreamValue: &Quote{}},
+		&TimestampedStreamValue{ObservedAtNanoseconds: 999, StreamValue: &Quote{}},
+	}
+	sv, err := GetAggregatorFuncV31(llotypes.AggregatorMedian)(values, 1)
+	require.NoError(t, err)
+	assert.Equal(t, uint64(100), sv.(*TimestampedStreamValue).ObservedAtNanoseconds)
+
+	for _, a := range []llotypes.Aggregator{llotypes.AggregatorMode, llotypes.AggregatorQuote, llotypes.AggregatorCalculated} {
+		assert.Equal(t, GetAggregatorFunc(a) == nil, GetAggregatorFuncV31(a) == nil, "aggregator %v", a)
+	}
 }

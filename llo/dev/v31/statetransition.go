@@ -529,7 +529,7 @@ func (p *Plugin) aggregate(
 
 			prevTSV := prevCarry[sid][agg]
 
-			aggF := protocol.GetAggregatorFunc(agg)
+			aggF := protocol.GetAggregatorFuncV31(agg)
 			if aggF == nil {
 				// Unknown aggregator, e.g. one added by a newer version. Admission
 				// rejects these, but a committed definition must not halt the

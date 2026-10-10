@@ -16,6 +16,7 @@ import (
 // minContributions usable values of the selected type.
 type AggregatorFunc func(contributions []StreamValue, minContributions int) (StreamValue, error)
 
+// GetAggregatorFunc returns the v30 aggregator for a.
 func GetAggregatorFunc(a llotypes.Aggregator) AggregatorFunc {
 	switch a {
 	case llotypes.AggregatorMedian:
@@ -29,14 +30,33 @@ func GetAggregatorFunc(a llotypes.Aggregator) AggregatorFunc {
 	}
 }
 
+// GetAggregatorFuncV31 returns the v31 aggregator for a. It differs from
+// GetAggregatorFunc only in the median, see MedianAggregatorV31.
+func GetAggregatorFuncV31(a llotypes.Aggregator) AggregatorFunc {
+	if a == llotypes.AggregatorMedian {
+		return MedianAggregatorV31
+	}
+	return GetAggregatorFunc(a)
+}
+
+// MedianAggregator is the v30 median.
 func MedianAggregator(values []StreamValue, minContributions int) (StreamValue, error) {
+	return medianAggregator(values, minContributions, true)
+}
+
+// MedianAggregatorV31 is the v31 median
+func MedianAggregatorV31(values []StreamValue, minContributions int) (StreamValue, error) {
+	return medianAggregator(values, minContributions, false)
+}
+
+func medianAggregator(values []StreamValue, minContributions int, countSkippedTimestamps bool) (StreamValue, error) {
 	typ, typValues := mostCommonType(values)
 
 	switch typ {
 	case LLOStreamValue_TimestampedStreamValue:
-		svalues := make([]StreamValue, len(typValues))
-		timestamps := make([]uint64, len(typValues))
-		for i, value := range typValues {
+		svalues := make([]StreamValue, 0, len(typValues))
+		timestamps := make([]uint64, 0, len(typValues))
+		for _, value := range typValues {
 			v, is := value.(*TimestampedStreamValue)
 			if !is {
 				return nil, fmt.Errorf("invariant violation, expected TimestampedStreamValue, got %T", value)
@@ -47,13 +67,16 @@ func MedianAggregator(values []StreamValue, minContributions int) (StreamValue, 
 				// NOTE: This could get into an infinite loop if a malicious node sends
 				// a TimestampedStreamValue with nested TimestampedStreamValues inside
 				// it, so you definitely want to discard those.
+				if countSkippedTimestamps {
+					timestamps = append(timestamps, 0)
+				}
 				continue
 			}
-			svalues[i] = v.StreamValue
-			timestamps[i] = v.ObservedAtNanoseconds
+			svalues = append(svalues, v.StreamValue)
+			timestamps = append(timestamps, v.ObservedAtNanoseconds)
 		}
 
-		medianValue, err := MedianAggregator(svalues, minContributions)
+		medianValue, err := medianAggregator(svalues, minContributions, countSkippedTimestamps)
 		if err != nil {
 			return nil, err
 		}
