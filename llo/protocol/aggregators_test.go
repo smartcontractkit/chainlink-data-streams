@@ -174,6 +174,68 @@ func Test_ModeAggregator(t *testing.T) {
 			minContributions: 3,
 			output:           ToDecimal(decimal.NewFromFloat(1.1)),
 		},
+		{
+			name: "decimals differing only in scale agree",
+			values: []StreamValue{
+				ToDecimal(decimal.New(1, 0)),
+				ToDecimal(decimal.New(10, -1)),
+				ToDecimal(decimal.New(100, -2)),
+				ToDecimal(decimal.New(2, 0)),
+			},
+			minContributions: 3,
+			output:           ToDecimal(decimal.New(1, 0)),
+		},
+		{
+			name: "integer decimals differing only in scale agree",
+			values: []StreamValue{
+				ToDecimal(decimal.New(100, 0)),
+				ToDecimal(decimal.New(1, 2)),
+				ToDecimal(decimal.New(10, 1)),
+			},
+			minContributions: 3,
+			output:           ToDecimal(decimal.New(1, 2)),
+		},
+		{
+			name: "zeros differing only in scale agree",
+			values: []StreamValue{
+				ToDecimal(decimal.New(0, 0)),
+				ToDecimal(decimal.New(0, -5)),
+				ToDecimal(decimal.New(0, 3)),
+			},
+			minContributions: 3,
+			output:           ToDecimal(decimal.New(0, 0)),
+		},
+		{
+			name: "quotes differing only in scale agree",
+			values: []StreamValue{
+				&Quote{Bid: decimal.New(9, 0), Benchmark: decimal.New(10, 0), Ask: decimal.New(11, 0)},
+				&Quote{Bid: decimal.New(90, -1), Benchmark: decimal.New(1000, -2), Ask: decimal.New(110, -1)},
+				&Quote{Bid: decimal.New(900, -2), Benchmark: decimal.New(1, 1), Ask: decimal.New(11000, -3)},
+			},
+			minContributions: 3,
+			output:           &Quote{Bid: decimal.New(9, 0), Benchmark: decimal.New(1, 1), Ask: decimal.New(11, 0)},
+		},
+		{
+			name: "timestamped values agree on inner value and take the median timestamp",
+			values: []StreamValue{
+				&TimestampedStreamValue{ObservedAtNanoseconds: 300, StreamValue: ToDecimal(decimal.New(15, -1))},
+				&TimestampedStreamValue{ObservedAtNanoseconds: 100, StreamValue: ToDecimal(decimal.New(150, -2))},
+				&TimestampedStreamValue{ObservedAtNanoseconds: 200, StreamValue: ToDecimal(decimal.New(15, -1))},
+				&TimestampedStreamValue{ObservedAtNanoseconds: 1, StreamValue: ToDecimal(decimal.New(2, 0))},
+			},
+			minContributions: 3,
+			output:           &TimestampedStreamValue{ObservedAtNanoseconds: 200, StreamValue: ToDecimal(decimal.New(15, -1))},
+		},
+		{
+			name: "timestamped values that disagree on inner value fail the floor",
+			values: []StreamValue{
+				&TimestampedStreamValue{ObservedAtNanoseconds: 100, StreamValue: ToDecimal(decimal.New(1, 0))},
+				&TimestampedStreamValue{ObservedAtNanoseconds: 100, StreamValue: ToDecimal(decimal.New(2, 0))},
+				&TimestampedStreamValue{ObservedAtNanoseconds: 100, StreamValue: ToDecimal(decimal.New(3, 0))},
+			},
+			minContributions: 2,
+			errStr:           "not enough contributions in agreement to calculate mode: most common value had 1, need 2",
+		},
 	}
 	for _, tc := range tcs {
 		t.Run(tc.name, func(t *testing.T) {
@@ -241,5 +303,21 @@ func Test_QuoteAggregator(t *testing.T) {
 		assert.Equal(t, "4.4", q.Bid.String())
 		assert.Equal(t, "5.5", q.Benchmark.String())
 		assert.Equal(t, "6.6", q.Ask.String())
+	})
+}
+
+func Test_canonicalDecimal(t *testing.T) {
+	t.Run("strips trailing zeros", func(t *testing.T) {
+		d := canonicalDecimal(decimal.New(-12300, -4))
+		assert.Equal(t, "-123", d.Coefficient().String())
+		assert.Equal(t, int32(-2), d.Exponent())
+	})
+	t.Run("stops at MaxDecimalExponent", func(t *testing.T) {
+		a := canonicalDecimal(decimal.New(100, MaxDecimalExponent-1))
+		b := canonicalDecimal(decimal.New(1000, MaxDecimalExponent-2))
+		assert.Equal(t, "10", a.Coefficient().String())
+		assert.Equal(t, int32(MaxDecimalExponent), a.Exponent())
+		assert.Equal(t, a, b)
+		require.NoError(t, checkDecimalExponent(a))
 	})
 }

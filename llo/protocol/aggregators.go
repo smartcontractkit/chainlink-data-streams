@@ -2,6 +2,7 @@ package protocol
 
 import (
 	"fmt"
+	"math/big"
 	"slices"
 	"sort"
 
@@ -95,18 +96,31 @@ func MedianAggregator(values []StreamValue, minContributions int) (StreamValue, 
 // There must be at least minContributions contributions in agreement in order
 // to produce a value
 // nil contributions are ignored
+//
+// Values are compared in canonical form (see canonicalModeValue), so decimals
+// that differ only in scale agree. A TimestampedStreamValue votes on its inner
+// value alone, and the result carries the median timestamp of the
+// contributions that agreed on it.
 func ModeAggregator(values []StreamValue, minContributions int) (StreamValue, error) {
 	largestBucketType, largestBucket := mostCommonType(values)
 
 	// find the most common value in the bucket
-	// use serialized representation for comparison/equality
+	// use serialized canonical representation for comparison/equality
 	counts := make(map[string]int)
+	timestamps := make(map[string][]uint64)
 	for _, value := range largestBucket {
-		b, err := value.MarshalBinary()
+		canonical, observedAt, err := canonicalModeValue(value)
+		if err != nil {
+			return nil, err
+		}
+		b, err := canonical.MarshalBinary()
 		if err != nil {
 			return nil, fmt.Errorf("failed to marshal value: %w", err)
 		}
 		counts[string(b)]++
+		if largestBucketType == LLOStreamValue_TimestampedStreamValue {
+			timestamps[string(b)] = append(timestamps[string(b)], observedAt)
+		}
 	}
 	var modeSerialized []byte
 	var modeCount int
@@ -131,7 +145,72 @@ func ModeAggregator(values []StreamValue, minContributions int) (StreamValue, er
 	if err != nil {
 		return nil, fmt.Errorf("failed to unmarshal value: %w", err)
 	}
+	if tsv, ok := val.(*TimestampedStreamValue); ok {
+		ts := timestamps[string(modeSerialized)]
+		slices.Sort(ts)
+		tsv.ObservedAtNanoseconds = ts[len(ts)/2]
+	}
 	return val, nil
+}
+
+// canonicalModeValue returns the form of v that ModeAggregator votes on.
+// A TimestampedStreamValue has its timestamp cleared and returned separately,
+// since honest oracles rarely observe at the same nanosecond.
+func canonicalModeValue(v StreamValue) (StreamValue, uint64, error) {
+	tsv, ok := v.(*TimestampedStreamValue)
+	if !ok {
+		return canonicalStreamValue(v), 0, nil
+	}
+	if tsv == nil || tsv.StreamValue == nil {
+		return nil, 0, ErrNilStreamValue
+	}
+	return &TimestampedStreamValue{StreamValue: canonicalStreamValue(tsv.StreamValue)}, tsv.ObservedAtNanoseconds, nil
+}
+
+// canonicalStreamValue rewrites the decimals in v to canonical form, so equal
+// values serialize to equal bytes. Other types are returned unchanged.
+func canonicalStreamValue(v StreamValue) StreamValue {
+	switch v := v.(type) {
+	case *Decimal:
+		if v == nil {
+			return v
+		}
+		return ToDecimal(canonicalDecimal(v.Decimal()))
+	case *Quote:
+		if v == nil {
+			return v
+		}
+		return &Quote{
+			Bid:       canonicalDecimal(v.Bid),
+			Benchmark: canonicalDecimal(v.Benchmark),
+			Ask:       canonicalDecimal(v.Ask),
+		}
+	default:
+		return v
+	}
+}
+
+// canonicalDecimal strips trailing zeros from the coefficient of d, so 1.0
+// and 1.00 both become 1. Zero becomes 0e0. Stripping stops at
+// MaxDecimalExponent so the result still decodes. The form stays unique, as
+// it is the smallest coefficient for that value with an exponent in bounds.
+func canonicalDecimal(d decimal.Decimal) decimal.Decimal {
+	coef := d.Coefficient()
+	if coef.Sign() == 0 {
+		return decimal.New(0, 0)
+	}
+	exp := d.Exponent()
+	ten := big.NewInt(10)
+	quo, rem := new(big.Int), new(big.Int)
+	for exp < MaxDecimalExponent {
+		quo.QuoRem(coef, ten, rem)
+		if rem.Sign() != 0 {
+			break
+		}
+		coef, quo = quo, coef
+		exp++
+	}
+	return decimal.NewFromBigInt(coef, exp)
 }
 
 func mostCommonType(values []StreamValue) (LLOStreamValue_Type, []StreamValue) {
