@@ -96,8 +96,8 @@ type twapConfig struct {
 //
 // The reason it matters is cost. Filling in log space needs a logarithm per
 // observed bucket and an exponential per bucket in the window — about 600
-// operations for a five-minute window — and they all serialize on the
-// transcendental lock. Measured: 197ms per evaluation for a 300-second window,
+// operations for a five-minute window — and they were serialized on a
+// process-wide lock at the time. Measured: 197ms per evaluation for a 300-second window,
 // and 7.2s for 32 such channels in one round, against a round budget on the
 // order of a second. Doing it this way, a fully covered window needs no
 // transcendental operations at all, and a window with gaps needs one power per

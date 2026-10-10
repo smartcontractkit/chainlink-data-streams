@@ -424,7 +424,7 @@ func Ln(x any) (decimal.Decimal, error) {
 	if n.IsZero() {
 		return decimal.Decimal{}, fmt.Errorf("cannot represent natural logarithm of 0")
 	}
-	return decimalLn(n, precision)
+	return lnDecimal(n, precision)
 }
 
 // Log returns the logarithms of y with base x. This is equivalent to log_x(y).
@@ -439,7 +439,7 @@ func Log(x, y any) (decimal.Decimal, error) {
 	if err != nil {
 		return decimal.Decimal{}, err
 	}
-	lnLog, err := decimalLn(log, doublePrecision) // double precision, since we're going to divide them
+	lnLog, err := lnDecimal(log, doublePrecision) // double precision, since we're going to divide them
 	if err != nil {
 		return decimal.Decimal{}, err
 	}
@@ -448,13 +448,13 @@ func Log(x, y any) (decimal.Decimal, error) {
 	if err != nil {
 		return decimal.Decimal{}, err
 	}
-	lnBase, err := decimalLn(base, doublePrecision) // double precision, since we're going to divide them
+	lnBase, err := lnDecimal(base, doublePrecision) // double precision, since we're going to divide them
 	if err != nil {
 		return decimal.Decimal{}, err
 	}
 
 	// ln(1) is 0, so base 1 has no logarithm: DivRound would panic with
-	// "decimal division by 0". Bases <= 0 are already rejected by decimalLn.
+	// "decimal division by 0". Bases <= 0 are already rejected by lnDecimal.
 	if lnLog.IsZero() {
 		return decimal.Decimal{}, fmt.Errorf("logarithm base 1 is undefined")
 	}

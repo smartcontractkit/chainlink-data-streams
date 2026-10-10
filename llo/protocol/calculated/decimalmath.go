@@ -3,60 +3,23 @@ package calculated
 import (
 	"fmt"
 	"math/big"
-	"sync"
+	"strconv"
 
 	"github.com/shopspring/decimal"
 
 	"github.com/smartcontractkit/chainlink-data-streams/llo/protocol"
 )
 
-// transcendentalMu serializes every call into shopspring/decimal's
-// transcendental functions.
-//
-// Decimal.ExpTaylor memoizes factorials in an unsynchronized package-level slice
-// (decimal.go: `var factorials = []Decimal{New(1, 0)}`) that it appends to, and
-// Ln reads through the same path. Concurrent calls therefore race, and an append
-// racing with a read can yield a corrupted value rather than merely a stale one —
-// which in a consensus path means two nodes disagreeing, or a panic.
-//
-// Only Ln is called now: exponentials go through expDecimal, which shares no
-// state. TWAP still calls ln once per bucket.
-//
-// The lock is taken per call rather than per evaluation to keep hold times short.
-// The cost is negligible against the arithmetic it guards.
-var transcendentalMu sync.Mutex
-
-// decimalLn is decimal.Ln under the transcendental lock.
-func decimalLn(x decimal.Decimal, prec int32) (result decimal.Decimal, err error) {
-	transcendentalMu.Lock()
-	defer transcendentalMu.Unlock()
-	defer recoverTranscendental("logarithm", x, &result, &err)
-	return x.Ln(prec)
-}
-
-// recoverTranscendental converts a panic from shopspring/decimal into an error.
-//
-// The library panics on some extreme inputs rather than returning an error (see
-// decimalPow for a case found by fuzzing). An expression must never be able to
-// bring the node down: turning it into an error makes the channel unreportable,
-// which is the correct fail-closed outcome.
-func recoverTranscendental(operation string, input decimal.Decimal, result *decimal.Decimal, err *error) {
-	if r := recover(); r != nil {
-		*result = decimal.Decimal{}
-		*err = fmt.Errorf("%s of %s could not be computed: %v", operation, input, r)
-	}
-}
-
-// decimalPow is decimal.PowWithPrecision with its exponential replaced by
-// expDecimal.
+// decimalPow is decimal.PowWithPrecision with its logarithm and exponential
+// replaced by lnDecimal and expDecimal.
 //
 // The library evaluates base^(i+f), for the integer part i and fractional part
 // f of the exponent, as base^i * exp(f * ln(base)), with the logarithm and the
 // exponential taken at a precision raised to cover the operands. This keeps that
-// structure and those precisions, so a result changes only where ExpTaylor was
-// itself inaccurate. ExpTaylor sums the series on the full argument, needing
-// about e*|x| terms of growing size: Sqrt of a stored value near 1e-943 took 4.4
-// seconds under the transcendental lock. See expDecimal.
+// structure and those precisions, so a result changes only where the library
+// was itself inaccurate. Its own Ln and ExpTaylor take time that grows steeply
+// with the argument and the precision: Sqrt of a stored value near 1e-943 took
+// 4.4 seconds. See expDecimal and lnDecimal.
 //
 // The exponent is bounded first. shopspring/decimal PANICS on an exponent large
 // enough to overflow the result's int32 scale ("exponent ... overflows an
@@ -99,7 +62,7 @@ func decimalPow(base, exponent decimal.Decimal, prec int32) (decimal.Decimal, er
 	}
 	fracPrec += 10
 
-	lnBase, err := decimalLn(base, fracPrec)
+	lnBase, err := lnDecimal(base, fracPrec)
 	if err != nil {
 		return decimal.Decimal{}, err
 	}
@@ -111,7 +74,7 @@ func decimalPow(base, exponent decimal.Decimal, prec int32) (decimal.Decimal, er
 }
 
 // decimalIntPow is decimal.PowWithPrecision for an integer exponent or a zero
-// base, neither of which reaches a transcendental function.
+// base, neither of which reaches a logarithm or an exponential.
 //
 // Backstop: checkPow covers the case seen in the wild, but the library reserves
 // the right to panic on other extremes and an expression must never be able to
@@ -158,8 +121,7 @@ const maxPowExponent = 100_000
 // That size is checked separately, against maxPowResultBits.
 //
 // Both operands come from consensus, so an unbounded power is not one node's
-// problem: every node computes it in the same round, inside StateTransition,
-// holding the transcendental lock.
+// problem: every node computes it in the same round, inside StateTransition.
 func checkPow(base, exponent decimal.Decimal) error {
 	if exponent.Abs().GreaterThan(decimal.NewFromInt(maxPowExponent)) {
 		return fmt.Errorf("exponent %s exceeds the maximum magnitude of %d", exponent, maxPowExponent)
@@ -175,7 +137,7 @@ func checkPow(base, exponent decimal.Decimal) error {
 		return fmt.Errorf("power of %s by %s needs a coefficient of up to %s bits, which exceeds the maximum of %d",
 			base, exponent, resultBits, maxPowResultBits)
 	}
-	lnBase, err := decimalLn(abs, powEstimatePrecision)
+	lnBase, err := lnDecimal(abs, powEstimatePrecision)
 	if err != nil {
 		return fmt.Errorf("power of %s by %s could not be bounded: %w", base, exponent, err)
 	}
@@ -261,7 +223,7 @@ func decimalToInt(name string, d decimal.Decimal, minimum, maximum int64) (int, 
 //
 //  1. No float64. math.Log and math.Exp are not guaranteed bit-identical across
 //     architectures or Go versions, so all logarithms and exponentials go through
-//     decimal.Ln and decimal.ExpTaylor at a fixed precision. This is why the TWAP
+//     lnDecimal and expDecimal at a fixed precision. This is why the TWAP
 //     implementation here is a port of the mercury float-based one, not a reuse.
 //  2. No reliance on decimal.DivisionPrecision. That is a mutable package-level
 //     global: anything in the process can change it and silently move every Div
@@ -306,7 +268,7 @@ func ln(x decimal.Decimal) (decimal.Decimal, error) {
 	if !x.IsPositive() {
 		return decimal.Decimal{}, fmt.Errorf("cannot take the logarithm of %s: value must be positive", x)
 	}
-	return decimalLn(x, doublePrecision)
+	return lnDecimal(x, doublePrecision)
 }
 
 // exp is a deterministic exponential at double precision, the inverse of ln.
@@ -352,7 +314,8 @@ func expDecimal(x decimal.Decimal, places int32) (decimal.Decimal, error) {
 	}
 
 	a := x.Abs()
-	k := a.Ceil().BigInt().BitLen() + 8
+	// The least k with a/2^k <= 1/256.
+	k := new(big.Int).Sub(a.Mul(decimal.NewFromInt(256)).Ceil().BigInt(), big.NewInt(1)).BitLen()
 	// 0.4343 is just above 1/ln(10).
 	resultDigits := a.Mul(decimal.RequireFromString("0.4343")).Ceil().IntPart() + 1
 	w := int32(places) + int32(resultDigits) + int32(k)/3 + 1 + expGuardDigits
@@ -384,8 +347,97 @@ func expDecimal(x decimal.Decimal, places int32) (decimal.Decimal, error) {
 	return result.Round(places), nil
 }
 
+// lnDecimal returns the natural logarithm of x rounded to places decimal
+// places, the contract of decimal.Ln.
+//
+// decimal.Ln refines a float64 estimate with Halley's method, calling ExpTaylor
+// once per step at the full precision, so its cost grows steeply with
+// precision: 0.84 seconds at 500 places. It also misses the last place for
+// about 0.8% of arguments, and shares ExpTaylor's unsynchronized factorial
+// cache, which forced a process-wide lock around it.
+//
+// Here x is split as m * 10^n with m in (0.316, 3.17), so ln(x) = ln(m) +
+// n*ln(10), and both logarithms come from halleyLn. ln(10) carries extra digits
+// to cover its multiplication by n. The error stays several orders below the
+// last place, so rounding only differs from the exact value's on a near tie,
+// and no state is shared.
+func lnDecimal(x decimal.Decimal, places int32) (decimal.Decimal, error) {
+	if x.IsNegative() {
+		return decimal.Decimal{}, fmt.Errorf("cannot calculate natural logarithm for negative decimals")
+	}
+	if x.IsZero() {
+		return decimal.Decimal{}, fmt.Errorf("cannot represent natural logarithm of 0, result: -infinity")
+	}
+	if places < 0 {
+		return decimal.Decimal{}, fmt.Errorf("logarithm precision %d must not be negative", places)
+	}
+
+	w := places + expGuardDigits
+	digits := int32(x.NumDigits())
+	m := decimal.NewFromBigInt(x.Coefficient(), 1-digits)
+	n := int64(digits) - 1 + int64(x.Exponent())
+	// Bring m from [1, 10) to within a factor of sqrt(10) of 1, where halleyLn
+	// is fastest.
+	if m.GreaterThan(decimal.RequireFromString("3.17")) {
+		m = m.Shift(-1)
+		n++
+	}
+
+	result, err := halleyLn(m, w)
+	if err != nil {
+		return decimal.Decimal{}, err
+	}
+	if n != 0 {
+		nDigits := int32(len(strconv.FormatInt(n, 10)))
+		ln10, err := halleyLn(decimal.NewFromInt(10), w+nDigits)
+		if err != nil {
+			return decimal.Decimal{}, err
+		}
+		result = result.Add(ln10.Mul(decimal.NewFromInt(n)))
+	}
+	return result.Round(places), nil
+}
+
+// halleyLn returns ln(m) for a positive m, to within a few units in the w-th
+// decimal place.
+//
+// Each step is y += 2(m - e^y) / (m + e^y), which is y += 2*tanh((ln(m) - y)/2):
+// it moves toward ln(m) from any start, by less than the remaining distance,
+// and cubes the error once close. It starts from 2(m - 1)/(m + 1), the first
+// term of the series for ln(m), which is within 0.67 of ln(m) for m up to 10
+// and within 1e-12 when m is within 1e-4 of 1, as a TWAP growth ratio usually
+// is. The start is exact rather than a float64 estimate, so every node takes
+// the same steps.
+//
+// A step of s leaves an error of about s^3/12, so it stops after a step below
+// 10^-(w/3+1), rather than spending a further exponential to confirm it.
+func halleyLn(m decimal.Decimal, w int32) (decimal.Decimal, error) {
+	one := decimal.NewFromInt(1)
+	two := decimal.NewFromInt(2)
+	threshold := decimal.New(1, -(w+2)/3-1)
+	y := m.Sub(one).Mul(two).DivRound(m.Add(one), w)
+	for range maxHalleySteps {
+		e, err := expDecimal(y, w)
+		if err != nil {
+			return decimal.Decimal{}, err
+		}
+		step := m.Sub(e).Mul(two).DivRound(m.Add(e), w)
+		y = y.Add(step)
+		if step.Abs().LessThanOrEqual(threshold) {
+			return y, nil
+		}
+	}
+	return decimal.Decimal{}, fmt.Errorf("logarithm of %s did not converge in %d steps", m, maxHalleySteps)
+}
+
+// maxHalleySteps backstops halleyLn. From the worst start, ln(10), its error
+// falls 0.67, 0.025, 1e-6, 1e-19, 1e-57, 1e-173, 1e-520, 1e-1561, so a dozen
+// steps covers any precision a bounded operand can ask for.
+const maxHalleySteps = 12
+
 // expGuardDigits covers the truncation error of expDecimal: one unit in the last
-// working place per series term and per squaring, under a thousand of each.
+// working place per series term and per squaring, under a thousand of each. It
+// covers the noise of halleyLn's steps in lnDecimal too.
 const expGuardDigits = 10
 
 // sqrt is a deterministic square root, rounded to the package precision.

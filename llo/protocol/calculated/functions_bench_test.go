@@ -19,10 +19,8 @@ import (
 // every expression of every channel is evaluated inside one state transition, so
 // per-expression cost multiplies by the channel count.
 //
-// TWAP is the one to watch. It takes a logarithm per observed bucket and an
-// exponential per bucket in the window, and all of those serialize on the
-// process-wide transcendental lock (see decimalmath.go), so its cost does not
-// parallelize across the plugin instances sharing a process.
+// TWAP is the one to watch: its cost grows with the window, and it is
+// evaluated for every channel that uses it.
 
 func benchSeries(depth int, intervalSeconds int) Series {
 	values := make([]decimal.Decimal, 0, depth)
@@ -208,9 +206,9 @@ func BenchmarkTWAPMaxWindow(b *testing.B) {
 	}
 }
 
-// BenchmarkTWAPParallel shows what the transcendental lock costs when several
-// plugin instances evaluate TWAP at once. Compare ns/op against the serial
-// benchmark: no speedup means the lock is the limit.
+// BenchmarkTWAPParallel shows how TWAP scales when several plugin instances
+// evaluate it at once. Compare ns/op against the serial benchmark: no speedup
+// means something shared is the limit.
 func BenchmarkTWAPParallel(b *testing.B) {
 	const windowSeconds = 300
 	window := benchSeries(windowSeconds, 1)

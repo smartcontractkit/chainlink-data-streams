@@ -99,17 +99,17 @@ func TestDivAndAvgPinnedToLegacyPrecision(t *testing.T) {
 	assertDecimal(t, "2.3333333333333333", got)
 }
 
-// TestTranscendentalsAreConcurrencySafe guards the lock around
-// shopspring/decimal's transcendental functions.
+// TestTranscendentalsAreConcurrencySafe guards against shared state in the
+// logarithm and exponential.
 //
-// ExpTaylor memoizes factorials in an unsynchronized package-level slice it
-// appends to, and Ln reads through the same path, so concurrent calls race. An
-// append racing with a read can produce a corrupted value rather than a merely
-// stale one, which in a consensus path means nodes disagreeing. A node runs
-// several plugin instances in one process, each evaluating on its own goroutine,
-// so this is reachable in production.
+// shopspring/decimal's ExpTaylor memoizes factorials in an unsynchronized
+// package-level slice it appends to, and its Ln reads through the same path, so
+// concurrent calls race. An append racing with a read can produce a corrupted
+// value rather than a merely stale one, which in a consensus path means nodes
+// disagreeing. A node runs several plugin instances in one process, each
+// evaluating on its own goroutine, so this is reachable in production.
 //
-// Run under -race, this fails if the guard is removed.
+// Run under -race, this fails if any of these functions reaches either again.
 func TestTranscendentalsAreConcurrencySafe(t *testing.T) {
 	t.Parallel()
 
@@ -230,6 +230,70 @@ func Test_checkOperand(t *testing.T) {
 	})
 }
 
+// libraryMu serializes the tests' reference calls into shopspring/decimal's Ln
+// and ExpTaylor, which share an unsynchronized factorial cache.
+var libraryMu sync.Mutex
+
+func Test_lnDecimal(t *testing.T) {
+	t.Parallel()
+
+	t.Run("correctly rounded", func(t *testing.T) {
+		t.Parallel()
+
+		// decimal.Ln is reliable given 30 spare places. At the places asked for
+		// it is not: it misses the last place for about 0.8% of arguments, and
+		// is the reference only because the spare places absorb that.
+		for _, x := range []string{
+			"1", "10", "0.1", "2", "9.99999", "1.00000001", "0.99999999",
+			"34.382783417947313786", "103108677640616370", "0.000000000726289154090313027",
+			"1777777777777777777777777777777777777777777777777777777777e-1000",
+			"1777777777777777777777777777777777777777777777777777777777e1000",
+		} {
+			for _, places := range []int32{8, 18, 36, 50} {
+				d := decimal.RequireFromString(x)
+				got, err := lnDecimal(d, places)
+				require.NoError(t, err)
+				libraryMu.Lock()
+				want, err := d.Ln(places + 30)
+				libraryMu.Unlock()
+				require.NoError(t, err)
+				assertDecimal(t, want.Round(places).String(), got)
+			}
+		}
+	})
+
+	t.Run("high precision is cheap", func(t *testing.T) {
+		t.Parallel()
+
+		// decimal.Ln took 0.84 seconds for this at 500 places.
+		start := time.Now()
+		got, err := lnDecimal(decimal.RequireFromString("103108677640616370"), 500)
+		require.Less(t, time.Since(start), 100*time.Millisecond)
+		require.NoError(t, err)
+
+		more, err := lnDecimal(decimal.RequireFromString("103108677640616370"), 530)
+		require.NoError(t, err)
+		assertDecimal(t, more.Round(500).String(), got)
+	})
+
+	t.Run("inverse of exp", func(t *testing.T) {
+		t.Parallel()
+
+		got, err := lnDecimal(decimal.RequireFromString("2.718281828459045235360287471352662497757"), 36)
+		require.NoError(t, err)
+		assertDecimal(t, "1", got.Round(30))
+	})
+
+	t.Run("refuses non-positive arguments", func(t *testing.T) {
+		t.Parallel()
+
+		_, err := lnDecimal(decimal.Zero, 18)
+		require.ErrorContains(t, err, "natural logarithm of 0")
+		_, err = lnDecimal(decimal.NewFromInt(-1), 18)
+		require.ErrorContains(t, err, "negative")
+	})
+}
+
 func Test_expDecimal(t *testing.T) {
 	t.Parallel()
 
@@ -245,10 +309,9 @@ func Test_expDecimal(t *testing.T) {
 				d := decimal.RequireFromString(x)
 				got, err := expDecimal(d, places)
 				require.NoError(t, err)
-				// ExpTaylor shares its factorial cache with every other caller.
-				transcendentalMu.Lock()
+				libraryMu.Lock()
 				want, err := d.Abs().ExpTaylor(places + 30)
-				transcendentalMu.Unlock()
+				libraryMu.Unlock()
 				require.NoError(t, err)
 				if d.IsNegative() {
 					// ExpTaylor's contract, kept: the reciprocal is rounded to
