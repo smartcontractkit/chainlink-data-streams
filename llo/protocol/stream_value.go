@@ -329,7 +329,7 @@ func (v *Quote) MarshalText() ([]byte, error) {
 	return []byte(fmt.Sprintf("Q{Bid: %s, Benchmark: %s, Ask: %s}", v.Bid.String(), v.Benchmark.String(), v.Ask.String())), nil
 }
 
-var quoteRegex = regexp.MustCompile(`Q\{Bid: ([0-9.]+), Benchmark: ([0-9.]+), Ask: ([0-9.]+)\}`)
+var quoteRegex = regexp.MustCompile(`^Q\{Bid: (-?[0-9.]+), Benchmark: (-?[0-9.]+), Ask: (-?[0-9.]+)\}$`)
 
 func (v *Quote) UnmarshalText(data []byte) error {
 	if v == nil {

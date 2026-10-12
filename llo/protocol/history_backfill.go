@@ -380,7 +380,7 @@ func DropInvalidHistoryBackfillChannels(lggr logger.Logger, defs llotypes.Channe
 func StreamValueFromBackfillString(agg llotypes.Aggregator, s string) (StreamValue, error) {
 	switch agg {
 	case llotypes.AggregatorQuote:
-		q := new(Quote) // {Bid: ([0-9.]+), Benchmark: ([0-9.]+), Ask: ([0-9.]+)}
+		q := new(Quote)
 		if err := q.UnmarshalText([]byte(s)); err != nil {
 			return nil, err
 		}
