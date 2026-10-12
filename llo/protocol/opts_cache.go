@@ -116,6 +116,10 @@ func (c *OptsCache) SyncTo(channelDefinitions llotypes.ChannelDefinitions) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	if c.sealed {
+		return
+	}
+
 	for channelID, cd := range channelDefinitions {
 		if existing, ok := c.raw[channelID]; ok && bytes.Equal(existing, cd.Opts) {
 			continue
