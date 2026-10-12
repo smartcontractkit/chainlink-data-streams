@@ -107,8 +107,8 @@ func computeHistoryRequirements(defs llotypes.ChannelDefinitions, optsCache *pro
 // The pair cap is the only rule. Under the chunked layout a round rewrites one
 // chunk and one header per pair whatever the depth, so a pair's cost against the
 // per-round byte budget is a constant — MaxHistoryPairs of them fit inside
-// MaxHistoryTotalBytes by construction, which TestHistoryBudgetFitsPairCap
-// asserts. That was not true of the single-blob layout, where cost scaled with
+// MaxHistoryTotalBytes by construction, which limits.go asserts at compile
+// time. That was not true of the single-blob layout, where cost scaled with
 // depth and the budget denied pairs long before the cap did.
 func admitHistoryRequirements(required map[histKey]uint32, lggr logger.Logger) historyRequirements {
 	keys := make([]histKey, 0, len(required))

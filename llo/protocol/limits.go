@@ -179,11 +179,12 @@ const (
 	// silently getting a shortened window. A stream aggregated two ways
 	// consumes two of these, not one.
 	MaxHistoryPairs = 128
-	// MaxHistoryTotalBytes bounds the estimated total history bytes rewritten
-	// per round (sum over pairs of requiredCount * MaxHistoryRecordBytes). The
-	// OCR3.1 per-round budget for modified keys plus values is 10 MiB and is
-	// shared with channel definitions and the other key prefixes, so history is
-	// held well below it.
+	// MaxHistoryTotalBytes bounds the history bytes rewritten per round. The
+	// worst case is MaxHistoryPairs * MaxHistoryPairRoundBytes, held under this
+	// bound at compile time, so admission enforces only the pair cap. The OCR3.1
+	// per-round budget for modified keys plus values is 10 MiB and is shared
+	// with channel definitions and the other key prefixes, so history is held
+	// well below it.
 	MaxHistoryTotalBytes = 4 << 20
 	// MaxHistoryRecordsPerExpression bounds the total history depth a single
 	// expression may request, summed over all of its History calls. Each
@@ -229,10 +230,9 @@ const (
 	// whole-set budgets.
 	MaxTotalTWAPCalls = 64
 	// MaxHistoryRecordBytes is the maximum serialized size of one history
-	// record, enforced on append (StreamHistory.Append) and used as the
-	// per-record size when admitting pairs against MaxHistoryTotalBytes.
-	// Enforcing the same number that the budget assumes is what makes the
-	// budget a real bound rather than an estimate.
+	// record, enforced on append (StreamHistory.Append) and on chunk decode. It
+	// sizes MaxHistoryPairRoundBytes, so enforcing it is what makes the
+	// per-round budget a real bound rather than an estimate.
 	//
 	// It has to be enforced rather than assumed because MaxDecimalExponent
 	// bounds a decimal's exponent but not its coefficient length: a 1000-digit
@@ -296,6 +296,9 @@ const (
 	// independent of the window depth, where the single-blob layout charged
 	// requiredCount * MaxHistoryRecordBytes every round.
 	MaxHistoryPairRoundBytes = MaxHistoryChunkRecords*MaxHistoryRecordBytes + MaxHistoryHeaderBytes
+	// Admission enforces only MaxHistoryPairs, so every admitted pair at its
+	// worst case must fit MaxHistoryTotalBytes. Fail compilation otherwise.
+	_ = uint(MaxHistoryTotalBytes - MaxHistoryPairs*MaxHistoryPairRoundBytes)
 
 	// MaxDecompressedObservationLength bounds the size of an observation after
 	// zstd decompression.

@@ -211,8 +211,10 @@ func (f *PluginFactory) NewReportingPlugin(ctx context.Context, cfg ocr3types.Re
 	//	                              where it is written into the aggregates.
 	//	MaxKeyValueModifiedKeys*      the per-round write set is c/defs plus r/agg
 	//	                              plus the history windows, and history is
-	//	                              held to protocol.MaxHistoryTotalBytes so it
-	//	                              cannot consume the whole budget on its own.
+	//	                              bounded by protocol.MaxHistoryPairs, which
+	//	                              protocol.MaxHistoryTotalBytes guarantees at
+	//	                              compile time fits the budget, so it cannot
+	//	                              consume the whole budget on its own.
 	//	MaxBlobPayloadBytes           enforced on the write side by
 	//	                              encodeBlobPayload.
 	info := ocr3_1types.ReportingPluginInfo1{
