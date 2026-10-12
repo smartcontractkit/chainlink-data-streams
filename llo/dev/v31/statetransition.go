@@ -227,6 +227,7 @@ func (p *Plugin) StateTransition(ctx context.Context, seqNr uint64, _ ocrtypes.A
 	// channel reports is derived from its opts by protocol.EffectiveStreams, so
 	// nothing about evaluation reaches replicated state and a persisted
 	// definition stays exactly what was voted on.
+	p.ExpressionPins.Set(prev.opts, effective)
 	calculated.ProcessCalculatedStreams(p.Logger, effective, out.StreamAggregates, out.ObservationTimestampNanoseconds, prev.opts, history)
 
 	// Flush KV mutations.

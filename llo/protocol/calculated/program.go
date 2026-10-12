@@ -47,11 +47,24 @@ func parseExpression(expression string) (*parser.Tree, error) {
 //
 // Both hits and failures are cached: a rejected expression stays rejected until
 // its text changes, and re-deriving the same error every round is wasted work.
+//
+// Expressions of committed definitions are pinned (see ExpressionPins) and kept
+// outside the LRU. Admission and peer validation analyze expressions that may
+// never be committed, so without pins enough of them would evict the live ones
+// and force a recompile every round.
 type analysisCache struct {
 	mu      sync.Mutex
 	entries map[string]*list.Element
 	order   *list.List // front is most recently used
 	max     int
+	pinned  map[string]*pinnedEntry
+}
+
+// pinnedEntry is an entry held out of eviction, counted by how many pin sets
+// hold it.
+type pinnedEntry struct {
+	entry   *analysisEntry
+	holders int
 }
 
 type analysisEntry struct {
@@ -78,6 +91,7 @@ func newAnalysisCache(max int) *analysisCache {
 		entries: make(map[string]*list.Element, max),
 		order:   list.New(),
 		max:     max,
+		pinned:  make(map[string]*pinnedEntry),
 	}
 }
 
@@ -252,15 +266,26 @@ func (c *analysisCache) entry(expression string) *analysisEntry {
 	if entry, ok := c.get(expression); ok {
 		return entry
 	}
+	return c.put(newAnalysisEntry(expression))
+}
 
+func newAnalysisEntry(expression string) *analysisEntry {
 	refs, twapCalls, names, err := analyzeHistoryExpression(expression)
-	return c.put(&analysisEntry{expression: expression, refs: refs, twapCalls: twapCalls, names: names, err: err})
+	return &analysisEntry{expression: expression, refs: refs, twapCalls: twapCalls, names: names, err: err}
 }
 
 func (c *analysisCache) get(expression string) (*analysisEntry, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	return c.lookupLocked(expression)
+}
 
+// lookupLocked returns the entry for expression, pinned or not, marking an
+// unpinned one as most recently used.
+func (c *analysisCache) lookupLocked(expression string) (*analysisEntry, bool) {
+	if pinned, ok := c.pinned[expression]; ok {
+		return pinned.entry, true
+	}
 	element, ok := c.entries[expression]
 	if !ok {
 		return nil, false
@@ -276,11 +301,15 @@ func (c *analysisCache) put(entry *analysisEntry) *analysisEntry {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	if element, ok := c.entries[entry.expression]; ok {
-		c.order.MoveToFront(element)
-		return element.Value.(*analysisEntry)
+	if existing, ok := c.lookupLocked(entry.expression); ok {
+		return existing
 	}
+	c.insertLocked(entry)
+	return entry
+}
 
+// insertLocked adds entry to the front of the LRU and evicts past max.
+func (c *analysisCache) insertLocked(entry *analysisEntry) {
 	c.entries[entry.expression] = c.order.PushFront(entry)
 	for c.order.Len() > c.max {
 		oldest := c.order.Back()
@@ -290,7 +319,6 @@ func (c *analysisCache) put(entry *analysisEntry) *analysisEntry {
 		c.order.Remove(oldest)
 		delete(c.entries, oldest.Value.(*analysisEntry).expression)
 	}
-	return entry
 }
 
 // program returns the cached compiled program for an expression, or nil if it
@@ -299,12 +327,11 @@ func (c *analysisCache) program(expression string) *vm.Program {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	element, ok := c.entries[expression]
+	entry, ok := c.lookupLocked(expression)
 	if !ok {
 		return nil
 	}
-	c.order.MoveToFront(element)
-	return element.Value.(*analysisEntry).program
+	return entry.program
 }
 
 // storeProgram attaches a compiled program to an existing entry. It is a no-op
@@ -314,16 +341,75 @@ func (c *analysisCache) storeProgram(expression string, program *vm.Program) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	element, ok := c.entries[expression]
+	entry, ok := c.lookupLocked(expression)
 	if !ok {
 		return
 	}
-	element.Value.(*analysisEntry).program = program
-	c.order.MoveToFront(element)
+	entry.program = program
 }
 
+// pin takes one hold on each of expressions, which must be distinct. An
+// expression already cached keeps its entry, and with it any compiled program.
+// Analysis of the rest runs outside the lock and does not pass through the LRU,
+// so pinning does not evict unpinned entries.
+func (c *analysisCache) pin(expressions []string) {
+	analyzed := make([]*analysisEntry, len(expressions))
+	for i, expression := range expressions {
+		if _, ok := c.get(expression); !ok {
+			analyzed[i] = newAnalysisEntry(expression)
+		}
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for i, expression := range expressions {
+		if pinned, ok := c.pinned[expression]; ok {
+			pinned.holders++
+			continue
+		}
+		entry := analyzed[i]
+		if element, ok := c.entries[expression]; ok {
+			entry = element.Value.(*analysisEntry)
+			c.order.Remove(element)
+			delete(c.entries, expression)
+		}
+		if entry == nil {
+			// Evicted between the lookup and the lock.
+			entry = newAnalysisEntry(expression)
+		}
+		c.pinned[expression] = &pinnedEntry{entry: entry, holders: 1}
+	}
+}
+
+// unpin releases one hold on each of expressions. An expression no longer held
+// returns to the front of the LRU rather than being dropped, since a definition
+// change may bring it back.
+func (c *analysisCache) unpin(expressions []string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, expression := range expressions {
+		pinned, ok := c.pinned[expression]
+		if !ok {
+			continue
+		}
+		pinned.holders--
+		if pinned.holders > 0 {
+			continue
+		}
+		delete(c.pinned, expression)
+		c.insertLocked(pinned.entry)
+	}
+}
+
+// len returns the number of unpinned entries.
 func (c *analysisCache) len() int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.order.Len()
+}
+
+func (c *analysisCache) pinnedLen() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return len(c.pinned)
 }

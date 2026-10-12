@@ -13,6 +13,7 @@ import (
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
 
 	"github.com/smartcontractkit/chainlink-data-streams/llo/protocol"
+	"github.com/smartcontractkit/chainlink-data-streams/llo/protocol/calculated"
 
 	"github.com/smartcontractkit/libocr/commontypes"
 	"github.com/smartcontractkit/libocr/offchainreporting2plus/ocr3_1types"
@@ -68,6 +69,12 @@ type Plugin struct {
 	// through a read-only view, so peers cannot evict them. May be nil, in
 	// which case nothing is memoized.
 	ChannelAnalysisCache *protocol.ChannelAnalysisCache
+
+	// ExpressionPins keeps the expressions this instance evaluates in the
+	// shared analysis cache, so expressions analyzed for admission and peer
+	// validation cannot evict their compiled programs. May be nil, in which
+	// case nothing is pinned.
+	ExpressionPins *calculated.ExpressionPins
 
 	// BlobPayloads memoizes blob payloads decoded within one round, so a handle
 	// referenced by an observation is fetched and decompressed once for
@@ -525,6 +532,7 @@ func (p *Plugin) ShouldTransmitAcceptedReport(context.Context, uint64, ocr3types
 }
 
 func (p *Plugin) Close() error {
+	p.ExpressionPins.Release()
 	if p.attributedObservationTelemeter != nil {
 		p.attributedObservationTelemeter.Close()
 	}

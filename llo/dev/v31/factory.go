@@ -10,6 +10,7 @@ import (
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
 
 	protocol "github.com/smartcontractkit/chainlink-data-streams/llo/protocol"
+	"github.com/smartcontractkit/chainlink-data-streams/llo/protocol/calculated"
 
 	"github.com/smartcontractkit/libocr/offchainreporting2plus/ocr3_1types"
 	"github.com/smartcontractkit/libocr/offchainreporting2plus/ocr3types"
@@ -165,6 +166,7 @@ func (f *PluginFactory) NewReportingPlugin(ctx context.Context, cfg ocr3types.Re
 	// immutable generation per c/seqnr, so a round can never mix the two.
 	p.ChannelCache = protocol.NewChannelCache()
 	p.ChannelAnalysisCache = protocol.NewChannelAnalysisCache()
+	p.ExpressionPins = calculated.NewExpressionPins()
 	p.BlobPayloads = newBlobPayloadCache()
 
 	// Setup the blobpump
