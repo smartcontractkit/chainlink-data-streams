@@ -100,8 +100,8 @@ type twapConfig struct {
 // process-wide lock at the time. Measured: 197ms per evaluation for a 300-second window,
 // and 7.2s for 32 such channels in one round, against a round budget on the
 // order of a second. Doing it this way, a fully covered window needs no
-// transcendental operations at all, and a window with gaps needs one power per
-// interior gap.
+// transcendental operations at all, and a window with gaps needs one logarithm
+// and one exponential per interior gap.
 type twapObservation struct {
 	offset int
 	price  decimal.Decimal
@@ -268,25 +268,16 @@ func twapFillThenAverage(observations []twapObservation, n int) (decimal.Decimal
 //	ratio    = (right / left) ^ (1 / span)
 //	filled[k] = filled[k-1] * ratio
 //
-// One power per gap instead of two logarithms plus one exponential per missing
-// bucket. With the spec's example thresholds a window can be missing 60 buckets,
-// which cost ~73ms the other way and a fraction of that here. Exponentials are the
-// expensive operation (~0.5ms each) and reducing their precision only helps by
-// about a factor of two, so cutting their number is the only lever that matters.
+// One logarithm and one exponential per gap instead of two logarithms plus one
+// exponential per missing bucket. With the spec's example thresholds a window
+// can be missing 60 buckets, which cost ~73ms the other way and a fraction of
+// that here.
 //
 // Determinism: the ratio is computed at a fixed precision and every step is
 // rounded, so the sequence is reproducible — the same requirement EMA has, for the
 // same reason. That is also why the steps cannot be summed in closed form.
 func twapInterpolate(left, right twapObservation) (decimal.Decimal, error) {
-	growth, err := divRound(right.price, left.price, doublePrecision)
-	if err != nil {
-		return decimal.Decimal{}, fmt.Errorf("TWAP: bucket %d: %w", left.offset, err)
-	}
-	exponent, err := divRoundByInt(decimal.NewFromInt(1), right.offset-left.offset, doublePrecision)
-	if err != nil {
-		return decimal.Decimal{}, err
-	}
-	ratio, err := decimalPow(growth, exponent, doublePrecision)
+	ratio, err := twapStepRatio(left.price, right.price, right.offset-left.offset)
 	if err != nil {
 		return decimal.Decimal{}, fmt.Errorf("TWAP: interpolating buckets %d..%d: %w", left.offset+1, right.offset-1, err)
 	}
@@ -298,6 +289,37 @@ func twapInterpolate(left, right twapObservation) (decimal.Decimal, error) {
 		sum = sum.Add(price)
 	}
 	return sum, nil
+}
+
+// twapStepRatio returns (right / left) ^ (1 / span), the per-second ratio of a
+// gap, as exp(ln(right / left) / span) rounded to doublePrecision.
+//
+// It takes the logarithm and the exponential directly rather than through
+// decimalPow. A power raises its working precision by the digits of the
+// exponent, and 1/span rounded to doublePrecision has that many, so decimalPow
+// would work at more than twice the precision the ratio is rounded to. Dividing
+// the logarithm by span also avoids rounding 1/span first.
+//
+// The exponential scales an error in its argument by the ratio, so the steps
+// before it carry expGuardDigits more places than the result. Each step of the
+// gap rounds to doublePrecision, so the ratio's error grows to at most span
+// units of that place over the gap, far below the precision the TWAP is
+// reported at.
+func twapStepRatio(left, right decimal.Decimal, span int) (decimal.Decimal, error) {
+	const working = doublePrecision + expGuardDigits
+	growth, err := divRound(right, left, working)
+	if err != nil {
+		return decimal.Decimal{}, err
+	}
+	logGrowth, err := lnDecimal(growth, working)
+	if err != nil {
+		return decimal.Decimal{}, err
+	}
+	logRatio, err := divRoundByInt(logGrowth, span, working)
+	if err != nil {
+		return decimal.Decimal{}, err
+	}
+	return expDecimal(logRatio, doublePrecision)
 }
 
 // parseTWAPConfig decodes and validates the configuration map.

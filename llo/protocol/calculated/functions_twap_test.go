@@ -185,6 +185,44 @@ func TestTWAP_FillThenAverage(t *testing.T) {
 	}
 }
 
+// TestTWAP_StepRatio checks the per-second ratio of a gap against a power taken
+// at twice the precision: it must be within one unit at doublePrecision.
+func TestTWAP_StepRatio(t *testing.T) {
+	t.Parallel()
+
+	ulp := decimal.New(1, -doublePrecision)
+	for _, tc := range []struct {
+		left, right string
+		span        int
+	}{
+		{"100", "1600", 4},
+		{"1600", "100", 4},
+		{"100", "100", 7},
+		{"1234.56789012", "1234.56789013", 2},
+		{"1234.56789012", "1851.85183518", 2},
+		{"1234.56789012", "1234567.89012", 2},
+		{"1234567.89012", "1234.56789012", 3},
+		{"0.000012345", "98765.4321", 84},
+		{"98765.4321", "98765.4322", 86400},
+	} {
+		t.Run(fmt.Sprintf("%s->%s/span=%d", tc.left, tc.right, tc.span), func(t *testing.T) {
+			left, right := decimal.RequireFromString(tc.left), decimal.RequireFromString(tc.right)
+			got, err := twapStepRatio(left, right, tc.span)
+			require.NoError(t, err)
+
+			const refPrecision = 2 * doublePrecision
+			growth, err := divRound(right, left, refPrecision)
+			require.NoError(t, err)
+			exponent, err := divRoundByInt(decimal.NewFromInt(1), tc.span, refPrecision)
+			require.NoError(t, err)
+			want, err := decimalPow(growth, exponent, refPrecision)
+			require.NoError(t, err)
+
+			assert.True(t, got.Sub(want).Abs().LessThanOrEqual(ulp), "ratio %s, want %s", got, want)
+		})
+	}
+}
+
 // TestTWAP_GapStats ports the mercury gap-classification cases. These are the
 // statistics the acceptance rule is written in terms of, so they are worth
 // pinning independently of the averaging.

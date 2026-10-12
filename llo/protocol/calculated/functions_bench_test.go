@@ -177,15 +177,24 @@ func BenchmarkTWAPRealisticGaps(b *testing.B) {
 // BenchmarkTWAPMaxWindow measures one TWAP call at the longest window allowed
 // over the deepest history allowed, which is what protocol.MaxTotalTWAPCalls
 // charges every call. Records one second apart leave a head gap that costs one
-// multiplication; records spread evenly across the window turn every missing
-// second into an interior one, the worst case.
+// multiplication. Records spread evenly across the window turn every missing
+// second into an interior one, the most steps. Records two seconds apart with
+// prices alternating by a large factor give the most gaps, each with a ratio
+// far from 1, the most expensive logarithm.
 func BenchmarkTWAPMaxWindow(b *testing.B) {
 	const windowSeconds = twapMaxWindowSeconds
 	const depth = protocol.MaxHistoryRecordsPerPair
 
-	for _, spacing := range []int{1, windowSeconds / depth} {
-		window := benchSeries(depth, spacing)
-		anchorNs := uint64(depth*spacing+1) * uint64(time.Second)
+	for _, tc := range []struct {
+		name   string
+		window Series
+	}{
+		{"recordSpacing=1s", benchSeries(depth, 1)},
+		{fmt.Sprintf("recordSpacing=%ds", windowSeconds/depth), benchSeries(depth, windowSeconds/depth)},
+		{"recordSpacing=2s/alternating", benchAlternatingSeries(depth, 2, decimal.NewFromInt(1000))},
+	} {
+		timestamps := tc.window.Timestamps()
+		anchorNs := timestamps[len(timestamps)-1] + uint64(time.Second)
 		cfg := map[string]any{
 			"window":         time.Duration(windowSeconds) * time.Second,
 			"minSamples":     1,
@@ -195,15 +204,34 @@ func BenchmarkTWAPMaxWindow(b *testing.B) {
 		}
 		twap := twapFunc(anchorNs)
 
-		b.Run(fmt.Sprintf("recordSpacing=%ds", spacing), func(b *testing.B) {
+		b.Run(tc.name, func(b *testing.B) {
 			b.ReportAllocs()
 			for range b.N {
-				if _, err := twap(window, cfg); err != nil {
+				if _, err := twap(tc.window, cfg); err != nil {
 					b.Fatal(err)
 				}
 			}
 		})
 	}
+}
+
+// benchAlternatingSeries is benchSeries with every other price multiplied by
+// factor, so every gap interpolates across a large move.
+func benchAlternatingSeries(depth int, intervalSeconds int, factor decimal.Decimal) Series {
+	series := benchSeries(depth, intervalSeconds)
+	values := series.Values()
+	alternating := make([]decimal.Decimal, len(values))
+	for i, value := range values {
+		alternating[i] = value
+		if i%2 == 1 {
+			alternating[i] = value.Mul(factor)
+		}
+	}
+	s, err := NewSeries(alternating, series.Timestamps())
+	if err != nil {
+		panic(err)
+	}
+	return s
 }
 
 // BenchmarkTWAPParallel shows how TWAP scales when several plugin instances

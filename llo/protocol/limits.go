@@ -210,11 +210,12 @@ const (
 	// every round on every oracle. Like the per-expression cap, this charges
 	// every call its worst case.
 	//
-	// The worst case is a maximum-length window over a maximum-depth history
-	// spread evenly across it, so every missing second is interior and is
-	// stepped through costing cpu time across the evaluation workers,
-	// while a window with a short gap, the realistic shape, costs tens of
-	// microseconds per call. Admission-only, like the other whole-set budgets.
+	// A call costs one multiplication per missing interior second plus one
+	// logarithm and one exponential per interior gap, and the gap count is not
+	// bounded by the acceptance rule. The worst case is a maximum-depth history
+	// with a one-second gap between every pair of records. The realistic shape,
+	// costs tens of microseconds per call. Admission-only, like the other
+	// whole-set budgets.
 	MaxTotalTWAPCalls = 64
 	// MaxHistoryRecordBytes is the maximum serialized size of one history
 	// record, enforced on append (StreamHistory.Append) and used as the

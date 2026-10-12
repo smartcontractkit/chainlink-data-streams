@@ -170,28 +170,14 @@ func twapDenseFillThenAverage(buckets []twapBucket) (decimal.Decimal, error) {
 //	ratio    = (right / left) ^ (1 / span)
 //	filled[k] = filled[k-1] * ratio
 //
-// One power per gap instead of two logarithms plus one exponential per missing
-// bucket. With the spec's example thresholds a window can be missing 60 buckets,
-// which cost ~73ms the other way and a fraction of that here. Exponentials are the
-// expensive operation (~0.5ms each) and reducing their precision only helps by
-// about a factor of two, so cutting their number is the only lever that matters.
-//
-// Determinism: the ratio is computed at a fixed precision and every step is
-// rounded, so the sequence is reproducible — the same requirement EMA has, for the
-// same reason.
+// The ratio comes from twapStepRatio, shared with the sparse implementation:
+// this reference checks how gaps are found and filled, not the arithmetic of
+// the ratio itself.
 func twapDenseInterpolate(buckets []twapBucket, filled []decimal.Decimal, runStart, rightIdx int) error {
 	leftIdx := runStart - 1
 	left, right := buckets[leftIdx].price, buckets[rightIdx].price
 
-	growth, err := divRound(right, left, doublePrecision)
-	if err != nil {
-		return fmt.Errorf("TWAP: bucket %d: %w", leftIdx, err)
-	}
-	exponent, err := divRoundByInt(decimal.NewFromInt(1), rightIdx-leftIdx, doublePrecision)
-	if err != nil {
-		return err
-	}
-	ratio, err := decimalPow(growth, exponent, doublePrecision)
+	ratio, err := twapStepRatio(left, right, rightIdx-leftIdx)
 	if err != nil {
 		return fmt.Errorf("TWAP: interpolating buckets %d..%d: %w", runStart, rightIdx-1, err)
 	}
