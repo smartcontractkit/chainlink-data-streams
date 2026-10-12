@@ -53,6 +53,14 @@ const observationWireVersion byte = 1
 // can force per round; see also maxObservationDecompressedBytes.
 const maxObservationBlobHandles = 4
 
+// maxObservationUpdateChannelDefinitionsBytes bounds the encoded size of the
+// channel definitions one observation votes to add or change. Stream values
+// travel in a blob, so these votes are the only part of the observation that
+// can approach ocr3_1types.MaxMaxObservationBytes: five definitions at the
+// admission caps encode to more than it. The remainder covers the other fields,
+// whose worst case TestLimits_ObservationWorstCaseFitsDeclared measures.
+const maxObservationUpdateChannelDefinitionsBytes = 384 << 10
+
 // maxObservationDecompressedBytes bounds the TOTAL decompressed blob bytes a
 // single observation may cause, across all of its handles. Without it, the
 // per-blob cap alone would let one peer force

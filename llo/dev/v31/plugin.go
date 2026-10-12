@@ -19,6 +19,7 @@ import (
 	"github.com/smartcontractkit/libocr/offchainreporting2plus/ocr3types"
 	ocrtypes "github.com/smartcontractkit/libocr/offchainreporting2plus/types"
 	"github.com/smartcontractkit/libocr/quorumhelper"
+	"google.golang.org/protobuf/proto"
 )
 
 // Config holds v31 plugin behavior toggles.
@@ -378,20 +379,36 @@ func (p *Plugin) voteOnChannels(obs *Observation, state *kvState) {
 		obs.RemoveChannelIDs[channelID] = struct{}{}
 	}
 
-	obs.UpdateChannelDefinitions = make(llotypes.ChannelDefinitions)
-	expectedChannelIDs := maps.Keys(expectedChannelDefs)
+	obs.UpdateChannelDefinitions = channelUpdateVotes(state.channelDefinitions, expectedChannelDefs)
+}
+
+// channelUpdateVotes returns the channels in expected that are new or changed
+// against committed, in channel ID order, up to
+// MaxObservationUpdateChannelDefinitionsLength channels and
+// maxObservationUpdateChannelDefinitionsBytes encoded bytes. Admission bounds
+// a single definition well below the byte budget, so the first change always
+// fits, and the rest are voted on in later rounds.
+func channelUpdateVotes(committed, expected llotypes.ChannelDefinitions) llotypes.ChannelDefinitions {
+	updates := make(llotypes.ChannelDefinitions)
+	expectedChannelIDs := maps.Keys(expected)
 	sortChannelIDs(expectedChannelIDs)
+	size := 0
 	for _, channelID := range expectedChannelIDs {
-		prev, exists := state.channelDefinitions[channelID]
-		channelDefinition := expectedChannelDefs[channelID]
+		prev, exists := committed[channelID]
+		channelDefinition := expected[channelID]
 		if exists && prev.Equals(channelDefinition) {
 			continue
 		}
-		obs.UpdateChannelDefinitions[channelID] = channelDefinition
-		if len(obs.UpdateChannelDefinitions) >= protocol.MaxObservationUpdateChannelDefinitionsLength {
+		size += proto.Size(protocol.ChannelDefinitionToProto(channelDefinition))
+		if size > maxObservationUpdateChannelDefinitionsBytes {
+			break
+		}
+		updates[channelID] = channelDefinition
+		if len(updates) >= protocol.MaxObservationUpdateChannelDefinitionsLength {
 			break
 		}
 	}
+	return updates
 }
 
 // ValidateObservation checks an observation is well-formed. Blob-referenced

@@ -188,13 +188,12 @@ func (f *PluginFactory) NewReportingPlugin(ctx context.Context, cfg ocr3types.Re
 	// rejects an oversized message or write set, which fails the round for every
 	// oracle. The derivations, and which of them are currently enforced, are:
 	//
-	//	MaxObservationBytes           bounded post-decompression by
-	//	                              protocol.MaxDecompressedObservationLength,
-	//	                              itself derived from
-	//	                              MaxObservationStreamValuesLength stream
-	//	                              values plus
-	//	                              MaxObservationUpdateChannelDefinitionsLength
-	//	                              definitions.
+	//	MaxObservationBytes           the observation is not compressed and
+	//	                              carries no stream values, which travel
+	//	                              in a blob. Its size is dominated by
+	//	                              channel definition votes, held to
+	//	                              maxObservationUpdateChannelDefinitionsBytes
+	//	                              by channelUpdateVotes.
 	//	MaxReportsPlusPrecursorBytes  the precursor embeds every definition plus
 	//	                              every stream aggregate. Admission bounds
 	//	                              the aggregate count by

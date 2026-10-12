@@ -1,6 +1,8 @@
 package llo
 
 import (
+	"math"
+	"math/big"
 	"strings"
 	"testing"
 
@@ -13,6 +15,7 @@ import (
 	protocol "github.com/smartcontractkit/chainlink-data-streams/llo/protocol"
 
 	"github.com/smartcontractkit/libocr/offchainreporting2plus/ocr3_1types"
+	"google.golang.org/protobuf/proto"
 )
 
 // The declared limits in factory.go are only honest if the plugin's own bounds
@@ -251,4 +254,157 @@ func TestLimits_KnownUnboundedInputs(t *testing.T) {
 	// Phase 1: an observation carrying it is rejected.
 	_, err = protocol.UnmarshalObservedProtoStreamValue(pb)
 	require.ErrorIs(t, err, protocol.ErrDecimalCoefficientOutOfRange)
+}
+
+// worstCaseDefinitions builds channels definitions of streamsEach streams and
+// optsEach opts bytes, with every ID in the 5-byte varint range so each entry
+// encodes at its largest. The channels share one set of stream IDs, which
+// keeps the set within the aggregated-pair budget however many channels it has.
+func worstCaseDefinitions(channels, streamsEach, optsEach int) llotypes.ChannelDefinitions {
+	streams := make([]llotypes.Stream, 0, streamsEach)
+	for i := range streamsEach {
+		streams = append(streams, llotypes.Stream{
+			StreamID:   llotypes.StreamID(math.MaxUint32 - i),
+			Aggregator: llotypes.AggregatorMedian,
+		})
+	}
+	defs := make(llotypes.ChannelDefinitions, channels)
+	for c := range channels {
+		defs[llotypes.ChannelID(math.MaxUint32-c)] = llotypes.ChannelDefinition{
+			ReportFormat:           llotypes.ReportFormatJSON,
+			Streams:                streams,
+			Opts:                   []byte(strings.Repeat("x", optsEach)),
+			Source:                 math.MaxUint32,
+			DisableNilStreamValues: true,
+		}
+	}
+	return defs
+}
+
+// TestLimits_ObservationWorstCaseFitsDeclared builds the largest observation
+// this oracle can produce and measures it. The channel definition votes are
+// the only part that admission alone does not keep under the libocr limit, so
+// the votes are capped by bytes, and this test measures the cap together with
+// every other field at its maximum.
+func TestLimits_ObservationWorstCaseFitsDeclared(t *testing.T) {
+	const channels = protocol.MaxObservationUpdateChannelDefinitionsLength
+	defs := worstCaseDefinitions(channels, protocol.MaxStreamsPerChannel, protocol.MaxChannelOptsBytes)
+	admitting := make(map[llotypes.ChannelID]struct{}, channels)
+	for id := range defs {
+		admitting[id] = struct{}{}
+	}
+	require.NoError(t, protocol.VerifyChannelDefinitionsForAdmission(nil, defs, admitting))
+
+	// One admissible definition must always fit, or the first pending change
+	// could never be voted on.
+	for _, cd := range defs {
+		require.Less(t, proto.Size(protocol.ChannelDefinitionToProto(cd)), maxObservationUpdateChannelDefinitionsBytes)
+		break
+	}
+	updates := channelUpdateVotes(nil, defs)
+	require.NotEmpty(t, updates)
+
+	// The largest retirement report a predecessor can attest: a validAfter for
+	// every channel, signed by every oracle.
+	validAfter := make(map[llotypes.ChannelID]uint64, protocol.MaxOutcomeChannelDefinitionsLength)
+	for i := range protocol.MaxOutcomeChannelDefinitionsLength {
+		validAfter[llotypes.ChannelID(math.MaxUint32-i)] = math.MaxUint64
+	}
+	retirementReport, err := protocol.StandardRetirementReportCodec{}.Encode(protocol.RetirementReport{
+		ProtocolVersion:       math.MaxUint32,
+		ValidAfterNanoseconds: validAfter,
+	})
+	require.NoError(t, err)
+	attested := &protocol.AttestedRetirementReport{RetirementReport: retirementReport, SeqNr: math.MaxUint64}
+	signers := make([][]byte, protocol.MaxObservationPredecessorSignersLength)
+	for i := range signers {
+		signers[i] = make([]byte, protocol.MaxPredecessorSignerBytes)
+		attested.Sigs = append(attested.Sigs, &protocol.AttributedOnchainSignature{
+			Signature: make([]byte, protocol.MaxPredecessorSignerBytes),
+			Signer:    math.MaxUint32,
+		})
+	}
+	attestedBytes, err := proto.Marshal(attested)
+	require.NoError(t, err)
+
+	removals := make(map[llotypes.ChannelID]struct{}, protocol.MaxObservationRemoveChannelIDsLength)
+	for i := range protocol.MaxObservationRemoveChannelIDsLength {
+		removals[llotypes.ChannelID(i)] = struct{}{}
+	}
+	formats := make(map[llotypes.ReportFormat]struct{}, protocol.MaxObservationSupportedReportFormatsLength)
+	for i := range protocol.MaxObservationSupportedReportFormatsLength {
+		formats[llotypes.ReportFormat(math.MaxUint32-i)] = struct{}{}
+	}
+
+	obs := Observation{
+		AttestedPredecessorRetirement: attestedBytes,
+		ShouldRetire:                  true,
+		UnixTimestampNanoseconds:      math.MaxUint64,
+		RemoveChannelIDs:              removals,
+		UpdateChannelDefinitions:      updates,
+		SupportedReportFormats:        formats,
+		PredecessorSigners:            signers,
+		PredecessorF:                  math.MaxUint8,
+	}
+	// The encoder references one blob. A handle carries at most one
+	// availability signature per oracle, well under 4 KiB.
+	encoded, err := encodeObservation(obs, [][]byte{make([]byte, 4<<10)})
+	require.NoError(t, err)
+	require.LessOrEqual(t, len(encoded), ocr3_1types.MaxMaxObservationBytes,
+		"worst-case observation (%d bytes) exceeds the declared limit", len(encoded))
+	t.Logf("worst-case observation: %d bytes of the %d limit, voting %d of %d definitions",
+		len(encoded), ocr3_1types.MaxMaxObservationBytes, len(updates), channels)
+}
+
+// TestLimits_PrecursorWorstCaseFitsDeclared builds the largest precursor the
+// admission budgets and the aggregate caps permit and measures it against the
+// declared libocr limit.
+func TestLimits_PrecursorWorstCaseFitsDeclared(t *testing.T) {
+	const channels = protocol.MaxOutcomeChannelDefinitionsLength
+	defs := worstCaseDefinitions(channels, protocol.MaxTotalStreamEntries/channels, protocol.MaxTotalOptsBytes/channels)
+
+	validAfter := make(map[llotypes.ChannelID]uint64, channels)
+	for id := range defs {
+		validAfter[id] = math.MaxUint64
+	}
+
+	// The largest decimal observation decode and the calculated stream write
+	// path accept.
+	coefficient := new(big.Int).Lsh(big.NewInt(1), protocol.MaxDecimalCoefficientBits)
+	coefficient.Sub(coefficient, big.NewInt(1))
+	largest := decimal.NewFromBigInt(coefficient, -protocol.MaxDecimalExponent)
+
+	// Observed pairs at the persisted-aggregate cap, each a quote of three
+	// largest decimals, plus calculated streams at their own cap.
+	aggregates := make(protocol.StreamAggregates, protocol.MaxPersistedAggregates+protocol.MaxTotalCalculatedStreams)
+	for i := range protocol.MaxPersistedAggregates {
+		aggregates[llotypes.StreamID(math.MaxUint32-i)] = map[llotypes.Aggregator]protocol.StreamValue{
+			llotypes.AggregatorMedian: &protocol.Quote{Bid: largest, Benchmark: largest, Ask: largest},
+		}
+	}
+	for i := range protocol.MaxTotalCalculatedStreams {
+		aggregates[llotypes.StreamID(math.MaxUint32-protocol.MaxPersistedAggregates-i)] = map[llotypes.Aggregator]protocol.StreamValue{
+			llotypes.AggregatorCalculated: protocol.ToDecimal(largest),
+		}
+	}
+
+	support := make(map[llotypes.ReportFormat]int, protocol.MaxOutcomeChannelDefinitionsLength)
+	for i := range protocol.MaxOutcomeChannelDefinitionsLength {
+		support[llotypes.ReportFormat(math.MaxUint32-i)] = math.MaxUint32
+	}
+
+	encoded, err := encodePrecursor(precursor{
+		LifeCycleStage:                  llotypes.LifeCycleStage(strings.Repeat("x", 32)),
+		ObservationTimestampNanoseconds: math.MaxUint64,
+		ChannelDefinitions:              defs,
+		ValidAfterNanoseconds:           validAfter,
+		StreamAggregates:                aggregates,
+		ChannelStateSeqNr:               math.MaxUint64,
+		SupportByFormat:                 support,
+	})
+	require.NoError(t, err)
+	require.LessOrEqual(t, len(encoded), ocr3_1types.MaxMaxReportsPlusPrecursorBytes,
+		"worst-case precursor (%d bytes) exceeds the declared limit", len(encoded))
+	t.Logf("worst-case precursor: %d bytes of the %d limit",
+		len(encoded), ocr3_1types.MaxMaxReportsPlusPrecursorBytes)
 }

@@ -294,6 +294,10 @@ const (
 	// MaxObservationUpdateChannelDefinitionsLength channel definitions of up
 	// to MaxStreamsPerChannel streams each, which lands in the low single-digit
 	// MiB range. 16 MiB leaves generous headroom.
+	//
+	// This bounds the v3.0 observation and the v3.1 stream-values blob. The
+	// v3.1 observation itself is not compressed and is bounded by the libocr
+	// observation limit instead (see the v3.1 PluginFactory).
 	MaxDecompressedObservationLength = 16 << 20
 
 	// MaxPersistedAggregates bounds how many (streamID, aggregator) pairs may
