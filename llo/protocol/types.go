@@ -14,6 +14,8 @@ import (
 const (
 	// DefaultMaxReportRange is the default maximum range of the report if unset in the opts.
 	DefaultMaxReportRange = Duration(5 * time.Minute)
+	// MaxReportRangeCeiling is the largest maximum report range a channel may set.
+	MaxReportRangeCeiling = Duration(7 * 24 * time.Hour)
 )
 
 type ReportCodec interface {

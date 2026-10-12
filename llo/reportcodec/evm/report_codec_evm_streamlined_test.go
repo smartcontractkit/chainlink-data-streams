@@ -113,6 +113,13 @@ func TestReportCodecEVMStreamlined(t *testing.T) {
 				})
 				require.Error(t, err)
 				require.Contains(t, err.Error(), "json: cannot unmarshal hex string of odd length")
+				err = codec.Verify(llotypes.ChannelDefinition{
+					Streams: []llotypes.Stream{
+						{StreamID: 123, Aggregator: llotypes.AggregatorMedian},
+					},
+					Opts: []byte(`{"abi":[{"type":"int160"}],"maxReportRange":"87600h"}`),
+				})
+				require.EqualError(t, err, "maxReportRange must not exceed 168h0m0s; got: 87600h0m0s")
 			})
 		})
 	})
