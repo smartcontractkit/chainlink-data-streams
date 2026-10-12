@@ -279,6 +279,16 @@ func Test_VerifyChannelDefinitions_CalculatedStreamCollisions(t *testing.T) {
 			require.EqualError(t, verifyAdmittingAll(codecs, channelDefs), want)
 		}
 	})
+	t.Run("keeps the streams declared before a zero-ID expression", func(t *testing.T) {
+		// Channel 1 is committed and still evaluates stream 100, so channel 2
+		// cannot be admitted declaring it.
+		channelDefs := llotypes.ChannelDefinitions{
+			1: exprChannel(10, `{"abi":[{"expressionStreamID":100},{"expressionStreamID":0}]}`, 100),
+			2: exprChannel(11, `{"abi":[{"expressionStreamID":100}]}`, 100),
+		}
+		err := VerifyChannelDefinitionsForAdmission(codecs, channelDefs, map[llotypes.ChannelID]struct{}{2: {}})
+		require.EqualError(t, err, "ChannelDefinition with ID 2 declares calculated stream 100 already declared by channel 1")
+	})
 	t.Run("ignores tombstoned channels", func(t *testing.T) {
 		tombstoned := exprChannel(11, `{"abi":[{"expressionStreamID":100}]}`, 100)
 		tombstoned.Tombstone = true

@@ -331,6 +331,9 @@ func analyzeChannelDefinitions(codecs map[llotypes.ReportFormat]ReportCodec, cha
 			if facts.calculatedErr != nil {
 				admit(fmt.Errorf("invalid ChannelDefinition with ID %d: %w", channelID, facts.calculatedErr), channelID)
 			}
+			// Keep the IDs declared before a failing entry: evaluation still
+			// produces them, so they occupy their stream IDs and count against
+			// the budget like any other.
 			totalCalculatedStreams += len(facts.calculatedIDs)
 			for _, streamID := range facts.calculatedIDs {
 				if owner, ok := calculatedBy[streamID]; ok {
