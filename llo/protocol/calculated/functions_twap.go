@@ -31,7 +31,9 @@ var (
 type TWAPRejectionReason string
 
 const (
-	// ReasonInsufficientSamples: M < minSamples, the coverage floor.
+	// ReasonInsufficientSamples: M < minSamples, the coverage floor. It bounds the
+	// total filled buckets, N - M, across head, interior and tail gaps combined;
+	// maxInteriorGap bounds only the longest single interior run.
 	ReasonInsufficientSamples TWAPRejectionReason = "min_samples"
 	// ReasonHeadGapTooLong: Ghead > maxHeadGap, backfilled prefix too long.
 	ReasonHeadGapTooLong TWAPRejectionReason = "head_gap_too_long"

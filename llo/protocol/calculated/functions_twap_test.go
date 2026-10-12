@@ -97,6 +97,21 @@ func TestTWAP_FillThenAverage(t *testing.T) {
 			want: "620",
 		},
 		{
+			// maxInteriorGap bounds each run, not their total. The total is
+			// bounded by minSamples, so the window is accepted at M == minSamples.
+			name:       "several interior gaps each at the threshold: accepted at the coverage floor",
+			prices:     []int64{100, 0, 400, 0, 1600}, // M=3, two runs of Gint=1
+			minSamples: 3, maxInterior: 1,
+			// Interpolating in log space doubles each step: 100,200,400,800,1600.
+			want: "620",
+		},
+		{
+			name:       "several interior gaps each at the threshold: rejected below the coverage floor",
+			prices:     []int64{100, 0, 400, 0, 1600},
+			minSamples: 4, maxInterior: 1,
+			wantReasons: []TWAPRejectionReason{ReasonInsufficientSamples},
+		},
+		{
 			name:       "interior gap one over the threshold: rejected",
 			prices:     []int64{100, 0, 0, 0, 1600},
 			minSamples: 2, maxInterior: 2,
