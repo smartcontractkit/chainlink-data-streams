@@ -169,3 +169,18 @@ func TestHasCalculatedStreams(t *testing.T) {
 		Streams:      []llotypes.Stream{{StreamID: 1, Aggregator: llotypes.AggregatorCalculated}},
 	}))
 }
+
+func TestDecodeCalculatedStreamOpts_CacheAndFallbackAgree(t *testing.T) {
+	// encoding/json matches "expreſsion" (U+017F) to the expression field
+	// under Unicode case folding and goccy/go-json does not, so a decoder
+	// mismatch between the paths reads a different expression and stream ID.
+	cd := exprChannel(`{"abi":[{"type":"int256","expression":"s1","expreſsion":"s2",`+
+		`"expressionStreamID":998,"expreſſionStreamID":999}]}`, observedStreams())
+	cache := newSealedOptsCache(llotypes.ChannelDefinitions{1: cd})
+
+	fromCache, err := DecodeCalculatedStreamOpts(cache, cd, 1)
+	require.NoError(t, err)
+	fromDefinition, err := DecodeCalculatedStreamOpts(nil, cd, 1)
+	require.NoError(t, err)
+	require.Equal(t, fromCache, fromDefinition)
+}

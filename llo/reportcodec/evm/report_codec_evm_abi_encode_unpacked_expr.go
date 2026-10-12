@@ -124,7 +124,13 @@ func (r ReportCodecEVMABIEncodeUnpackedExpr) Verify(cd llotypes.ChannelDefinitio
 //
 // nil opts cache: the definition is given directly, so the opts are decoded from
 // it rather than looked up.
+//
+// Opts keys must be canonical: the expressions and stream IDs admission checks
+// must be the ones every decoder of these bytes reads.
 func (r ReportCodecEVMABIEncodeUnpackedExpr) VerifyForAdmission(cd llotypes.ChannelDefinition) error {
+	if err := protocol.VerifyOptsKeys(cd.Opts); err != nil {
+		return fmt.Errorf("invalid Opts: %w", err)
+	}
 	if err := calculated.ValidateChannelExpressions(nil, cd, 0); err != nil {
 		return fmt.Errorf("invalid calculated stream expressions: %w", err)
 	}

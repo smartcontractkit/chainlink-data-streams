@@ -1,7 +1,6 @@
 package protocol
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 
@@ -44,8 +43,8 @@ func DecodeCalculatedStreamOpts(optsCache *OptsCache, cd llotypes.ChannelDefinit
 		o, err = GetOpts[CalculatedStreamOpts](optsCache, cid)
 	}
 	if optsCache == nil || err != nil {
-		o = CalculatedStreamOpts{}
-		if uerr := json.Unmarshal(cd.Opts, &o); uerr != nil {
+		var uerr error
+		if o, uerr = decodeOpts[CalculatedStreamOpts](cd.Opts); uerr != nil {
 			return o, fmt.Errorf("failed to decode calculated stream opts: %w", uerr)
 		}
 	}

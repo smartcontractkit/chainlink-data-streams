@@ -271,7 +271,7 @@ func Test_VerifyChannelDefinitions_CalculatedStreamCollisions(t *testing.T) {
 	})
 	t.Run("fails for undecodable, empty, and zero-ID expression opts", func(t *testing.T) {
 		for opts, want := range map[string]string{
-			`not json`:                           "invalid ChannelDefinition with ID 1: failed to decode calculated stream opts: invalid character 'o' in literal null (expecting 'u')",
+			`not json`:                           "invalid ChannelDefinition with ID 1: failed to decode calculated stream opts: json: invalid character o as null",
 			`{}`:                                 "invalid ChannelDefinition with ID 1: no expressions found in channel definition",
 			`{"abi":[{"expressionStreamID":0}]}`: "invalid ChannelDefinition with ID 1: expression stream ID is 0, abi index: 0",
 		} {
