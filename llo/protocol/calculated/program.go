@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"sync"
 
 	"github.com/expr-lang/expr/conf"
@@ -176,7 +177,7 @@ func ValidateChannelExpressions(optsCache *protocol.OptsCache, cd llotypes.Chann
 		// would be installed and fail to compile every round.
 		for _, name := range entry.names {
 			if !channelBindsName(name, aggByStream) {
-				errs = append(errs, fmt.Errorf("expression %q: %w: identifier %q is neither a function nor a stream the channel observes",
+				errs = append(errs, fmt.Errorf("expression %q: %w: identifier %q is neither a function nor a field of a stream the channel observes",
 					expression, ErrUnknownIdentifier, name))
 			}
 		}
@@ -190,9 +191,17 @@ func ValidateChannelExpressions(optsCache *protocol.OptsCache, cd llotypes.Chann
 		// history and never reports. Reporting it here is the whole point of
 		// validating the definition.
 		for _, ref := range refs {
-			if _, ok := aggByStream[ref.StreamID]; !ok {
+			agg, ok := aggByStream[ref.StreamID]
+			if !ok {
 				errs = append(errs, fmt.Errorf("expression %q: %w: %s references stream %d, which the channel does not observe",
 					expression, ErrHistoryExpression, HistoryFunctionName, ref.StreamID))
+				continue
+			}
+			// The aggregator fixes the type of the stored value, so a field it
+			// cannot carry fails projection every round.
+			if !aggregatorCarriesField(agg, strings.TrimPrefix(ref.Field.suffix(), "_")) {
+				errs = append(errs, fmt.Errorf("expression %q: %w: %s reads the %s field of stream %d, which its %s aggregator does not produce",
+					expression, ErrHistoryExpression, HistoryFunctionName, ref.Field, ref.StreamID, agg))
 			}
 		}
 	}
@@ -204,9 +213,7 @@ func ValidateChannelExpressions(optsCache *protocol.OptsCache, cd llotypes.Chann
 var ErrUnknownIdentifier = errors.New("unknown identifier")
 
 // channelBindsName reports whether evaluation binds name for a channel whose
-// observed streams are aggByStream. It cannot check a stream identifier's
-// field: s1_bid is only bound when s1 observes a quote, and the value type is
-// not part of the definition.
+// observed streams are aggByStream.
 func channelBindsName(name string, aggByStream map[llotypes.StreamID]llotypes.Aggregator) bool {
 	if _, ok := defaultEnv[name]; ok || name == observationsTimestampName {
 		return true
@@ -219,8 +226,21 @@ func channelBindsName(name string, aggByStream map[llotypes.StreamID]llotypes.Ag
 	if err != nil {
 		return false
 	}
-	_, ok := aggByStream[llotypes.StreamID(id)]
-	return ok
+	agg, ok := aggByStream[llotypes.StreamID(id)]
+	return ok && aggregatorCarriesField(agg, match[2])
+}
+
+// aggregatorCarriesField reports whether the value agg produces can bind the
+// stream identifier suffix field, given without its underscore.
+func aggregatorCarriesField(agg llotypes.Aggregator, field string) bool {
+	switch agg {
+	case llotypes.AggregatorMedian:
+		return field == "" || field == "timestamp"
+	case llotypes.AggregatorQuote:
+		return field == "bid" || field == "ask" || field == "benchmark"
+	default:
+		return true
+	}
 }
 
 func (c *analysisCache) analyze(expression string) ([]HistoryRef, error) {

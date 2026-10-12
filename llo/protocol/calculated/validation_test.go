@@ -131,6 +131,17 @@ func TestValidateChannelExpressions(t *testing.T) {
 	require.ErrorContains(t, err, "which the channel does not observe")
 	assert.Contains(t, err.Error(), "stream 2")
 
+	// The aggregator fixes the type of the stored value, so a field it does
+	// not produce fails projection every round.
+	quote := llotypes.Stream{StreamID: 2, Aggregator: llotypes.AggregatorQuote}
+	require.NoError(t, ValidateChannelExpressions(nil,
+		channel([]llotypes.Stream{median(1), quote}, "Add(Avg(History(s1, 10)), Avg(History(s2_bid, 10)))"), 1))
+	err = ValidateChannelExpressions(nil,
+		channel([]llotypes.Stream{median(1), quote}, "Avg(History(s1_bid, 10))", "Avg(History(s2, 10))"), 1)
+	require.ErrorIs(t, err, ErrHistoryExpression)
+	assert.Contains(t, err.Error(), "bid field of stream 1")
+	assert.Contains(t, err.Error(), "value field of stream 2")
+
 	// Calculated streams are not observed, so an expression cannot read the
 	// history of one.
 	err = ValidateChannelExpressions(nil, channel([]llotypes.Stream{
@@ -185,6 +196,8 @@ func TestValidateChannelExpressions_Identifiers(t *testing.T) {
 			Streams: []llotypes.Stream{
 				{StreamID: 1, Aggregator: llotypes.AggregatorMedian},
 				{StreamID: 2, Aggregator: llotypes.AggregatorMedian},
+				{StreamID: 3, Aggregator: llotypes.AggregatorQuote},
+				{StreamID: 4, Aggregator: llotypes.AggregatorMode},
 				{StreamID: 900, Aggregator: llotypes.AggregatorCalculated},
 			},
 			Opts: []byte(fmt.Sprintf(`{"abi":[{"type":"int256","expression":%q,"expressionStreamID":900}]}`, expression)),
@@ -193,7 +206,9 @@ func TestValidateChannelExpressions_Identifiers(t *testing.T) {
 
 	for _, expression := range []string{
 		"Add(s1, s2)",
-		"Add(s1_bid, s2_timestamp)",
+		"Add(s3_bid, s2_timestamp)",
+		"Add(s3_ask, s3_benchmark)",
+		"Add(s4, s4_bid)", // mode carries whatever type its contributions agree on
 		"Sub(observations_timestamp, s1_timestamp)",
 		`TWAP(History(s1, 3), {window: Duration("3s"), minSamples: 1, maxHeadGap: 3, maxInteriorGap: 3, maxTailGap: 3})`,
 		"let a = Mul(s1, s2); Add(a, 1)",
@@ -210,7 +225,10 @@ func TestValidateChannelExpressions_Identifiers(t *testing.T) {
 	}{
 		{"Add(s9999, s1)", "s9999"},
 		{"Add(s9999_bid, s1)", "s9999_bid"},
-		{"Add(s900, s1)", "s900"}, // a calculated stream is not bound
+		{"Add(s900, s1)", "s900"},     // a calculated stream is not bound
+		{"Add(s1_bid, s1)", "s1_bid"}, // a median is never a quote
+		{"Add(s3, s1)", "s3"},         // a quote has no bare value
+		{"Add(s3_timestamp, s1)", "s3_timestamp"},
 		{"Add(foo, s1)", "foo"},
 		{"Foo(s1)", "Foo"},
 		{"Add(xs1, s1)", "xs1"},
