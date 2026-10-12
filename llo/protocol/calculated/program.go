@@ -17,10 +17,11 @@ import (
 	"github.com/smartcontractkit/chainlink-data-streams/llo/protocol"
 )
 
-// maxAnalysisCacheEntries bounds the expression analysis cache. Channel
-// definitions can churn, so the cache must not grow with the number of distinct
-// expressions ever seen; a few hundred live expressions is already far more than
-// any real configuration.
+// maxAnalysisCacheEntries bounds the unpinned part of the expression analysis
+// cache. Expressions of committed definitions are pinned and do not count
+// against it, so it only bounds transient analysis by admission and peer
+// validation, which must not grow with the number of distinct expressions ever
+// seen.
 const maxAnalysisCacheEntries = 1024
 
 // parseExpression is the single parse of the DSL: it applies the expression

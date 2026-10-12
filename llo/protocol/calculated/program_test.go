@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/expr-lang/expr"
+	"github.com/expr-lang/expr/vm"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -172,6 +173,40 @@ func TestAnalysisCache_PinnedSurvivesChurn(t *testing.T) {
 
 	assert.Same(t, program, c.program(live), "pinned program must survive eviction")
 	assert.Equal(t, 1, c.pinnedLen())
+	assert.Equal(t, max, c.len())
+}
+
+// TestAnalysisCache_PinnedExceedsMax checks that a live expression set larger
+// than the LRU bound keeps every compiled program through churn, since
+// admission permits far more calculated streams than the bound.
+func TestAnalysisCache_PinnedExceedsMax(t *testing.T) {
+	t.Parallel()
+
+	const max = 4
+	c := newAnalysisCache(max)
+
+	live := make([]string, 4*max)
+	for i := range live {
+		live[i] = fmt.Sprintf("Avg(History(s%d, 10))", 10001+i)
+	}
+	c.pin(live)
+
+	programs := make([]*vm.Program, len(live))
+	for i, expression := range live {
+		program, err := expr.Compile("1")
+		require.NoError(t, err)
+		c.storeProgram(expression, program)
+		programs[i] = program
+	}
+
+	for i := range 100 {
+		c.entry(fmt.Sprintf("Avg(History(s%d, 10))", i+1))
+	}
+
+	for i, expression := range live {
+		assert.Same(t, programs[i], c.program(expression), "pinned program must survive eviction: %s", expression)
+	}
+	assert.Equal(t, len(live), c.pinnedLen())
 	assert.Equal(t, max, c.len())
 }
 
