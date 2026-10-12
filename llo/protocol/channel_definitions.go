@@ -428,6 +428,14 @@ func sortedStreamIDs(m map[llotypes.StreamID]llotypes.ChannelID) []llotypes.Stre
 	return ids
 }
 
+// SubtractChannelDefinitions returns the channels in minuend that are absent
+// from subtrahend, keeping the limit lowest channel IDs.
+//
+// Keep the lowest IDs rather than rotating across rounds: a removal needs
+// matching votes, and a fixed prefix maximizes the overlap between oracles
+// whose desired sets differ slightly. Fairness is not a goal. Removed channels
+// leave the committed set, so the next round reaches the following IDs, and
+// only the channel definitions owner can refill the prefix.
 func SubtractChannelDefinitions(minuend llotypes.ChannelDefinitions, subtrahend llotypes.ChannelDefinitions, limit int) llotypes.ChannelDefinitions {
 	differenceList := []ChannelDefinitionWithID{}
 	for channelID, channelDefinition := range minuend {
