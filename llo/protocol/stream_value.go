@@ -315,6 +315,9 @@ func (v *Quote) MarshalBinary() (b []byte, err error) {
 }
 
 func (v *Quote) UnmarshalBinary(data []byte) error {
+	if v == nil {
+		return ErrNilStreamValue
+	}
 	q := new(LLOStreamValueQuote)
 	if err := proto.Unmarshal(data, q); err != nil {
 		return err
@@ -455,6 +458,9 @@ func (v *TimestampedStreamValue) UnmarshalBinary(data []byte) error {
 // unmarshalBinary carries the nesting depth reached so far. See
 // unmarshalProtoStreamValue.
 func (v *TimestampedStreamValue) unmarshalBinary(data []byte, depth int) error {
+	if v == nil {
+		return ErrNilStreamValue
+	}
 	t := new(LLOTimestampedStreamValue)
 	if err := proto.Unmarshal(data, t); err != nil {
 		return err

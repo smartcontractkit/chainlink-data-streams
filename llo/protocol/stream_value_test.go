@@ -44,6 +44,20 @@ func Test_TimestampedStreamValue_NilInnerValue(t *testing.T) {
 	})
 }
 
+func Test_StreamValue_UnmarshalNilReceiver(t *testing.T) {
+	for _, sv := range []StreamValue{
+		(*Decimal)(nil),
+		(*Quote)(nil),
+		(*TimestampedStreamValue)(nil),
+	} {
+		t.Run(reflect.TypeOf(sv).Elem().Name(), func(t *testing.T) {
+			require.ErrorIs(t, sv.UnmarshalBinary(nil), ErrNilStreamValue)
+			require.ErrorIs(t, sv.UnmarshalText(nil), ErrNilStreamValue)
+			require.ErrorIs(t, Decode(sv, nil), ErrNilStreamValue)
+		})
+	}
+}
+
 func Test_Decimal_ExponentBound(t *testing.T) {
 	// A decimal with an unbounded exponent is only 6 bytes on the wire but
 	// costs hundreds of MB to compare during aggregation, so it must be
