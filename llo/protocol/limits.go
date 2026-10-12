@@ -83,6 +83,13 @@ const (
 	// can be supported
 	MaxOutcomeChannelDefinitionsLength = MaxReportCount
 
+	// MaxRetirementReportChannels bounds the ValidAfterNanoseconds entries a
+	// decoded retirement report may carry. v30 keeps a removed channel's
+	// watermark until an explicit removal vote, so an honest report can exceed
+	// the live channel count. Twice the definitions cap leaves room for that
+	// without rejecting a legitimate handover.
+	MaxRetirementReportChannels = 2 * MaxOutcomeChannelDefinitionsLength
+
 	// MaxTotalStreamEntries bounds the sum of len(cd.Streams) over the whole
 	// definition set.
 	//
