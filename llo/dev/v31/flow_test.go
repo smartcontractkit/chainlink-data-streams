@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -17,6 +18,7 @@ import (
 	"github.com/smartcontractkit/chainlink-common/pkg/utils/tests"
 
 	protocol "github.com/smartcontractkit/chainlink-data-streams/llo/protocol"
+	"github.com/smartcontractkit/chainlink-data-streams/llo/reportcodec"
 
 	"github.com/smartcontractkit/libocr/offchainreporting2plus/ocr3types"
 	ocrtypes "github.com/smartcontractkit/libocr/offchainreporting2plus/types"
@@ -989,4 +991,49 @@ func Test_IsReportable_MinReportIntervalDoesNotOverflow(t *testing.T) {
 
 	require.Equal(t, uint64(math.MaxUint64), saturatingAdd(validAfter, math.MaxUint64))
 	require.Equal(t, uint64(9), saturatingAdd(4, 5))
+}
+
+// verifyCountingCodec counts how often channel definitions are decoded, which
+// the channel analysis cache is there to avoid.
+type verifyCountingCodec struct {
+	reportcodec.JSONReportCodec
+	verifies atomic.Int64
+}
+
+func (c *verifyCountingCodec) Verify(cd llotypes.ChannelDefinition) error {
+	c.verifies.Add(1)
+	return c.JSONReportCodec.Verify(cd)
+}
+
+// Test_ValidateObservation_DoesNotEvictChannelAnalysisCache pins that peer
+// observations cannot displace what this node cached from its own inputs: more
+// distinct updates of one channel than the cache retains leave the committed
+// definition cached, and are not cached themselves.
+func Test_ValidateObservation_DoesNotEvictChannelAnalysisCache(t *testing.T) {
+	ctx := tests.Context(t)
+	p := testPlugin(t)
+	codec := &verifyCountingCodec{}
+	p.ReportCodecs = map[llotypes.ReportFormat]protocol.ReportCodec{llotypes.ReportFormatJSON: codec}
+	p.ChannelAnalysisCache = protocol.NewChannelAnalysisCache()
+	kv := newMemKV()
+
+	committed := llotypes.ChannelDefinitions{1: jsonChannel()}
+	require.NoError(t, writeChannelState(kv, 1, committed))
+	// What Observation does with the committed set.
+	require.NoError(t, protocol.VerifyChannelDefinitionsWithCache(p.ReportCodecs, committed, p.ChannelAnalysisCache))
+	require.Equal(t, int64(1), codec.verifies.Load())
+
+	const updates = 6
+	for round := 0; round < 2; round++ {
+		for i := 0; i < updates; i++ {
+			cd := jsonChannel()
+			cd.Streams[0].StreamID = llotypes.StreamID(200 + i) //nolint:gosec // small test constant
+			obs := Observation{UnixTimestampNanoseconds: 1_000, UpdateChannelDefinitions: llotypes.ChannelDefinitions{1: cd}}
+			require.NoError(t, p.ValidateObservation(ctx, 2, ocrtypes.AttributedQuery{}, ao(i%4, mustEncodeObs(t, obs)), kv, testBlobs))
+		}
+	}
+	require.Equal(t, int64(1+2*updates), codec.verifies.Load(), "peer updates must not be cached")
+
+	require.NoError(t, protocol.VerifyChannelDefinitionsWithCache(p.ReportCodecs, committed, p.ChannelAnalysisCache))
+	require.Equal(t, int64(1+2*updates), codec.verifies.Load(), "committed definition must still be cached")
 }

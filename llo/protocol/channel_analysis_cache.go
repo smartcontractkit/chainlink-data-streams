@@ -46,8 +46,19 @@ type channelFacts struct {
 // value within a round, so the cache holds a small number of entries per
 // channel rather than one. The overlapping sets agree on everything else.
 //
+// Only sets derived from this node's own inputs should be recorded. Sets
+// proposed by peers are verified through ReadOnly, so that a peer cannot evict
+// what this node derived from the committed and the desired definitions.
+//
 // A nil *ChannelAnalysisCache is usable and simply memoizes nothing.
 type ChannelAnalysisCache struct {
+	entries  *channelAnalysisEntries
+	readOnly bool
+}
+
+// channelAnalysisEntries is the state shared by a cache and its read-only
+// views.
+type channelAnalysisEntries struct {
 	mu    sync.Mutex
 	facts map[llotypes.ChannelID][]cachedChannelFacts
 }
@@ -62,14 +73,25 @@ type cachedChannelFacts struct {
 
 // channelFactsRetained bounds how many definitions of one channel are
 // remembered. Two is what a round asks for while a channel is being changed
-// (the committed value and the proposed one); the third leaves room for a
-// second proposal in flight.
+// (the committed value and the desired one); the third leaves room for the
+// desired value to change again before the previous one is committed.
 const channelFactsRetained = 3
 
 func NewChannelAnalysisCache() *ChannelAnalysisCache {
 	return &ChannelAnalysisCache{
-		facts: make(map[llotypes.ChannelID][]cachedChannelFacts),
+		entries: &channelAnalysisEntries{
+			facts: make(map[llotypes.ChannelID][]cachedChannelFacts),
+		},
 	}
+}
+
+// ReadOnly returns a view that serves the same entries but never records new
+// ones.
+func (c *ChannelAnalysisCache) ReadOnly() *ChannelAnalysisCache {
+	if c == nil {
+		return nil
+	}
+	return &ChannelAnalysisCache{entries: c.entries, readOnly: true}
 }
 
 // Prune drops the entries of every channel channelDefs does not hold. Verifying
@@ -77,14 +99,15 @@ func NewChannelAnalysisCache() *ChannelAnalysisCache {
 // callers that know the committed set: on the v31 hot path, the round that
 // loads it.
 func (c *ChannelAnalysisCache) Prune(channelDefs llotypes.ChannelDefinitions) {
-	if c == nil {
+	if c == nil || c.readOnly {
 		return
 	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	for channelID := range c.facts {
+	e := c.entries
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	for channelID := range e.facts {
 		if _, ok := channelDefs[channelID]; !ok {
-			delete(c.facts, channelID)
+			delete(e.facts, channelID)
 		}
 	}
 }
@@ -94,9 +117,10 @@ func (c *ChannelAnalysisCache) get(channelID llotypes.ChannelID, cd llotypes.Cha
 	if c == nil {
 		return channelFacts{}, false
 	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	for _, entry := range c.facts[channelID] {
+	e := c.entries
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	for _, entry := range e.facts[channelID] {
 		if entry.cd.Equals(cd) {
 			return entry.facts, true
 		}
@@ -105,17 +129,18 @@ func (c *ChannelAnalysisCache) get(channelID llotypes.ChannelID, cd llotypes.Cha
 }
 
 // put records facts as derived from cd, evicting the channel's oldest entry
-// once the bound is reached. cd is cloned: the caller's definition may share
-// memory with a set that is mutated later, and the entry's identity has to stay
-// what it was derived from.
+// once the bound is reached. A read-only view records nothing. cd is cloned:
+// the caller's definition may share memory with a set that is mutated later,
+// and the entry's identity has to stay what it was derived from.
 func (c *ChannelAnalysisCache) put(channelID llotypes.ChannelID, cd llotypes.ChannelDefinition, facts channelFacts) {
-	if c == nil {
+	if c == nil || c.readOnly {
 		return
 	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	e := c.entries
+	e.mu.Lock()
+	defer e.mu.Unlock()
 
-	entries := c.facts[channelID]
+	entries := e.facts[channelID]
 	for _, entry := range entries {
 		if entry.cd.Equals(cd) {
 			// A concurrent analysis got there first. The facts are a pure
@@ -123,14 +148,11 @@ func (c *ChannelAnalysisCache) put(channelID llotypes.ChannelID, cd llotypes.Cha
 			return
 		}
 	}
-	if c.facts == nil {
-		c.facts = make(map[llotypes.ChannelID][]cachedChannelFacts)
-	}
 	entries = append(entries, cachedChannelFacts{cd: cloneChannelDefinition(cd), facts: facts})
 	if len(entries) > channelFactsRetained {
 		entries = entries[len(entries)-channelFactsRetained:]
 	}
-	c.facts[channelID] = entries
+	e.facts[channelID] = entries
 }
 
 // channelFactsFor returns the facts for cd, decoding its opts only when they are

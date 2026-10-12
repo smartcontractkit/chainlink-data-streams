@@ -63,7 +63,9 @@ type Plugin struct {
 	// desired ones in Observation, and the set each update-carrying observation
 	// advocates in ValidateObservation. One cache is shared by all of them, so
 	// the parallel ValidateObservation calls hit what Observation already
-	// decoded. May be nil, in which case nothing is memoized.
+	// decoded. Only Observation records entries: ValidateObservation reads
+	// through a read-only view, so peers cannot evict them. May be nil, in
+	// which case nothing is memoized.
 	ChannelAnalysisCache *protocol.ChannelAnalysisCache
 
 	// BlobPayloads memoizes blob payloads decoded within one round, so a handle
@@ -467,7 +469,7 @@ func (p *Plugin) ValidateObservation(ctx context.Context, seqNr uint64, _ ocrtyp
 	// updates from a staler one, which costs update-voting liveness only. An
 	// observation that votes no update has nothing to verify here, so rounds
 	// themselves are unaffected.
-	if err := protocol.VerifyChannelDefinitionsWithCache(p.ReportCodecs, defsForVerify, p.ChannelAnalysisCache); err != nil {
+	if err := protocol.VerifyChannelDefinitionsWithCache(p.ReportCodecs, defsForVerify, p.ChannelAnalysisCache.ReadOnly()); err != nil {
 		return fmt.Errorf("UpdateChannelDefinitions is invalid: %w", err)
 	}
 
