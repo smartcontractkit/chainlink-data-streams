@@ -54,13 +54,17 @@ const (
 	// exponent can still carry an arbitrarily long coefficient and be
 	// arbitrarily large on the wire.
 	//
-	// 192 bits is 58 decimal digits, derived from MaxHistoryRecordBytes
-	// A timestamped quote, the largest shape a stream value takes carrying
-	// three coefficients at this bound measures 125B as a history record,
-	// the most that fits the 128B per-record limit.
-	// One step up (224 bits) measures 137 B, which observation decode would accept
-	// and history would then refuse, leaving a gap in the series for a value the round agreed on.
-	// Asserted by TestDecimalCoefficientBoundFitsHistoryRecord.
+	// 192 bits is 58 decimal digits, derived from MaxHistoryRecordBytes. A
+	// timestamped quote, the largest shape decode admits at one nesting level,
+	// carrying three coefficients at this bound measures 125 B as a history
+	// record, the most that fits the 128 B per-record limit. One step up
+	// (224 bits) measures 137 B, which observation decode would accept and
+	// history would then refuse, leaving a gap in the series for a value the
+	// round agreed on. Asserted by TestDecimalCoefficientBoundFitsHistoryRecord.
+	//
+	// The timestamped quote is a conservative worst case. v31 observation
+	// validation only admits a timestamped value wrapping a Decimal, so the
+	// largest value that reaches history is a quote at this bound, 109 B.
 	//
 	// For scale, the fixtures in the size table below are 57 bits (an 18-digit
 	// price) and 124 bits (38 digits), so this is ~3x and ~1.5x those.
@@ -295,13 +299,13 @@ const (
 	// to MaxStreamsPerChannel streams each, which lands in the low single-digit
 	// MiB range. 16 MiB leaves generous headroom.
 	//
-	// This bounds the v3.0 observation and the v3.1 stream-values blob. The
-	// v3.1 observation itself is not compressed and is bounded by the libocr
-	// observation limit instead (see the v3.1 PluginFactory).
+	// This bounds the v30 observation and the v31 stream-values blob. The
+	// v31 observation itself is not compressed and is bounded by the libocr
+	// observation limit instead (see the v31 PluginFactory).
 	MaxDecompressedObservationLength = 16 << 20
 
 	// MaxPersistedAggregates bounds how many (streamID, aggregator) pairs may
-	// carry a timestamped aggregate forward across rounds in the v3.1 r/agg
+	// carry a timestamped aggregate forward across rounds in the v31 r/agg
 	// record.
 	MaxPersistedAggregates = 2 * MaxObservationStreamValuesLength
 

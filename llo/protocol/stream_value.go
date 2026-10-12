@@ -60,6 +60,12 @@ var (
 // coordinated across versions.
 //
 // Bounding observations bounds everything written from them going forward.
+//
+// The bounds apply per decimal, not per shape. Up to MaxStreamValueNesting
+// timestamped levels decode here, and past one level a value at the
+// coefficient bound outgrows MaxHistoryRecordBytes. Callers rely on the
+// plugin's observation validation to restrict which shapes are admitted (see
+// v31 Plugin.ValidateObservation).
 func UnmarshalObservedProtoStreamValue(enc *LLOStreamValue) (StreamValue, error) {
 	sv, err := UnmarshalProtoStreamValue(enc)
 	if err != nil {
