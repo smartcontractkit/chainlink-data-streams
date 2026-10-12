@@ -11,7 +11,6 @@ import (
 
 	"github.com/goccy/go-json"
 
-	"github.com/smartcontractkit/chainlink-common/pkg/logger"
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
 )
 
@@ -356,28 +355,6 @@ func ValidateHistoryBackfillValues(cd llotypes.ChannelDefinition, defs llotypes.
 		}
 	}
 	return nil
-}
-
-// DropInvalidHistoryBackfillChannels returns a copy of defs without history_backfill channels that fail validation.
-// The input defs map is not modified. nowNanos should be wall-clock nanoseconds; use 0 to skip the future-timestamp check.
-func DropInvalidHistoryBackfillChannels(lggr logger.Logger, defs llotypes.ChannelDefinitions, nowNanos uint64) llotypes.ChannelDefinitions {
-	if defs == nil {
-		return nil
-	}
-	out := make(llotypes.ChannelDefinitions, len(defs))
-	for k, v := range defs {
-		out[k] = v
-	}
-	for cid, cd := range out {
-		if cd.ReportFormat != llotypes.ReportFormatHistoryBackfill {
-			continue
-		}
-		if err := ValidateHistoryBackfillAgainstDefinitions(cd, out, nowNanos); err != nil {
-			logger.Sugared(lggr).Warnw("dropping invalid history_backfill channel definition", "channelID", cid, "err", err)
-			delete(out, cid)
-		}
-	}
-	return out
 }
 
 // StreamValueFromBackfillString parses a backfill observation string for the given aggregator.
