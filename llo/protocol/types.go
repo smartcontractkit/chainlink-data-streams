@@ -3,6 +3,7 @@ package protocol
 import (
 	"errors"
 	"fmt"
+	"math"
 	"time"
 
 	"github.com/goccy/go-json"
@@ -171,6 +172,10 @@ func (d *Duration) UnmarshalJSON(b []byte) error {
 	}
 	switch value := v.(type) {
 	case float64:
+		// Reject magnitudes int64 cannot hold
+		if math.IsNaN(value) || value >= float64(math.MaxInt64) || value < float64(math.MinInt64) {
+			return fmt.Errorf("duration out of range: %v", value)
+		}
 		*d = Duration(time.Duration(value))
 		return nil
 	case string:
