@@ -1,8 +1,6 @@
 package llo
 
 import (
-	"github.com/goccy/go-json"
-
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
 
 	protocol "github.com/smartcontractkit/chainlink-data-streams/llo/protocol"
@@ -18,28 +16,22 @@ type timeResolutionOpts struct {
 // whose validAfter and observation timestamp fall in the same second, otherwise
 // the reports would overlap (or be not-yet-valid) once truncated to seconds.
 //
-// Unlike the v30 equivalent (which reads a node-local, incrementally mutated
-// OptsCache and is therefore non-deterministic on a cache miss), this parses the resolution directly from
-// the channel definition's opts, which are part of the replicated state — so the
-// result is deterministic across oracles.
+// It reads opts through the round OptsCache. That cache is sealed to the same
+// channel generation as the definitions, so it holds every channel opts and
+// the result is deterministic across oracles.
 //
 //   - ReportFormatEVMPremiumLegacy always uses seconds.
-//   - ReportFormatEVMABIEncodeUnpacked uses the TimeResolution opt, which
-//     defaults to seconds (the zero value) when unset; malformed opts are
-//     treated as non-seconds.
+//   - ReportFormatEVMABIEncodeUnpacked and ReportFormatEVMABIEncodeUnpackedExpr
+//     use the TimeResolution opt, which defaults to seconds (the zero value)
+//     when unset; malformed opts are treated as non-seconds.
 //   - all other formats use full (nanosecond) resolution.
-func isSecondsResolution(cd llotypes.ChannelDefinition) bool {
+func isSecondsResolution(cd llotypes.ChannelDefinition, channelID llotypes.ChannelID, optsCache *protocol.OptsCache) bool {
 	switch cd.ReportFormat {
 	case llotypes.ReportFormatEVMPremiumLegacy:
 		return true
-	case llotypes.ReportFormatEVMABIEncodeUnpacked:
-		var o timeResolutionOpts // TimeResolution zero value == ResolutionSeconds
-		if len(cd.Opts) > 0 {
-			if err := json.Unmarshal(cd.Opts, &o); err != nil {
-				return false
-			}
-		}
-		return o.TimeResolution == protocol.ResolutionSeconds
+	case llotypes.ReportFormatEVMABIEncodeUnpacked, llotypes.ReportFormatEVMABIEncodeUnpackedExpr:
+		o, err := protocol.GetOpts[timeResolutionOpts](optsCache, channelID)
+		return err == nil && o.TimeResolution == protocol.ResolutionSeconds
 	default:
 		return false
 	}

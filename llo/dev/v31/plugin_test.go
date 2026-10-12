@@ -526,7 +526,43 @@ func Test_SecondsResolutionOverlap(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			p := mkPrec(tc.format, tc.opts, tc.validAfter, tc.obsTs)
-			got := p.withSupport(1).reportableChannels(0, 0, protocol.NewOptsCache(), nil)
+			cache := protocol.NewOptsCache()
+			cache.ResetTo(p.ChannelDefinitions)
+			got := p.withSupport(1).reportableChannels(0, 0, cache, nil)
+			if tc.reportable {
+				require.Equal(t, []llotypes.ChannelID{1}, got)
+			} else {
+				require.Empty(t, got)
+			}
+		})
+	}
+
+	// Expr channels need a calculated aggregate to be reportable at all, so a
+	// not reportable result can only come from the overlap check.
+	const exprStreamID = 999
+	exprOpts := func(resolution string) []byte {
+		return []byte(`{` + resolution + `"abi":[{"type":"int256","expression":"s1","expressionStreamID":999}]}`)
+	}
+	exprTests := []struct {
+		name       string
+		opts       []byte
+		obsTs      uint64
+		reportable bool
+	}{
+		{"expr default opts same second -> not reportable (defaults to seconds)", exprOpts(``), sec1b, false},
+		{"expr explicit seconds same second -> not reportable", exprOpts(`"TimeResolution":"s",`), sec1b, false},
+		{"expr explicit seconds next second -> reportable", exprOpts(`"TimeResolution":"s",`), sec2, true},
+		{"expr explicit ns same second -> reportable", exprOpts(`"TimeResolution":"ns",`), sec1b, true},
+	}
+	for _, tc := range exprTests {
+		t.Run(tc.name, func(t *testing.T) {
+			p := mkPrec(llotypes.ReportFormatEVMABIEncodeUnpackedExpr, tc.opts, sec1a, tc.obsTs)
+			p.StreamAggregates = protocol.StreamAggregates{
+				exprStreamID: {llotypes.AggregatorCalculated: protocol.ToDecimal(decimal.NewFromInt(3))},
+			}
+			cache := protocol.NewOptsCache()
+			cache.ResetTo(p.ChannelDefinitions)
+			got := p.withSupport(1).reportableChannels(0, 0, cache, nil)
 			if tc.reportable {
 				require.Equal(t, []llotypes.ChannelID{1}, got)
 			} else {
@@ -570,7 +606,8 @@ func Test_DisableNilStreamValues_CalculatedStreams(t *testing.T) {
 		base2 = llotypes.StreamID(200)
 		expr1 = llotypes.StreamID(900)
 	)
-	validOpts := []byte(`{"abi":[{"type":"int256","expression":"Add(s100, s200)","expressionStreamID":900}]}`)
+	// Nanosecond resolution, so the 1000ns report window is not a seconds overlap.
+	validOpts := []byte(`{"TimeResolution":"ns","abi":[{"type":"int256","expression":"Add(s100, s200)","expressionStreamID":900}]}`)
 
 	baseStreams := []llotypes.Stream{
 		{StreamID: base1, Aggregator: llotypes.AggregatorMedian},

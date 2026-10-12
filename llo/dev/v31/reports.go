@@ -398,7 +398,7 @@ func (o precursor) isReportable(channelID llotypes.ChannelID, minReportInterval 
 	}
 	// For seconds-resolution report formats, also require a full second between
 	// validAfter and the observation timestamp to prevent overlapping reports.
-	if isSecondsResolution(cd) && secondsOverlap(validAfter, o.ObservationTimestampNanoseconds) {
+	if isSecondsResolution(cd, channelID, optsCache) && secondsOverlap(validAfter, o.ObservationTimestampNanoseconds) {
 		return false
 	}
 	return true
