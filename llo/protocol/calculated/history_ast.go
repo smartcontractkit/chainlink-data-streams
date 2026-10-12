@@ -153,6 +153,17 @@ var (
 		"EMA":       true,
 		"TWAP":      true,
 	}
+
+	// minWindowDepth is the smallest depth at which a window function compares
+	// more than one record. Below it the function is constant by construction,
+	// so the expression is rejected rather than left to publish that constant.
+	minWindowDepth = map[string]uint32{
+		"Variance":  2,
+		"Stddev":    2,
+		"Delta":     2,
+		"PctChange": 2,
+		"Spread":    2,
+	}
 )
 
 // ErrHistoryExpression is returned for any expression that misuses History. It
@@ -263,6 +274,7 @@ func (p *historyPatcher) Visit(node *ast.Node) {
 			if callee.Value == twapFunctionName {
 				p.checkTWAP(n)
 			}
+			p.checkWindowDepth(callee.Value, n)
 		}
 	}
 }
@@ -386,6 +398,24 @@ func (p *historyPatcher) checkTWAP(call *ast.CallNode) {
 	if minSamples > int64(ref.Count) {
 		p.errorf("%s requires at least %d observations but %s only keeps %d records; increase the history depth or lower minSamples",
 			twapFunctionName, minSamples, ref, ref.Count)
+	}
+}
+
+// checkWindowDepth rejects a window shallower than the function needs to
+// compare records. Only a direct History argument is checked: that is the only
+// way a window reaches a function.
+func (p *historyPatcher) checkWindowDepth(name string, call *ast.CallNode) {
+	minDepth, ok := minWindowDepth[name]
+	if !ok || len(call.Arguments) == 0 {
+		return
+	}
+	ref, ok := p.refByNode[call.Arguments[0]]
+	if !ok {
+		return
+	}
+	if ref.Count < minDepth {
+		p.errorf("%s requires a history depth of at least %d but %s only keeps %d records",
+			name, minDepth, ref, ref.Count)
 	}
 }
 

@@ -97,6 +97,10 @@ func TestAnalyzeHistoryExpression_Accepts(t *testing.T) {
 			expression: "Avg(History(s1, 1))",
 			want:       []HistoryRef{{StreamID: 1, Field: FieldValue, Count: 1}},
 		},
+		"minimum depth of a comparison function": {
+			expression: "Delta(History(s1, 2))",
+			want:       []HistoryRef{{StreamID: 1, Field: FieldValue, Count: 2}},
+		},
 		// The case a text-level rewriter gets wrong: only the parser knows this
 		// is a string, not a call.
 		"history inside a string literal is not a call": {
@@ -219,6 +223,26 @@ func TestAnalyzeHistoryExpression_Rejects(t *testing.T) {
 		"parse error": {
 			expression: "Avg(History(s1, 10)",
 			wantErr:    "failed to parse expression",
+		},
+		"Delta over a single record": {
+			expression: "Delta(History(s1, 1))",
+			wantErr:    "Delta requires a history depth of at least 2",
+		},
+		"PctChange over a single record": {
+			expression: "PctChange(History(s1_bid, 1))",
+			wantErr:    "PctChange requires a history depth of at least 2",
+		},
+		"Variance over a single record": {
+			expression: "Variance(History(s1, 1))",
+			wantErr:    "Variance requires a history depth of at least 2",
+		},
+		"Stddev over a single record": {
+			expression: "Stddev(History(s1, 1))",
+			wantErr:    "Stddev requires a history depth of at least 2",
+		},
+		"Spread over a single record": {
+			expression: "Spread(History(s1, 1))",
+			wantErr:    "Spread requires a history depth of at least 2",
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -493,5 +517,8 @@ func TestRangeAcceptingFunctionsAreRegistered(t *testing.T) {
 
 	for name := range rangeAcceptingFunctions {
 		assert.Contains(t, defaultEnv, name, "%s accepts a window but is not registered", name)
+	}
+	for name := range minWindowDepth {
+		assert.True(t, rangeAcceptingFunctions[name], "%s has a minimum window depth but does not accept a window", name)
 	}
 }

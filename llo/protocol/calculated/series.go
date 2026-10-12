@@ -141,6 +141,21 @@ func window(name string, x any) (Series, error) {
 	return series, nil
 }
 
+// comparisonWindow resolves the history window of a function that compares
+// records, which needs at least two. Static analysis rejects a shallower depth
+// (minWindowDepth), so this is a plain error rather than ErrInsufficientHistory:
+// more rounds would not make the window evaluable.
+func comparisonWindow(name string, x any) (Series, error) {
+	series, err := window(name, x)
+	if err != nil {
+		return Series{}, err
+	}
+	if series.Len() < 2 {
+		return Series{}, fmt.Errorf("%s: history window has %d record, needs at least 2", name, series.Len())
+	}
+	return series, nil
+}
+
 // windowSize resolves a function's sample-count argument against a window.
 func windowSize(name string, series Series, x any) (int, error) {
 	d, err := toDecimal(x)
