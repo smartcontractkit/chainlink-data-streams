@@ -27,6 +27,23 @@ func Test_TimestampedStreamValue_MarshalBinary(t *testing.T) {
 	require.Equal(t, sv, sv2)
 }
 
+func Test_TimestampedStreamValue_NilInnerValue(t *testing.T) {
+	sv := &TimestampedStreamValue{ObservedAtNanoseconds: 123}
+
+	t.Run("MarshalBinary", func(t *testing.T) {
+		_, err := sv.MarshalBinary()
+		require.ErrorIs(t, err, ErrNilStreamValue)
+	})
+	t.Run("MarshalText", func(t *testing.T) {
+		_, err := sv.MarshalText()
+		require.ErrorIs(t, err, ErrNilStreamValue)
+	})
+	t.Run("NewTypedTextStreamValue", func(t *testing.T) {
+		_, err := NewTypedTextStreamValue(sv)
+		require.ErrorIs(t, err, ErrNilStreamValue)
+	})
+}
+
 func Test_Decimal_ExponentBound(t *testing.T) {
 	// A decimal with an unbounded exponent is only 6 bytes on the wire but
 	// costs hundreds of MB to compare during aggregation, so it must be

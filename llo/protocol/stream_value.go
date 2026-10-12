@@ -17,11 +17,11 @@ import (
 
 type StreamValue interface {
 	// Binary marshaler/unmarshaler used for protobufs
-	// Unmarshal should NOT panic on nil receiver, but instead return ErrNilStreamValue
+	// Marshal and Unmarshal should NOT panic on nil receiver, but instead return ErrNilStreamValue
 	encoding.BinaryMarshaler
 	encoding.BinaryUnmarshaler
 	// TextMarshaler needed for JSON serialization and logging
-	// Unmarshal should NOT panic on nil receiver, but instead return ErrNilStreamValue
+	// Marshal and Unmarshal should NOT panic on nil receiver, but instead return ErrNilStreamValue
 	encoding.TextMarshaler
 	encoding.TextUnmarshaler
 	// Type is needed for proto serialization so we know how to unserialize it
@@ -463,7 +463,7 @@ func (v *TimestampedStreamValue) unmarshalBinary(data []byte, depth int) error {
 }
 
 func (v *TimestampedStreamValue) MarshalText() ([]byte, error) {
-	if v == nil {
+	if v == nil || v.StreamValue == nil {
 		return nil, ErrNilStreamValue
 	}
 	serializedSv, err := v.StreamValue.MarshalText()

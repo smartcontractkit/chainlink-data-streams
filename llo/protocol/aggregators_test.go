@@ -103,6 +103,21 @@ func Test_MedianAggregator(t *testing.T) {
 		})
 	})
 
+	t.Run("for *TimestampedStreamValue skips nil values", func(t *testing.T) {
+		nilValues := []StreamValue{
+			&TimestampedStreamValue{ObservedAtNanoseconds: 100, StreamValue: ToDecimal(decimal.NewFromFloat(2.6))},
+			&TimestampedStreamValue{ObservedAtNanoseconds: 102, StreamValue: ToDecimal(decimal.NewFromFloat(4.6))},
+			&TimestampedStreamValue{ObservedAtNanoseconds: 104, StreamValue: ToDecimal(decimal.NewFromFloat(6.6))},
+			&TimestampedStreamValue{ObservedAtNanoseconds: 999},
+			(*TimestampedStreamValue)(nil),
+		}
+
+		sv, err := MedianAggregatorV31(nilValues, 3)
+		require.NoError(t, err)
+		assert.Equal(t, "4.6", sv.(*TimestampedStreamValue).StreamValue.(*Decimal).String())
+		assert.Equal(t, uint64(102), sv.(*TimestampedStreamValue).ObservedAtNanoseconds)
+	})
+
 	t.Run("fails below the contribution floor", func(t *testing.T) {
 		_, err := MedianAggregator(values[:2], 4)
 		require.EqualError(t, err, "not enough contributions to calculate median: got 2, need 4")

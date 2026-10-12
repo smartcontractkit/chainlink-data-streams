@@ -61,7 +61,7 @@ func medianAggregator(values []StreamValue, minContributions int, countSkippedTi
 			if !is {
 				return nil, fmt.Errorf("invariant violation, expected TimestampedStreamValue, got %T", value)
 			}
-			if v.StreamValue.Type() != LLOStreamValue_Decimal {
+			if v == nil || v.StreamValue == nil || v.StreamValue.Type() != LLOStreamValue_Decimal {
 				// Only decimal is allowed for now, for simplicity.
 				//
 				// NOTE: This could get into an infinite loop if a malicious node sends
