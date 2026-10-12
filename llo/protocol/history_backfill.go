@@ -169,26 +169,30 @@ func (ReportCodecHistoryBackfill) Verify(cd llotypes.ChannelDefinition) error {
 
 // ReportTimestampResolutionNanos returns one tick of the target channel's observation timestamp resolution in nanoseconds.
 func ReportTimestampResolutionNanos(target llotypes.ChannelDefinition) (uint64, error) {
-	switch target.ReportFormat {
-	case llotypes.ReportFormatEVMPremiumLegacy:
-		return 1e9, nil
-	case llotypes.ReportFormatEVMABIEncodeUnpacked, llotypes.ReportFormatEVMABIEncodeUnpackedExpr:
-		res, err := TargetChannelTimeResolution(target)
-		if err != nil {
-			return 0, err
-		}
-		switch res {
-		case ResolutionMilliseconds:
-			return 1e6, nil
-		case ResolutionMicroseconds:
-			return 1e3, nil
-		case ResolutionNanoseconds:
-			return 1, nil
-		default:
-			return 1e9, nil
-		}
+	res, err := TargetChannelTimeResolution(target)
+	if err != nil {
+		return 0, err
+	}
+	nanos, ok := resolutionNanos(res)
+	if !ok {
+		return 0, fmt.Errorf("invalid time resolution %d", res)
+	}
+	return nanos, nil
+}
+
+// resolutionNanos returns the length of one tick of res in nanoseconds.
+func resolutionNanos(res TimeResolution) (uint64, bool) {
+	switch res {
+	case ResolutionSeconds:
+		return 1e9, true
+	case ResolutionMilliseconds:
+		return 1e6, true
+	case ResolutionMicroseconds:
+		return 1e3, true
+	case ResolutionNanoseconds:
+		return 1, true
 	default:
-		return 1e9, nil
+		return 0, false
 	}
 }
 
@@ -202,25 +206,17 @@ func ReportTimestampResolutionNanos(target llotypes.ChannelDefinition) (uint64, 
 // unrepresentable far-future timestamp would read as a valid past one. Keys come
 // from channel definition opts, which makes this reachable from configuration.
 func ObservationTimestampKeyToNanoseconds(rawKey uint64, res TimeResolution) (nanoseconds uint64, ok bool) {
-	var multiplier uint64
-	switch res {
-	case ResolutionMilliseconds:
-		multiplier = 1e6
-	case ResolutionMicroseconds:
-		multiplier = 1e3
-	case ResolutionNanoseconds:
-		return rawKey, true
-	case ResolutionSeconds:
-		multiplier = 1e9
-	default:
-		multiplier = 1e9
-	}
-	if rawKey > math.MaxUint64/multiplier {
+	multiplier, ok := resolutionNanos(res)
+	if !ok || rawKey > math.MaxUint64/multiplier {
 		return 0, false
 	}
 	return rawKey * multiplier, true
 }
 
+// TargetChannelTimeResolution returns the resolution the target channel's codec
+// encodes timestamps at, which is also the unit of its backfill observation keys.
+// It is the only place that maps a report format to a resolution, so an unknown
+// format is an error rather than a guess.
 func TargetChannelTimeResolution(target llotypes.ChannelDefinition) (TimeResolution, error) {
 	switch target.ReportFormat {
 	case llotypes.ReportFormatEVMABIEncodeUnpacked, llotypes.ReportFormatEVMABIEncodeUnpackedExpr:
@@ -234,8 +230,16 @@ func TargetChannelTimeResolution(target llotypes.ChannelDefinition) (TimeResolut
 			return 0, fmt.Errorf("target channel opts: %w", err)
 		}
 		return aux.TimeResolution, nil
-	default:
+	case llotypes.ReportFormatEVMPremiumLegacy, llotypes.ReportFormatJSON,
+		llotypes.ReportFormatRetirement, llotypes.ReportFormatCapabilityTrigger,
+		llotypes.ReportFormatEVMStreamlined:
 		return ResolutionSeconds, nil
+	case llotypes.ReportFormatHistoryBackfill:
+		// Rejected at admission by ValidateHistoryBackfillTarget. Resolving it
+		// keeps already committed definitions passing base validation.
+		return ResolutionSeconds, nil
+	default:
+		return 0, fmt.Errorf("unsupported history_backfill target report format %s", target.ReportFormat)
 	}
 }
 

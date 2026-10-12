@@ -28,7 +28,7 @@ func Test_ObservationTimestampKeyToNanoseconds_Overflow(t *testing.T) {
 		{"milliseconds overflow", math.MaxUint64/uint64(1e6) + 1, ResolutionMilliseconds, 0, false},
 		{"microseconds overflow", math.MaxUint64/uint64(1e3) + 1, ResolutionMicroseconds, 0, false},
 		{"nanoseconds never overflow", math.MaxUint64, ResolutionNanoseconds, math.MaxUint64, true},
-		{"unknown resolution is treated as seconds", math.MaxUint64, TimeResolution(200), 0, false},
+		{"unknown resolution is rejected", 1, TimeResolution(200), 0, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got, ok := ObservationTimestampKeyToNanoseconds(tc.rawKey, tc.res)
@@ -43,6 +43,47 @@ func Test_ObservationTimestampKeyToNanoseconds_Overflow(t *testing.T) {
 	// does not compile.
 	rawKey, multiplier := math.MaxUint64/uint64(1e9)+1, uint64(1e9)
 	require.Less(t, rawKey*multiplier, uint64(1_700_000_000)*multiplier)
+}
+
+func Test_TargetChannelTimeResolution_CoversEveryReportFormat(t *testing.T) {
+	// A new report format must be mapped on purpose: guessing its resolution
+	// would publish backfill reports with the wrong validAfter window.
+	for _, rf := range llotypes.ReportFormats {
+		t.Run(rf.String(), func(t *testing.T) {
+			target := llotypes.ChannelDefinition{ReportFormat: rf}
+			_, err := TargetChannelTimeResolution(target)
+			require.NoError(t, err)
+			_, err = ReportTimestampResolutionNanos(target)
+			require.NoError(t, err)
+		})
+	}
+
+	_, err := TargetChannelTimeResolution(llotypes.ChannelDefinition{ReportFormat: llotypes.ReportFormat(1000)})
+	require.ErrorContains(t, err, "unsupported history_backfill target report format")
+	_, err = ReportTimestampResolutionNanos(llotypes.ChannelDefinition{ReportFormat: llotypes.ReportFormat(1000)})
+	require.ErrorContains(t, err, "unsupported history_backfill target report format")
+}
+
+func Test_ReportTimestampResolutionNanos(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		cd   llotypes.ChannelDefinition
+		want uint64
+	}{
+		{"premium legacy", llotypes.ChannelDefinition{ReportFormat: llotypes.ReportFormatEVMPremiumLegacy}, 1e9},
+		{"json", llotypes.ChannelDefinition{ReportFormat: llotypes.ReportFormatJSON}, 1e9},
+		{"abi without opts", llotypes.ChannelDefinition{ReportFormat: llotypes.ReportFormatEVMABIEncodeUnpacked}, 1e9},
+		{"abi seconds", llotypes.ChannelDefinition{ReportFormat: llotypes.ReportFormatEVMABIEncodeUnpacked, Opts: []byte(`{"TimeResolution":"s"}`)}, 1e9},
+		{"abi milliseconds", llotypes.ChannelDefinition{ReportFormat: llotypes.ReportFormatEVMABIEncodeUnpacked, Opts: []byte(`{"TimeResolution":"ms"}`)}, 1e6},
+		{"abi microseconds", llotypes.ChannelDefinition{ReportFormat: llotypes.ReportFormatEVMABIEncodeUnpacked, Opts: []byte(`{"TimeResolution":"us"}`)}, 1e3},
+		{"abi expr nanoseconds", llotypes.ChannelDefinition{ReportFormat: llotypes.ReportFormatEVMABIEncodeUnpackedExpr, Opts: []byte(`{"TimeResolution":"ns"}`)}, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := ReportTimestampResolutionNanos(tc.cd)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, got)
+		})
+	}
 }
 
 func Test_GetHistoryBackfillOpts(t *testing.T) {
