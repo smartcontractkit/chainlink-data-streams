@@ -260,7 +260,7 @@ const (
 	// Changing it changes the stored layout and requires resetting every window.
 	//
 	// It must divide MaxHistoryRecordsPerPair, so that a window at maximum depth
-	// is an exact number of chunks (asserted by TestHistoryChunkLimits).
+	// is an exact number of chunks (asserted below at compile time).
 	MaxHistoryChunkRecords = 64
 	// MaxHistoryChunkSlots is the size of the ring: the number of distinct chunk
 	// slots one pair may occupy.
@@ -277,6 +277,9 @@ const (
 	// every slot. Reuse of a slot across a lap of the ring is caught by the
 	// sequence stored inside each chunk.
 	MaxHistoryChunkSlots = MaxHistoryRecordsPerPair/MaxHistoryChunkRecords + 2
+	// The chunk size must divide the maximum depth, or the floor above
+	// undersizes the ring by one slot. Fail compilation otherwise.
+	_ = uint(0 - MaxHistoryRecordsPerPair%MaxHistoryChunkRecords)
 	// MaxHistoryRetainedRecords is the most records a window may hold. Retention
 	// works in whole chunks, so a window overshoots its required depth by up to
 	// one chunk less one record. Readers ask for an exact depth and never see
