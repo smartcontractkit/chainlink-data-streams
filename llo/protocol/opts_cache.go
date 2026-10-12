@@ -19,7 +19,8 @@ type optsCacheKey struct {
 // OptsCache caches decoded channel definition options keyed by (ChannelID, target type).
 // Raw opts bytes are stored via Set during channel definition changes in Outcome().
 // Decoded values are produced lazily on the first GetOpts call for a given (channelID, type)
-// and reused until the channel is updated or removed.
+// and reused until the channel is updated or removed. Callers share each decoded
+// value, so they must not modify it.
 type OptsCache struct {
 	mu      sync.Mutex
 	raw     map[llotypes.ChannelID]llotypes.ChannelOpts
@@ -150,6 +151,10 @@ func (c *OptsCache) ResetTo(channelDefinitions llotypes.ChannelDefinitions) {
 // On the first call for a given (channelID, T) after Set, the raw bytes are
 // decoded via json.Unmarshal and the result is cached. Subsequent calls return
 // the cached value directly.
+//
+// The returned value shares its slices, maps and pointers with the cache and
+// with every other caller. Treat it as read-only. Copy any field before
+// modifying it.
 //
 // Returns an error if the channel is not in the cache or decoding fails.
 // The caller must pass a valid opts cache.
