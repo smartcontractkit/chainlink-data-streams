@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"math"
 	"math/big"
-	"regexp"
 	"runtime"
 	"slices"
 	"strconv"
@@ -183,10 +182,13 @@ func (e environment) release() {
 	pool.Put(e)
 }
 
+// observationsTimestampName binds the round's consensus observation timestamp.
+const observationsTimestampName = "observations_timestamp"
+
 // NewEnv returns a new environment with the default functions
 func NewEnv(observationTimestampNanoseconds uint64) environment {
 	env := pool.Get().(environment)
-	env["observations_timestamp"] = observationTimestampNanoseconds
+	env[observationsTimestampName] = observationTimestampNanoseconds
 	// TWAP's window is anchored on the round's consensus observation timestamp,
 	// not on the data, so it is bound per round. release() restores the default
 	// binding, which fails if called.
@@ -1264,7 +1266,7 @@ func (v *visitor) Visit(node *ast.Node) {
 	}
 
 	if n, ok := (*node).(*ast.IdentifierNode); ok {
-		match := streamMatch.FindStringSubmatch(n.Value)
+		match := streamIdentifier.FindStringSubmatch(n.Value)
 		if len(match) > 0 {
 			id, err := strconv.ParseUint(match[1], 10, 32)
 			if err != nil {
@@ -1276,5 +1278,3 @@ func (v *visitor) Visit(node *ast.Node) {
 		}
 	}
 }
-
-var streamMatch = regexp.MustCompile(`s(\d+)(?:_(bid|ask|benchmark|timestamp))?`)

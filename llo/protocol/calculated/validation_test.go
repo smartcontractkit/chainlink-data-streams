@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/expr-lang/expr/ast"
 	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -170,6 +171,58 @@ func TestValidateChannelExpressions(t *testing.T) {
 	err = ValidateChannelExpressions(nil, cd, 1)
 	require.ErrorContains(t, err, "expression is empty")
 	assert.Contains(t, err.Error(), "abi index: 1")
+}
+
+// TestValidateChannelExpressions_Identifiers checks every name an expression
+// reads is one evaluation binds. One that is not fails to compile every round,
+// so the channel would never report.
+func TestValidateChannelExpressions_Identifiers(t *testing.T) {
+	t.Parallel()
+
+	cd := func(expression string) llotypes.ChannelDefinition {
+		return llotypes.ChannelDefinition{
+			ReportFormat: llotypes.ReportFormatEVMABIEncodeUnpackedExpr,
+			Streams: []llotypes.Stream{
+				{StreamID: 1, Aggregator: llotypes.AggregatorMedian},
+				{StreamID: 2, Aggregator: llotypes.AggregatorMedian},
+				{StreamID: 900, Aggregator: llotypes.AggregatorCalculated},
+			},
+			Opts: []byte(fmt.Sprintf(`{"abi":[{"type":"int256","expression":%q,"expressionStreamID":900}]}`, expression)),
+		}
+	}
+
+	for _, expression := range []string{
+		"Add(s1, s2)",
+		"Add(s1_bid, s2_timestamp)",
+		"Sub(observations_timestamp, s1_timestamp)",
+		`TWAP(History(s1, 3), {window: Duration("3s"), minSamples: 1, maxHeadGap: 3, maxInteriorGap: 3, maxTailGap: 3})`,
+		"let a = Mul(s1, s2); Add(a, 1)",
+	} {
+		t.Run("accepts "+expression, func(t *testing.T) {
+			t.Parallel()
+			require.NoError(t, ValidateChannelExpressions(nil, cd(expression), 1))
+		})
+	}
+
+	for _, tc := range []struct {
+		expression string
+		identifier string
+	}{
+		{"Add(s9999, s1)", "s9999"},
+		{"Add(s9999_bid, s1)", "s9999_bid"},
+		{"Add(s900, s1)", "s900"}, // a calculated stream is not bound
+		{"Add(foo, s1)", "foo"},
+		{"Foo(s1)", "Foo"},
+		{"Add(xs1, s1)", "xs1"},
+		{"Add($env, s1)", "$env"},
+	} {
+		t.Run("rejects "+tc.expression, func(t *testing.T) {
+			t.Parallel()
+			err := ValidateChannelExpressions(nil, cd(tc.expression), 1)
+			require.ErrorIs(t, err, ErrUnknownIdentifier)
+			assert.Contains(t, err.Error(), fmt.Sprintf("identifier %q", tc.identifier))
+		})
+	}
 }
 
 // TestProcessCalculatedStreamsDryRun_Satisfiability checks the offline path
@@ -375,4 +428,16 @@ func TestChannelTWAPCalls(t *testing.T) {
 		ReportFormat: llotypes.ReportFormatEVMABIEncodeUnpackedExpr,
 		Opts:         []byte(`not json`),
 	}, 1), "opts that do not decode declare no expressions")
+}
+
+// TestVisitor_StreamIdentifiers checks the dry run only synthesizes inputs for
+// identifiers that are whole stream names, not ones that merely contain one.
+func TestVisitor_StreamIdentifiers(t *testing.T) {
+	t.Parallel()
+
+	tree, err := parseExpression("Add(Add(xs1, s2_bid), s3x)")
+	require.NoError(t, err)
+	v := &visitor{}
+	ast.Walk(&tree.Node, v)
+	assert.Equal(t, map[llotypes.StreamID]string{2: "bid"}, v.Identifiers)
 }

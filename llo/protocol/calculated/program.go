@@ -4,6 +4,7 @@ import (
 	"container/list"
 	"errors"
 	"fmt"
+	"strconv"
 	"sync"
 
 	"github.com/expr-lang/expr/conf"
@@ -56,6 +57,7 @@ type analysisEntry struct {
 	expression string
 	refs       []HistoryRef
 	twapCalls  int
+	names      []string
 	err        error
 
 	// program is the compiled expression, filled in on first successful
@@ -164,11 +166,21 @@ func ValidateChannelExpressions(optsCache *protocol.OptsCache, cd llotypes.Chann
 			errs = append(errs, fmt.Errorf("%w: expression is empty", ErrHistoryExpression))
 			continue
 		}
-		refs, err := AnalyzeExpressionHistory(expression)
-		if err != nil {
-			errs = append(errs, fmt.Errorf("expression %q: %w", expression, err))
+		entry := historyAnalysisCache.entry(expression)
+		if entry.err != nil {
+			errs = append(errs, fmt.Errorf("expression %q: %w", expression, entry.err))
 			continue
 		}
+		// Every name the expression reads must be bound at evaluation. A name
+		// that is not compiles against no channel environment, so the channel
+		// would be installed and fail to compile every round.
+		for _, name := range entry.names {
+			if !channelBindsName(name, aggByStream) {
+				errs = append(errs, fmt.Errorf("expression %q: %w: identifier %q is neither a function nor a stream the channel observes",
+					expression, ErrUnknownIdentifier, name))
+			}
+		}
+		refs := entry.refs
 		// A History call may only read a stream the channel observes. The DSL
 		// names a stream, and the channel definition is what says which
 		// aggregation of it is meant, so a reference to a stream that is not
@@ -187,6 +199,30 @@ func ValidateChannelExpressions(optsCache *protocol.OptsCache, cd llotypes.Chann
 	return errors.Join(errs...)
 }
 
+// ErrUnknownIdentifier is returned for an expression that reads a name a
+// channel's evaluation environment does not bind.
+var ErrUnknownIdentifier = errors.New("unknown identifier")
+
+// channelBindsName reports whether evaluation binds name for a channel whose
+// observed streams are aggByStream. It cannot check a stream identifier's
+// field: s1_bid is only bound when s1 observes a quote, and the value type is
+// not part of the definition.
+func channelBindsName(name string, aggByStream map[llotypes.StreamID]llotypes.Aggregator) bool {
+	if _, ok := defaultEnv[name]; ok || name == observationsTimestampName {
+		return true
+	}
+	match := streamIdentifier.FindStringSubmatch(name)
+	if match == nil {
+		return false
+	}
+	id, err := strconv.ParseUint(match[1], 10, 32)
+	if err != nil {
+		return false
+	}
+	_, ok := aggByStream[llotypes.StreamID(id)]
+	return ok
+}
+
 func (c *analysisCache) analyze(expression string) ([]HistoryRef, error) {
 	entry := c.entry(expression)
 	return entry.refs, entry.err
@@ -197,8 +233,8 @@ func (c *analysisCache) entry(expression string) *analysisEntry {
 		return entry
 	}
 
-	refs, twapCalls, err := analyzeHistoryExpression(expression)
-	return c.put(&analysisEntry{expression: expression, refs: refs, twapCalls: twapCalls, err: err})
+	refs, twapCalls, names, err := analyzeHistoryExpression(expression)
+	return c.put(&analysisEntry{expression: expression, refs: refs, twapCalls: twapCalls, names: names, err: err})
 }
 
 func (c *analysisCache) get(expression string) (*analysisEntry, bool) {
