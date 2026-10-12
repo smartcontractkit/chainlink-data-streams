@@ -899,9 +899,10 @@ func applyCalculatedStreams(lggr logger.Logger, channelDefinitions llotypes.Chan
 					work.cid, abi.ExpressionStreamID, abi.Expression)
 				break
 			}
-			// A calculated value never passes through observation decode, so
-			// this is the only place its coefficient is bounded.
-			if cerr := protocol.CheckDecimalCoefficient(value); cerr != nil {
+
+			// bound the calculated value before it is stored.
+			var cerr error
+			if value, cerr = storableDecimal(value); cerr != nil {
 				err = fmt.Errorf(
 					"calculated stream value out of range, channelID: %d, expressionStreamID: %d, expression: %s: %w",
 					work.cid, abi.ExpressionStreamID, abi.Expression, cerr)
@@ -925,6 +926,25 @@ func applyCalculatedStreams(lggr logger.Logger, channelDefinitions llotypes.Chan
 		}
 		work.env.release()
 	}
+}
+
+// storableDecimal returns d in a form that decodes, or an error if it has none.
+// Only a value whose exponent is out of bounds is rewritten to its canonical
+// form, so every value storable before keeps its encoding and the outcome it is
+// part of stays the same across versions.
+func storableDecimal(d decimal.Decimal) (decimal.Decimal, error) {
+	if err := protocol.CheckDecimalCoefficient(d); err != nil {
+		return decimal.Decimal{}, err
+	}
+	if protocol.CheckDecimalExponent(d) == nil {
+		return d, nil
+	}
+	// Canonicalizing only shortens the coefficient, so it stays in bounds.
+	d = protocol.CanonicalDecimal(d)
+	if err := protocol.CheckDecimalExponent(d); err != nil {
+		return decimal.Decimal{}, err
+	}
+	return d, nil
 }
 
 // AggregatorByStream indexes a channel's non-calculated streams by stream ID.
@@ -1217,6 +1237,11 @@ func ProcessCalculatedStreamsDryRun(expression string) error {
 		return fmt.Errorf("failed to process expression: %w", result.err)
 	}
 	for i, value := range result.values {
+		// Held to the same bounds as applyCalculatedStreams, so a definition
+		// whose result cannot be stored is rejected.
+		if _, err := storableDecimal(value); err != nil {
+			return fmt.Errorf("calculated stream value out of range, expression: %s: %w", o.ABI[i].Expression, err)
+		}
 		aggr[o.ABI[i].ExpressionStreamID] = map[llotypes.Aggregator]protocol.StreamValue{
 			llotypes.AggregatorCalculated: protocol.ToDecimal(value),
 		}

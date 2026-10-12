@@ -213,6 +213,11 @@ func canonicalStreamValue(v StreamValue) StreamValue {
 	}
 }
 
+// CanonicalDecimal returns the canonical form of d. See canonicalDecimal.
+func CanonicalDecimal(d decimal.Decimal) decimal.Decimal {
+	return canonicalDecimal(d)
+}
+
 // canonicalDecimal strips trailing zeros from the coefficient of d, so 1.0
 // and 1.00 both become 1. Zero becomes 0e0. Stripping stops at
 // MaxDecimalExponent so the result still decodes. The form stays unique, as
