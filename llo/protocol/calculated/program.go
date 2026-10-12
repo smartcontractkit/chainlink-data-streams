@@ -198,9 +198,7 @@ func (c *analysisCache) entry(expression string) *analysisEntry {
 	}
 
 	refs, twapCalls, err := analyzeHistoryExpression(expression)
-	entry := &analysisEntry{expression: expression, refs: refs, twapCalls: twapCalls, err: err}
-	c.put(entry)
-	return entry
+	return c.put(&analysisEntry{expression: expression, refs: refs, twapCalls: twapCalls, err: err})
 }
 
 func (c *analysisCache) get(expression string) (*analysisEntry, bool) {
@@ -215,25 +213,28 @@ func (c *analysisCache) get(expression string) (*analysisEntry, bool) {
 	return element.Value.(*analysisEntry), true
 }
 
-func (c *analysisCache) put(entry *analysisEntry) {
+// put inserts entry unless one already exists for its expression, and returns
+// the cached entry. Keep the existing one: analysis is pure, so both are
+// equivalent, and the existing one may already carry a compiled program.
+func (c *analysisCache) put(entry *analysisEntry) *analysisEntry {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	if element, ok := c.entries[entry.expression]; ok {
-		element.Value = entry
 		c.order.MoveToFront(element)
-		return
+		return element.Value.(*analysisEntry)
 	}
 
 	c.entries[entry.expression] = c.order.PushFront(entry)
 	for c.order.Len() > c.max {
 		oldest := c.order.Back()
 		if oldest == nil {
-			return
+			break
 		}
 		c.order.Remove(oldest)
 		delete(c.entries, oldest.Value.(*analysisEntry).expression)
 	}
+	return entry
 }
 
 // program returns the cached compiled program for an expression, or nil if it

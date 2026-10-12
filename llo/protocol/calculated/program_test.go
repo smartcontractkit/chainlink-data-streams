@@ -5,6 +5,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/expr-lang/expr"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -89,6 +90,25 @@ func TestAnalysisCache_EvictsLeastRecentlyUsed(t *testing.T) {
 	assert.False(t, ok, "least recently used entry must be evicted")
 	_, ok = c.get(d)
 	assert.True(t, ok)
+}
+
+// TestAnalysisCache_PutKeepsCompiledProgram replays a cache-miss race: a late
+// put for an already cached expression must not drop its compiled program.
+func TestAnalysisCache_PutKeepsCompiledProgram(t *testing.T) {
+	t.Parallel()
+
+	c := newAnalysisCache(8)
+	const expression = "Avg(History(s10001, 10))"
+
+	first := c.entry(expression)
+	program, err := expr.Compile("1")
+	require.NoError(t, err)
+	c.storeProgram(expression, program)
+
+	late := &analysisEntry{expression: expression, refs: first.refs, twapCalls: first.twapCalls}
+	assert.Same(t, first, c.put(late), "put must return the existing entry")
+	assert.Same(t, program, c.program(expression))
+	assert.Equal(t, 1, c.len())
 }
 
 // TestAnalysisCache_Concurrent checks the cache is safe under concurrent use;
