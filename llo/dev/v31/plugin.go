@@ -337,13 +337,13 @@ func (p *Plugin) voteOnPredecessorConfig(obs *Observation, seqNr uint64) {
 //     the owner omits it from a later file. So a channel leaves the committed
 //     set only after the DON has already agreed it is a tombstone.
 //
-// This function must not assume that, because the contract does not require it.
-// Definitions may be implemented by anything, and the static cache shipped for
-// benchmarks and the dummy relayer ignores the committed set entirely and
-// returns its configured JSON verbatim. Everything below is therefore written
-// against the weaker guarantee: the desired set is one node's opinion, votes
-// decide, and an absent channel means "not mentioned", which is only treated as
-// "remove" when the set as a whole is credible. See the empty-set case below.
+// This function enforces the same rule rather than assume it, because the
+// contract does not require it. Definitions may be implemented by anything, and
+// the static cache shipped for benchmarks and the dummy relayer ignores the
+// committed set entirely and returns its configured JSON verbatim. So the
+// desired set is one node's opinion, votes decide, and an absent channel only
+// means "remove" when it is already a committed tombstone. Removing a live
+// channel with the static cache takes a tombstone first, as it does onchain.
 func (p *Plugin) voteOnChannels(obs *Observation, state *kvState) {
 	obs.RemoveChannelIDs = map[llotypes.ChannelID]struct{}{}
 
@@ -358,29 +358,17 @@ func (p *Plugin) voteOnChannels(obs *Observation, state *kvState) {
 		return
 	}
 
-	// An empty desired set against a non-empty committed one is not read as
-	// "remove every channel". Under the reconciliation above the onchain cache
-	// cannot produce that for live channels, but nothing in the interface says
-	// so, and an implementation that returns nothing before it has loaded
-	// anything, or on a source it could not read, would make every live channel
-	// a removal candidate. Every node would do it from the same input, so the
-	// channels would really go.
-	//
-	// Tombstoned channels stay removable. An empty desired set is exactly what
-	// the onchain cache produces on the last reap: the owner omits the
-	// tombstones it wants dropped, and when every committed channel is a
-	// tombstone the merge comes back empty. Abstaining there would stop the
-	// removal the DON has already agreed to and strand those channels in the
-	// definitions permanently.
-	removable := state.channelDefinitions
-	if len(expectedChannelDefs) == 0 && len(state.channelDefinitions) > 0 {
-		removable = llotypes.ChannelDefinitions{}
-		for channelID, cd := range state.channelDefinitions {
-			if cd.Tombstone {
-				removable[channelID] = cd
-			}
+	// Only tombstoned channels are removal candidates. A live channel missing
+	// from the desired set is not read as "remove": a cache that returns a
+	// partial set, before it has loaded or from a source it could not read,
+	// would otherwise get those channels removed, since every node would vote
+	// the same way from the same input. Removal stays a two step decision: the
+	// DON first agrees on the tombstone, then on dropping it.
+	removable := llotypes.ChannelDefinitions{}
+	for channelID, cd := range state.channelDefinitions {
+		if cd.Tombstone {
+			removable[channelID] = cd
 		}
-		p.Logger.Warnw("ChannelDefinitionCache.Definitions is empty while channels are committed; voting to remove only the tombstoned ones", "committed", len(state.channelDefinitions), "removable", len(removable))
 	}
 
 	removeChannelDefinitions := protocol.SubtractChannelDefinitions(removable, expectedChannelDefs, protocol.MaxObservationRemoveChannelIDsLength)

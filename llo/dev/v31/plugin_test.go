@@ -1704,8 +1704,8 @@ func (d *recordingDataSource) streams() []llotypes.StreamID {
 // Test_Observation_UnverifiableCommittedChannelIsNotFatal covers the
 // version-skew case: a channel committed under an older build fails this
 // build's codec.Verify. The node must not halt. It keeps observing and,
-// crucially, still votes the offending channel out, which is the only way the
-// DON recovers.
+// crucially, still votes to tombstone the offending channel, which is the first
+// step of the only way the DON recovers.
 func Test_Observation_UnverifiableCommittedChannelIsNotFatal(t *testing.T) {
 	ctx := tests.Context(t)
 	p := testPlugin(t)
@@ -1736,12 +1736,14 @@ func Test_Observation_UnverifiableCommittedChannelIsNotFatal(t *testing.T) {
 	require.Contains(t, kvChannelDefs(t, kv), llotypes.ChannelID(2))
 
 	// Now this node upgrades to a build whose codec rejects channel 2, and the
-	// definitions file drops it so the node has something to vote for.
+	// definitions file tombstones it so the node has something to vote for.
 	p.ReportCodecs = map[llotypes.ReportFormat]protocol.ReportCodec{
 		llotypes.ReportFormatJSON: strictJSONCodec{rejectStream: 999},
 	}
 	p.ChannelCache = protocol.NewChannelCache()
-	p.ChannelDefinitionCache = &mockChannelDefinitionCache{defs: llotypes.ChannelDefinitions{1: healthy}}
+	tombstoned := rejected
+	tombstoned.Tombstone = true
+	p.ChannelDefinitionCache = &mockChannelDefinitionCache{defs: llotypes.ChannelDefinitions{1: healthy, 2: tombstoned}}
 	p.ShouldRetireCache = &mockShouldRetireCache{}
 	ds := &recordingDataSource{}
 	attachPump(t, p, ds, newFakeBroadcaster())
@@ -1751,10 +1753,11 @@ func Test_Observation_UnverifiableCommittedChannelIsNotFatal(t *testing.T) {
 	obs, err := decodeObservation(ctx, obsBytes, testBlobs, nil)
 	require.NoError(t, err)
 
-	// The removal vote is the recovery path, and it is only cast because the
-	// verification failure above was not fatal.
-	require.Contains(t, obs.RemoveChannelIDs, llotypes.ChannelID(2))
-	require.NotContains(t, obs.UpdateChannelDefinitions, llotypes.ChannelID(2))
+	// The tombstone vote is the recovery path, and it is only cast because the
+	// verification failure above was not fatal. The channel is live until the
+	// tombstone commits, so it is not voted out yet.
+	require.Equal(t, tombstoned, obs.UpdateChannelDefinitions[2])
+	require.NotContains(t, obs.RemoveChannelIDs, llotypes.ChannelID(2))
 
 	// The rejected channel's streams are still observed: withholding them would
 	// only starve the nodes still on the old build, which considers the channel
@@ -1765,7 +1768,7 @@ func Test_Observation_UnverifiableCommittedChannelIsNotFatal(t *testing.T) {
 
 // Test_FullRound_RecoverFromUnverifiableChannel is the end-to-end recovery:
 // every node upgrades to a build that rejects a committed channel, and the DON
-// keeps making rounds and votes the channel out.
+// keeps making rounds, tombstones the channel and then votes it out.
 func Test_FullRound_RecoverFromUnverifiableChannel(t *testing.T) {
 	ctx := tests.Context(t)
 	p := testPlugin(t)
@@ -1798,10 +1801,29 @@ func Test_FullRound_RecoverFromUnverifiableChannel(t *testing.T) {
 	}
 	p.ChannelCache = protocol.NewChannelCache()
 
-	// Every oracle votes the rejected channel out, and the round is accepted:
-	// the same observation must also pass ValidateObservation on the new build.
-	removeObs := Observation{
+	// Every oracle votes to tombstone the rejected channel, then to remove it,
+	// and both rounds are accepted: each observation must also pass
+	// ValidateObservation on the new build.
+	tombstoned := rejected
+	tombstoned.Tombstone = true
+	tombstoneObs := Observation{
 		UnixTimestampNanoseconds: 2_000,
+		UpdateChannelDefinitions: llotypes.ChannelDefinitions{2: tombstoned},
+		StreamValues:             protocol.StreamValues{100: protocol.ToDecimal(decimal.NewFromInt(42))},
+	}
+	tombstoneAOs := []ocrtypes.AttributedObservation{}
+	for i := 0; i < 4; i++ {
+		tombstoneAOs = append(tombstoneAOs, ao(i, mustEncodeObs(t, tombstoneObs)))
+	}
+	for _, aObs := range tombstoneAOs {
+		require.NoError(t, p.ValidateObservation(ctx, 3, ocrtypes.AttributedQuery{}, aObs, kv, testBlobs))
+	}
+	_, err = p.StateTransition(ctx, 3, ocrtypes.AttributedQuery{}, tombstoneAOs, kv, testBlobs)
+	require.NoError(t, err)
+	require.True(t, kvChannelDefs(t, kv)[2].Tombstone)
+
+	removeObs := Observation{
+		UnixTimestampNanoseconds: 3_000,
 		RemoveChannelIDs:         map[llotypes.ChannelID]struct{}{2: {}},
 		StreamValues:             protocol.StreamValues{100: protocol.ToDecimal(decimal.NewFromInt(42))},
 	}
@@ -1810,9 +1832,9 @@ func Test_FullRound_RecoverFromUnverifiableChannel(t *testing.T) {
 		removeAOs = append(removeAOs, ao(i, mustEncodeObs(t, removeObs)))
 	}
 	for _, aObs := range removeAOs {
-		require.NoError(t, p.ValidateObservation(ctx, 3, ocrtypes.AttributedQuery{}, aObs, kv, testBlobs))
+		require.NoError(t, p.ValidateObservation(ctx, 4, ocrtypes.AttributedQuery{}, aObs, kv, testBlobs))
 	}
-	_, err = p.StateTransition(ctx, 3, ocrtypes.AttributedQuery{}, removeAOs, kv, testBlobs)
+	_, err = p.StateTransition(ctx, 4, ocrtypes.AttributedQuery{}, removeAOs, kv, testBlobs)
 	require.NoError(t, err)
 	require.NotContains(t, kvChannelDefs(t, kv), llotypes.ChannelID(2))
 	require.Contains(t, kvChannelDefs(t, kv), llotypes.ChannelID(1))
