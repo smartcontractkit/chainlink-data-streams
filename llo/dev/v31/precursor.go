@@ -118,6 +118,11 @@ func encodePrecursor(p precursor) (ocr3_1types.ReportsPlusPrecursor, error) {
 	return b, nil
 }
 
+// decodePrecursor decodes a precursor this oracle produced, or one fetched from
+// a peer that libocr verified against the certified digest and size limit. Its
+// channel definitions are the committed set, so the per-definition stream and
+// opts caps are not applied here: they are admission-only, and rejecting a
+// committed definition would fail Reports on every oracle.
 func decodePrecursor(b ocr3_1types.ReportsPlusPrecursor) (precursor, error) {
 	pb := &protocol.LLOPrecursorProto{}
 	if err := proto.Unmarshal(b, pb); err != nil {
