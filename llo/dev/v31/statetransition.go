@@ -429,6 +429,12 @@ func supportVotesForEffectiveFormats(votes map[llotypes.ReportFormat]int, effect
 // can each cross the threshold in the same round, and their union can exceed a
 // budget none of them did, so the budgets are enforced here on the merged set.
 //
+// Removals apply before updates, so an update that crosses the threshold in
+// the same round as a removal of the same channel wins. This is intended:
+// only committed tombstones are voted out (see voteOnChannels), and the update
+// is a newer definition from the owner, so the result is the same as reaping
+// the tombstone and adding the definition in consecutive rounds.
+//
 // defs is the PENDING set: everything applied here takes effect next round. It
 // deliberately does not touch the round's channel generation, whose definitions
 // and decoded opts stay pinned to the effective set for the whole round.

@@ -1010,6 +1010,28 @@ func Test_Observation_RemovesOnlyTombstones(t *testing.T) {
 	})
 }
 
+// Test_ApplyChannelVotes_UpdateWinsOverSameRoundRemoval covers polling skew
+// across a reap: some oracles read a file that omits a committed tombstone and
+// vote to remove it, others read a newer one that reuses the channel ID, and
+// both cross the threshold in the same round. The new definition is kept.
+func Test_ApplyChannelVotes_UpdateWinsOverSameRoundRemoval(t *testing.T) {
+	const f = 1
+	tombstoned := jsonChannel()
+	tombstoned.Tombstone = true
+	readded := jsonChannel()
+	readded.Streams = []llotypes.Stream{{StreamID: 200, Aggregator: llotypes.AggregatorMedian}}
+
+	pending := llotypes.ChannelDefinitions{1: jsonChannel(), 2: tombstoned}
+	readdedWithID := protocol.ChannelDefinitionWithID{ChannelDefinition: readded, ChannelID: 2}
+	h := makeChannelHash(readdedWithID)
+	applyChannelVotes(pending,
+		map[llotypes.ChannelID]int{2: f + 1},
+		map[[32]byte]protocol.ChannelDefinitionWithID{h: readdedWithID},
+		map[[32]byte]int{h: f + 1}, f)
+
+	require.Equal(t, llotypes.ChannelDefinitions{1: jsonChannel(), 2: readded}, pending)
+}
+
 // Test_IsReportable_MinReportIntervalDoesNotOverflow
 // validAfter is a nanosecond wall-clock timestamp and the offchain config
 // bounds DefaultMinReportIntervalNanoseconds only away from zero, so a large
