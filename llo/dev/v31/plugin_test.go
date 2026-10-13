@@ -1118,6 +1118,38 @@ func Test_StateTransition_PropagatesBlobFetchFailure(t *testing.T) {
 	require.Contains(t, err.Error(), "fetch blob")
 }
 
+// Test_StateTransition_RequiresQuorumAfterDecode checks that observations
+// dropped on decode cannot shrink the sample below 2f+1, where f byzantine
+// timestamps could control the median.
+func Test_StateTransition_RequiresQuorumAfterDecode(t *testing.T) {
+	ctx := tests.Context(t)
+	p := testPlugin(t)
+	kv := newMemKV()
+
+	// Bootstrap.
+	_, err := p.StateTransition(ctx, 1, ocrtypes.AttributedQuery{}, []ocrtypes.AttributedObservation{ao(0, nil), ao(1, nil), ao(2, nil)}, kv, testBlobs)
+	require.NoError(t, err)
+
+	valid := func(i int) ocrtypes.AttributedObservation {
+		return ao(i, mustEncodeObs(t, Observation{UnixTimestampNanoseconds: 1000}))
+	}
+	invalid := func(i int) ocrtypes.AttributedObservation {
+		return ao(i, []byte{0x7f})
+	}
+
+	t.Run("2f+1 decoded observations proceed", func(t *testing.T) {
+		aos := []ocrtypes.AttributedObservation{valid(0), valid(1), valid(2), invalid(3)}
+		_, err := p.StateTransition(ctx, 2, ocrtypes.AttributedQuery{}, aos, kv, testBlobs)
+		require.NoError(t, err)
+	})
+
+	t.Run("fewer than 2f+1 decoded observations fail the round", func(t *testing.T) {
+		aos := []ocrtypes.AttributedObservation{valid(0), valid(1), invalid(2), invalid(3)}
+		_, err := p.StateTransition(ctx, 3, ocrtypes.AttributedQuery{}, aos, kv, testBlobs)
+		require.ErrorContains(t, err, "expected at least 2f+1 decoded observations, got 2 (f: 1)")
+	})
+}
+
 // equalStreamValue compares two stream values by their binary encoding.
 func equalStreamValue(a, b protocol.StreamValue) bool {
 	ba, err := a.MarshalBinary()

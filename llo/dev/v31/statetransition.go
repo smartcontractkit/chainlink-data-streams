@@ -79,8 +79,8 @@ func (p *Plugin) StateTransition(ctx context.Context, seqNr uint64, _ ocrtypes.A
 	if err != nil {
 		return nil, err
 	}
-	if len(tally.timestampsNanoseconds) == 0 {
-		return nil, fmt.Errorf("no valid observations")
+	if len(tally.timestampsNanoseconds) < 2*p.F+1 {
+		return nil, fmt.Errorf("invariant violation: expected at least 2f+1 decoded observations, got %d (f: %d)", len(tally.timestampsNanoseconds), p.F)
 	}
 
 	// Verifying an attested predecessor retirement report needs the
@@ -316,8 +316,9 @@ func (p *Plugin) decodeObservations(ctx context.Context, aos []ocrtypes.Attribut
 				// an error (see the ReportingPlugin contract).
 				return observationTally{}, fmt.Errorf("failed to fetch blob for observation from oracle %v: %w", ao.Observer, derr)
 			}
-			// Deterministic decode failure (same bytes on every oracle): safe to
-			// drop just this observation.
+			// Unreachable while libocr runs ValidateObservation, which decodes
+			// the same bytes, before StateTransition. Drop rather than fail, and
+			// let the quorum check in StateTransition catch a shrunk sample.
 			p.Logger.Warnw("ignoring invalid observation", "oracleID", ao.Observer, "error", derr)
 			if collect {
 				tally.attributed = append(tally.attributed, attributedObservation{observer: ao.Observer, decodeErr: derr})
