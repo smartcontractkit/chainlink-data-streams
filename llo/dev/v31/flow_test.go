@@ -1060,6 +1060,58 @@ func Test_ApplyChannelVotes_UpdateWinsOverSameRoundRemoval(t *testing.T) {
 	require.Equal(t, llotypes.ChannelDefinitions{1: jsonChannel(), 2: readded}, pending)
 }
 
+// Test_ApplyChannelVotes_ContestedUpdateIsSkipped covers polling skew across
+// two publications in quick succession: oracles split between two new
+// definitions of the same channel, and both cross the threshold in the same
+// round. Definitions carry no version, so neither is applied.
+func Test_ApplyChannelVotes_ContestedUpdateIsSkipped(t *testing.T) {
+	const f = 1
+	withStream := func(id llotypes.StreamID) protocol.ChannelDefinitionWithID {
+		cd := jsonChannel()
+		cd.Streams = []llotypes.Stream{{StreamID: id, Aggregator: llotypes.AggregatorMedian}}
+		return protocol.ChannelDefinitionWithID{ChannelDefinition: cd, ChannelID: 2}
+	}
+	x, y := withStream(200), withStream(300)
+	hx, hy := makeChannelHash(x), makeChannelHash(y)
+	updates := map[[32]byte]protocol.ChannelDefinitionWithID{hx: x, hy: y}
+
+	t.Run("both past the threshold leaves the channel unchanged", func(t *testing.T) {
+		pending := llotypes.ChannelDefinitions{1: jsonChannel(), 2: jsonChannel()}
+		applyChannelVotes(pending, nil, updates, map[[32]byte]int{hx: f + 1, hy: f + 1}, f)
+		require.Equal(t, llotypes.ChannelDefinitions{1: jsonChannel(), 2: jsonChannel()}, pending)
+	})
+
+	t.Run("both past the threshold adds nothing", func(t *testing.T) {
+		pending := llotypes.ChannelDefinitions{1: jsonChannel()}
+		applyChannelVotes(pending, nil, updates, map[[32]byte]int{hx: f + 1, hy: f + 1}, f)
+		require.Equal(t, llotypes.ChannelDefinitions{1: jsonChannel()}, pending)
+	})
+
+	t.Run("one past the threshold is applied", func(t *testing.T) {
+		pending := llotypes.ChannelDefinitions{1: jsonChannel(), 2: jsonChannel()}
+		applyChannelVotes(pending, nil, updates, map[[32]byte]int{hx: f, hy: f + 1}, f)
+		require.Equal(t, llotypes.ChannelDefinitions{1: jsonChannel(), 2: y.ChannelDefinition}, pending)
+	})
+
+	t.Run("other channels still apply", func(t *testing.T) {
+		other := protocol.ChannelDefinitionWithID{ChannelDefinition: x.ChannelDefinition, ChannelID: 3}
+		ho := makeChannelHash(other)
+		pending := llotypes.ChannelDefinitions{1: jsonChannel(), 2: jsonChannel()}
+		applyChannelVotes(pending, nil,
+			map[[32]byte]protocol.ChannelDefinitionWithID{hx: x, hy: y, ho: other},
+			map[[32]byte]int{hx: f + 1, hy: f + 1, ho: f + 1}, f)
+		require.Equal(t, llotypes.ChannelDefinitions{1: jsonChannel(), 2: jsonChannel(), 3: x.ChannelDefinition}, pending)
+	})
+
+	t.Run("a same round removal still applies", func(t *testing.T) {
+		tombstoned := jsonChannel()
+		tombstoned.Tombstone = true
+		pending := llotypes.ChannelDefinitions{1: jsonChannel(), 2: tombstoned}
+		applyChannelVotes(pending, map[llotypes.ChannelID]int{2: f + 1}, updates, map[[32]byte]int{hx: f + 1, hy: f + 1}, f)
+		require.Equal(t, llotypes.ChannelDefinitions{1: jsonChannel()}, pending)
+	})
+}
+
 // Test_IsReportable_MinReportIntervalDoesNotOverflow
 // validAfter is a nanosecond wall-clock timestamp and the offchain config
 // bounds DefaultMinReportIntervalNanoseconds only away from zero, so a large

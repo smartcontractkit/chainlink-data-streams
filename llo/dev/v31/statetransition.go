@@ -442,6 +442,13 @@ func supportVotesForEffectiveFormats(votes map[llotypes.ReportFormat]int, effect
 // is a newer definition from the owner, so the result is the same as reaping
 // the tombstone and adding the definition in consecutive rounds.
 //
+// A channel with more than one definition past the threshold is left
+// unchanged. Definitions carry no version, so the votes cannot tell which is
+// newer. This happens when the owner publishes twice within one polling
+// window, and any pick would flip each round until the caches converge, since
+// oracles skip voting for the committed definition and the others vote the
+// competing one back in.
+//
 // defs is the PENDING set: everything applied here takes effect next round. It
 // deliberately does not touch the round's channel generation, whose definitions
 // and decoded opts stay pinned to the effective set for the whole round.
@@ -467,18 +474,23 @@ func applyChannelVotes(
 	for h, d := range updateDefsByHash {
 		ordered = append(ordered, hashWithID{h, d})
 	}
-	// Sort by (channelID, hash): the hash tiebreak keeps the order total, so
-	// two competing definitions for the same channelID are applied in the same
-	// sequence on every oracle (last one wins, consistently).
+	// Sort by (channelID, hash) so the cap and budgets see changes in the same
+	// order on every oracle.
 	sort.Slice(ordered, func(i, j int) bool {
 		if ordered[i].def.ChannelID != ordered[j].def.ChannelID {
 			return ordered[i].def.ChannelID < ordered[j].def.ChannelID
 		}
 		return bytes.Compare(ordered[i].hash[:], ordered[j].hash[:]) < 0
 	})
+	passing := make(map[llotypes.ChannelID]int)
+	for _, hwid := range ordered {
+		if updateVotesByHash[hwid.hash] > f {
+			passing[hwid.def.ChannelID]++
+		}
+	}
 	budget := protocol.NewChannelDefinitionsBudget(defs)
 	for _, hwid := range ordered {
-		if updateVotesByHash[hwid.hash] <= f {
+		if updateVotesByHash[hwid.hash] <= f || passing[hwid.def.ChannelID] > 1 {
 			continue
 		}
 		defWithID := hwid.def
