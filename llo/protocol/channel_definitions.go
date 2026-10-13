@@ -231,17 +231,11 @@ func analyzeChannelDefinitions(codecs map[llotypes.ReportFormat]ReportCodec, cha
 		res.admissionFindings = append(res.admissionFindings, admissionFinding{wholeSet: true, err: err})
 	}
 
-	// Whole-set budgets, accumulated over the channels the loop below visits
-	// and checked once at the end. Tombstones count: nothing reads their
-	// streams or opts, but they are persisted in the definitions record all the
-	// same.
-	var totalStreamEntries, totalOptsBytes int
+	// Whole-set size budgets, measured the same way the state transition
+	// enforces them. Tombstones count: nothing reads their streams or opts, but
+	// they are persisted in the definitions record all the same.
+	budget := NewChannelDefinitionsBudget(channelDefs)
 
-	// Every (streamID, aggregator) pair that will hold an aggregate. Distinct
-	// pairs, not stream entries: several channels naming the same pair cost one
-	// aggregate between them. Bounded by MaxPersistedAggregates, which is what
-	// the r/agg record can carry.
-	aggregatedPairs := make(map[streamAggregatorPair]struct{}, len(channelDefs))
 	// Calculated streams declared across the set. Counted separately from the
 	// pairs above because they are recomputed each round rather than carried
 	// forward, so they cost precursor bytes but no r/agg bytes.
@@ -272,7 +266,6 @@ func analyzeChannelDefinitions(codecs map[llotypes.ReportFormat]ReportCodec, cha
 		if len(cd.Opts) > MaxChannelOptsBytes {
 			admit(fmt.Errorf("ChannelDefinition with ID %d has opts that are too long, got: %d/%d", channelID, len(cd.Opts), MaxChannelOptsBytes), channelID)
 		}
-		totalOptsBytes += len(cd.Opts)
 
 		// A tombstone is persisted as is, so its streams are bounded like any
 		// other. Admission-only, so that a committed tombstone stays reapable.
@@ -280,7 +273,6 @@ func analyzeChannelDefinitions(codecs map[llotypes.ReportFormat]ReportCodec, cha
 			if len(cd.Streams) > MaxStreamsPerChannel {
 				admit(fmt.Errorf("ChannelDefinition with ID %d has too many streams, got: %d/%d", channelID, len(cd.Streams), MaxStreamsPerChannel), channelID)
 			}
-			totalStreamEntries += len(cd.Streams)
 			continue
 		}
 
@@ -292,7 +284,6 @@ func analyzeChannelDefinitions(codecs map[llotypes.ReportFormat]ReportCodec, cha
 			base(fmt.Errorf("ChannelDefinition with ID %d has too many streams, got: %d/%d", channelID, len(cd.Streams), MaxStreamsPerChannel), channelID)
 			continue
 		}
-		totalStreamEntries += len(cd.Streams)
 		for _, strm := range cd.Streams {
 			if strm.Aggregator == 0 {
 				base(fmt.Errorf("ChannelDefinition with ID %d has stream %d with zero aggregator (this may indicate an uninitialized struct)", channelID, strm.StreamID), channelID)
@@ -307,12 +298,6 @@ func analyzeChannelDefinitions(codecs map[llotypes.ReportFormat]ReportCodec, cha
 				admit(fmt.Errorf("ChannelDefinition with ID %d has stream %d with unknown aggregator %d", channelID, strm.StreamID, strm.Aggregator), channelID)
 			}
 			uniqueStreamIDs[strm.StreamID] = struct{}{}
-			// Pairs that aggregation actually produces a value for: calculated
-			// streams are recomputed each round rather than aggregated, and
-			// history backfill channels are not aggregated at all.
-			if strm.Aggregator != llotypes.AggregatorCalculated && cd.ReportFormat != llotypes.ReportFormatHistoryBackfill {
-				aggregatedPairs[streamAggregatorPair{streamID: strm.StreamID, aggregator: strm.Aggregator}] = struct{}{}
-			}
 			// Calculated streams are derived from the opts that declare them and
 			// are not stored on the definition, so anything listed here is
 			// observed. Definitions written by older code may still carry their
@@ -394,17 +379,11 @@ func analyzeChannelDefinitions(codecs map[llotypes.ReportFormat]ReportCodec, cha
 	// Whole-set budgets. Each is what the sizes of the channel-definitions
 	// record, the precursor and the carry-forward record, or the per-round
 	// evaluation work, actually depend on; see the limits they name.
-	if totalStreamEntries > MaxTotalStreamEntries {
-		admitSet(fmt.Errorf("too many stream entries across all channels, got: %d/%d", totalStreamEntries, MaxTotalStreamEntries))
-	}
-	if len(aggregatedPairs) > MaxPersistedAggregates {
-		admitSet(fmt.Errorf("too many aggregated (stream, aggregator) pairs across all channels, got: %d/%d", len(aggregatedPairs), MaxPersistedAggregates))
+	if err := budget.Err(); err != nil {
+		admitSet(err)
 	}
 	if totalCalculatedStreams > MaxTotalCalculatedStreams {
 		admitSet(fmt.Errorf("too many calculated streams across all channels, got: %d/%d", totalCalculatedStreams, MaxTotalCalculatedStreams))
-	}
-	if totalOptsBytes > MaxTotalOptsBytes {
-		admitSet(fmt.Errorf("too many opts bytes across all channels, got: %d/%d", totalOptsBytes, MaxTotalOptsBytes))
 	}
 	if totalTWAPCalls > MaxTotalTWAPCalls {
 		admitSet(fmt.Errorf("too many TWAP calls across all channels, got: %d/%d", totalTWAPCalls, MaxTotalTWAPCalls))

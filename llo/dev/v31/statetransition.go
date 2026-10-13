@@ -421,7 +421,13 @@ func supportVotesForEffectiveFormats(votes map[llotypes.ReportFormat]int, effect
 }
 
 // applyChannelVotes applies remove/add votes with a >F threshold, in ascending
-// channelID order, respecting MaxOutcomeChannelDefinitionsLength.
+// channelID order, respecting MaxOutcomeChannelDefinitionsLength and the
+// whole-set budgets of protocol.ChannelDefinitionsBudget.
+//
+// Each update passed admission on at least one honest oracle, but against that
+// oracle's own desired set. Updates from oracles whose desired sets differ
+// can each cross the threshold in the same round, and their union can exceed a
+// budget none of them did, so the budgets are enforced here on the merged set.
 //
 // defs is the PENDING set: everything applied here takes effect next round. It
 // deliberately does not touch the round's channel generation, whose definitions
@@ -457,14 +463,24 @@ func applyChannelVotes(
 		}
 		return bytes.Compare(ordered[i].hash[:], ordered[j].hash[:]) < 0
 	})
+	budget := protocol.NewChannelDefinitionsBudget(defs)
 	for _, hwid := range ordered {
 		if updateVotesByHash[hwid.hash] <= f {
 			continue
 		}
 		defWithID := hwid.def
-		_, exists := defs[defWithID.ChannelID]
+		prev, exists := defs[defWithID.ChannelID]
 		if !exists && len(defs) >= protocol.MaxOutcomeChannelDefinitionsLength {
 			// Skip additions beyond the cap; a replacement of an existing channel is still fine.
+			continue
+		}
+		var replaced *llotypes.ChannelDefinition
+		if exists {
+			replaced = &prev
+		}
+		if !budget.Replace(replaced, defWithID.ChannelDefinition) {
+			// Skip changes that grow the set past a whole-set budget; they are
+			// voted on again in later rounds.
 			continue
 		}
 		defs[defWithID.ChannelID] = defWithID.ChannelDefinition

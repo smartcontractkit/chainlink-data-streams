@@ -457,7 +457,8 @@ func (p *Plugin) ValidateObservation(ctx context.Context, seqNr uint64, _ ocrtyp
 	//
 	// Whole-set budgets cannot be enforced per observation anyway, votes from
 	// different oracles combine, and what gets committed is decided by the
-	// per-hash threshold, not by any single observation.
+	// per-hash threshold, not by any single observation. applyChannelVotes
+	// enforces them on the merged set instead.
 	defsForVerify := observation.UpdateChannelDefinitions
 	if len(observation.UpdateChannelDefinitions) > 0 {
 		state, serr := loadColdKVState(kvReader, p.ChannelCache)

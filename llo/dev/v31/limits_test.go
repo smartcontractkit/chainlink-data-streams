@@ -188,6 +188,56 @@ func TestLimits_DefinitionSetBudgetsAreAdmissionOnly(t *testing.T) {
 		protocol.MaxTotalStreamEntries)
 }
 
+// TestLimits_ChannelVotesRespectDefinitionSetBudgets covers updates that each
+// pass admission on their own but whose union does not: two oracles with
+// different desired sets each get an addition past the vote threshold in the
+// same round. Admission cannot see the union, so the state transition must
+// keep it within budget.
+func TestLimits_ChannelVotesRespectDefinitionSetBudgets(t *testing.T) {
+	const f = 1
+	channel := func(streamID llotypes.StreamID) llotypes.ChannelDefinition {
+		return llotypes.ChannelDefinition{
+			ReportFormat: llotypes.ReportFormatJSON,
+			Streams:      []llotypes.Stream{{StreamID: streamID, Aggregator: llotypes.AggregatorMedian}},
+			Opts:         []byte(strings.Repeat("x", protocol.MaxChannelOptsBytes)),
+		}
+	}
+	// One channel short of MaxTotalOptsBytes, so either addition fits alone.
+	committed := llotypes.ChannelDefinitions{}
+	for c := range protocol.MaxTotalOptsBytes/protocol.MaxChannelOptsBytes - 1 {
+		committed[llotypes.ChannelID(c+1)] = channel(1)
+	}
+	updates := map[[32]byte]protocol.ChannelDefinitionWithID{
+		{1}: {ChannelDefinition: channel(2), ChannelID: 1000},
+		{2}: {ChannelDefinition: channel(3), ChannelID: 1001},
+	}
+	votes := map[[32]byte]int{{1}: f + 1, {2}: f + 1}
+
+	for _, id := range []llotypes.ChannelID{1000, 1001} {
+		alone := cloneChannelDefinitions(committed)
+		alone[id] = channel(2)
+		require.NoError(t, protocol.NewChannelDefinitionsBudget(alone).Err())
+	}
+
+	pending := cloneChannelDefinitions(committed)
+	applyChannelVotes(pending, nil, updates, votes, f)
+	require.NoError(t, protocol.NewChannelDefinitionsBudget(pending).Err())
+	// Applied in channel ID order, so the lower ID wins on every oracle.
+	require.Contains(t, pending, llotypes.ChannelID(1000))
+	require.NotContains(t, pending, llotypes.ChannelID(1001))
+
+	// Once the committed set is over budget, a tombstone that trims it is
+	// still applied.
+	over := cloneChannelDefinitions(pending)
+	over[1001] = channel(3)
+	tombstone := llotypes.ChannelDefinition{ReportFormat: llotypes.ReportFormatJSON, Tombstone: true}
+	applyChannelVotes(over, nil,
+		map[[32]byte]protocol.ChannelDefinitionWithID{{3}: {ChannelDefinition: tombstone, ChannelID: 1001}},
+		map[[32]byte]int{{3}: f + 1}, f)
+	require.True(t, over[1001].Tombstone)
+	require.NoError(t, protocol.NewChannelDefinitionsBudget(over).Err())
+}
+
 // TestLimits_ChannelStateWorstCaseFitsPerKeyLimit builds the largest definition
 // set the admission budgets permit and measures the record it marshals to. The
 // budgets were sized from this number, so measuring it is what keeps them
