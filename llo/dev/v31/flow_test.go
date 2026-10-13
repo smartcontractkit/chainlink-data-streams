@@ -279,6 +279,14 @@ func Test_Factory_NewReportingPlugin_reportCadence(t *testing.T) {
 	t.Run("accepts a non-zero cadence", func(t *testing.T) {
 		for _, protocolVersion := range []uint32{1, 2} {
 			require.NoError(t, newPlugin(t, encode(t, protocolVersion, 1000)))
+			require.NoError(t, newPlugin(t, encode(t, protocolVersion, protocol.MaxDefaultMinReportIntervalNanoseconds)))
+		}
+	})
+
+	t.Run("refuses to start on a cadence above the maximum", func(t *testing.T) {
+		for _, protocolVersion := range []uint32{1, 2} {
+			err := newPlugin(t, encode(t, protocolVersion, protocol.MaxDefaultMinReportIntervalNanoseconds+1))
+			require.EqualError(t, err, fmt.Sprintf("NewReportingPlugin: offchain config defaultMinReportIntervalNanoseconds (%d) exceeds the maximum (%d)", protocol.MaxDefaultMinReportIntervalNanoseconds+1, protocol.MaxDefaultMinReportIntervalNanoseconds))
 		}
 	})
 
@@ -1025,8 +1033,8 @@ func Test_IsReportable_MinReportIntervalDoesNotOverflow(t *testing.T) {
 			"interval %d must gate the report, not wrap", interval)
 	}
 
-	require.Equal(t, uint64(math.MaxUint64), saturatingAdd(validAfter, math.MaxUint64))
-	require.Equal(t, uint64(9), saturatingAdd(4, 5))
+	require.Equal(t, uint64(math.MaxUint64), protocol.SaturatingAdd(validAfter, math.MaxUint64))
+	require.Equal(t, uint64(9), protocol.SaturatingAdd(4, 5))
 }
 
 // verifyCountingCodec counts how often channel definitions are decoded, which

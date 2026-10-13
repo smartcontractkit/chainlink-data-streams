@@ -124,6 +124,10 @@ func (f *PluginFactory) NewReportingPlugin(ctx context.Context, cfg ocr3types.Re
 	if offchainConfig.ProtocolVersion > 0 && offchainConfig.DefaultMinReportIntervalNanoseconds == 0 {
 		return nil, nil, fmt.Errorf("NewReportingPlugin: offchain config must set defaultMinReportIntervalNanoseconds to a non-zero value if protocol version is %d", offchainConfig.ProtocolVersion)
 	}
+	// A cadence above the maximum stalls every channel for its whole length.
+	if offchainConfig.DefaultMinReportIntervalNanoseconds > protocol.MaxDefaultMinReportIntervalNanoseconds {
+		return nil, nil, fmt.Errorf("NewReportingPlugin: offchain config defaultMinReportIntervalNanoseconds (%d) exceeds the maximum (%d)", offchainConfig.DefaultMinReportIntervalNanoseconds, protocol.MaxDefaultMinReportIntervalNanoseconds)
+	}
 
 	blobInFlightWaitFactor := f.BlobInFlightWaitFactor
 	if blobInFlightWaitFactor == 0 {

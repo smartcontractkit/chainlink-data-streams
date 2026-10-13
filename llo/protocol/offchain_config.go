@@ -4,9 +4,27 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"time"
 
 	"google.golang.org/protobuf/proto"
 )
+
+// MaxDefaultMinReportIntervalNanoseconds bounds the report cadence. The
+// interval gates every channel, so a larger value stalls all reporting for its
+// whole length. LLO v31 enforces it (see llo/dev/v31.NewReportingPlugin).
+const MaxDefaultMinReportIntervalNanoseconds = uint64(5 * time.Second)
+
+// SaturatingAdd returns a+b, clamped to MaxUint64 instead of wrapping.
+//
+// Use it for validAfter+DefaultMinReportIntervalNanoseconds. A wrapped sum is
+// small, so the cadence comparison would always pass and the interval would
+// silently stop gating anything. Clamping makes the gate fail closed.
+func SaturatingAdd(a, b uint64) uint64 {
+	if sum := a + b; sum >= a {
+		return sum
+	}
+	return math.MaxUint64
+}
 
 type OffchainConfig struct {
 	ProtocolVersion uint32
