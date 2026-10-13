@@ -138,6 +138,12 @@ func (f *PluginFactory) NewReportingPlugin(ctx context.Context, cfg ocr3types.Re
 		return nil, nil, fmt.Errorf("NewReportingPlugin: offchain config defaultMinReportIntervalNanoseconds (%d) exceeds the maximum (%d)", offchainConfig.DefaultMinReportIntervalNanoseconds, protocol.MaxDefaultMinReportIntervalNanoseconds)
 	}
 
+	// OCR3.1 requires this to be positive. Reject a host that bypasses
+	// it rather than run a pump whose every cycle times out immediately.
+	if cfg.MaxDurationObservation <= 0 {
+		return nil, nil, fmt.Errorf("NewReportingPlugin: MaxDurationObservation (%v) must be positive", cfg.MaxDurationObservation)
+	}
+
 	blobInFlightWaitFactor := f.BlobInFlightWaitFactor
 	if blobInFlightWaitFactor == 0 {
 		blobInFlightWaitFactor = defaultBlobInFlightWaitFactor

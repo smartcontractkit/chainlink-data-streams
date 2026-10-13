@@ -239,7 +239,7 @@ func Test_Factory_NewReportingPlugin_aggregationFaultTolerance(t *testing.T) {
 		require.EqualError(t, err, "aggregationFaultTolerance must be at least 1 when consensus F (1) is non-zero: a floor of 1 contribution lets a single oracle set an aggregate")
 	})
 	t.Run("accepts below consensus F", func(t *testing.T) {
-		p, _, err := f.NewReportingPlugin(ctx, ocr3types.ReportingPluginConfig{N: 7, F: 2, ConfigDigest: ocrtypes.ConfigDigest{9}, OffchainConfig: mustEncodeOffchainConfig(t, 1)}, nil)
+		p, _, err := f.NewReportingPlugin(ctx, ocr3types.ReportingPluginConfig{N: 7, F: 2, ConfigDigest: ocrtypes.ConfigDigest{9}, OffchainConfig: mustEncodeOffchainConfig(t, 1), MaxDurationObservation: time.Second}, nil)
 		require.NoError(t, err)
 		pl, ok := p.(*Plugin)
 		require.True(t, ok)
@@ -247,7 +247,7 @@ func Test_Factory_NewReportingPlugin_aggregationFaultTolerance(t *testing.T) {
 		require.NoError(t, pl.Close())
 	})
 	t.Run("accepts zero when consensus F is zero", func(t *testing.T) {
-		p, _, err := f.NewReportingPlugin(ctx, ocr3types.ReportingPluginConfig{N: 1, F: 0, ConfigDigest: ocrtypes.ConfigDigest{9}, OffchainConfig: mustEncodeOffchainConfig(t, 0)}, nil)
+		p, _, err := f.NewReportingPlugin(ctx, ocr3types.ReportingPluginConfig{N: 1, F: 0, ConfigDigest: ocrtypes.ConfigDigest{9}, OffchainConfig: mustEncodeOffchainConfig(t, 0), MaxDurationObservation: time.Second}, nil)
 		require.NoError(t, err)
 		pl, ok := p.(*Plugin)
 		require.True(t, ok)
@@ -277,7 +277,7 @@ func Test_Factory_NewReportingPlugin_reportCadence(t *testing.T) {
 
 	newPlugin := func(t *testing.T, offchainConfig []byte) error {
 		t.Helper()
-		p, _, err := f.NewReportingPlugin(ctx, ocr3types.ReportingPluginConfig{N: 4, F: 1, ConfigDigest: ocrtypes.ConfigDigest{9}, OffchainConfig: offchainConfig}, nil)
+		p, _, err := f.NewReportingPlugin(ctx, ocr3types.ReportingPluginConfig{N: 4, F: 1, ConfigDigest: ocrtypes.ConfigDigest{9}, OffchainConfig: offchainConfig, MaxDurationObservation: time.Second}, nil)
 		if err == nil {
 			require.NoError(t, p.Close())
 		}
@@ -314,9 +314,50 @@ func Test_Factory_NewReportingPlugin_reportCadence(t *testing.T) {
 	})
 }
 
+func Test_Factory_NewReportingPlugin_maxDurationObservation(t *testing.T) {
+	ctx := tests.Context(t)
+	f := NewPluginFactory(PluginFactoryParams{
+		OnchainConfigCodec: mockOnchainConfigCodec{},
+		Logger:             logger.Test(t),
+	})
+	base := ocr3types.ReportingPluginConfig{N: 4, F: 1, ConfigDigest: ocrtypes.ConfigDigest{9}, OffchainConfig: mustEncodeOffchainConfig(t, 1)}
+
+	// The pump derives its observation timeout from this value, so zero would
+	// expire every cycle's context before it starts.
+	t.Run("refuses to start when not positive", func(t *testing.T) {
+		for _, d := range []time.Duration{0, -time.Second} {
+			cfg := base
+			cfg.MaxDurationObservation = d
+			_, _, err := f.NewReportingPlugin(ctx, cfg, nil)
+			require.EqualError(t, err, fmt.Sprintf("NewReportingPlugin: MaxDurationObservation (%v) must be positive", d))
+		}
+	})
+
+	t.Run("refuses to start when not positive even with a blob observation override", func(t *testing.T) {
+		f := NewPluginFactory(PluginFactoryParams{
+			OnchainConfigCodec:         mockOnchainConfigCodec{},
+			Logger:                     logger.Test(t),
+			MaxDurationBlobObservation: time.Second,
+		})
+		_, _, err := f.NewReportingPlugin(ctx, base, nil)
+		require.EqualError(t, err, "NewReportingPlugin: MaxDurationObservation (0s) must be positive")
+	})
+
+	t.Run("derives the pump timeouts when positive", func(t *testing.T) {
+		cfg := base
+		cfg.MaxDurationObservation = time.Second
+		p, _, err := f.NewReportingPlugin(ctx, cfg, nil)
+		require.NoError(t, err)
+		pump := p.(*Plugin).pump
+		require.Equal(t, DefaultBlobObservationDurationMultiplier*time.Second, pump.observationTimeout)
+		require.Equal(t, time.Second/time.Duration(defaultBlobInFlightWaitFactor), pump.inFlightWait)
+		require.NoError(t, p.Close())
+	})
+}
+
 func Test_Factory_MaxRoundPeriod(t *testing.T) {
 	ctx := tests.Context(t)
-	base := ocr3types.ReportingPluginConfig{N: 4, F: 1, ConfigDigest: ocrtypes.ConfigDigest{9}, OffchainConfig: mustEncodeOffchainConfig(t, 1)}
+	base := ocr3types.ReportingPluginConfig{N: 4, F: 1, ConfigDigest: ocrtypes.ConfigDigest{9}, OffchainConfig: mustEncodeOffchainConfig(t, 1), MaxDurationObservation: time.Second}
 
 	newPump := func(t *testing.T, params PluginFactoryParams, cfg ocr3types.ReportingPluginConfig) *blobPump {
 		t.Helper()
@@ -344,7 +385,7 @@ func Test_Factory_NewReportingPlugin(t *testing.T) {
 		OnchainConfigCodec: mockOnchainConfigCodec{},
 		Logger:             logger.Test(t),
 	})
-	p, info, err := f.NewReportingPlugin(ctx, ocr3types.ReportingPluginConfig{N: 4, F: 1, ConfigDigest: ocrtypes.ConfigDigest{9}, OffchainConfig: mustEncodeOffchainConfig(t, 1)}, nil)
+	p, info, err := f.NewReportingPlugin(ctx, ocr3types.ReportingPluginConfig{N: 4, F: 1, ConfigDigest: ocrtypes.ConfigDigest{9}, OffchainConfig: mustEncodeOffchainConfig(t, 1), MaxDurationObservation: time.Second}, nil)
 	require.NoError(t, err)
 
 	info1, ok := info.(interface{ Validate() error })
