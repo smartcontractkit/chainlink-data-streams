@@ -897,7 +897,19 @@ func (p *Plugin) resolvePredecessorRetirement(
 		return nil
 	}
 
+	// A retired predecessor freezes its watermarks, so every report it signs
+	// after retiring carries the same map and the aos order cannot matter. If
+	// valid reports disagree, that invariant is broken and the order would pick
+	// the watermarks: refuse to promote rather than let the leader choose.
+	var chosen *protocol.RetirementReport
+	verified := make(map[string]struct{}, len(tally.attestedRetirements))
 	for _, attested := range tally.attestedRetirements {
+		// Honest oracles usually attach the same bytes: verify them once.
+		if _, seen := verified[string(attested)]; seen {
+			continue
+		}
+		verified[string(attested)] = struct{}{}
+
 		retirementReport, verr := p.PredecessorRetirementReportCache.VerifyAttestedRetirementReport(*p.PredecessorConfigDigest, agreed.signers, agreed.f, attested)
 		if verr != nil {
 			p.Logger.Warnw("Ignoring invalid attested predecessor retirement", "seqNr", seqNr, "error", verr, "predecessorConfigDigest", *p.PredecessorConfigDigest)
@@ -907,9 +919,16 @@ func (p *Plugin) resolvePredecessorRetirement(
 			p.Logger.Warnw("Ignoring incompatible attested predecessor retirement", "seqNr", seqNr, "error", verr, "predecessorConfigDigest", *p.PredecessorConfigDigest)
 			continue
 		}
-		return &retirementReport
+		if chosen == nil {
+			chosen = &retirementReport
+			continue
+		}
+		if chosen.ProtocolVersion != retirementReport.ProtocolVersion || !maps.Equal(chosen.ValidAfterNanoseconds, retirementReport.ValidAfterNanoseconds) {
+			p.Logger.Errorw("Refusing promotion: valid attested predecessor retirements disagree", "seqNr", seqNr, "predecessorConfigDigest", *p.PredecessorConfigDigest)
+			return nil
+		}
 	}
-	return nil
+	return chosen
 }
 
 // electPredecessorConfig returns the candidate with more than f votes, or nil.
