@@ -141,6 +141,8 @@ type mockPredecessorRetirementReportCache struct {
 	// signers overrides testPredecessorSigners; f is the predecessor's f.
 	signers [][]byte
 	f       uint8
+	// attested overrides the attested retirement report the cache returns.
+	attested []byte
 	// verifyErr makes VerifyAttestedRetirementReport fail deterministically.
 	verifyErr error
 }
@@ -155,6 +157,9 @@ func (m *mockPredecessorRetirementReportCache) localSigners() [][]byte {
 func (m *mockPredecessorRetirementReportCache) AttestedRetirementReport(ocrtypes.ConfigDigest) ([]byte, error) {
 	if m.err != nil {
 		return nil, m.err
+	}
+	if m.attested != nil {
+		return m.attested, nil
 	}
 	return []byte("attested"), nil
 }
@@ -891,6 +896,29 @@ func Test_Observation_PredecessorConfigVote(t *testing.T) {
 		obs := observe(t, p, kv)
 		require.Empty(t, obs.AttestedPredecessorRetirement)
 		require.Empty(t, obs.PredecessorSigners, "the signer set is dead weight without a report")
+	})
+
+	// A local entry that peers would reject must be left out, not broadcast,
+	// or every peer drops this node's whole observation.
+	for name, prrc := range map[string]*mockPredecessorRetirementReportCache{
+		"empty signer key":     {signers: [][]byte{{0x01}, {}, {0x03}, {0x04}}},
+		"oversized signer key": {signers: [][]byte{{0x01}, make([]byte, protocol.MaxPredecessorSignerBytes+1), {0x03}, {0x04}}},
+		"f out of range":       {f: uint8(len(testPredecessorSigners))},
+	} {
+		t.Run("abstains on a local config peers would reject: "+name, func(t *testing.T) {
+			p, kv := stagedObserver(t, prrc)
+			obs := observe(t, p, kv)
+			require.NotEmpty(t, obs.AttestedPredecessorRetirement)
+			require.Empty(t, obs.PredecessorSigners)
+			require.Zero(t, obs.PredecessorF)
+		})
+	}
+
+	t.Run("omits a local report peers would reject", func(t *testing.T) {
+		p, kv := stagedObserver(t, &mockPredecessorRetirementReportCache{attested: make([]byte, protocol.MaxAttestedRetirementReportBytes+1)})
+		obs := observe(t, p, kv)
+		require.Empty(t, obs.AttestedPredecessorRetirement)
+		require.Empty(t, obs.PredecessorSigners)
 	})
 }
 

@@ -168,12 +168,15 @@ func (p *Plugin) Observation(ctx context.Context, seqNr uint64, _ ocrtypes.Attri
 
 		if p.PredecessorConfigDigest != nil && state.lifeCycleStage == protocol.LifeCycleStageStaging {
 			obs.AttestedPredecessorRetirement, err = p.PredecessorRetirementReportCache.AttestedRetirementReport(*p.PredecessorConfigDigest)
+			if err == nil {
+				err = validateAttestedPredecessorRetirement(obs.AttestedPredecessorRetirement)
+			}
 			if err != nil {
 				// Best-effort: the state transition only needs one node to
 				// supply a valid retirement report, so omit it rather than
 				// failing the round.
 				obs.AttestedPredecessorRetirement = nil
-				p.Logger.Errorw("Failed to fetch attested retirement report from cache, omitting it from this observation", "stage", "Observation", "seqNr", seqNr, "err", err)
+				p.Logger.Errorw("Failed to fetch a usable attested retirement report from cache, omitting it from this observation", "stage", "Observation", "seqNr", seqNr, "err", err)
 			}
 			if len(obs.AttestedPredecessorRetirement) != 0 {
 				p.voteOnPredecessorConfig(&obs, seqNr)
@@ -310,8 +313,12 @@ func (p *Plugin) voteOnPredecessorConfig(obs *Observation, seqNr uint64) {
 		p.Logger.Warnw("Predecessor config not in the local cache yet, not voting on it this round", "stage", "Observation", "seqNr", seqNr, "predecessorConfigDigest", *p.PredecessorConfigDigest)
 		return
 	}
-	if len(signers) == 0 || len(signers) > protocol.MaxObservationPredecessorSignersLength {
-		p.Logger.Errorw("Local predecessor config has an unusable signer set, not voting on it", "stage", "Observation", "seqNr", seqNr, "signers", len(signers))
+	if len(signers) == 0 {
+		p.Logger.Errorw("Local predecessor config has an empty signer set, not voting on it", "stage", "Observation", "seqNr", seqNr)
+		return
+	}
+	if err := validatePredecessorConfig(signers, uint32(f)); err != nil {
+		p.Logger.Errorw("Local predecessor config is unusable, not voting on it", "stage", "Observation", "seqNr", seqNr, "err", err)
 		return
 	}
 	obs.PredecessorSigners = signers

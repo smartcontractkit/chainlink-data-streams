@@ -290,29 +290,49 @@ func observationFromProto(main *protocol.LLOObservationProto) (Observation, erro
 		return Observation{}, fmt.Errorf("observation advertises too many report formats: %d (max %d)", len(main.SupportedReportFormats), protocol.MaxObservationSupportedReportFormatsLength)
 	}
 
-	if len(main.AttestedPredecessorRetirement) > protocol.MaxAttestedRetirementReportBytes {
-		return Observation{}, fmt.Errorf("observation carries an attested predecessor retirement of %d bytes (max %d)", len(main.AttestedPredecessorRetirement), protocol.MaxAttestedRetirementReportBytes)
+	if err := validateAttestedPredecessorRetirement(main.AttestedPredecessorRetirement); err != nil {
+		return Observation{}, fmt.Errorf("observation carries %w", err)
 	}
-
-	if len(main.PredecessorSigners) > protocol.MaxObservationPredecessorSignersLength {
-		return Observation{}, fmt.Errorf("observation carries too many predecessor signers: %d (max %d)", len(main.PredecessorSigners), protocol.MaxObservationPredecessorSignersLength)
-	}
-	for i, signer := range main.PredecessorSigners {
-		if len(signer) == 0 || len(signer) > protocol.MaxPredecessorSignerBytes {
-			return Observation{}, fmt.Errorf("observation carries predecessor signer %d of invalid length %d (max %d)", i, len(signer), protocol.MaxPredecessorSignerBytes)
-		}
-	}
-	// f indexes nothing, but a set that cannot reach f+1 valid signatures could
-	// never verify a report, so treat it as malformed rather than carrying it
-	// into the vote.
-	if main.PredecessorF > 0 && int(main.PredecessorF) >= len(main.PredecessorSigners) {
-		return Observation{}, fmt.Errorf("observation carries predecessor f=%d for a signer set of %d", main.PredecessorF, len(main.PredecessorSigners))
+	if err := validatePredecessorConfig(main.PredecessorSigners, main.PredecessorF); err != nil {
+		return Observation{}, fmt.Errorf("observation carries %w", err)
 	}
 	obs.PredecessorSigners = main.PredecessorSigners
 	obs.PredecessorF = uint8(main.PredecessorF)
 
 	obs.SupportedReportFormats = formatsFromWire(main.SupportedReportFormats)
 	return obs, nil
+}
+
+// validateAttestedPredecessorRetirement bounds the attested predecessor
+// retirement an observation may carry. Observation applies it before
+// broadcasting, so a node never sends a report its peers would reject.
+func validateAttestedPredecessorRetirement(report []byte) error {
+	if len(report) > protocol.MaxAttestedRetirementReportBytes {
+		return fmt.Errorf("an attested predecessor retirement of %d bytes (max %d)", len(report), protocol.MaxAttestedRetirementReportBytes)
+	}
+	return nil
+}
+
+// validatePredecessorConfig bounds the predecessor config vote an observation
+// may carry. An empty signer set passes, as it means no vote. Observation
+// applies it before broadcasting, so a node never sends a vote its peers would
+// reject.
+func validatePredecessorConfig(signers [][]byte, f uint32) error {
+	if len(signers) > protocol.MaxObservationPredecessorSignersLength {
+		return fmt.Errorf("too many predecessor signers: %d (max %d)", len(signers), protocol.MaxObservationPredecessorSignersLength)
+	}
+	for i, signer := range signers {
+		if len(signer) == 0 || len(signer) > protocol.MaxPredecessorSignerBytes {
+			return fmt.Errorf("predecessor signer %d of invalid length %d (max %d)", i, len(signer), protocol.MaxPredecessorSignerBytes)
+		}
+	}
+	// f indexes nothing, but a set that cannot reach f+1 valid signatures could
+	// never verify a report, so treat it as malformed rather than carrying it
+	// into the vote.
+	if f > 0 && int(f) >= len(signers) {
+		return fmt.Errorf("predecessor f=%d for a signer set of %d", f, len(signers))
+	}
+	return nil
 }
 
 // sortedFormatsToWire returns the formats sorted ascending. nil in, nil out, so
