@@ -372,6 +372,12 @@ func (p *Plugin) decodeObservations(ctx context.Context, aos []ocrtypes.Attribut
 // mergeCodecSupport overlays this round's advertisements on the persisted ones,
 // replacing the entry of every oracle that contributed an observation and
 // leaving the rest untouched.
+//
+// Entries are never expired. An oracle that stops contributing keeps counting
+// for its last advertised formats, but it is then faulty and counts against f.
+// The 2f+1 supporter threshold still leaves f+1 honest live encoders whenever
+// at most f oracles are faulty, and this state is scoped to a single protocol
+// instance.
 func mergeCodecSupport(persisted, thisRound map[commontypes.OracleID]map[llotypes.ReportFormat]struct{}) map[commontypes.OracleID]map[llotypes.ReportFormat]struct{} {
 	merged := make(map[commontypes.OracleID]map[llotypes.ReportFormat]struct{}, len(persisted)+len(thisRound))
 	for oracleID, formats := range persisted {
