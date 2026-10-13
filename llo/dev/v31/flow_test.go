@@ -229,8 +229,20 @@ func Test_Factory_NewReportingPlugin_aggregationFaultTolerance(t *testing.T) {
 		_, _, err := f.NewReportingPlugin(ctx, ocr3types.ReportingPluginConfig{N: 4, F: 1, ConfigDigest: ocrtypes.ConfigDigest{9}, OffchainConfig: mustEncodeOffchainConfig(t, 2)}, nil)
 		require.EqualError(t, err, "aggregationFaultTolerance (2) must not exceed consensus F (1): a floor of 5 contributions can never be met from 3 observations")
 	})
-	t.Run("accepts zero", func(t *testing.T) {
-		p, _, err := f.NewReportingPlugin(ctx, ocr3types.ReportingPluginConfig{N: 4, F: 1, ConfigDigest: ocrtypes.ConfigDigest{9}, OffchainConfig: mustEncodeOffchainConfig(t, 0)}, nil)
+	t.Run("refuses zero when consensus F is non-zero", func(t *testing.T) {
+		_, _, err := f.NewReportingPlugin(ctx, ocr3types.ReportingPluginConfig{N: 4, F: 1, ConfigDigest: ocrtypes.ConfigDigest{9}, OffchainConfig: mustEncodeOffchainConfig(t, 0)}, nil)
+		require.EqualError(t, err, "aggregationFaultTolerance must be at least 1 when consensus F (1) is non-zero: a floor of 1 contribution lets a single oracle set an aggregate")
+	})
+	t.Run("accepts below consensus F", func(t *testing.T) {
+		p, _, err := f.NewReportingPlugin(ctx, ocr3types.ReportingPluginConfig{N: 7, F: 2, ConfigDigest: ocrtypes.ConfigDigest{9}, OffchainConfig: mustEncodeOffchainConfig(t, 1)}, nil)
+		require.NoError(t, err)
+		pl, ok := p.(*Plugin)
+		require.True(t, ok)
+		require.Equal(t, 3, pl.minContributions())
+		require.NoError(t, pl.Close())
+	})
+	t.Run("accepts zero when consensus F is zero", func(t *testing.T) {
+		p, _, err := f.NewReportingPlugin(ctx, ocr3types.ReportingPluginConfig{N: 1, F: 0, ConfigDigest: ocrtypes.ConfigDigest{9}, OffchainConfig: mustEncodeOffchainConfig(t, 0)}, nil)
 		require.NoError(t, err)
 		pl, ok := p.(*Plugin)
 		require.True(t, ok)

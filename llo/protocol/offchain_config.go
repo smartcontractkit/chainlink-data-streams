@@ -47,6 +47,9 @@ type OffchainConfig struct {
 	// There is no default. The right value depends on the DON's observed
 	// per-stream omission rate, so a default would either silently weaken
 	// safety or silently stall reporting.
+	//
+	// LLO v31 bounds it to [1, F], or to 0 when F is 0. Values below F
+	// tolerate fewer Byzantine contributors than consensus tolerates oracles.
 	AggregationFaultTolerance *uint32
 }
 

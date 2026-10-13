@@ -115,6 +115,15 @@ func (f *PluginFactory) NewReportingPlugin(ctx context.Context, cfg ocr3types.Re
 		return nil, nil, fmt.Errorf("aggregationFaultTolerance (%d) must not exceed consensus F (%d): a floor of %d contributions can never be met from %d observations",
 			aggregationFaultTolerance, cfg.F, 2*aggregationFaultTolerance+1, 2*cfg.F+1)
 	}
+	// Zero lets a single contributor set a stream aggregate, which a DON that
+	// tolerates Byzantine oracles must not allow.
+	if cfg.F > 0 && aggregationFaultTolerance == 0 {
+		return nil, nil, fmt.Errorf("aggregationFaultTolerance must be at least 1 when consensus F (%d) is non-zero: a floor of 1 contribution lets a single oracle set an aggregate", cfg.F)
+	}
+	if aggregationFaultTolerance < cfg.F {
+		l.Warnw("aggregationFaultTolerance is below consensus F: stream aggregates tolerate fewer Byzantine contributors than consensus tolerates oracles",
+			"aggregationFaultTolerance", aggregationFaultTolerance, "f", cfg.F, "minContributions", 2*aggregationFaultTolerance+1)
+	}
 
 	// The report cadence is a replicated state transition parameter and gates
 	// every channel (see isReportable). protocol.OffchainConfig.Validate used to
