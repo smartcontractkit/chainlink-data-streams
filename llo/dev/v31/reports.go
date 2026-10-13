@@ -410,9 +410,10 @@ func (o precursor) isReportable(channelID llotypes.ChannelID, minReportInterval 
 	if o.ObservationTimestampNanoseconds < saturatingAdd(validAfter, minReportInterval) || o.ObservationTimestampNanoseconds <= validAfter {
 		return false
 	}
-	// For seconds-resolution report formats, also require a full second between
-	// validAfter and the observation timestamp to prevent overlapping reports.
-	if isSecondsResolution(cd, channelID, optsCache) && secondsOverlap(validAfter, o.ObservationTimestampNanoseconds) {
+	// Require validAfter and the observation timestamp to fall in distinct ticks
+	// of the report format resolution, so the encoded validity window is not
+	// inverted.
+	if res, ok := reportTimeResolution(cd, channelID, optsCache); ok && tickOverlap(validAfter, o.ObservationTimestampNanoseconds, res) {
 		return false
 	}
 	return true

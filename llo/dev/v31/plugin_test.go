@@ -493,7 +493,7 @@ func Test_decodeObservation_RejectsHugeHandleCount(t *testing.T) {
 	require.Contains(t, err.Error(), "too many blobs")
 }
 
-func Test_SecondsResolutionOverlap(t *testing.T) {
+func Test_TimeResolutionOverlap(t *testing.T) {
 	mkPrec := func(format llotypes.ReportFormat, opts []byte, validAfterNs, obsTsNs uint64) precursor {
 		return precursor{
 			LifeCycleStage:                  protocol.LifeCycleStageProduction,
@@ -507,6 +507,11 @@ func Test_SecondsResolutionOverlap(t *testing.T) {
 		sec1a = 1_500_000_000 // second 1
 		sec1b = 1_900_000_000 // second 1 (later ns, same second)
 		sec2  = 2_100_000_000 // second 2
+
+		ms1500b = 1_500_000_900 // same millisecond and microsecond as sec1a
+		ms1501  = 1_501_000_000 // next millisecond after sec1a
+		us1b    = 1_500_000_500 // same microsecond as sec1a
+		us2     = 1_500_001_000 // next microsecond after sec1a
 	)
 
 	tests := []struct {
@@ -523,6 +528,11 @@ func Test_SecondsResolutionOverlap(t *testing.T) {
 		{"unpacked default opts same second -> not reportable (defaults to seconds)", llotypes.ReportFormatEVMABIEncodeUnpacked, nil, sec1a, sec1b, false},
 		{"unpacked explicit ns same second -> reportable", llotypes.ReportFormatEVMABIEncodeUnpacked, []byte(`{"TimeResolution":"ns"}`), sec1a, sec1b, true},
 		{"unpacked explicit seconds next second -> reportable", llotypes.ReportFormatEVMABIEncodeUnpacked, []byte(`{"TimeResolution":"s"}`), sec1a, sec2, true},
+		{"unpacked ms same millisecond -> not reportable", llotypes.ReportFormatEVMABIEncodeUnpacked, []byte(`{"TimeResolution":"ms"}`), sec1a, ms1500b, false},
+		{"unpacked ms next millisecond -> reportable", llotypes.ReportFormatEVMABIEncodeUnpacked, []byte(`{"TimeResolution":"ms"}`), sec1a, ms1501, true},
+		{"unpacked us same microsecond -> not reportable", llotypes.ReportFormatEVMABIEncodeUnpacked, []byte(`{"TimeResolution":"us"}`), sec1a, us1b, false},
+		{"unpacked us next microsecond -> reportable", llotypes.ReportFormatEVMABIEncodeUnpacked, []byte(`{"TimeResolution":"us"}`), sec1a, us2, true},
+		{"unpacked ns same microsecond -> reportable", llotypes.ReportFormatEVMABIEncodeUnpacked, []byte(`{"TimeResolution":"ns"}`), sec1a, us1b, true},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -554,6 +564,10 @@ func Test_SecondsResolutionOverlap(t *testing.T) {
 		{"expr explicit seconds same second -> not reportable", exprOpts(`"TimeResolution":"s",`), sec1b, false},
 		{"expr explicit seconds next second -> reportable", exprOpts(`"TimeResolution":"s",`), sec2, true},
 		{"expr explicit ns same second -> reportable", exprOpts(`"TimeResolution":"ns",`), sec1b, true},
+		{"expr ms same millisecond -> not reportable", exprOpts(`"TimeResolution":"ms",`), ms1500b, false},
+		{"expr ms next millisecond -> reportable", exprOpts(`"TimeResolution":"ms",`), ms1501, true},
+		{"expr us same microsecond -> not reportable", exprOpts(`"TimeResolution":"us",`), us1b, false},
+		{"expr us next microsecond -> reportable", exprOpts(`"TimeResolution":"us",`), us2, true},
 	}
 	for _, tc := range exprTests {
 		t.Run(tc.name, func(t *testing.T) {
