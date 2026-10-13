@@ -16,21 +16,21 @@ type timeResolutionOpts struct {
 // validAfter and observation timestamp fall in the same tick, otherwise the
 // encoded report would be not yet valid (ValidFrom after Timestamp).
 //
-// It reads opts through the round OptsCache. That cache is sealed to the same
-// channel generation as the definitions, so it holds every channel opts and
-// the result is deterministic across oracles.
+// It reads opts through the round OptsCache and decodes the definition's raw
+// opts on a cache miss, so the result is deterministic across oracles.
 //
 //   - ReportFormatEVMPremiumLegacy always uses seconds.
 //   - ReportFormatEVMABIEncodeUnpacked and ReportFormatEVMABIEncodeUnpackedExpr
 //     use the TimeResolution opt, which defaults to seconds (the zero value)
-//     when unset. ok is false when the opts cannot be read.
+//     when unset. ok is false when the opts cannot be read, and the caller
+//     treats such a channel as unreportable.
 //   - all other formats use full (nanosecond) resolution.
 func reportTimeResolution(cd llotypes.ChannelDefinition, channelID llotypes.ChannelID, optsCache *protocol.OptsCache) (res protocol.TimeResolution, ok bool) {
 	switch cd.ReportFormat {
 	case llotypes.ReportFormatEVMPremiumLegacy:
 		return protocol.ResolutionSeconds, true
 	case llotypes.ReportFormatEVMABIEncodeUnpacked, llotypes.ReportFormatEVMABIEncodeUnpackedExpr:
-		o, err := protocol.GetOpts[timeResolutionOpts](optsCache, channelID)
+		o, err := protocol.GetOptsOrDecode[timeResolutionOpts](optsCache, cd, channelID)
 		if err != nil {
 			return 0, false
 		}

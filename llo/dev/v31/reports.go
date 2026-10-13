@@ -392,11 +392,16 @@ func (o precursor) isReportable(channelID llotypes.ChannelID, minReportInterval 
 	if o.ObservationTimestampNanoseconds < protocol.SaturatingAdd(validAfter, minReportInterval) || o.ObservationTimestampNanoseconds <= validAfter {
 		return false
 	}
+	// The codec reads the same opts, so a channel whose opts do not decode
+	// cannot be encoded. Treat it as unreportable so validAfter does not advance
+	// over a round that emitted nothing.
+	res, ok := reportTimeResolution(cd, channelID, optsCache)
+	if !ok {
+		tally.note("channel opts cannot be decoded", channelID)
+		return false
+	}
 	// Require validAfter and the observation timestamp to fall in distinct ticks
 	// of the report format resolution, so the encoded validity window is not
 	// inverted.
-	if res, ok := reportTimeResolution(cd, channelID, optsCache); ok && tickOverlap(validAfter, o.ObservationTimestampNanoseconds, res) {
-		return false
-	}
-	return true
+	return !tickOverlap(validAfter, o.ObservationTimestampNanoseconds, res)
 }

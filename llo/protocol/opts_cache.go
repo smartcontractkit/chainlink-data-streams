@@ -193,6 +193,19 @@ func GetOpts[T any](c *OptsCache, channelID llotypes.ChannelID) (T, error) {
 	return result, nil
 }
 
+// GetOptsOrDecode returns the channel opts of type T from the cache, and
+// decodes the definition's raw opts on a cache miss or a nil cache. The
+// fallback keeps the result identical across oracles whether or not their
+// cache holds the channel. The same read-only rule as GetOpts applies.
+func GetOptsOrDecode[T any](c *OptsCache, cd llotypes.ChannelDefinition, channelID llotypes.ChannelID) (T, error) {
+	if c != nil {
+		if o, err := GetOpts[T](c, channelID); err == nil {
+			return o, nil
+		}
+	}
+	return decodeOpts[T](cd.Opts)
+}
+
 // decodeOpts is the single decode of raw channel opts. The cache and every
 // cache miss fallback go through it, so a definition reads the same whichever
 // path decodes it. JSON libraries disagree on some inputs, such as keys that

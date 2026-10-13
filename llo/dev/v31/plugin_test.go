@@ -533,6 +533,11 @@ func Test_TimeResolutionOverlap(t *testing.T) {
 		{"unpacked us same microsecond -> not reportable", llotypes.ReportFormatEVMABIEncodeUnpacked, []byte(`{"TimeResolution":"us"}`), sec1a, us1b, false},
 		{"unpacked us next microsecond -> reportable", llotypes.ReportFormatEVMABIEncodeUnpacked, []byte(`{"TimeResolution":"us"}`), sec1a, us2, true},
 		{"unpacked ns same microsecond -> reportable", llotypes.ReportFormatEVMABIEncodeUnpacked, []byte(`{"TimeResolution":"ns"}`), sec1a, us1b, true},
+		// The codec cannot encode a channel whose opts do not decode, so it must
+		// not be reportable, otherwise validAfter advances over a round that
+		// emitted nothing.
+		{"unpacked invalid resolution next second -> not reportable", llotypes.ReportFormatEVMABIEncodeUnpacked, []byte(`{"TimeResolution":"bogus"}`), sec1a, sec2, false},
+		{"unpacked malformed opts next second -> not reportable", llotypes.ReportFormatEVMABIEncodeUnpacked, []byte(`{"not":`), sec1a, sec2, false},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
