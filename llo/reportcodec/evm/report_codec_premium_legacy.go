@@ -222,6 +222,10 @@ func ExtractReportValues(report protocol.Report) (nativePrice, linkPrice decimal
 	return nativePrice, linkPrice, quote, nil
 }
 
+// extractPrice returns a fee token price. A nil price returns zero, which
+// CalculateFee turns into a zero fee, so a fee price outage does not stop the
+// channel from reporting. Channels that must always charge a fee set
+// DisableNilStreamValues, which makes a nil aggregate unreportable.
 func extractPrice(price protocol.StreamValue) (decimal.Decimal, error) {
 	switch p := price.(type) {
 	case *protocol.Decimal:
