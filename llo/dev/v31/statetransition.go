@@ -166,7 +166,7 @@ func (p *Plugin) StateTransition(ctx context.Context, seqNr uint64, _ ocrtypes.A
 				// Backfill: prevReportable and selection conditions must be met, or stays put.
 				out.ValidAfterNanoseconds[channelID] = prevValidAfter
 				if prevReportable(prev, channelID) {
-					if tsNanos, _, _, found := selectBackfillCandidate(effective, prev.validAfterNanoseconds, prev.observationTimestampNs, channelID, prev.opts); found {
+					if tsNanos, _, _, _, found := selectBackfillCandidate(effective, prev.validAfterNanoseconds, prev.observationTimestampNs, channelID, prev.opts); found {
 						out.ValidAfterNanoseconds[channelID] = tsNanos
 					}
 				}

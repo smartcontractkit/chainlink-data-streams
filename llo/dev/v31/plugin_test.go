@@ -990,17 +990,17 @@ func Test_HistoryBackfill(t *testing.T) {
 	defs := llotypes.ChannelDefinitions{targetCID: targetCD, backfillCID: backfillCD}
 
 	// Candidate selection advances with the watermark, then completes.
-	ts, raw, opts, ok := selectBackfillCandidate(defs, map[llotypes.ChannelID]uint64{backfillCID: 0}, tenSec, backfillCID, nil)
+	ts, raw, opts, _, ok := selectBackfillCandidate(defs, map[llotypes.ChannelID]uint64{backfillCID: 0}, tenSec, backfillCID, nil)
 	require.True(t, ok)
 	require.Equal(t, fiveSec, ts)
 	require.Equal(t, uint64(5), raw)
 	require.Equal(t, targetCID, opts.TargetChannelID)
 
-	ts2, _, _, ok2 := selectBackfillCandidate(defs, map[llotypes.ChannelID]uint64{backfillCID: fiveSec}, tenSec, backfillCID, nil)
+	ts2, _, _, _, ok2 := selectBackfillCandidate(defs, map[llotypes.ChannelID]uint64{backfillCID: fiveSec}, tenSec, backfillCID, nil)
 	require.True(t, ok2)
 	require.Equal(t, eightSec, ts2)
 
-	_, _, _, ok3 := selectBackfillCandidate(defs, map[llotypes.ChannelID]uint64{backfillCID: eightSec}, tenSec, backfillCID, nil)
+	_, _, _, _, ok3 := selectBackfillCandidate(defs, map[llotypes.ChannelID]uint64{backfillCID: eightSec}, tenSec, backfillCID, nil)
 	require.False(t, ok3, "backfill should be complete once watermark passes the last observation")
 
 	// Reports emits the backfill report, encoded with the target channel's format.
@@ -1236,20 +1236,22 @@ func Test_SelectBackfillCandidate_UnemittableRow(t *testing.T) {
 		targetCID   = llotypes.ChannelID(10)
 		backfillCID = llotypes.ChannelID(20)
 		tenSec      = uint64(10_000_000_000)
+		sevenSec    = uint64(7_000_000_000)
 	)
 	targetCD := llotypes.ChannelDefinition{ReportFormat: llotypes.ReportFormatJSON, Streams: []llotypes.Stream{{StreamID: 100, Aggregator: llotypes.AggregatorMedian}}}
 
-	// Row carries stream 999, not the target's stream 100, so
-	// BuildBackfillStreamValues would fail in Reports. The candidate must not
-	// be selectable: the watermark would otherwise advance past a row that
-	// never emitted, losing it permanently.
+	// Row 5 carries stream 999, not the target's stream 100, so
+	// BuildBackfillStreamValues would fail in Reports. Selecting it would advance
+	// the watermark past a row that never emitted, and refusing to select past it
+	// would stall the backfill on it for good: selection passes over it instead.
 	missingStream := llotypes.ChannelDefinition{
 		ReportFormat: llotypes.ReportFormatHistoryBackfill,
 		Opts:         []byte(`{"targetChannelId":10,"observations":{"5":{"999":"1.5"}}}`),
 	}
 	defs := llotypes.ChannelDefinitions{targetCID: targetCD, backfillCID: missingStream}
-	_, _, _, ok := selectBackfillCandidate(defs, map[llotypes.ChannelID]uint64{backfillCID: 0}, tenSec, backfillCID, nil)
+	_, _, _, skipped, ok := selectBackfillCandidate(defs, map[llotypes.ChannelID]uint64{backfillCID: 0}, tenSec, backfillCID, nil)
 	require.False(t, ok, "row missing a target stream must not be selectable")
+	require.Equal(t, 1, skipped)
 
 	// Same row shape, but the value is not parseable as a stream value.
 	badValue := llotypes.ChannelDefinition{
@@ -1257,8 +1259,20 @@ func Test_SelectBackfillCandidate_UnemittableRow(t *testing.T) {
 		Opts:         []byte(`{"targetChannelId":10,"observations":{"5":{"100":"not-a-number"}}}`),
 	}
 	defs[backfillCID] = badValue
-	_, _, _, ok = selectBackfillCandidate(defs, map[llotypes.ChannelID]uint64{backfillCID: 0}, tenSec, backfillCID, nil)
+	_, _, _, skipped, ok = selectBackfillCandidate(defs, map[llotypes.ChannelID]uint64{backfillCID: 0}, tenSec, backfillCID, nil)
 	require.False(t, ok, "row with an unparseable value must not be selectable")
+	require.Equal(t, 1, skipped)
+
+	// A later emittable row is selected past both unemittable ones.
+	defs[backfillCID] = llotypes.ChannelDefinition{
+		ReportFormat: llotypes.ReportFormatHistoryBackfill,
+		Opts:         []byte(`{"targetChannelId":10,"observations":{"5":{"999":"1.5"},"6":{"100":"not-a-number"},"7":{"100":"2.5"}}}`),
+	}
+	ts, raw, _, skipped, ok := selectBackfillCandidate(defs, map[llotypes.ChannelID]uint64{backfillCID: 0}, tenSec, backfillCID, nil)
+	require.True(t, ok, "an emittable row after unemittable ones must be selectable")
+	require.Equal(t, sevenSec, ts)
+	require.Equal(t, uint64(7), raw)
+	require.Equal(t, 2, skipped)
 }
 
 // withSupport returns a copy of the precursor with n oracles advertising a

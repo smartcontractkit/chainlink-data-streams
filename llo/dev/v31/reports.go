@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"sort"
+	"strconv"
 
 	"github.com/smartcontractkit/chainlink-common/pkg/logger"
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
@@ -69,24 +70,28 @@ func (p *Plugin) Reports(ctx context.Context, seqNr uint64, rawPrecursor ocr3_1t
 		cd := out.ChannelDefinitions[cid]
 
 		if cd.ReportFormat == llotypes.ReportFormatHistoryBackfill {
-			tsNanos, rawTS, opts, ok := selectBackfillCandidate(out.ChannelDefinitions, out.ValidAfterNanoseconds, out.ObservationTimestampNanoseconds, cid, channelOpts)
+			tsNanos, rawTS, opts, skipped, ok := selectBackfillCandidate(out.ChannelDefinitions, out.ValidAfterNanoseconds, out.ObservationTimestampNanoseconds, cid, channelOpts)
 			if !ok {
-				p.Logger.Warnw("backfill channel was reportable but selection failed", "channelID", cid, "stage", "Report", "seqNr", seqNr)
+				p.reportNotEmitted(seqNr, cid, cd.ReportFormat, "backfill_selection_failed")
 				continue
+			}
+			if skipped > 0 {
+				p.Logger.Errorw("Skipped unemittable backfill rows; the watermark advances past them", "channelID", cid, "skipped", skipped, "selectedTimestampNanoseconds", tsNanos, "stage", "Report", "seqNr", seqNr)
+				reportsNotEmittedMetric.WithLabelValues(strconv.FormatUint(uint64(p.DonID), 10), cd.ReportFormat.String(), "backfill_row_unemittable").Add(float64(skipped))
 			}
 			targetCD, exists := out.ChannelDefinitions[opts.TargetChannelID]
 			if !exists {
-				p.Logger.Warnw("missing target channel for history_backfill", "channelID", cid, "targetChannelID", opts.TargetChannelID, "stage", "Report", "seqNr", seqNr)
+				p.reportNotEmitted(seqNr, cid, cd.ReportFormat, "backfill_target_missing", "targetChannelID", opts.TargetChannelID)
 				continue
 			}
 			values, err := protocol.BuildBackfillStreamValues(targetCD, opts.Observations[rawTS])
 			if err != nil {
-				p.Logger.Warnw("Error building backfill stream values", "err", err, "channelID", cid, "stage", "Report", "seqNr", seqNr)
+				p.reportNotEmitted(seqNr, cid, cd.ReportFormat, "backfill_values_unbuildable", "err", err)
 				continue
 			}
 			resNanos, err := protocol.ReportTimestampResolutionNanos(targetCD)
 			if err != nil {
-				p.Logger.Warnw("Error resolving history_backfill report timestamp resolution", "err", err, "channelID", cid, "stage", "Report", "seqNr", seqNr)
+				p.reportNotEmitted(seqNr, cid, cd.ReportFormat, "backfill_resolution_invalid", "err", err)
 				continue
 			}
 			// The backfill report spans one resolution tick ending at the selected observation time.
@@ -110,12 +115,12 @@ func (p *Plugin) Reports(ctx context.Context, seqNr uint64, rawPrecursor ocr3_1t
 			p.captureReportTelemetry(reportForEncode, targetCD, out.LifeCycleStage)
 			codec, exists := p.ReportCodecs[targetCD.ReportFormat]
 			if !exists {
-				p.Logger.Warnw("Error encoding backfill report; codec missing for target ReportFormat", "reportFormat", targetCD.ReportFormat, "channelID", cid, "targetChannelID", opts.TargetChannelID, "stage", "Report", "seqNr", seqNr)
+				p.reportNotEmitted(seqNr, cid, targetCD.ReportFormat, "codec_missing", "targetChannelID", opts.TargetChannelID)
 				continue
 			}
 			encoded, err := codec.Encode(reportForEncode, targetCD, channelOpts)
 			if err != nil {
-				p.Logger.Warnw("Error encoding backfill report", "reportFormat", targetCD.ReportFormat, "err", err, "channelID", cid, "stage", "Report", "seqNr", seqNr)
+				p.reportNotEmitted(seqNr, cid, targetCD.ReportFormat, "encode_failed", "targetChannelID", opts.TargetChannelID, "err", err)
 				continue
 			}
 			rwis = append(rwis, ocr3types.ReportPlus[llotypes.ReportInfo]{
@@ -136,7 +141,7 @@ func (p *Plugin) Reports(ctx context.Context, seqNr uint64, rawPrecursor ocr3_1t
 		// encodes as its payload.
 		streams, err := protocol.EffectiveStreams(channelOpts, cd, cid)
 		if err != nil {
-			p.Logger.Warnw("Error encoding report; cannot derive effective streams", "err", err, "channelID", cid, "stage", "Report", "seqNr", seqNr)
+			p.reportNotEmitted(seqNr, cid, cd.ReportFormat, "effective_streams_underivable", "err", err)
 			continue
 		}
 		values := make([]protocol.StreamValue, 0, len(streams))
@@ -158,12 +163,12 @@ func (p *Plugin) Reports(ctx context.Context, seqNr uint64, rawPrecursor ocr3_1t
 
 		codec, exists := p.ReportCodecs[cd.ReportFormat]
 		if !exists {
-			p.Logger.Warnw("Error encoding report; codec missing for ReportFormat", "reportFormat", cd.ReportFormat, "channelID", cid, "stage", "Report", "seqNr", seqNr)
+			p.reportNotEmitted(seqNr, cid, cd.ReportFormat, "codec_missing")
 			continue
 		}
 		encoded, encErr := codec.Encode(report, cd, channelOpts)
 		if encErr != nil {
-			p.Logger.Warnw("Error encoding report", "reportFormat", cd.ReportFormat, "err", encErr, "channelID", cid, "stage", "Report", "seqNr", seqNr)
+			p.reportNotEmitted(seqNr, cid, cd.ReportFormat, "encode_failed", "err", encErr)
 			continue
 		}
 		rwis = append(rwis, ocr3types.ReportPlus[llotypes.ReportInfo]{
@@ -339,8 +344,11 @@ func (o precursor) isReportable(channelID llotypes.ChannelID, minReportInterval 
 			// condition to the watermark, so the two stay consistent.
 			return false
 		}
-		_, _, opts, ok := selectBackfillCandidate(o.ChannelDefinitions, o.ValidAfterNanoseconds, o.ObservationTimestampNanoseconds, channelID, optsCache)
+		_, _, opts, skipped, ok := selectBackfillCandidate(o.ChannelDefinitions, o.ValidAfterNanoseconds, o.ObservationTimestampNanoseconds, channelID, optsCache)
 		if !ok {
+			if skipped > 0 {
+				tally.note("no emittable backfill row", channelID, "skipped", skipped)
+			}
 			return false
 		}
 		// Backfill reports are encoded with the target channel's codec, so the
@@ -367,6 +375,12 @@ func (o precursor) isReportable(channelID llotypes.ChannelID, minReportInterval 
 	// in the state transition. Codec lookup and Encode are not: p.ReportCodecs
 	// is node-local, and reading it here would make the state transition
 	// node-dependent. Those failure modes remain outside this predicate.
+	//
+	// When one of them fails, Reports skips the channel and the watermark still
+	// advances over the round. This is deliberate. A deterministic failure fails
+	// again in every round, so holding the watermark would recover nothing and
+	// only widen the next report's interval. Reports logs each skip at error
+	// level and counts it in reportsNotEmittedMetric.
 	streams, err := protocol.EffectiveStreams(optsCache, cd, channelID)
 	if err != nil {
 		tally.note("cannot derive effective streams", channelID, "err", err)
