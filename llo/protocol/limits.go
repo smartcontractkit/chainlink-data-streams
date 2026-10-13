@@ -40,6 +40,13 @@ const (
 	// largest key any supported chain uses is well under this; the headroom
 	// stops a peer from padding its observation with oversized entries.
 	MaxPredecessorSignerBytes = 128
+	// MaxAttestedRetirementReportBytes bounds the attested predecessor
+	// retirement report an observation may carry. Every oracle hashes it once
+	// per signature while verifying, so the cap stops a peer from padding it up
+	// to the observation limit. The largest honest one, MaxRetirementReportChannels
+	// entries signed by MaxObservationPredecessorSignersLength oracles, encodes
+	// to about 137 KiB.
+	MaxAttestedRetirementReportBytes = 192 << 10
 	// Maximum allowed number of streams per channel
 	MaxStreamsPerChannel = 10_000
 	// MaxDecimalExponent bounds the absolute value of the base-10 exponent of

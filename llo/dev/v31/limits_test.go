@@ -356,8 +356,8 @@ func TestLimits_ObservationWorstCaseFitsDeclared(t *testing.T) {
 
 	// The largest retirement report a predecessor can attest: a validAfter for
 	// every channel, signed by every oracle.
-	validAfter := make(map[llotypes.ChannelID]uint64, protocol.MaxOutcomeChannelDefinitionsLength)
-	for i := range protocol.MaxOutcomeChannelDefinitionsLength {
+	validAfter := make(map[llotypes.ChannelID]uint64, protocol.MaxRetirementReportChannels)
+	for i := range protocol.MaxRetirementReportChannels {
 		validAfter[llotypes.ChannelID(math.MaxUint32-i)] = math.MaxUint64
 	}
 	retirementReport, err := protocol.StandardRetirementReportCodec{}.Encode(protocol.RetirementReport{
@@ -376,6 +376,8 @@ func TestLimits_ObservationWorstCaseFitsDeclared(t *testing.T) {
 	}
 	attestedBytes, err := proto.Marshal(attested)
 	require.NoError(t, err)
+	require.LessOrEqual(t, len(attestedBytes), protocol.MaxAttestedRetirementReportBytes,
+		"worst-case attested retirement report (%d bytes) exceeds the declared limit", len(attestedBytes))
 
 	removals := make(map[llotypes.ChannelID]struct{}, protocol.MaxObservationRemoveChannelIDsLength)
 	for i := range protocol.MaxObservationRemoveChannelIDsLength {

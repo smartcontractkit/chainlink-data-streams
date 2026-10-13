@@ -119,7 +119,7 @@ func Test_PluginScopedRetirementReportCache(t *testing.T) {
 
 			// config is invalid (no signers)
 			_, err = psrrc.CheckAttestedRetirementReport(exampleDigest, serializedValidArr)
-			require.EqualError(t, err, "Verify failed; attested report signer index out of bounds (got: 0, max: -1)")
+			require.EqualError(t, err, "Verify failed; attested report carries more signatures than signers (got: 4, max: 0)")
 
 			rrc.cfg = Config{Digest: exampleDigest, Signers: [][]byte{[]byte{0}, []byte{1}, []byte{2}, []byte{3}}, F: 1}
 
@@ -189,6 +189,24 @@ func Test_PluginScopedRetirementReportCache(t *testing.T) {
 
 			_, err = psrrc.CheckAttestedRetirementReport(exampleDigest, serializedDupArr)
 			require.EqualError(t, err, "Verify failed; duplicate signature from signer index 0")
+		})
+
+		t.Run("rejects a signer index out of bounds", func(t *testing.T) {
+			rrc.cfg = Config{Digest: exampleDigest, Signers: [][]byte{{0}, {1}, {2}, {3}}, F: 1}
+			rrc.exists = true
+
+			oobArr := protocol.AttestedRetirementReport{
+				RetirementReport: exampleUnattestedSerializedRetirementReport,
+				SeqNr:            42,
+				Sigs: []*protocol.AttributedOnchainSignature{
+					{Signer: 4, Signature: []byte("bar4")},
+				},
+			}
+			serializedOOBArr, err := proto.Marshal(&oobArr)
+			require.NoError(t, err)
+
+			_, err = psrrc.CheckAttestedRetirementReport(exampleDigest, serializedOOBArr)
+			require.EqualError(t, err, "Verify failed; attested report signer index out of bounds (got: 4, max: 3)")
 		})
 	})
 	t.Run("AttestedRetirementReport", func(t *testing.T) {

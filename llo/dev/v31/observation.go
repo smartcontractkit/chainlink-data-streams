@@ -290,6 +290,10 @@ func observationFromProto(main *protocol.LLOObservationProto) (Observation, erro
 		return Observation{}, fmt.Errorf("observation advertises too many report formats: %d (max %d)", len(main.SupportedReportFormats), protocol.MaxObservationSupportedReportFormatsLength)
 	}
 
+	if len(main.AttestedPredecessorRetirement) > protocol.MaxAttestedRetirementReportBytes {
+		return Observation{}, fmt.Errorf("observation carries an attested predecessor retirement of %d bytes (max %d)", len(main.AttestedPredecessorRetirement), protocol.MaxAttestedRetirementReportBytes)
+	}
+
 	if len(main.PredecessorSigners) > protocol.MaxObservationPredecessorSignersLength {
 		return Observation{}, fmt.Errorf("observation carries too many predecessor signers: %d (max %d)", len(main.PredecessorSigners), protocol.MaxObservationPredecessorSignersLength)
 	}

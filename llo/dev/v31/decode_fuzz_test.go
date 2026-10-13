@@ -76,6 +76,9 @@ func FuzzDecodeObservation(f *testing.F) {
 		if len(decoded.SupportedReportFormats) > protocol.MaxObservationSupportedReportFormatsLength {
 			t.Fatalf("decoded %d report formats, max %d", len(decoded.SupportedReportFormats), protocol.MaxObservationSupportedReportFormatsLength)
 		}
+		if len(decoded.AttestedPredecessorRetirement) > protocol.MaxAttestedRetirementReportBytes {
+			t.Fatalf("decoded an attested predecessor retirement of %d bytes, max %d", len(decoded.AttestedPredecessorRetirement), protocol.MaxAttestedRetirementReportBytes)
+		}
 		// Re-encoding the decoded set is what the wire has to be canonical in.
 		wire := sortedFormatsToWire(decoded.SupportedReportFormats)
 		for i := 1; i < len(wire); i++ {

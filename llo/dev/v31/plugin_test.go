@@ -1449,6 +1449,29 @@ func Test_Observation_SupportedReportFormats_RoundTrip(t *testing.T) {
 	require.ErrorContains(t, err, "advertises too many report formats")
 }
 
+func Test_DecodeObservation_AttestedPredecessorRetirementBound(t *testing.T) {
+	ctx := tests.Context(t)
+
+	atLimit, err := proto.Marshal(&protocol.LLOObservationProto{
+		UnixTimestampNanoseconds:      1,
+		AttestedPredecessorRetirement: make([]byte, protocol.MaxAttestedRetirementReportBytes),
+	})
+	require.NoError(t, err)
+	got, err := decodeObservation(ctx, frameObservation(nil, atLimit), nil, nil)
+	require.NoError(t, err)
+	require.Len(t, got.AttestedPredecessorRetirement, protocol.MaxAttestedRetirementReportBytes)
+
+	// Oversized reports are rejected at decode rather than reaching the
+	// verification in the state transition.
+	overLimit, err := proto.Marshal(&protocol.LLOObservationProto{
+		UnixTimestampNanoseconds:      1,
+		AttestedPredecessorRetirement: make([]byte, protocol.MaxAttestedRetirementReportBytes+1),
+	})
+	require.NoError(t, err)
+	_, err = decodeObservation(ctx, frameObservation(nil, overLimit), nil, nil)
+	require.ErrorContains(t, err, "attested predecessor retirement of")
+}
+
 func Test_Precursor_SupportByFormat_RoundTrip(t *testing.T) {
 	prec := precursor{
 		LifeCycleStage: protocol.LifeCycleStageProduction,
