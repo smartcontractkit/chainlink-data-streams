@@ -484,15 +484,6 @@ func (p *Plugin) ValidateObservation(ctx context.Context, seqNr uint64, _ ocrtyp
 	if len(observation.PredecessorSigners) != 0 && len(observation.AttestedPredecessorRetirement) == 0 {
 		return errors.New("PredecessorSigners is not empty even though this observation carries no AttestedPredecessorRetirement")
 	}
-	if len(observation.UpdateChannelDefinitions) > protocol.MaxObservationUpdateChannelDefinitionsLength {
-		return fmt.Errorf("UpdateChannelDefinitions is too long: %v vs %v", len(observation.UpdateChannelDefinitions), protocol.MaxObservationUpdateChannelDefinitionsLength)
-	}
-	if len(observation.RemoveChannelIDs) > protocol.MaxObservationRemoveChannelIDsLength {
-		return fmt.Errorf("RemoveChannelIDs is too long: %v vs %v", len(observation.RemoveChannelIDs), protocol.MaxObservationRemoveChannelIDsLength)
-	}
-	if len(observation.SupportedReportFormats) > protocol.MaxObservationSupportedReportFormatsLength {
-		return fmt.Errorf("SupportedReportFormats is too long: %v vs %v", len(observation.SupportedReportFormats), protocol.MaxObservationSupportedReportFormatsLength)
-	}
 
 	// Only the baseline checks run here. A definition is installed on more than
 	// f votes for its exact hash, so at least one honest oracle must have voted

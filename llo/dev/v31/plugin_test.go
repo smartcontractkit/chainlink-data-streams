@@ -1486,6 +1486,38 @@ func Test_Observation_SupportedReportFormats_RoundTrip(t *testing.T) {
 	require.ErrorContains(t, err, "advertises too many report formats")
 }
 
+// Test_DecodeObservation_ChannelVoteBounds checks that over-length channel
+// votes are rejected before any blob is fetched: the fetcher fails, so reaching
+// it would surface a fetch error instead.
+func Test_DecodeObservation_ChannelVoteBounds(t *testing.T) {
+	ctx := tests.Context(t)
+
+	removals := make([]uint32, protocol.MaxObservationRemoveChannelIDsLength+1)
+	for i := range removals {
+		removals[i] = uint32(i)
+	}
+	updates := make(map[uint32]*protocol.LLOChannelDefinitionProto, protocol.MaxObservationUpdateChannelDefinitionsLength+1)
+	for i := range protocol.MaxObservationUpdateChannelDefinitionsLength + 1 {
+		updates[uint32(i)] = &protocol.LLOChannelDefinitionProto{}
+	}
+
+	for _, tc := range []struct {
+		name string
+		main *protocol.LLOObservationProto
+		err  string
+	}{
+		{"RemoveChannelIDs", &protocol.LLOObservationProto{UnixTimestampNanoseconds: 1, RemoveChannelIDs: removals}, "removes too many channels"},
+		{"UpdateChannelDefinitions", &protocol.LLOObservationProto{UnixTimestampNanoseconds: 1, UpdateChannelDefinitions: updates}, "updates too many channels"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			raw, err := proto.Marshal(tc.main)
+			require.NoError(t, err)
+			_, err = decodeObservation(ctx, frameObservation([][]byte{validBlobHandleBytes()}, raw), &errBroadcaster{}, nil)
+			require.ErrorContains(t, err, tc.err)
+		})
+	}
+}
+
 func Test_DecodeObservation_AttestedPredecessorRetirementBound(t *testing.T) {
 	ctx := tests.Context(t)
 

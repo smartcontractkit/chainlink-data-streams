@@ -258,6 +258,14 @@ func decodeObservation(ctx context.Context, raw ocrtypes.Observation, bf ocr3_1t
 }
 
 func observationFromProto(main *protocol.LLOObservationProto) (Observation, error) {
+	// Bound the channel votes before copying them, and before decodeObservation
+	// fetches any blob, so an oversized observation costs no fetch.
+	if len(main.RemoveChannelIDs) > protocol.MaxObservationRemoveChannelIDsLength {
+		return Observation{}, fmt.Errorf("observation removes too many channels: %d (max %d)", len(main.RemoveChannelIDs), protocol.MaxObservationRemoveChannelIDsLength)
+	}
+	if len(main.UpdateChannelDefinitions) > protocol.MaxObservationUpdateChannelDefinitionsLength {
+		return Observation{}, fmt.Errorf("observation updates too many channels: %d (max %d)", len(main.UpdateChannelDefinitions), protocol.MaxObservationUpdateChannelDefinitionsLength)
+	}
 	obs := Observation{
 		AttestedPredecessorRetirement: main.AttestedPredecessorRetirement,
 		ShouldRetire:                  main.ShouldRetire,
