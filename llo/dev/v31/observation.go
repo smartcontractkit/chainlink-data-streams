@@ -196,6 +196,12 @@ func decodeObservation(ctx context.Context, raw ocrtypes.Observation, bf ocr3_1t
 	// Fetch and merge blob-carried stream values. The decompression budget is
 	// shared across handles, so a peer cannot multiply the work it imposes by
 	// naming several blobs.
+	//
+	// A handle is not checked against the citing oracle: any oracle may cite a
+	// blob another oracle submitted. This does not inflate contributions, since
+	// libocr guarantees at most one observation per oracle, and citing a peer's
+	// blob gains a faulty oracle nothing it could not get by submitting the
+	// same values itself.
 	budget := maxObservationDecompressedBytes
 	for _, h := range handles {
 		entry, ok := memo.get(h.key)
