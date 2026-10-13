@@ -781,6 +781,82 @@ func Test_TimestampedAggregate_CarryForwardOnAggregationFailure(t *testing.T) {
 	})
 }
 
+func Test_TimestampedAggregate_RejectsFarFutureTimestamp(t *testing.T) {
+	p := testPlugin(t) // F=1
+	defs := llotypes.ChannelDefinitions{1: {ReportFormat: llotypes.ReportFormatJSON, Streams: []llotypes.Stream{{StreamID: 100, Aggregator: llotypes.AggregatorMedian}}}}
+	key := histKey{streamID: 100, aggregator: llotypes.AggregatorMedian}
+	requirements := historyRequirements{depths: map[histKey]uint32{key: 5}}
+
+	const now = uint64(1_000_000_000_000)
+	limit := now + maxTimestampedFutureSkew
+
+	tsv := func(ts uint64, v int64) *protocol.TimestampedStreamValue {
+		return &protocol.TimestampedStreamValue{ObservedAtNanoseconds: ts, StreamValue: protocol.ToDecimal(decimal.NewFromInt(v))}
+	}
+	obs := func(ts uint64, v int64) map[llotypes.StreamID][]protocol.StreamValue {
+		return map[llotypes.StreamID][]protocol.StreamValue{100: {tsv(ts, v), tsv(ts, v), tsv(ts, v)}}
+	}
+	carryOf := func(c *protocol.TimestampedStreamValue) map[llotypes.StreamID]map[llotypes.Aggregator]*protocol.TimestampedStreamValue {
+		m := map[llotypes.StreamID]map[llotypes.Aggregator]*protocol.TimestampedStreamValue{}
+		if c != nil {
+			m[100] = map[llotypes.Aggregator]*protocol.TimestampedStreamValue{llotypes.AggregatorMedian: c}
+		}
+		return m
+	}
+	// round aggregates one round and returns the published value, the value
+	// carried into the next round and the history timestamps.
+	round := func(t *testing.T, carry *protocol.TimestampedStreamValue, observations map[llotypes.StreamID][]protocol.StreamValue) (published, carried *protocol.TimestampedStreamValue, history []uint64) {
+		t.Helper()
+		kv := newCountingKV()
+		store := newTestHistoryStore(t, kv)
+		require.NoError(t, requirements.apply(store))
+		next := carryOf(nil)
+		out := protocol.StreamAggregates{}
+		require.NoError(t, p.aggregate(carryOf(carry), next, defs, observations, out, store, requirements, now))
+		require.NoError(t, store.Flush(kv))
+
+		if v, ok := out[100][llotypes.AggregatorMedian]; ok {
+			published = v.(*protocol.TimestampedStreamValue)
+		}
+		return published, next[100][llotypes.AggregatorMedian], historyTimestamps(readHistoryRecords(t, kv, key.streamID, key.aggregator))
+	}
+
+	t.Run("far-future fresh aggregate is rejected and the carry kept", func(t *testing.T) {
+		published, carried, history := round(t, tsv(now-1, 5), obs(limit+1, 7))
+		require.Equal(t, now-1, published.ObservedAtNanoseconds)
+		require.Equal(t, now-1, carried.ObservedAtNanoseconds)
+		require.Empty(t, history, "a rejected aggregate must not reach history")
+	})
+
+	t.Run("far-future fresh aggregate without a carry leaves the pair absent", func(t *testing.T) {
+		published, carried, history := round(t, nil, obs(limit+1, 7))
+		require.Nil(t, published)
+		require.Nil(t, carried)
+		require.Empty(t, history)
+	})
+
+	t.Run("far-future carry is dropped and the fresh aggregate adopted", func(t *testing.T) {
+		published, carried, history := round(t, tsv(limit+1, 5), obs(now, 7))
+		require.Equal(t, now, published.ObservedAtNanoseconds)
+		require.Equal(t, now, carried.ObservedAtNanoseconds)
+		require.Equal(t, []uint64{now}, history)
+	})
+
+	t.Run("far-future carry is dropped when aggregation fails", func(t *testing.T) {
+		starved := map[llotypes.StreamID][]protocol.StreamValue{100: {tsv(now, 7)}}
+		published, carried, _ := round(t, tsv(limit+1, 5), starved)
+		require.Nil(t, published)
+		require.Nil(t, carried)
+	})
+
+	t.Run("aggregate exactly at the skew limit is adopted", func(t *testing.T) {
+		published, carried, history := round(t, tsv(now, 5), obs(limit, 7))
+		require.Equal(t, limit, published.ObservedAtNanoseconds)
+		require.Equal(t, limit, carried.ObservedAtNanoseconds)
+		require.Equal(t, []uint64{limit}, history)
+	})
+}
+
 func Test_Telemetry(t *testing.T) {
 	ctx := tests.Context(t)
 	otCh := make(chan *protocol.LLOOutcomeTelemetry, 8)

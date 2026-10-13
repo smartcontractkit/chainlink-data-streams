@@ -10,6 +10,7 @@ import (
 	"maps"
 	"sort"
 	"sync"
+	"time"
 
 	"github.com/smartcontractkit/chainlink-common/pkg/logger"
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
@@ -478,6 +479,11 @@ func applyChannelVotes(
 // adopted. Regular (non-timestamped) aggregates are recomputed fresh each round
 // and never persisted.
 //
+// A timestamped value more than maxTimestampedFutureSkew ahead of the round's
+// consensus observation timestamp is never adopted, and a carried value that
+// far ahead is dropped. Otherwise a single far-future timestamp would win the
+// newer-wins comparison and pin the pair, and its history, indefinitely.
+//
 // prevCarry holds the previous round's carry-forward values (read-only);
 // nextCarry is populated with the values to persist for the next round. A pair
 // that is not written into nextCarry is dropped from the store, which is how
@@ -532,6 +538,12 @@ func (p *Plugin) aggregate(
 			}
 
 			prevTSV := prevCarry[sid][agg]
+			if prevTSV != nil && tooFarAhead(prevTSV, observationTimestampNanoseconds) {
+				p.Logger.Errorw("Dropping carried-forward timestamped aggregate: timestamp too far ahead of consensus time",
+					"streamID", sid, "aggregator", agg, "observedAtNanoseconds", prevTSV.ObservedAtNanoseconds,
+					"observationTimestampNanoseconds", observationTimestampNanoseconds)
+				prevTSV = nil
+			}
 
 			aggF := protocol.GetAggregatorFuncV31(agg)
 			if aggF == nil {
@@ -567,6 +579,18 @@ func (p *Plugin) aggregate(
 
 			switch v := result.(type) {
 			case *protocol.TimestampedStreamValue:
+				if tooFarAhead(v, observationTimestampNanoseconds) {
+					// Treat as a failed aggregation: keep the carry and record
+					// nothing into history.
+					p.Logger.Errorw("Rejecting timestamped aggregate: timestamp too far ahead of consensus time",
+						"streamID", sid, "aggregator", agg, "observedAtNanoseconds", v.ObservedAtNanoseconds,
+						"observationTimestampNanoseconds", observationTimestampNanoseconds)
+					if prevTSV != nil {
+						m[agg] = prevTSV
+						keep(sid, agg, prevTSV)
+					}
+					continue
+				}
 				if prevTSV == nil || v.ObservedAtNanoseconds > prevTSV.ObservedAtNanoseconds {
 					// Strictly newer: adopt and persist.
 					m[agg] = v
@@ -589,6 +613,17 @@ func (p *Plugin) aggregate(
 		}
 	}
 	return nil
+}
+
+// maxTimestampedFutureSkew bounds how far a timestamped aggregate may sit
+// ahead of the round's consensus observation timestamp. It absorbs ordinary
+// skew between data source timestamps and oracle clocks.
+const maxTimestampedFutureSkew = uint64(time.Minute)
+
+// tooFarAhead reports whether tsv is timestamped beyond the allowed skew past
+// nowNanoseconds.
+func tooFarAhead(tsv *protocol.TimestampedStreamValue, nowNanoseconds uint64) bool {
+	return tsv.ObservedAtNanoseconds > nowNanoseconds+maxTimestampedFutureSkew
 }
 
 // appendHistory records a pair's agreed value for this round.
