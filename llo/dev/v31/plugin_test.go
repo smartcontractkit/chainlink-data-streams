@@ -1900,6 +1900,71 @@ func Test_FullRound_RecoverFromUnverifiableChannel(t *testing.T) {
 	require.Contains(t, kvChannelDefs(t, kv), llotypes.ChannelID(1))
 }
 
+// Test_VoteOnChannels_WithholdsOnlyInadmissibleChannels covers a desired set
+// holding channels that fail verification: the node withholds its vote for
+// those and still votes on every other update and removal.
+func Test_VoteOnChannels_WithholdsOnlyInadmissibleChannels(t *testing.T) {
+	channel := func(streamID llotypes.StreamID) llotypes.ChannelDefinition {
+		return llotypes.ChannelDefinition{
+			ReportFormat: llotypes.ReportFormatJSON,
+			Streams:      []llotypes.Stream{{StreamID: streamID, Aggregator: llotypes.AggregatorMedian}},
+		}
+	}
+	unknownAggregator := channel(200)
+	unknownAggregator.Streams[0].Aggregator = 99
+	tombstone := llotypes.ChannelDefinition{ReportFormat: llotypes.ReportFormatJSON, Tombstone: true}
+
+	vote := func(t *testing.T, p *Plugin, committed, desired llotypes.ChannelDefinitions) Observation {
+		t.Helper()
+		p.ChannelDefinitionCache = &mockChannelDefinitionCache{defs: desired}
+		var obs Observation
+		p.voteOnChannels(&obs, &kvState{channelDefinitions: committed})
+		return obs
+	}
+
+	t.Run("an inadmissible addition does not block the others", func(t *testing.T) {
+		committed := llotypes.ChannelDefinitions{1: channel(100), 9: tombstone}
+		desired := llotypes.ChannelDefinitions{1: channel(100), 2: unknownAggregator, 3: channel(300), 4: {ReportFormat: llotypes.ReportFormatJSON}}
+		obs := vote(t, testPlugin(t), committed, desired)
+		require.Equal(t, llotypes.ChannelDefinitions{3: channel(300)}, obs.UpdateChannelDefinitions)
+		require.Equal(t, map[llotypes.ChannelID]struct{}{9: {}}, obs.RemoveChannelIDs)
+	})
+	t.Run("an inadmissible change keeps the committed definition", func(t *testing.T) {
+		committed := llotypes.ChannelDefinitions{1: channel(100)}
+		changed := unknownAggregator
+		desired := llotypes.ChannelDefinitions{1: changed, 3: channel(300)}
+		obs := vote(t, testPlugin(t), committed, desired)
+		require.Equal(t, llotypes.ChannelDefinitions{3: channel(300)}, obs.UpdateChannelDefinitions)
+	})
+	t.Run("a committed channel this build rejects does not block the others", func(t *testing.T) {
+		p := testPlugin(t)
+		p.ReportCodecs = map[llotypes.ReportFormat]protocol.ReportCodec{
+			llotypes.ReportFormatJSON: strictJSONCodec{rejectStream: 999},
+		}
+		committed := llotypes.ChannelDefinitions{1: channel(999)}
+		desired := llotypes.ChannelDefinitions{1: channel(999), 3: channel(300)}
+		obs := vote(t, p, committed, desired)
+		require.Equal(t, llotypes.ChannelDefinitions{3: channel(300)}, obs.UpdateChannelDefinitions)
+	})
+	t.Run("a whole-set finding withholds every update but not removals", func(t *testing.T) {
+		committed := llotypes.ChannelDefinitions{9: tombstone}
+		desired := llotypes.ChannelDefinitions{}
+		for c := range protocol.MaxOutcomeChannelDefinitionsLength + 1 {
+			desired[llotypes.ChannelID(c+100)] = channel(100)
+		}
+		obs := vote(t, testPlugin(t), committed, desired)
+		require.Empty(t, obs.UpdateChannelDefinitions)
+		require.Equal(t, map[llotypes.ChannelID]struct{}{9: {}}, obs.RemoveChannelIDs)
+	})
+	t.Run("does not mutate the desired set", func(t *testing.T) {
+		committed := llotypes.ChannelDefinitions{1: channel(100)}
+		desired := llotypes.ChannelDefinitions{1: unknownAggregator, 2: unknownAggregator}
+		obs := vote(t, testPlugin(t), committed, desired)
+		require.Empty(t, obs.UpdateChannelDefinitions)
+		require.Equal(t, llotypes.ChannelDefinitions{1: unknownAggregator, 2: unknownAggregator}, desired)
+	})
+}
+
 // Test_Observation_RetirementCacheErrorsAreNotFatal guards the liveness fix:
 // both retirement caches read from node-local, asynchronously populated state,
 // so a transient failure must not fail the round. The vote is best-effort — a

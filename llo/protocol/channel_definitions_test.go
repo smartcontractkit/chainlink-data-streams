@@ -406,6 +406,68 @@ func Test_VerifyChannelDefinitions_AdmissionScope(t *testing.T) {
 	})
 }
 
+func Test_InadmissibleChannelIDs(t *testing.T) {
+	codecs := map[llotypes.ReportFormat]ReportCodec{0: stubReportCodec{}}
+	feedIDCodecs := map[llotypes.ReportFormat]ReportCodec{0: mockFeedIDCodec{feedID: [32]byte{0xab}, ok: true}}
+	channel := func(streamID llotypes.StreamID) llotypes.ChannelDefinition {
+		return llotypes.ChannelDefinition{Streams: []llotypes.Stream{{StreamID: streamID, Aggregator: llotypes.AggregatorMedian}}}
+	}
+	ids := func(channelIDs ...llotypes.ChannelID) map[llotypes.ChannelID]struct{} {
+		set := make(map[llotypes.ChannelID]struct{}, len(channelIDs))
+		for _, channelID := range channelIDs {
+			set[channelID] = struct{}{}
+		}
+		return set
+	}
+
+	t.Run("attributes findings to the admitted channels that produced them", func(t *testing.T) {
+		unknownAggregator := channel(2)
+		unknownAggregator.Streams[0].Aggregator = 99
+		defs := llotypes.ChannelDefinitions{1: channel(1), 2: unknownAggregator, 3: {}}
+		got, err := InadmissibleChannelIDsWithCache(codecs, defs, ids(1, 2, 3), nil)
+		require.NoError(t, err)
+		require.Equal(t, ids(2, 3), got)
+	})
+	t.Run("leaves out findings against committed channels", func(t *testing.T) {
+		// Channel 1 fails a baseline check but is not being admitted.
+		defs := llotypes.ChannelDefinitions{1: {}, 2: channel(2)}
+		got, err := InadmissibleChannelIDsWithCache(codecs, defs, ids(2), nil)
+		require.NoError(t, err)
+		require.Empty(t, got)
+	})
+	t.Run("a cross-definition finding implicates only the admitted side", func(t *testing.T) {
+		defs := llotypes.ChannelDefinitions{1: channel(1), 2: channel(1)}
+		for _, admitted := range []llotypes.ChannelID{1, 2} {
+			got, err := InadmissibleChannelIDsWithCache(feedIDCodecs, defs, ids(admitted), nil)
+			require.NoError(t, err)
+			require.Equal(t, ids(admitted), got)
+		}
+	})
+	t.Run("a whole-set budget is an error only when something is admitted", func(t *testing.T) {
+		defs := llotypes.ChannelDefinitions{}
+		for c := range MaxTotalOptsBytes/MaxChannelOptsBytes + 1 {
+			cd := channel(1)
+			cd.Opts = []byte(strings.Repeat("x", MaxChannelOptsBytes))
+			defs[llotypes.ChannelID(c+1)] = cd
+		}
+		got, err := InadmissibleChannelIDsWithCache(codecs, defs, ids(1), nil)
+		require.Error(t, err)
+		require.Empty(t, got)
+
+		got, err = InadmissibleChannelIDsWithCache(codecs, defs, ids(), nil)
+		require.NoError(t, err)
+		require.Empty(t, got)
+	})
+	t.Run("too many channels is an error", func(t *testing.T) {
+		defs := llotypes.ChannelDefinitions{}
+		for c := range MaxOutcomeChannelDefinitionsLength + 1 {
+			defs[llotypes.ChannelID(c+1)] = channel(1)
+		}
+		_, err := InadmissibleChannelIDsWithCache(codecs, defs, ids(1), nil)
+		require.EqualError(t, err, fmt.Sprintf("too many channels, got: %d/%d", MaxOutcomeChannelDefinitionsLength+1, MaxOutcomeChannelDefinitionsLength))
+	})
+}
+
 func Test_VerifyChannelDefinitions_SizeBudgets(t *testing.T) {
 	codecs := map[llotypes.ReportFormat]ReportCodec{0: stubReportCodec{}}
 

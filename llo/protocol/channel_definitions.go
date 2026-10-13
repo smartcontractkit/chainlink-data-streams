@@ -105,12 +105,11 @@ func (f admissionFinding) appliesTo(admitting map[llotypes.ChannelID]struct{}) b
 // For a DON where all participants share the same version this is unreachable,
 // as ValidateObservation runs the same baseline checks over the merged set,
 // but a version skew can make it reachable.
-// Report the finding and carry on, which is the same treatment the
-// admission-only findings get in voteOnChannels.
+// Report the finding and carry on.
 //
 // Attributing the findings instead lets the caller drop just those channels and
-// keep going, which is the same treatment the admission-only findings already
-// get. The returned error carries the whole-set baseline findings, which
+// keep going, which is the same treatment InadmissibleChannelIDsWithCache gives
+// the channels being admitted. The returned error carries the whole-set baseline findings, which
 // implicate no particular channel and so cannot be skipped selectively.
 func UnverifiableChannelIDs(codecs map[llotypes.ReportFormat]ReportCodec, channelDefs llotypes.ChannelDefinitions) (map[llotypes.ChannelID]struct{}, error) {
 	return UnverifiableChannelIDsWithCache(codecs, channelDefs, nil)
@@ -125,6 +124,55 @@ func UnverifiableChannelIDsWithCache(codecs map[llotypes.ReportFormat]ReportCode
 		ids[channelID] = struct{}{}
 	}
 	return ids, res.setErr()
+}
+
+// InadmissibleChannelIDsWithCache returns the channels of admitting that any
+// baseline or admission-only finding implicates, so that a node can withhold
+// its vote for just those instead of for the whole set. Findings against
+// channels outside admitting are left out: those are already committed, and
+// UnverifiableChannelIDs reports them.
+//
+// The returned error carries the findings that implicate no particular channel,
+// which cannot be withheld selectively. A whole-set budget only applies when
+// something is being admitted, the same as in VerifyChannelDefinitionsForAdmission.
+// The unique stream ID budget is reported only once no channel is implicated,
+// since withholding an implicated channel may bring the set back within it.
+//
+// The per-definition checks are memoized in cache. A nil cache memoizes
+// nothing.
+func InadmissibleChannelIDsWithCache(codecs map[llotypes.ReportFormat]ReportCodec, channelDefs llotypes.ChannelDefinitions, admitting map[llotypes.ChannelID]struct{}, cache *ChannelAnalysisCache) (map[llotypes.ChannelID]struct{}, error) {
+	res := analyzeChannelDefinitions(codecs, channelDefs, cache)
+	if res.wholeSetErr != nil {
+		return nil, res.wholeSetErr
+	}
+
+	ids := make(map[llotypes.ChannelID]struct{})
+	implicate := func(channelID llotypes.ChannelID) {
+		if _, ok := admitting[channelID]; ok {
+			ids[channelID] = struct{}{}
+		}
+	}
+	for channelID := range res.channelErrs {
+		implicate(channelID)
+	}
+
+	var setErr error
+	for _, finding := range res.admissionFindings {
+		if finding.wholeSet {
+			if finding.appliesTo(admitting) {
+				setErr = errors.Join(setErr, finding.err)
+			}
+			continue
+		}
+		for _, channelID := range finding.channels {
+			implicate(channelID)
+		}
+	}
+
+	if setErr == nil && len(ids) == 0 && len(admitting) > 0 && res.uniqueStreamIDs > MaxObservationStreamValuesLength {
+		setErr = fmt.Errorf("too many unique stream IDs, got: %d/%d", res.uniqueStreamIDs, MaxObservationStreamValuesLength)
+	}
+	return ids, setErr
 }
 
 // verifyResult is the outcome of analyzing a definition set: baseline findings

@@ -355,22 +355,15 @@ func (p *Plugin) voteOnChannels(obs *Observation, state *kvState) {
 	obs.RemoveChannelIDs = map[llotypes.ChannelID]struct{}{}
 
 	expectedChannelDefs := p.ChannelDefinitionCache.Definitions(state.channelDefinitions)
-	// Only the channels this node would vote to add or change are held to the
-	// admission-only checks; the ones already committed are not, or a
-	// grandfathered channel would freeze channel voting entirely.
-	admitting := protocol.ChangedChannelIDs(state.channelDefinitions, expectedChannelDefs)
-	if err := protocol.VerifyChannelDefinitionsForAdmissionWithCache(p.ReportCodecs, expectedChannelDefs, admitting, p.ChannelAnalysisCache); err != nil {
-		// Don't halt on an invalid channel-definitions file; just don't vote.
-		p.Logger.Errorw("ChannelDefinitionCache.Definitions is invalid", "err", err)
-		return
-	}
 
 	// Only tombstoned channels are removal candidates. A live channel missing
 	// from the desired set is not read as "remove": a cache that returns a
 	// partial set, before it has loaded or from a source it could not read,
 	// would otherwise get those channels removed, since every node would vote
 	// the same way from the same input. Removal stays a two step decision: the
-	// DON first agrees on the tombstone, then on dropping it.
+	// DON first agrees on the tombstone, then on dropping it. Reaping only
+	// shrinks the committed set, so it is voted on even when the desired set
+	// fails verification.
 	removable := llotypes.ChannelDefinitions{}
 	for channelID, cd := range state.channelDefinitions {
 		if cd.Tombstone {
@@ -383,7 +376,55 @@ func (p *Plugin) voteOnChannels(obs *Observation, state *kvState) {
 		obs.RemoveChannelIDs[channelID] = struct{}{}
 	}
 
-	obs.UpdateChannelDefinitions = channelUpdateVotes(state.channelDefinitions, expectedChannelDefs)
+	admissible, skipped, err := admissibleChannelDefinitions(p.ReportCodecs, state.channelDefinitions, expectedChannelDefs, p.ChannelAnalysisCache)
+	if len(skipped) > 0 {
+		p.Logger.Errorw("ChannelDefinitionCache.Definitions has inadmissible channels, not voting for them", "channelIDs", sortedChannelIDSet(skipped))
+	}
+	if err != nil {
+		// Don't halt on an invalid channel-definitions file; just don't vote
+		// for any update.
+		p.Logger.Errorw("ChannelDefinitionCache.Definitions is invalid", "err", err)
+		return
+	}
+	obs.UpdateChannelDefinitions = channelUpdateVotes(state.channelDefinitions, admissible)
+}
+
+// admissibleChannelDefinitions returns expected with every channel that fails
+// admission reverted to its committed definition, or dropped if it has none,
+// together with the channels it reverted. Only the channels being added or
+// changed are held to the admission-only checks; the ones already committed
+// are not, or a grandfathered channel would freeze channel voting entirely.
+//
+// Reverting a channel can expose a finding against another one, such as a
+// history backfill channel whose target was reverted, so the result is
+// verified once more and rejected as a whole if it still fails. An error means
+// no update is admissible.
+func admissibleChannelDefinitions(codecs map[llotypes.ReportFormat]protocol.ReportCodec, committed, expected llotypes.ChannelDefinitions, cache *protocol.ChannelAnalysisCache) (llotypes.ChannelDefinitions, map[llotypes.ChannelID]struct{}, error) {
+	admitting := protocol.ChangedChannelIDs(committed, expected)
+	skipped, err := protocol.InadmissibleChannelIDsWithCache(codecs, expected, admitting, cache)
+	if err != nil || len(skipped) == 0 {
+		return expected, skipped, err
+	}
+
+	// expected may share its backing map with the committed set.
+	admissible := cloneChannelDefinitions(expected)
+	for channelID := range skipped {
+		if prev, ok := committed[channelID]; ok {
+			admissible[channelID] = prev
+		} else {
+			delete(admissible, channelID)
+		}
+	}
+
+	admitting = protocol.ChangedChannelIDs(committed, admissible)
+	rest, err := protocol.InadmissibleChannelIDsWithCache(codecs, admissible, admitting, cache)
+	if err == nil && len(rest) > 0 {
+		err = fmt.Errorf("channels %v fail admission once channels %v are withheld", sortedChannelIDSet(rest), sortedChannelIDSet(skipped))
+	}
+	if err != nil {
+		return nil, skipped, err
+	}
+	return admissible, skipped, nil
 }
 
 // channelUpdateVotes returns the channels in expected that are new or changed
