@@ -31,4 +31,11 @@ func Test_RetirementReport_CheckCompatible(t *testing.T) {
 		err := rr(0).CheckCompatible(MaxSupportedProtocolVersion + 1)
 		require.ErrorContains(t, err, "this instance has unsupported protocol version")
 	})
+
+	t.Run("matches the versions OffchainConfig accepts", func(t *testing.T) {
+		for v := uint32(0); v <= MaxSupportedProtocolVersion; v++ {
+			require.NoError(t, OffchainConfig{ProtocolVersion: v}.Validate(), "v%d", v)
+		}
+		require.ErrorContains(t, OffchainConfig{ProtocolVersion: MaxSupportedProtocolVersion + 1}.Validate(), "unknown protocol version")
+	})
 }
