@@ -580,6 +580,53 @@ func Test_StateTransition_Retirement(t *testing.T) {
 	require.Equal(t, protocol.LifeCycleStageRetired, reports[0].ReportWithInfo.Info.LifeCycleStage)
 }
 
+// Test_StateTransition_RetirementThreshold pins retirement at f+1 votes out of
+// the 2f+1 observations a round may carry: f votes must not retire, and
+// staging instances never retire on votes.
+func Test_StateTransition_RetirementThreshold(t *testing.T) {
+	ctx := tests.Context(t)
+
+	// retireRound returns 2f+1 observations, the first votes of which vote to
+	// retire.
+	retireRound := func(t *testing.T, votes int) []ocrtypes.AttributedObservation {
+		aos := make([]ocrtypes.AttributedObservation, 0, 3)
+		for i := 0; i < 3; i++ {
+			obs := Observation{UnixTimestampNanoseconds: 2000, ShouldRetire: i < votes}
+			aos = append(aos, ao(i, mustEncodeObs(t, obs)))
+		}
+		return aos
+	}
+
+	productionPlugin := func(t *testing.T) (*Plugin, *memKV) {
+		p := testPlugin(t)
+		kv := newMemKV()
+		_, err := p.StateTransition(ctx, 1, ocrtypes.AttributedQuery{}, []ocrtypes.AttributedObservation{ao(0, nil), ao(1, nil), ao(2, nil)}, kv, testBlobs)
+		require.NoError(t, err)
+		return p, kv
+	}
+
+	for _, tc := range []struct {
+		name  string
+		setup func(t *testing.T) (*Plugin, *memKV)
+		votes int
+		want  llotypes.LifeCycleStage
+	}{
+		{"production with f votes", productionPlugin, 1, protocol.LifeCycleStageProduction},
+		{"production with f+1 votes", productionPlugin, 2, protocol.LifeCycleStageRetired},
+		{"staging with f+1 votes", func(t *testing.T) (*Plugin, *memKV) {
+			return stagedPlugin(t, &mockPredecessorRetirementReportCache{})
+		}, 2, protocol.LifeCycleStageStaging},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p, kv := tc.setup(t)
+			require.Equal(t, 1, p.F)
+			_, err := p.StateTransition(ctx, 2, ocrtypes.AttributedQuery{}, retireRound(t, tc.votes), kv, testBlobs)
+			require.NoError(t, err)
+			require.Equal(t, string(tc.want), string(kv.m[string(keyLifecycle)]))
+		})
+	}
+}
+
 // Test_ValidateObservation_RemoveAddSwapAtBudget pins that the set verified is
 // the one the observation advocates: a swap that keeps the definition set
 // inside a whole-set budget must validate, even though the committed set plus

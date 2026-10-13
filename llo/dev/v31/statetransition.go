@@ -115,6 +115,9 @@ func (p *Plugin) StateTransition(ctx context.Context, seqNr uint64, _ ocrtypes.A
 	} else {
 		out.LifeCycleStage = prev.lifeCycleStage
 	}
+	// ShouldRetire is a monotone onchain flag per config digest, so f+1 votes
+	// imply at least one honest oracle read it set. Requiring more would let f
+	// faulty oracles block retirement whenever only 2f+1 observations arrive.
 	if out.LifeCycleStage == protocol.LifeCycleStageProduction && tally.shouldRetireVotes > p.F {
 		p.Logger.Infow("Retiring production protocol instance ⚰️", "seqNr", seqNr)
 		out.LifeCycleStage = protocol.LifeCycleStageRetired
