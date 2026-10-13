@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"math"
 	"strconv"
 	"sync"
 	"testing"
@@ -1493,6 +1494,37 @@ func Test_StateTransition_ObservationTimestampDoesNotRegress(t *testing.T) {
 
 	// Forward again once the clock passes the floor.
 	require.Equal(t, uint64(2_000), agreedAt(4, ao(0, obsAt(2_000)), ao(1, obsAt(2_000)), ao(2, obsAt(2_000))))
+}
+
+// With at least 2f+1 observations and at most f of them byzantine, the median
+// stays within the honest range however the byzantine values are placed.
+func Test_MedianTimestamp_BoundedByHonestRange(t *testing.T) {
+	for f := 1; f <= 5; f++ {
+		for extraHonest := 0; extraHonest <= f; extraHonest++ {
+			honest := make([]uint64, f+1+extraHonest)
+			for i := range honest {
+				honest[i] = uint64(1_000 + i)
+			}
+			minHonest, maxHonest := honest[0], honest[len(honest)-1]
+			for _, byzantine := range []uint64{0, math.MaxUint64} {
+				ts := append([]uint64{}, honest...)
+				for range f {
+					ts = append(ts, byzantine)
+				}
+				median := medianTimestamp(ts)
+				assert.GreaterOrEqual(t, median, minHonest, "f=%d extraHonest=%d byzantine=%d", f, extraHonest, byzantine)
+				assert.LessOrEqual(t, median, maxHonest, "f=%d extraHonest=%d byzantine=%d", f, extraHonest, byzantine)
+			}
+		}
+	}
+}
+
+func Test_AheadOfClock(t *testing.T) {
+	const now = uint64(1_000_000_000_000)
+	assert.False(t, aheadOfClock(now, now))
+	assert.False(t, aheadOfClock(now+maxConsensusClockLead, now))
+	assert.True(t, aheadOfClock(now+maxConsensusClockLead+1, now))
+	assert.False(t, aheadOfClock(0, now))
 }
 
 func Test_Observation_StampsTheRoundNotTheSnapshot(t *testing.T) {

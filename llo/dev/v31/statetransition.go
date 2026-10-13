@@ -106,6 +106,7 @@ func (p *Plugin) StateTransition(ctx context.Context, seqNr uint64, _ ocrtypes.A
 		StreamAggregates:                protocol.StreamAggregates{},
 		SupportByFormat:                 supportVotesForEffectiveFormats(countSupportByFormat(codecSupport), effective),
 	}
+	p.warnIfAheadOfLocalClock(out.ObservationTimestampNanoseconds, seqNr)
 
 	// Lifecycle stage & promotion.
 	promotedValidAfter := map[llotypes.ChannelID]uint64(nil)
@@ -618,7 +619,7 @@ func (p *Plugin) aggregate(
 // maxTimestampedFutureSkew bounds how far a timestamped aggregate may sit
 // ahead of the round's consensus observation timestamp. It absorbs ordinary
 // skew between data source timestamps and oracle clocks.
-const maxTimestampedFutureSkew = uint64(time.Minute)
+const maxTimestampedFutureSkew = uint64(10 * time.Second)
 
 // tooFarAhead reports whether tsv is timestamped beyond the allowed skew past
 // nowNanoseconds.
@@ -748,6 +749,14 @@ func prevReportable(prev *kvState, channelID llotypes.ChannelID) bool {
 // next round to exceed that watermark and appendHistory only records a value
 // strictly newer than the newest stored one. A regression leaves every channel
 // unreportable and silently drops history appends until the clock catches back up.
+//
+// The quorum is at least 2f+1 observations, so with at most f faulty oracles
+// the median lies within the range of honest timestamps. An oracle with a
+// broken clock counts as faulty: f byzantine oracles plus one fast clock can
+// move the median ahead of real time, and the floor then holds every channel
+// unreportable until real time catches up. No deterministic rule can exclude
+// f+1 faults with this quorum, so the only defence is detection, see
+// warnIfAheadOfLocalClock.
 func (p *Plugin) agreedObservationTimestamp(timestampsNanoseconds []uint64, prevObservationTimestampNs uint64, seqNr uint64) uint64 {
 	median := medianTimestamp(timestampsNanoseconds)
 	if median < prevObservationTimestampNs {
@@ -756,6 +765,30 @@ func (p *Plugin) agreedObservationTimestamp(timestampsNanoseconds []uint64, prev
 		return prevObservationTimestampNs
 	}
 	return median
+}
+
+// maxConsensusClockLead bounds how far the agreed observation timestamp may
+// sit ahead of this node's clock before it is reported. It sits well above
+// NTP skew between oracle clocks, and low enough that a forward jump costing
+// more than a few rounds of reporting is caught.
+const maxConsensusClockLead = uint64(5 * time.Second)
+
+// warnIfAheadOfLocalClock logs when the agreed observation timestamp is ahead
+// of this node's clock by more than maxConsensusClockLead. It reads the local
+// clock, so it must only produce side effects and never feed the outcome.
+// Replayed rounds carry past timestamps and do not trigger it.
+func (p *Plugin) warnIfAheadOfLocalClock(agreedNanoseconds uint64, seqNr uint64) {
+	nowNanoseconds := uint64(max(time.Now().UnixNano(), 0))
+	if aheadOfClock(agreedNanoseconds, nowNanoseconds) {
+		p.Logger.Errorw("Agreed observation timestamp is ahead of the local clock; either this node's clock is behind or more than f oracles reported fast timestamps",
+			"seqNr", seqNr, "agreed", agreedNanoseconds, "local", nowNanoseconds, "lead", time.Duration(agreedNanoseconds-nowNanoseconds))
+	}
+}
+
+// aheadOfClock reports whether agreedNanoseconds leads nowNanoseconds by more
+// than maxConsensusClockLead.
+func aheadOfClock(agreedNanoseconds, nowNanoseconds uint64) bool {
+	return agreedNanoseconds > nowNanoseconds+maxConsensusClockLead
 }
 
 func medianTimestamp(timestampsNanoseconds []uint64) uint64 {
