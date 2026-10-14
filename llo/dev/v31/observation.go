@@ -131,8 +131,10 @@ func frameObservation(handles [][]byte, mainBytes []byte) []byte {
 //   - A blob-fetch failure is node-local and possibly transient: one oracle may
 //     fail to fetch while others succeed. Dropping the observation on only some
 //     oracles would make StateTransition non-deterministic and could halt the
-//     protocol. Callers inside StateTransition must propagate this (aborting and
-//     uniformly retrying the round) rather than skipping the observation.
+//     protocol. Callers inside StateTransition must propagate this rather than
+//     skip the observation. The error costs only this oracle's Prepare for the
+//     round: the others commit without it when they reach quorum, and this
+//     oracle adopts the committed state through state sync.
 type blobFetchError struct{ err error }
 
 func (e *blobFetchError) Error() string { return e.err.Error() }

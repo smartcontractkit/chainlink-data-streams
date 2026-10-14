@@ -311,9 +311,12 @@ func (p *Plugin) decodeObservations(ctx context.Context, aos []ocrtypes.Attribut
 			if errors.As(derr, &bfErr) {
 				// Node-local, possibly transient failure. Dropping this
 				// observation on only some oracles would make StateTransition
-				// non-deterministic; instead abort the round so every oracle
-				// retries uniformly. Determinism is not required when returning
-				// an error (see the ReportingPlugin contract).
+				// non-deterministic, so fail instead. Determinism is not
+				// required when returning an error (see the ReportingPlugin
+				// contract). libocr does not retry: this oracle sends no
+				// Prepare for the round and adopts the committed state through
+				// state sync. If more than f oracles fail, the round does not
+				// commit and a new epoch starts it over.
 				return observationTally{}, fmt.Errorf("failed to fetch blob for observation from oracle %v: %w", ao.Observer, derr)
 			}
 			// Unreachable while libocr runs ValidateObservation, which decodes
