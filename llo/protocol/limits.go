@@ -180,11 +180,12 @@ const (
 	// request. Note this is per pair, not per stream: a stream aggregated two
 	// ways holds two windows of up to this depth each.
 	MaxHistoryRecordsPerPair = 1024
-	// MaxHistoryPairs bounds how many pairs may have history at once. Pairs are
-	// ordered by (streamID, aggregator) and those beyond the cap are denied
-	// history; channels referencing them become unreportable rather than
-	// silently getting a shortened window. A stream aggregated two ways
-	// consumes two of these, not one.
+	// MaxHistoryPairs bounds how many pairs may have history at once. Pairs
+	// already holding a window come first, then new pairs, each ordered by
+	// (streamID, aggregator), and those beyond the cap are denied history,
+	// channels referencing them become unreportable rather than silently
+	// getting a shortened window. A stream aggregated two ways consumes
+	// two of these, not one.
 	MaxHistoryPairs = 128
 	// MaxHistoryTotalBytes bounds the history bytes rewritten per round. The
 	// worst case is MaxHistoryPairs * MaxHistoryPairRoundBytes, held under this

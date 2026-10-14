@@ -248,7 +248,7 @@ func Test_History_UnavailableOnDeniedPair(t *testing.T) {
 	for i := range protocol.MaxHistoryPairs + 1 {
 		required[histKey{streamID: llotypes.StreamID(i + 1), aggregator: llotypes.AggregatorMedian}] = 1
 	}
-	got := admitHistoryRequirements(required)
+	got := admitHistoryRequirements(required, nil)
 	require.NotEmpty(t, got.denied)
 
 	denied := got.sortedDenied()[0]

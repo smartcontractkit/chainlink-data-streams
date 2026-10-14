@@ -200,12 +200,12 @@ func BenchmarkComputeHistoryRequirements(b *testing.B) {
 			// depth * MaxHistoryRecordBytes per round and the byte budget ran out
 			// first. Chunking made that cost independent of depth, so the pair
 			// cap is now the only thing that can deny a window.
-			admitted := len(computeHistoryRequirements(defs, cache, lggr).depths)
+			admitted := len(computeHistoryRequirements(defs, cache, nil, lggr).depths)
 			b.ReportMetric(float64(admitted), "admittedPairs")
 
 			b.ResetTimer()
 			for range b.N {
-				computeHistoryRequirements(defs, cache, lggr)
+				computeHistoryRequirements(defs, cache, nil, lggr)
 			}
 		})
 	}

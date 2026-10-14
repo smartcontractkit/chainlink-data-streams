@@ -202,7 +202,7 @@ func (p *Plugin) StateTransition(ctx context.Context, seqNr uint64, _ ocrtypes.A
 	if err != nil {
 		return nil, err
 	}
-	requirements := computeHistoryRequirements(effective, prev.opts, p.Logger)
+	requirements := computeHistoryRequirements(effective, prev.opts, history.indexKeys(), p.Logger)
 	if err := requirements.apply(history); err != nil {
 		return nil, err
 	}

@@ -201,8 +201,9 @@
 //     any live channel's expressions ask for) from the channel definitions and
 //     their opts. Both are replicated and expression analysis is a pure function
 //     of the expression string, so every oracle computes the same depths — they
-//     become persisted state. Pairs beyond MaxHistoryPairs are denied history
-//     entirely, in (streamID, aggregator) order; channels reading them do not
+//     become persisted state. Pairs already holding a window are admitted
+//     first, then new pairs, each in (streamID, aggregator) order. Pairs beyond
+//     MaxHistoryPairs are denied history entirely; channels reading them do not
 //     report, rather than silently evaluating over a shorter window. The pair cap
 //     is the only admission rule: per-round cost no longer depends on depth, so
 //     MaxHistoryPairs of them fit the byte budget by construction.
