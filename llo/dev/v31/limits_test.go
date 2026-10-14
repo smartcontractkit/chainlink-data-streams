@@ -82,20 +82,24 @@ func TestLimits_HistoryFitsWriteBudgets(t *testing.T) {
 // measurement the cap is only a count, and the byte limit libocr enforces is
 // what actually fails the round.
 func TestLimits_HotStateWorstCaseFitsPerKeyLimit(t *testing.T) {
-	// An 18-digit price, the largest value a real feed produces. Note this is
-	// the honest worst case, not the adversarial one: a decimal's coefficient
-	// length is not yet bounded, so a byzantine value can still exceed this.
-	// Bounding the coefficient is a separate, consensus-affecting change.
-	price := decimal.RequireFromString("123456789012345.678")
+	// The adversarial worst case: the longest coefficient observation decode
+	// admits (MaxDecimalCoefficientBits), negative, at the most negative
+	// exponent, with maximal IDs and timestamps so every varint is at its
+	// widest. An aggregate is one of the observed values, so it is held to the
+	// same bounds.
+	coefficient := new(big.Int).Lsh(big.NewInt(1), protocol.MaxDecimalCoefficientBits)
+	coefficient.Sub(coefficient, big.NewInt(1)).Neg(coefficient)
+	price := decimal.NewFromBigInt(coefficient, -protocol.MaxDecimalExponent)
+	const maxTimestamp = uint64(math.MaxUint64)
 
 	carry := make(map[llotypes.StreamID]map[llotypes.Aggregator]*protocol.TimestampedStreamValue, protocol.MaxObservationStreamValuesLength)
 	aggregators := []llotypes.Aggregator{llotypes.AggregatorMedian, llotypes.AggregatorMode}
 	for i := range protocol.MaxObservationStreamValuesLength {
-		sid := llotypes.StreamID(i)
+		sid := llotypes.StreamID(math.MaxUint32 - i)
 		carry[sid] = make(map[llotypes.Aggregator]*protocol.TimestampedStreamValue, len(aggregators))
 		for _, agg := range aggregators {
 			carry[sid][agg] = &protocol.TimestampedStreamValue{
-				ObservedAtNanoseconds: 1_700_000_000_000_000_000,
+				ObservedAtNanoseconds: maxTimestamp,
 				StreamValue:           protocol.ToDecimal(price),
 			}
 		}
@@ -106,17 +110,19 @@ func TestLimits_HotStateWorstCaseFitsPerKeyLimit(t *testing.T) {
 	validAfter := make(map[llotypes.ChannelID]uint64, protocol.MaxOutcomeChannelDefinitionsLength)
 	reportable := make(map[llotypes.ChannelID]bool, protocol.MaxOutcomeChannelDefinitionsLength)
 	for i := range protocol.MaxOutcomeChannelDefinitionsLength {
-		validAfter[llotypes.ChannelID(i)] = 1_700_000_000_000_000_000
-		reportable[llotypes.ChannelID(i)] = true
+		cid := llotypes.ChannelID(math.MaxUint32 - i)
+		validAfter[cid] = maxTimestamp
+		reportable[cid] = true
 	}
 
 	kv := newMemKV()
-	require.NoError(t, writeHotState(kv, 1_700_000_000_000_000_000, validAfter, reportable, carry, logger.Test(t)))
+	require.NoError(t, writeHotState(kv, maxTimestamp, validAfter, reportable, carry, logger.Test(t)))
 
 	record, err := kv.Read(keyHotState)
 	require.NoError(t, err)
 	require.LessOrEqual(t, len(record), ocr3_1types.MaxMaxKeyValueValueBytes,
 		"worst-case r/agg record (%d bytes) exceeds the per-key limit", len(record))
+	t.Logf("worst-case r/agg record: %d bytes of %d", len(record), ocr3_1types.MaxMaxKeyValueValueBytes)
 }
 
 // TestLimits_HotStateTruncatesAboveCap covers the cap itself: above it, pairs
