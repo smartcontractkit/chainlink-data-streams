@@ -217,8 +217,14 @@ func channelHistorySatisfied(expressions []string, aggByStream map[llotypes.Stre
 			if !ok {
 				continue
 			}
-			// Reads through the memoized store, so this costs no extra state
-			// access.
+			// Usually a hit in the memoized store: evaluation already loaded
+			// the pairs of every channel that reached history binding. A
+			// channel skipped before binding, such as one missing an input
+			// value, can load a header here for the first time. That read is
+			// round local and feeds only this metric. Corruption it finds is
+			// logged by reset but not counted in historyCorruptMetric, which
+			// is captured before this, and the reset is not flushed, so the
+			// next round that loads the pair before flushing counts it.
 			h, err := history.Load(ref.StreamID, aggregator)
 			if err != nil || uint32(h.Len()) < ref.Count {
 				return false
