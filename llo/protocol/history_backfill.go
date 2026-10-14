@@ -216,6 +216,13 @@ func ObservationTimestampKeyToNanoseconds(rawKey uint64, res TimeResolution) (na
 // encodes timestamps at, which is also the unit of its backfill observation keys.
 // It is the only place that maps a report format to a resolution, so an unknown
 // format is an error rather than a guess.
+//
+// The resolution is read from the target's current definition every round, not
+// fixed when the backfill was admitted. Changing a target's TimeResolution while
+// a backfill for it is in progress therefore changes what the remaining keys
+// mean. Base validation rechecks every key against the new resolution, and
+// selection skips keys that overflow, so the result is deterministic, but the
+// keys must be rewritten in the new unit together with the target change.
 func TargetChannelTimeResolution(target llotypes.ChannelDefinition) (TimeResolution, error) {
 	switch target.ReportFormat {
 	case llotypes.ReportFormatEVMABIEncodeUnpacked, llotypes.ReportFormatEVMABIEncodeUnpackedExpr:
