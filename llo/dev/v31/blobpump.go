@@ -500,6 +500,7 @@ func (p *blobPump) observe(in pumpInput) (*blobSnapshot, error) {
 		p.lggr.Warnw("DataSource returned unrequested streams; dropping them", "seqNr", in.seqNr, "requested", len(in.streams), "returned", len(sv))
 		sv = requested
 	}
+	dropUnobservable(sv, p.lggr, in.seqNr)
 
 	payload, err := marshalStreamValues(sv)
 	if err != nil {
@@ -571,6 +572,27 @@ func (p *blobPump) latestSeqNr() uint64 {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return p.input.seqNr
+}
+
+// dropUnobservable unsets every value peers would reject on decode, such as one
+// over MaxDecimalCoefficientBits. Peers reject the whole observation on the
+// first such value, so one bad value from the DataSource would otherwise void
+// every other value this node contributes. The check is the receiver's own
+// decode, so both sides apply the same rules.
+func dropUnobservable(sv protocol.StreamValues, lggr logger.Logger, seqNr uint64) {
+	for id, v := range sv {
+		if v == nil {
+			continue
+		}
+		pb, err := protocol.StreamValueToProto(v)
+		if err == nil {
+			_, err = streamValueFromProtoAllowNil(pb)
+		}
+		if err != nil {
+			lggr.Warnw("Dropping stream value peers would reject", "streamID", id, "err", err, "seqNr", seqNr)
+			sv[id] = nil
+		}
+	}
 }
 
 // marshalStreamValues serializes stream values into the stream-values-only

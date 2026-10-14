@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"math"
+	"math/big"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -12,6 +13,7 @@ import (
 	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/smartcontractkit/chainlink-common/pkg/logger"
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
@@ -105,6 +107,30 @@ func Test_blobPump_DropsUnrequestedStreams(t *testing.T) {
 	snap, reason := p.Take(t.Context(), 3)
 	require.NotNil(t, snap, "reason: %s", reason)
 	require.Equal(t, 1, snap.streamCount)
+}
+
+func Test_dropUnobservable(t *testing.T) {
+	over := new(big.Int).Lsh(big.NewInt(1), protocol.MaxDecimalCoefficientBits+1)
+	sv := protocol.StreamValues{
+		1: protocol.ToDecimal(decimal.NewFromInt(7)),
+		2: protocol.ToDecimal(decimal.NewFromBigInt(over, 0)),
+		3: nil,
+	}
+	dropUnobservable(sv, logger.Test(t), 1)
+	assert.Equal(t, protocol.ToDecimal(decimal.NewFromInt(7)), sv[1])
+	assert.Nil(t, sv[2])
+	assert.Nil(t, sv[3])
+
+	// What is left decodes on the receiving side.
+	payload, err := marshalStreamValues(sv)
+	require.NoError(t, err)
+	raw, err := decodeBlobPayload(payload, maxDecompressedBlobPayloadBytes)
+	require.NoError(t, err)
+	chunk := &protocol.LLOObservationProto{}
+	require.NoError(t, proto.Unmarshal(raw, chunk))
+	require.Len(t, chunk.StreamValues, 1)
+	_, err = streamValueFromProtoAllowNil(chunk.StreamValues[1])
+	require.NoError(t, err)
 }
 
 // Test_blobPump_TakeIsSingleUse guards against two rounds referencing the same
