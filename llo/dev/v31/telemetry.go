@@ -77,11 +77,12 @@ func makeOutcomeTelemetry(out precursor, configDigest ocrtypes.ConfigDigest, seq
 
 // captureReportTelemetry emits the telemetry of reports produced in a stage
 // that emits telemetry, when this oracle is one telemetry emitter for the seqNr.
-func (p *Plugin) captureReportTelemetry(r protocol.Report, cd llotypes.ChannelDefinition, stage llotypes.LifeCycleStage) {
+// streams are the streams r.Values were built from, in the same order.
+func (p *Plugin) captureReportTelemetry(r protocol.Report, cd llotypes.ChannelDefinition, streams []llotypes.Stream, stage llotypes.LifeCycleStage) {
 	if p.ReportTelemetryCh == nil || !p.emitsTelemetry(stage) || !p.isTelemetryEmitter(r.SeqNr) {
 		return
 	}
-	rt, err := makeReportTelemetry(r, cd, p.DonID)
+	rt, err := makeReportTelemetry(r, cd, streams, p.DonID)
 	if err != nil {
 		p.Logger.Warnw("Error making report telemetry", "err", err)
 		return
@@ -93,10 +94,10 @@ func (p *Plugin) captureReportTelemetry(r protocol.Report, cd llotypes.ChannelDe
 	}
 }
 
-func makeReportTelemetry(r protocol.Report, cd llotypes.ChannelDefinition, donID uint32) (*protocol.LLOReportTelemetry, error) {
-	streams := make([]*protocol.LLOStreamDefinition, len(cd.Streams))
-	for i, s := range cd.Streams {
-		streams[i] = &protocol.LLOStreamDefinition{
+func makeReportTelemetry(r protocol.Report, cd llotypes.ChannelDefinition, streams []llotypes.Stream, donID uint32) (*protocol.LLOReportTelemetry, error) {
+	defs := make([]*protocol.LLOStreamDefinition, len(streams))
+	for i, s := range streams {
+		defs[i] = &protocol.LLOStreamDefinition{
 			StreamID:   s.StreamID,
 			Aggregator: uint32(s.Aggregator),
 		}
@@ -124,7 +125,7 @@ func makeReportTelemetry(r protocol.Report, cd llotypes.ChannelDefinition, donID
 		ObservationTimestampNanoseconds: r.ObservationTimestampNanoseconds,
 		ReportFormat:                    uint32(cd.ReportFormat),
 		Specimen:                        r.Specimen,
-		StreamDefinitions:               streams,
+		StreamDefinitions:               defs,
 		StreamValues:                    svs,
 		ChannelOpts:                     cd.Opts,
 		SeqNr:                           r.SeqNr,

@@ -111,7 +111,7 @@ func (p *Plugin) Reports(ctx context.Context, seqNr uint64, rawPrecursor ocr3_1t
 			reportForEncode := report
 			reportForEncode.ChannelID = opts.TargetChannelID
 
-			p.captureReportTelemetry(reportForEncode, targetCD, out.LifeCycleStage)
+			p.captureReportTelemetry(reportForEncode, targetCD, targetCD.Streams, out.LifeCycleStage)
 			codec, exists := p.ReportCodecs[targetCD.ReportFormat]
 			if !exists {
 				p.reportNotEmitted(seqNr, cid, targetCD.ReportFormat, "codec_missing", "targetChannelID", opts.TargetChannelID)
@@ -158,7 +158,7 @@ func (p *Plugin) Reports(ctx context.Context, seqNr uint64, rawPrecursor ocr3_1t
 			Specimen:                        out.LifeCycleStage != protocol.LifeCycleStageProduction,
 		}
 
-		p.captureReportTelemetry(report, cd, out.LifeCycleStage)
+		p.captureReportTelemetry(report, cd, streams, out.LifeCycleStage)
 
 		codec, exists := p.ReportCodecs[cd.ReportFormat]
 		if !exists {
