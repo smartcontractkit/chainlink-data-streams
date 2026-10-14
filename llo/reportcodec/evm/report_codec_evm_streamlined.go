@@ -3,6 +3,7 @@ package evm
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"math"
 
@@ -34,6 +35,9 @@ type ReportCodecEVMStreamlined struct {
 }
 
 func (rc ReportCodecEVMStreamlined) Encode(r protocol.Report, cd llotypes.ChannelDefinition, optsCache *protocol.OptsCache) (payload []byte, err error) {
+	if r.Specimen {
+		return nil, errors.New("ReportCodecEVMStreamlined does not support encoding specimen reports")
+	}
 	opts, getErr := protocol.GetOpts[ReportFormatEVMStreamlinedOpts](optsCache, r.ChannelID)
 	if getErr != nil {
 		return nil, fmt.Errorf("opts not in cache for channel %d: %w", r.ChannelID, getErr)
