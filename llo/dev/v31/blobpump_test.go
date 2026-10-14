@@ -92,6 +92,21 @@ func Test_blobPump_TakeKicksNextCycle(t *testing.T) {
 	require.Eventually(t, func() bool { return p.Cycles() >= 2 }, tests.WaitTimeout(t), 10*time.Millisecond)
 }
 
+func Test_blobPump_DropsUnrequestedStreams(t *testing.T) {
+	ds := mockDS()
+	ds.vals[999] = protocol.ToDecimal(decimal.NewFromInt(9))
+	p := testPump(t, ds, newFakeBroadcaster(), time.Minute)
+
+	p.SetInput(pumpInputFor(2))
+	p.Take(t.Context(), 2)
+	require.Eventually(t, func() bool { return p.Cycles() >= 1 }, tests.WaitTimeout(t), 10*time.Millisecond)
+
+	p.SetInput(pumpInputFor(3))
+	snap, reason := p.Take(t.Context(), 3)
+	require.NotNil(t, snap, "reason: %s", reason)
+	require.Equal(t, 1, snap.streamCount)
+}
+
 // Test_blobPump_TakeIsSingleUse guards against two rounds referencing the same
 // blob handle.
 func Test_blobPump_TakeIsSingleUse(t *testing.T) {

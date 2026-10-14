@@ -489,6 +489,17 @@ func (p *blobPump) observe(in pumpInput) (*blobSnapshot, error) {
 	if err := p.ds.Observe(ctx, sv, opts); err != nil {
 		return nil, fmt.Errorf("DataSource.Observe error: %w", err)
 	}
+	// Broadcast only the requested streams. Peers reject an observation over
+	// MaxObservationStreamValuesLength, so unrequested keys from the
+	// DataSource could void this node's whole contribution.
+	if len(sv) > len(in.streams) {
+		requested := make(protocol.StreamValues, len(in.streams))
+		for _, sid := range in.streams {
+			requested[sid] = sv[sid]
+		}
+		p.lggr.Warnw("DataSource returned unrequested streams; dropping them", "seqNr", in.seqNr, "requested", len(in.streams), "returned", len(sv))
+		sv = requested
+	}
 
 	payload, err := marshalStreamValues(sv)
 	if err != nil {
