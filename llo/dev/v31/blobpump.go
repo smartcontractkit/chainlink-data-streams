@@ -63,6 +63,10 @@ const (
 	// roughly one blob per round, so the unexpired-blob budget declared to
 	// libocr grows with the lifetime; this keeps that budget sane.
 	MaxBlobLifetimeRounds = 64
+	// MinMaxSnapshotRounds bounds MaxSnapshotRounds from below. A cycle gathers
+	// the snapshot for the round that kicked it, and the snapshot is first taken
+	// by the next round, so a window of one round discards every snapshot.
+	MinMaxSnapshotRounds = 2
 	// BlobBroadcastAttempts is how many times one cycle tries to broadcast the
 	// payload it gathered.
 	BlobBroadcastAttempts = 3
@@ -108,6 +112,9 @@ func ResolveBlobRounds(maxSnapshotRounds, blobLifetimeRounds uint64) (uint64, ui
 	}
 	if blobLifetimeRounds == 0 {
 		blobLifetimeRounds = DefaultBlobLifetimeRounds
+	}
+	if maxSnapshotRounds < MinMaxSnapshotRounds {
+		return 0, 0, fmt.Errorf("MaxSnapshotRounds (%d) is below MinMaxSnapshotRounds (%d)", maxSnapshotRounds, MinMaxSnapshotRounds)
 	}
 	if blobLifetimeRounds > MaxBlobLifetimeRounds {
 		return 0, 0, fmt.Errorf("BlobLifetimeRounds (%d) exceeds MaxBlobLifetimeRounds (%d)", blobLifetimeRounds, MaxBlobLifetimeRounds)

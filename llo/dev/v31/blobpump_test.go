@@ -696,6 +696,11 @@ func Test_ResolveBlobRounds(t *testing.T) {
 		assert.Equal(t, uint64(DefaultBlobLifetimeRounds), life)
 	})
 
+	t.Run("rejects a snapshot window below the minimum", func(t *testing.T) {
+		_, _, err := ResolveBlobRounds(1, 0)
+		require.ErrorContains(t, err, "below MinMaxSnapshotRounds")
+	})
+
 	t.Run("rejects a lifetime past the maximum", func(t *testing.T) {
 		_, _, err := ResolveBlobRounds(0, MaxBlobLifetimeRounds+1)
 		require.ErrorContains(t, err, "exceeds MaxBlobLifetimeRounds")
@@ -707,7 +712,7 @@ func Test_ResolveBlobRounds(t *testing.T) {
 	})
 
 	t.Run("rejects a lifetime shorter than the margin", func(t *testing.T) {
-		_, _, err := ResolveBlobRounds(1, 1)
+		_, _, err := ResolveBlobRounds(MinMaxSnapshotRounds, 1)
 		require.ErrorContains(t, err, "rounds of fetch margin")
 	})
 

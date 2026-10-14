@@ -47,9 +47,10 @@ type PluginFactoryParams struct {
 	DonID uint32
 	// MaxSnapshotRounds overrides DefaultMaxSnapshotRounds if non-zero. Bounds
 	// how stale this node's own stream values may be when it references them,
-	// and nothing else; it does not affect what peers can fetch. Must be >0,
-	// since a snapshot gathered for one sequence number is consumed by a later
-	// one, and must leave BlobFetchMarginRounds below BlobLifetimeRounds.
+	// and nothing else; it does not affect what peers can fetch. Must be at
+	// least MinMaxSnapshotRounds, since a snapshot gathered for one sequence
+	// number is consumed by a later one, and must leave BlobFetchMarginRounds
+	// below BlobLifetimeRounds.
 	MaxSnapshotRounds uint64
 	// BlobLifetimeRounds overrides DefaultBlobLifetimeRounds if non-zero. Bounds
 	// how long peers can still fetch a broadcast blob, and nothing else; it does
