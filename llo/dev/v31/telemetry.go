@@ -105,8 +105,9 @@ func makeReportTelemetry(r protocol.Report, cd llotypes.ChannelDefinition, strea
 	svs := make([]*protocol.LLOStreamValue, len(r.Values))
 	for i, v := range r.Values {
 		if v == nil {
-			// Missing stream value (allowed when DisableNilStreamValues is false);
-			// emit an empty entry rather than panicking.
+			// Missing stream value (allowed when DisableNilStreamValues is
+			// false). Emit an entry with an empty value, which no present value
+			// marshals to, so consumers can tell the two apart.
 			svs[i] = &protocol.LLOStreamValue{}
 			continue
 		}
