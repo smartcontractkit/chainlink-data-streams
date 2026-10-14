@@ -11,7 +11,8 @@ import (
 // selectBackfillCandidate returns the next history-backfill observation to emit
 // for backfillCID: its timestamp (nanoseconds), the raw opts key, and the parsed
 // opts. ok is false when the channel is not a valid, in-progress backfill (no
-// definition, wrong format, missing target, no watermark, or backfill complete).
+// definition, wrong format, missing or tombstoned target, no watermark, or
+// backfill complete).
 //
 // The watermark is validAfter[backfillCID] (the last emitted backfill observation
 // time); the next candidate is the smallest emittable observation strictly after
@@ -30,8 +31,10 @@ func selectBackfillCandidate(defs llotypes.ChannelDefinitions, validAfter map[ll
 	if err != nil {
 		return 0, 0, protocol.HistoryBackfillOpts{}, 0, false
 	}
+	// A tombstoned target no longer reports, so its history is not backfilled
+	// either. The watermark holds, and backfill resumes if the target returns.
 	target, exists := defs[o.TargetChannelID]
-	if !exists {
+	if !exists || target.Tombstone {
 		return 0, 0, protocol.HistoryBackfillOpts{}, 0, false
 	}
 	res, err := protocol.TargetChannelTimeResolution(target)

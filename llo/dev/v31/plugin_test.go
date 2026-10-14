@@ -1326,6 +1326,31 @@ func Test_SelectBackfillCandidate_UnemittableRow(t *testing.T) {
 	require.Equal(t, 2, skipped)
 }
 
+func Test_SelectBackfillCandidate_TombstonedTarget(t *testing.T) {
+	const (
+		targetCID   = llotypes.ChannelID(10)
+		backfillCID = llotypes.ChannelID(20)
+		tenSec      = uint64(10_000_000_000)
+	)
+	targetCD := llotypes.ChannelDefinition{ReportFormat: llotypes.ReportFormatJSON, Streams: []llotypes.Stream{{StreamID: 100, Aggregator: llotypes.AggregatorMedian}}}
+	defs := llotypes.ChannelDefinitions{
+		targetCID: targetCD,
+		backfillCID: {
+			ReportFormat: llotypes.ReportFormatHistoryBackfill,
+			Opts:         []byte(`{"targetChannelId":10,"observations":{"5":{"100":"1.5"}}}`),
+		},
+	}
+	validAfter := map[llotypes.ChannelID]uint64{backfillCID: 0}
+
+	_, _, _, _, ok := selectBackfillCandidate(defs, validAfter, tenSec, backfillCID, nil)
+	require.True(t, ok)
+
+	targetCD.Tombstone = true
+	defs[targetCID] = targetCD
+	_, _, _, _, ok = selectBackfillCandidate(defs, validAfter, tenSec, backfillCID, nil)
+	require.False(t, ok, "a tombstoned target must not be backfilled")
+}
+
 // withSupport returns a copy of the precursor with n oracles advertising a
 // report codec for every format its channels need, so tests that are not about
 // the support gate are unaffected by it. Backfill channels are resolved to
