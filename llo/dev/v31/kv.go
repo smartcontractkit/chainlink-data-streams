@@ -259,6 +259,13 @@ func writeCodecSupport(w ocr3_1types.KeyValueStateReadWriter, support map[common
 }
 
 // readChannelState reads and decodes the c/defs record.
+//
+// Unlike decodeHistoryIndex it applies no count cap. The record is this
+// plugin's own committed state, written only by StateTransition from verified
+// definitions, whose count is capped at MaxOutcomeChannelDefinitionsLength.
+// libocr bounds the record to MaxMaxKeyValueValueBytes, which bounds what the
+// decode can allocate. A peer cannot inject records, and every oracle reads
+// the same bytes.
 func readChannelState(r ocr3_1types.KeyValueStateReader) (llotypes.ChannelDefinitions, error) {
 	b, err := r.Read(keyChannelState)
 	if err != nil {
@@ -281,7 +288,10 @@ func readChannelState(r ocr3_1types.KeyValueStateReader) (llotypes.ChannelDefini
 	return defs, nil
 }
 
-// readHotState reads and decodes the r/agg record into s.
+// readHotState reads and decodes the r/agg record into s. Counts are not
+// capped, for the same reasons as in readChannelState: writeHotState truncates
+// aggregates to MaxPersistedAggregates, channels are capped by verification,
+// and the record is bounded in bytes.
 func readHotState(r ocr3_1types.KeyValueStateReader, s *kvState) error {
 	b, err := r.Read(keyHotState)
 	if err != nil {
@@ -549,6 +559,11 @@ func writeHistoryIndex(w ocr3_1types.KeyValueStateReadWriter, keys []histKey) er
 // round from the required set, which is capped there, with orphans dropped in
 // the same commit — so a longer index is corruption and is rejected instead of
 // sizing an allocation from it.
+//
+// The rejection fails every StateTransition, as an undecodable c/defs or r/agg
+// record does, rather than resetting history. Only a writer bug can produce it,
+// and every oracle reads the same bytes, so the DON halts together and loudly
+// instead of silently discarding every window.
 func decodeHistoryIndex(b []byte) ([]histKey, error) {
 	n := len(b) / 8
 	if n > protocol.MaxHistoryPairs {
