@@ -185,7 +185,7 @@ func TestAdmitHistoryRequirements(t *testing.T) {
 		got := admitHistoryRequirements(map[histKey]uint32{
 			{streamID: 1, aggregator: llotypes.AggregatorMedian}: 10,
 			{streamID: 2, aggregator: llotypes.AggregatorMedian}: 20,
-		}, logger.Test(t))
+		})
 		assert.Len(t, got.depths, 2)
 		assert.Empty(t, got.denied)
 	})
@@ -196,7 +196,7 @@ func TestAdmitHistoryRequirements(t *testing.T) {
 		for i := range protocol.MaxHistoryPairs + 5 {
 			required[histKey{streamID: llotypes.StreamID(i + 1), aggregator: llotypes.AggregatorMedian}] = 1
 		}
-		got := admitHistoryRequirements(required, logger.Test(t))
+		got := admitHistoryRequirements(required)
 		assert.Len(t, got.depths, protocol.MaxHistoryPairs)
 		require.Len(t, got.denied, 5)
 		// Admission is by (streamID, aggregator) order, so the denied set is the
@@ -215,7 +215,7 @@ func TestAdmitHistoryRequirements(t *testing.T) {
 		for i := range protocol.MaxHistoryPairs {
 			required[histKey{streamID: llotypes.StreamID(i + 1), aggregator: llotypes.AggregatorMedian}] = protocol.MaxHistoryRecordsPerPair
 		}
-		got := admitHistoryRequirements(required, logger.Test(t))
+		got := admitHistoryRequirements(required)
 		assert.Len(t, got.depths, protocol.MaxHistoryPairs)
 		assert.Empty(t, got.denied)
 	})
@@ -226,9 +226,9 @@ func TestAdmitHistoryRequirements(t *testing.T) {
 		for i := range protocol.MaxHistoryPairs + 10 {
 			required[histKey{streamID: llotypes.StreamID(i + 1), aggregator: llotypes.AggregatorMedian}] = 8
 		}
-		first := admitHistoryRequirements(required, logger.Test(t))
+		first := admitHistoryRequirements(required)
 		for range 20 {
-			again := admitHistoryRequirements(required, logger.Test(t))
+			again := admitHistoryRequirements(required)
 			require.Equal(t, first.depths, again.depths)
 			require.Equal(t, first.sortedDenied(), again.sortedDenied())
 		}

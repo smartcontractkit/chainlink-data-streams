@@ -206,10 +206,15 @@ func (p *Plugin) StateTransition(ctx context.Context, seqNr uint64, _ ocrtypes.A
 	if err := requirements.apply(history); err != nil {
 		return nil, err
 	}
-	for _, key := range requirements.sortedDenied() {
-		// Channels reading this pair cannot evaluate and so will not report.
+	if denied := requirements.sortedDenied(); len(denied) > 0 {
+		// Channels reading these pairs cannot evaluate and so will not report.
+		// One line per round, however many pairs are denied.
+		pairs := make([]string, len(denied))
+		for i, key := range denied {
+			pairs[i] = fmt.Sprintf("%d/%d", key.streamID, key.aggregator)
+		}
 		p.Logger.Errorw("Stream history denied; channels reading it will not report",
-			"streamID", key.streamID, "aggregator", key.aggregator, "seqNr", seqNr)
+			"denied", len(denied), "pairs", pairs, "maxPairs", protocol.MaxHistoryPairs, "seqNr", seqNr)
 	}
 
 	// Aggregation (regular fresh; timestamped with cross-round carry-forward via

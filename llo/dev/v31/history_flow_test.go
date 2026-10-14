@@ -8,7 +8,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/smartcontractkit/chainlink-common/pkg/logger"
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
 	"github.com/smartcontractkit/chainlink-common/pkg/utils/tests"
 
@@ -249,7 +248,7 @@ func Test_History_UnavailableOnDeniedPair(t *testing.T) {
 	for i := range protocol.MaxHistoryPairs + 1 {
 		required[histKey{streamID: llotypes.StreamID(i + 1), aggregator: llotypes.AggregatorMedian}] = 1
 	}
-	got := admitHistoryRequirements(required, logger.Test(t))
+	got := admitHistoryRequirements(required)
 	require.NotEmpty(t, got.denied)
 
 	denied := got.sortedDenied()[0]
