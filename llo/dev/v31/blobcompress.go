@@ -57,9 +57,12 @@ func getBlobCompressor() (blobCompressor, error) {
 			return
 		}
 		// WithDecoderMaxMemory bounds the decompressed size to a safe limit.
+		// WithDecodeAllCapLimit bounds each DecodeAll call to the capacity of
+		// its destination, which decodeBlobPayload sizes to the call's budget.
 		decoder, err := zstd.NewReader(nil,
 			zstd.WithDecoderConcurrency(0),
 			zstd.WithDecoderMaxMemory(maxDecompressedBlobPayloadBytes),
+			zstd.WithDecodeAllCapLimit(true),
 		)
 		if err != nil {
 			blobZstdErr = fmt.Errorf("new zstd decoder: %w", err)
@@ -101,9 +104,10 @@ func encodeBlobPayload(raw []byte) ([]byte, error) {
 
 // decodeBlobPayload reverses encodeBlobPayload. The payload is untrusted, so
 // the decompressed size is bounded by maxOut: cheaply up front via the zstd
-// frame header when it declares a content size, and again after the fact in
-// case it does not. maxOut is a caller-supplied budget (see decodeObservation)
-// and is clamped to maxDecompressedBlobPayloadBytes.
+// frame header when it declares a content size, and during decompression via
+// the capacity of the destination buffer in case it does not. maxOut is a
+// caller-supplied budget (see decodeObservation) and is clamped to
+// maxDecompressedBlobPayloadBytes.
 func decodeBlobPayload(payload []byte, maxOut int) ([]byte, error) {
 	if len(payload) == 0 {
 		return nil, fmt.Errorf("empty blob payload")
@@ -136,12 +140,19 @@ func decodeBlobPayload(payload []byte, maxOut int) ([]byte, error) {
 		if hdr.HasFCS && hdr.FrameContentSize > uint64(maxOut) {
 			return nil, fmt.Errorf("declared decompressed blob payload too large: %d > %d bytes", hdr.FrameContentSize, maxOut)
 		}
-		out, err := c.decoder.DecodeAll(body, nil)
+		// The decoder stops once the output outgrows the destination capacity,
+		// so the per-call budget holds while decompressing, not only after.
+		// encodeBlobPayload always declares the content size, so an honest
+		// payload allocates exactly its size here.
+		capacity := maxOut
+		if hdr.HasFCS {
+			capacity = int(hdr.FrameContentSize) //nolint:gosec // bounded by maxOut above
+		}
+		out, err := c.decoder.DecodeAll(body, make([]byte, 0, capacity))
 		if err != nil {
 			return nil, fmt.Errorf("decompress blob payload: %w", err)
 		}
-		// The shared decoder only enforces the process-wide ceiling, so this
-		// check is what enforces the (possibly tighter) per-call budget.
+		// The cap limit is checked per block, so a block can overshoot it.
 		if len(out) > maxOut {
 			return nil, fmt.Errorf("decompressed blob payload too large: %d > %d bytes", len(out), maxOut)
 		}
