@@ -785,7 +785,7 @@ func channelDefinitionsChanged(prev, next llotypes.ChannelDefinitions) bool {
 // prevReportable reports whether the channel was reportable in the previous
 // round. This reads the reportability decision persisted by the previous
 // round's StateTransition, which already accounts for min-interval,
-// seconds-resolution overlap, and DisableNilStreamValues. It is exactly
+// seconds-resolution overlap, and nil stream values. It is exactly
 // the value the v30 code derives from previousOutcome.IsReportable.
 func prevReportable(prev *kvState, channelID llotypes.ChannelID) bool {
 	return prev.reportedLastRound[channelID]

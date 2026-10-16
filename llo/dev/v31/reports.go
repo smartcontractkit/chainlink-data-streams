@@ -338,15 +338,6 @@ func (o precursor) isReportable(channelID llotypes.ChannelID, minReportInterval 
 		// above already established the target exists.
 		return o.formatIsEncodable(o.ChannelDefinitions[opts.TargetChannelID].ReportFormat, f, channelID, tally)
 	}
-	// When DisableNilStreamValues is set, every stream must have a (non-nil)
-	// aggregate value for the channel to be reportable.
-	if cd.DisableNilStreamValues {
-		for _, strm := range cd.Streams {
-			if o.StreamAggregates[strm.StreamID][strm.Aggregator] == nil {
-				return false
-			}
-		}
-	}
 	// Reportability and emission must agree on what the report carries. Reports
 	// derives the report's values from protocol.EffectiveStreams, so the same
 	// derivation has to succeed here: if it fails there, the report is skipped
@@ -368,17 +359,17 @@ func (o precursor) isReportable(channelID llotypes.ChannelID, minReportInterval 
 		tally.note("cannot derive effective streams", channelID, "err", err)
 		return false
 	}
-	// Calculated streams are derived state, and unlike observed streams a
-	// missing one cannot be reported around: the codec has nothing to encode.
-	// A channel whose expressions failed (bad input, eval error, or history
-	// still warming up) has no aggregate for them. Observed streams stay
-	// nil-permitted here; that is what DisableNilStreamValues above governs.
+	// Every value the report carries must be present. Codecs do not encode a
+	// missing value, and a missing calculated stream means its expression failed
+	// (bad input, eval error, or history still warming up). Holding the
+	// watermark over such a round lets the next report cover it once the values
+	// are back.
+	//
+	// This applies regardless of DisableNilStreamValues, which v31 ignores and
+	// treats as always set.
 	for _, strm := range streams {
-		if strm.Aggregator != llotypes.AggregatorCalculated {
-			continue
-		}
 		if o.StreamAggregates[strm.StreamID][strm.Aggregator] == nil {
-			tally.note("nil calculated stream value", channelID, "streamID", strm.StreamID)
+			tally.note("nil stream value", channelID, "streamID", strm.StreamID, "aggregator", strm.Aggregator)
 			return false
 		}
 	}

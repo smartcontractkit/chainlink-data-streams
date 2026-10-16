@@ -400,18 +400,28 @@ func Test_StateTransition_ContributionFloor(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, out.StreamAggregates, llotypes.StreamID(100))
 
-	// Two do not: no aggregate, so no report. The channel itself stays
-	// reportable, since nil observed stream values are permitted unless the
-	// definition sets DisableNilStreamValues; the report is then dropped at
-	// encode time, exactly as for any other missing observed value.
+	// Two do not: no aggregate, so the channel is unreportable rather than
+	// dropped at encode time.
 	prec, err = p.StateTransition(ctx, 4, ocrtypes.AttributedQuery{}, valObs(3_000, 2), kv, testBlobs)
 	require.NoError(t, err)
 	out, err = decodePrecursor(prec)
 	require.NoError(t, err)
 	require.NotContains(t, out.StreamAggregates, llotypes.StreamID(100))
+	validAfter := out.ValidAfterNanoseconds[1]
 	reports, err := p.Reports(ctx, 4, prec)
 	require.NoError(t, err)
 	require.Empty(t, reports)
+
+	// The watermark holds over the round that emitted nothing, so the next
+	// report covers it.
+	prec, err = p.StateTransition(ctx, 5, ocrtypes.AttributedQuery{}, valObs(4_000, 3), kv, testBlobs)
+	require.NoError(t, err)
+	out, err = decodePrecursor(prec)
+	require.NoError(t, err)
+	require.Equal(t, validAfter, out.ValidAfterNanoseconds[1])
+	reports, err = p.Reports(ctx, 5, prec)
+	require.NoError(t, err)
+	require.Len(t, reports, 1)
 }
 
 func Test_Precursor_RoundTrip_And_Determinism(t *testing.T) {
@@ -620,6 +630,57 @@ func Test_DisableNilStreamValues(t *testing.T) {
 	require.Equal(t, []llotypes.ChannelID{1}, full.withSupport(1).reportableChannels(0, 0, protocol.NewOptsCache(), nil))
 }
 
+// v31 ignores DisableNilStreamValues: a nil value makes any channel
+// unreportable, whatever its format and whichever position the value has.
+func Test_IsReportable_NilStreamValue(t *testing.T) {
+	streams := []llotypes.Stream{
+		{StreamID: 100, Aggregator: llotypes.AggregatorMedian},
+		{StreamID: 200, Aggregator: llotypes.AggregatorMedian},
+		{StreamID: 300, Aggregator: llotypes.AggregatorQuote},
+	}
+	allExcept := func(missing llotypes.StreamID) protocol.StreamAggregates {
+		aggs := protocol.StreamAggregates{}
+		for _, strm := range streams {
+			if strm.StreamID != missing {
+				aggs[strm.StreamID] = map[llotypes.Aggregator]protocol.StreamValue{strm.Aggregator: protocol.ToDecimal(decimal.NewFromInt(1))}
+			}
+		}
+		return aggs
+	}
+	for _, format := range []llotypes.ReportFormat{
+		llotypes.ReportFormatJSON,
+		llotypes.ReportFormatEVMPremiumLegacy,
+		llotypes.ReportFormatEVMABIEncodeUnpacked,
+		llotypes.ReportFormatEVMStreamlined,
+		llotypes.ReportFormatCapabilityTrigger,
+	} {
+		for _, tc := range []struct {
+			missing    llotypes.StreamID
+			reportable bool
+		}{
+			{0, true},
+			{100, false},
+			{300, false},
+		} {
+			t.Run(format.String()+"/missing="+strconv.Itoa(int(tc.missing)), func(t *testing.T) {
+				o := precursor{
+					LifeCycleStage:                  protocol.LifeCycleStageProduction,
+					ObservationTimestampNanoseconds: 2 * uint64(time.Second),
+					ChannelDefinitions:              llotypes.ChannelDefinitions{1: {ReportFormat: format, Streams: streams}},
+					ValidAfterNanoseconds:           map[llotypes.ChannelID]uint64{1: uint64(time.Second)},
+					StreamAggregates:                allExcept(tc.missing),
+				}
+				got := o.withSupport(1).reportableChannels(0, 0, protocol.NewOptsCache(), nil)
+				if tc.reportable {
+					require.Equal(t, []llotypes.ChannelID{1}, got)
+				} else {
+					require.Empty(t, got)
+				}
+			})
+		}
+	}
+}
+
 func Test_DisableNilStreamValues_CalculatedStreams(t *testing.T) {
 	const (
 		base1 = llotypes.StreamID(100)
@@ -695,6 +756,13 @@ func Test_DisableNilStreamValues_CalculatedStreams(t *testing.T) {
 		// report. Treating the channel as reportable would advance validAfter
 		// over a round that emitted nothing.
 		o := mkPrec(false, validOpts, baseStreams, baseAggregates())
+		require.Empty(t, o.withSupport(1).reportableChannels(0, 0, populatedCache(o), nil))
+	})
+
+	t.Run("DisableNilStreamValues=false, nil observed value -> not reportable", func(t *testing.T) {
+		aggs := evaluatedAggregates()
+		delete(aggs, base2)
+		o := mkPrec(false, validOpts, withCalculated, aggs)
 		require.Empty(t, o.withSupport(1).reportableChannels(0, 0, populatedCache(o), nil))
 	})
 
@@ -1714,11 +1782,12 @@ func Test_StateTransition_CodecSupportAccumulatesAcrossRounds(t *testing.T) {
 		1: {ReportFormat: llotypes.ReportFormatJSON, Streams: []llotypes.Stream{{StreamID: 1, Aggregator: llotypes.AggregatorMedian}}},
 	}))
 
+	values := protocol.StreamValues{1: protocol.ToDecimal(decimal.NewFromInt(1))}
 	obsJSON := func(ts uint64) []byte {
-		return mustEncodeObs(t, Observation{UnixTimestampNanoseconds: ts, SupportedReportFormats: formatSet(llotypes.ReportFormatJSON)})
+		return mustEncodeObs(t, Observation{UnixTimestampNanoseconds: ts, StreamValues: values, SupportedReportFormats: formatSet(llotypes.ReportFormatJSON)})
 	}
 	obsNone := func(ts uint64) []byte {
-		return mustEncodeObs(t, Observation{UnixTimestampNanoseconds: ts, SupportedReportFormats: formatSet()})
+		return mustEncodeObs(t, Observation{UnixTimestampNanoseconds: ts, StreamValues: values, SupportedReportFormats: formatSet()})
 	}
 
 	// All N oracles advertise JSON.
@@ -2058,7 +2127,7 @@ func Test_UnreportableTally_CollapsesPerChannelWarnings(t *testing.T) {
 		ObservationTimestampNanoseconds: 1_000,
 		ChannelDefinitions:              llotypes.ChannelDefinitions{},
 		ValidAfterNanoseconds:           map[llotypes.ChannelID]uint64{},
-		StreamAggregates:                protocol.StreamAggregates{},
+		StreamAggregates:                protocol.StreamAggregates{1: {llotypes.AggregatorMedian: protocol.ToDecimal(decimal.NewFromInt(1))}},
 	}
 	for i := 1; i <= channels; i++ {
 		cid := llotypes.ChannelID(i) //nolint:gosec // G115 bounded by the loop

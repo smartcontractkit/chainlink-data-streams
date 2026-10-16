@@ -122,7 +122,7 @@ type kvState struct {
 	validAfterNanoseconds map[llotypes.ChannelID]uint64
 	// reportedLastRound[cid] is the persisted reportability decision from the
 	// previous round's StateTransition. It bakes in every reportability check
-	// (min-interval, seconds-resolution, DisableNilStreamValues), so the current
+	// (min-interval, seconds-resolution, nil stream values), so the current
 	// round can advance validAfter faithfully without re-deriving it from
 	// aggregates that are not persisted.
 	reportedLastRound map[llotypes.ChannelID]bool
