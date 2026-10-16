@@ -138,12 +138,12 @@ type kvState struct {
 //
 // cache may be nil, in which case the channel definitions are always re-read
 // and decoded.
-func loadKVState(r ocr3_1types.KeyValueStateReader, cache *protocol.ChannelCache) (*kvState, error) {
+func loadKVState(r ocr3_1types.KeyValueStateReader, cache *protocol.ChannelCache, lggr logger.Logger) (*kvState, error) {
 	s, err := loadColdKVState(r, cache)
 	if err != nil {
 		return nil, err
 	}
-	if err := readHotState(r, s); err != nil {
+	if err := readHotState(r, s, lggr); err != nil {
 		return nil, err
 	}
 	return s, nil
@@ -292,7 +292,7 @@ func readChannelState(r ocr3_1types.KeyValueStateReader) (llotypes.ChannelDefini
 // capped, for the same reasons as in readChannelState: writeHotState truncates
 // aggregates to MaxPersistedAggregates, channels are capped by verification,
 // and the record is bounded in bytes.
-func readHotState(r ocr3_1types.KeyValueStateReader, s *kvState) error {
+func readHotState(r ocr3_1types.KeyValueStateReader, s *kvState, lggr logger.Logger) error {
 	b, err := r.Read(keyHotState)
 	if err != nil {
 		return fmt.Errorf("read hot state: %w", err)
@@ -316,12 +316,19 @@ func readHotState(r ocr3_1types.KeyValueStateReader, s *kvState) error {
 		if err != nil {
 			return fmt.Errorf("unmarshal carry-forward aggregate for stream %d: %w", sa.StreamID, err)
 		}
+		agg := llotypes.Aggregator(sa.Aggregator)
 		tsv, ok := sv.(*protocol.TimestampedStreamValue)
 		if !ok {
-			// Only timestamped values are persisted; ignore anything else.
+			// writeHotState only persists timestamped values. Skip anything else
+			// rather than fail: the record is replicated, so an error would halt
+			// every node on the same state.
+			lggr.Errorw("Discarding non-timestamped carry-forward aggregate from hot state",
+				"streamID", sa.StreamID,
+				"aggregator", agg,
+				"type", fmt.Sprintf("%T", sv),
+			)
 			continue
 		}
-		agg := llotypes.Aggregator(sa.Aggregator)
 		if s.carryForward[sa.StreamID] == nil {
 			s.carryForward[sa.StreamID] = map[llotypes.Aggregator]*protocol.TimestampedStreamValue{}
 		}

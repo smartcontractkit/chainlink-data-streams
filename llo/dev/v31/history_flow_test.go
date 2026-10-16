@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/smartcontractkit/chainlink-common/pkg/logger"
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
 	"github.com/smartcontractkit/chainlink-common/pkg/utils/tests"
 
@@ -282,7 +283,7 @@ func storedHotState(t *testing.T, kv *memKV) *kvState {
 		reportedLastRound:     map[llotypes.ChannelID]bool{},
 		carryForward:          map[llotypes.StreamID]map[llotypes.Aggregator]*protocol.TimestampedStreamValue{},
 	}
-	require.NoError(t, readHotState(kv, s))
+	require.NoError(t, readHotState(kv, s, logger.Test(t)))
 	return s
 }
 

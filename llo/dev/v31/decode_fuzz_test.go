@@ -6,6 +6,7 @@ import (
 
 	"github.com/shopspring/decimal"
 
+	"github.com/smartcontractkit/chainlink-common/pkg/logger"
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
 
 	protocol "github.com/smartcontractkit/chainlink-data-streams/llo/protocol"
@@ -178,7 +179,7 @@ func FuzzLoadKVState(f *testing.F) {
 		if _, err := loadColdKVState(kv, protocol.NewChannelCache()); err != nil {
 			return
 		}
-		s, err := loadKVState(kv, nil)
+		s, err := loadKVState(kv, nil, logger.Nop())
 		if err != nil {
 			return
 		}

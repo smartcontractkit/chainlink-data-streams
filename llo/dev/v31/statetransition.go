@@ -70,7 +70,7 @@ func (p *Plugin) StateTransition(ctx context.Context, seqNr uint64, _ ocrtypes.A
 		return encodePrecursor(precursor{LifeCycleStage: stage})
 	}
 
-	prev, err := loadKVState(kvRW, p.ChannelCache)
+	prev, err := loadKVState(kvRW, p.ChannelCache, p.Logger)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load KV state: %w", err)
 	}

@@ -79,7 +79,7 @@ func kvHotState(t *testing.T, kv *memKV) *kvState {
 		reportedLastRound:     map[llotypes.ChannelID]bool{},
 		carryForward:          map[llotypes.StreamID]map[llotypes.Aggregator]*protocol.TimestampedStreamValue{},
 	}
-	require.NoError(t, readHotState(kv, s))
+	require.NoError(t, readHotState(kv, s, logger.Test(t)))
 	return s
 }
 
@@ -2283,6 +2283,6 @@ func readHotStateForTest(t *testing.T, kv *memKV) *kvState {
 		reportedLastRound:     map[llotypes.ChannelID]bool{},
 		carryForward:          map[llotypes.StreamID]map[llotypes.Aggregator]*protocol.TimestampedStreamValue{},
 	}
-	require.NoError(t, readHotState(kv, s))
+	require.NoError(t, readHotState(kv, s, logger.Test(t)))
 	return s
 }

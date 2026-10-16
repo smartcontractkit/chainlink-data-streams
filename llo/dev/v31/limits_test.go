@@ -151,7 +151,7 @@ func TestLimits_HotStateTruncatesAboveCap(t *testing.T) {
 		reportedLastRound:     map[llotypes.ChannelID]bool{},
 		carryForward:          map[llotypes.StreamID]map[llotypes.Aggregator]*protocol.TimestampedStreamValue{},
 	}
-	require.NoError(t, readHotState(kv, state))
+	require.NoError(t, readHotState(kv, state, logger.Test(t)))
 
 	require.Len(t, state.carryForward, protocol.MaxPersistedAggregates)
 	// The kept pairs are the lowest ones: truncation is after the sort, so the
