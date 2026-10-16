@@ -217,16 +217,18 @@ func channelHistorySatisfied(expressions []string, aggByStream map[llotypes.Stre
 			if !ok {
 				continue
 			}
-			// Usually a hit in the memoized store: evaluation already loaded
-			// the pairs of every channel that reached history binding. A
-			// channel skipped before binding, such as one missing an input
-			// value, can load a header here for the first time. That read is
-			// round local and feeds only this metric. Corruption it finds is
-			// logged by reset but not counted in historyCorruptMetric, which
-			// is captured before this, and the reset is not flushed, so the
-			// next round that loads the pair before flushing counts it.
-			h, err := history.Load(ref.StreamID, aggregator)
-			if err != nil || uint32(h.Len()) < ref.Count {
+			// Read only what evaluation loaded, so this runs after the flush
+			// without touching state. Evaluation walks the same references in
+			// the same order and stops at the same first unsatisfied one, so
+			// every channel that reached history binding finds its pairs here.
+			// A pair it never reached belongs to a channel skipped for another
+			// reason, such as a missing input value, which is not a history
+			// condition.
+			h, ok := history.cached(ref.StreamID, aggregator)
+			if !ok {
+				return true
+			}
+			if uint32(h.Len()) < ref.Count {
 				return false
 			}
 		}

@@ -223,6 +223,13 @@ func (s *historyStore) Load(sid llotypes.StreamID, agg llotypes.Aggregator) (*pr
 	return s.window(histKey{streamID: sid, aggregator: agg})
 }
 
+// cached returns a pair's working copy only if this round already loaded it,
+// reading nothing.
+func (s *historyStore) cached(sid llotypes.StreamID, agg llotypes.Aggregator) (*protocol.RingWindow, bool) {
+	w, ok := s.windows[histKey{streamID: sid, aggregator: agg}]
+	return w, ok
+}
+
 // Series implements calculated.HistoryReader, projecting the newest count
 // records onto one field.
 //
