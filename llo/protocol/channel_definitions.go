@@ -279,18 +279,22 @@ func analyzeChannelDefinitions(codecs map[llotypes.ReportFormat]ReportCodec, cha
 		res.admissionFindings = append(res.admissionFindings, admissionFinding{wholeSet: true, err: err})
 	}
 
-	// Whole-set size budgets, measured the same way the state transition
+	// The facts of each channel, derived once per analysis: the budget and the
+	// checks below both read them, and cache may not record.
+	derived := make(map[llotypes.ChannelID]channelFacts, len(channelDefs))
+	factsOf := func(channelID llotypes.ChannelID, cd llotypes.ChannelDefinition) channelFacts {
+		facts, ok := derived[channelID]
+		if !ok {
+			facts = channelFactsFor(cache, codecs, channelID, cd)
+			derived[channelID] = facts
+		}
+		return facts
+	}
+
+	// Whole-set budgets, measured the same way the state transition
 	// enforces them. Tombstones count: nothing reads their streams or opts, but
 	// they are persisted in the definitions record all the same.
-	budget := NewChannelDefinitionsBudget(channelDefs)
-
-	// Calculated streams declared across the set. Counted separately from the
-	// pairs above because they are recomputed each round rather than carried
-	// forward, so they cost precursor bytes but no r/agg bytes.
-	var totalCalculatedStreams int
-	// TWAP calls across every expression in the set, each charged its worst
-	// case; see MaxTotalTWAPCalls.
-	var totalTWAPCalls int
+	budget := newChannelDefinitionsBudget(channelDefs, factsOf)
 
 	uniqueStreamIDs := make(map[llotypes.StreamID]struct{}, len(channelDefs))
 	// Owners of every stream ID that will hold an aggregate: observed streams
@@ -357,8 +361,7 @@ func analyzeChannelDefinitions(codecs map[llotypes.ReportFormat]ReportCodec, cha
 				}
 			}
 		}
-		facts := channelFactsFor(cache, codecs, channelID, cd)
-		totalTWAPCalls += facts.twapCalls
+		facts := factsOf(channelID, cd)
 
 		if HasCalculatedStreams(cd) {
 			if facts.calculatedErr != nil {
@@ -367,7 +370,6 @@ func analyzeChannelDefinitions(codecs map[llotypes.ReportFormat]ReportCodec, cha
 			// Keep the IDs declared before a failing entry: evaluation still
 			// produces them, so they occupy their stream IDs and count against
 			// the budget like any other.
-			totalCalculatedStreams += len(facts.calculatedIDs)
 			for _, streamID := range facts.calculatedIDs {
 				if owner, ok := calculatedBy[streamID]; ok {
 					admit(fmt.Errorf("ChannelDefinition with ID %d declares calculated stream %d already declared by channel %d", channelID, streamID, owner), channelID, owner)
@@ -429,12 +431,6 @@ func analyzeChannelDefinitions(codecs map[llotypes.ReportFormat]ReportCodec, cha
 	// evaluation work, actually depend on; see the limits they name.
 	if err := budget.Err(); err != nil {
 		admitSet(err)
-	}
-	if totalCalculatedStreams > MaxTotalCalculatedStreams {
-		admitSet(fmt.Errorf("too many calculated streams across all channels, got: %d/%d", totalCalculatedStreams, MaxTotalCalculatedStreams))
-	}
-	if totalTWAPCalls > MaxTotalTWAPCalls {
-		admitSet(fmt.Errorf("too many TWAP calls across all channels, got: %d/%d", totalTWAPCalls, MaxTotalTWAPCalls))
 	}
 
 	res.uniqueStreamIDs = len(uniqueStreamIDs)

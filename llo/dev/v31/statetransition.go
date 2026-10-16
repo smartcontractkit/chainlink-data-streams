@@ -128,7 +128,7 @@ func (p *Plugin) StateTransition(ctx context.Context, seqNr uint64, _ ocrtypes.A
 	// Channel definition changes (skipped once retired). These apply to pending
 	// only: they take effect next round.
 	if out.LifeCycleStage != protocol.LifeCycleStageRetired {
-		applyChannelVotes(pending, tally.removeChannelVotesByID, tally.updateChannelDefinitionsByHash, tally.updateChannelVotesByHash, p.F)
+		applyChannelVotes(p.ReportCodecs, p.ChannelAnalysisCache.ReadOnly(), pending, tally.removeChannelVotesByID, tally.updateChannelDefinitionsByHash, tally.updateChannelVotesByHash, p.F)
 	}
 
 	// validAfter.
@@ -460,7 +460,15 @@ func supportVotesForEffectiveFormats(votes map[llotypes.ReportFormat]int, effect
 // defs is the PENDING set: everything applied here takes effect next round. It
 // deliberately does not touch the round's channel generation, whose definitions
 // and decoded opts stay pinned to the effective set for the whole round.
+//
+// The budgets that depend on opts are measured through cache, which holds the
+// committed definitions once Observation has verified them. It should be
+// read-only, since the updates were proposed by peers. The budget is only
+// measured when an update passes the threshold, so a round without changes
+// decodes nothing.
 func applyChannelVotes(
+	codecs map[llotypes.ReportFormat]protocol.ReportCodec,
+	cache *protocol.ChannelAnalysisCache,
 	defs llotypes.ChannelDefinitions,
 	removeVotesByID map[llotypes.ChannelID]int,
 	updateDefsByHash map[[32]byte]protocol.ChannelDefinitionWithID,
@@ -496,10 +504,13 @@ func applyChannelVotes(
 			passing[hwid.def.ChannelID]++
 		}
 	}
-	budget := protocol.NewChannelDefinitionsBudget(defs)
+	var budget *protocol.ChannelDefinitionsBudget
 	for _, hwid := range ordered {
 		if updateVotesByHash[hwid.hash] <= f || passing[hwid.def.ChannelID] > 1 {
 			continue
+		}
+		if budget == nil {
+			budget = protocol.NewChannelDefinitionsBudget(codecs, defs, cache)
 		}
 		defWithID := hwid.def
 		prev, exists := defs[defWithID.ChannelID]
@@ -511,7 +522,7 @@ func applyChannelVotes(
 		if exists {
 			replaced = &prev
 		}
-		if !budget.Replace(replaced, defWithID.ChannelDefinition) {
+		if !budget.Replace(defWithID.ChannelID, replaced, defWithID.ChannelDefinition) {
 			// Skip changes that grow the set past a whole-set budget; they are
 			// voted on again in later rounds.
 			continue

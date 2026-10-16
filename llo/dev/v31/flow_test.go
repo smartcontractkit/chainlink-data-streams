@@ -1093,7 +1093,7 @@ func Test_ApplyChannelVotes_UpdateWinsOverSameRoundRemoval(t *testing.T) {
 	pending := llotypes.ChannelDefinitions{1: jsonChannel(), 2: tombstoned}
 	readdedWithID := protocol.ChannelDefinitionWithID{ChannelDefinition: readded, ChannelID: 2}
 	h := makeChannelHash(readdedWithID)
-	applyChannelVotes(pending,
+	applyChannelVotes(nil, nil, pending,
 		map[llotypes.ChannelID]int{2: f + 1},
 		map[[32]byte]protocol.ChannelDefinitionWithID{h: readdedWithID},
 		map[[32]byte]int{h: f + 1}, f)
@@ -1118,19 +1118,19 @@ func Test_ApplyChannelVotes_ContestedUpdateIsSkipped(t *testing.T) {
 
 	t.Run("both past the threshold leaves the channel unchanged", func(t *testing.T) {
 		pending := llotypes.ChannelDefinitions{1: jsonChannel(), 2: jsonChannel()}
-		applyChannelVotes(pending, nil, updates, map[[32]byte]int{hx: f + 1, hy: f + 1}, f)
+		applyChannelVotes(nil, nil, pending, nil, updates, map[[32]byte]int{hx: f + 1, hy: f + 1}, f)
 		require.Equal(t, llotypes.ChannelDefinitions{1: jsonChannel(), 2: jsonChannel()}, pending)
 	})
 
 	t.Run("both past the threshold adds nothing", func(t *testing.T) {
 		pending := llotypes.ChannelDefinitions{1: jsonChannel()}
-		applyChannelVotes(pending, nil, updates, map[[32]byte]int{hx: f + 1, hy: f + 1}, f)
+		applyChannelVotes(nil, nil, pending, nil, updates, map[[32]byte]int{hx: f + 1, hy: f + 1}, f)
 		require.Equal(t, llotypes.ChannelDefinitions{1: jsonChannel()}, pending)
 	})
 
 	t.Run("one past the threshold is applied", func(t *testing.T) {
 		pending := llotypes.ChannelDefinitions{1: jsonChannel(), 2: jsonChannel()}
-		applyChannelVotes(pending, nil, updates, map[[32]byte]int{hx: f, hy: f + 1}, f)
+		applyChannelVotes(nil, nil, pending, nil, updates, map[[32]byte]int{hx: f, hy: f + 1}, f)
 		require.Equal(t, llotypes.ChannelDefinitions{1: jsonChannel(), 2: y.ChannelDefinition}, pending)
 	})
 
@@ -1138,7 +1138,7 @@ func Test_ApplyChannelVotes_ContestedUpdateIsSkipped(t *testing.T) {
 		other := protocol.ChannelDefinitionWithID{ChannelDefinition: x.ChannelDefinition, ChannelID: 3}
 		ho := makeChannelHash(other)
 		pending := llotypes.ChannelDefinitions{1: jsonChannel(), 2: jsonChannel()}
-		applyChannelVotes(pending, nil,
+		applyChannelVotes(nil, nil, pending, nil,
 			map[[32]byte]protocol.ChannelDefinitionWithID{hx: x, hy: y, ho: other},
 			map[[32]byte]int{hx: f + 1, hy: f + 1, ho: f + 1}, f)
 		require.Equal(t, llotypes.ChannelDefinitions{1: jsonChannel(), 2: jsonChannel(), 3: x.ChannelDefinition}, pending)
@@ -1148,7 +1148,7 @@ func Test_ApplyChannelVotes_ContestedUpdateIsSkipped(t *testing.T) {
 		tombstoned := jsonChannel()
 		tombstoned.Tombstone = true
 		pending := llotypes.ChannelDefinitions{1: jsonChannel(), 2: tombstoned}
-		applyChannelVotes(pending, map[llotypes.ChannelID]int{2: f + 1}, updates, map[[32]byte]int{hx: f + 1, hy: f + 1}, f)
+		applyChannelVotes(nil, nil, pending, map[llotypes.ChannelID]int{2: f + 1}, updates, map[[32]byte]int{hx: f + 1, hy: f + 1}, f)
 		require.Equal(t, llotypes.ChannelDefinitions{1: jsonChannel()}, pending)
 	})
 }

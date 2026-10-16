@@ -1,6 +1,7 @@
 package llo
 
 import (
+	"fmt"
 	"math"
 	"math/big"
 	"strings"
@@ -222,12 +223,12 @@ func TestLimits_ChannelVotesRespectDefinitionSetBudgets(t *testing.T) {
 	for _, id := range []llotypes.ChannelID{1000, 1001} {
 		alone := cloneChannelDefinitions(committed)
 		alone[id] = channel(2)
-		require.NoError(t, protocol.NewChannelDefinitionsBudget(alone).Err())
+		require.NoError(t, protocol.NewChannelDefinitionsBudget(nil, alone, nil).Err())
 	}
 
 	pending := cloneChannelDefinitions(committed)
-	applyChannelVotes(pending, nil, updates, votes, f)
-	require.NoError(t, protocol.NewChannelDefinitionsBudget(pending).Err())
+	applyChannelVotes(nil, nil, pending, nil, updates, votes, f)
+	require.NoError(t, protocol.NewChannelDefinitionsBudget(nil, pending, nil).Err())
 	// Applied in channel ID order, so the lower ID wins on every oracle.
 	require.Contains(t, pending, llotypes.ChannelID(1000))
 	require.NotContains(t, pending, llotypes.ChannelID(1001))
@@ -237,11 +238,67 @@ func TestLimits_ChannelVotesRespectDefinitionSetBudgets(t *testing.T) {
 	over := cloneChannelDefinitions(pending)
 	over[1001] = channel(3)
 	tombstone := llotypes.ChannelDefinition{ReportFormat: llotypes.ReportFormatJSON, Tombstone: true}
-	applyChannelVotes(over, nil,
+	applyChannelVotes(nil, nil, over, nil,
 		map[[32]byte]protocol.ChannelDefinitionWithID{{3}: {ChannelDefinition: tombstone, ChannelID: 1001}},
 		map[[32]byte]int{{3}: f + 1}, f)
 	require.True(t, over[1001].Tombstone)
-	require.NoError(t, protocol.NewChannelDefinitionsBudget(over).Err())
+	require.NoError(t, protocol.NewChannelDefinitionsBudget(nil, over, nil).Err())
+}
+
+// TestLimits_ChannelVotesRespectExpressionBudgets covers the budgets measured
+// from opts: two updates that each fit can still exceed the calculated stream
+// budget together, or declare the same calculated stream.
+func TestLimits_ChannelVotesRespectExpressionBudgets(t *testing.T) {
+	const f = 1
+	expression := func(observed llotypes.StreamID, calculatedIDs ...llotypes.StreamID) llotypes.ChannelDefinition {
+		abi := make([]string, 0, len(calculatedIDs))
+		for _, id := range calculatedIDs {
+			abi = append(abi, fmt.Sprintf(`{"expressionStreamID":%d}`, id))
+		}
+		return llotypes.ChannelDefinition{
+			ReportFormat: llotypes.ReportFormatEVMABIEncodeUnpackedExpr,
+			Streams:      []llotypes.Stream{{StreamID: observed, Aggregator: llotypes.AggregatorMedian}},
+			Opts:         llotypes.ChannelOpts(fmt.Sprintf(`{"abi":[%s]}`, strings.Join(abi, ","))),
+		}
+	}
+	votes := map[[32]byte]int{{1}: f + 1, {2}: f + 1}
+
+	t.Run("calculated streams", func(t *testing.T) {
+		// One calculated stream short of MaxTotalCalculatedStreams.
+		ids := make([]llotypes.StreamID, protocol.MaxTotalCalculatedStreams-1)
+		for i := range ids {
+			ids[i] = llotypes.StreamID(1_000_000 + i)
+		}
+		committed := llotypes.ChannelDefinitions{1: expression(1, ids...)}
+		updates := map[[32]byte]protocol.ChannelDefinitionWithID{
+			{1}: {ChannelDefinition: expression(2, 2_000_000), ChannelID: 1000},
+			{2}: {ChannelDefinition: expression(3, 2_000_001), ChannelID: 1001},
+		}
+		for _, u := range updates {
+			alone := cloneChannelDefinitions(committed)
+			alone[u.ChannelID] = u.ChannelDefinition
+			require.NoError(t, protocol.NewChannelDefinitionsBudget(nil, alone, nil).Err())
+		}
+
+		pending := cloneChannelDefinitions(committed)
+		applyChannelVotes(nil, nil, pending, nil, updates, votes, f)
+		require.NoError(t, protocol.NewChannelDefinitionsBudget(nil, pending, nil).Err())
+		require.Contains(t, pending, llotypes.ChannelID(1000))
+		require.NotContains(t, pending, llotypes.ChannelID(1001))
+	})
+
+	t.Run("calculated stream declared twice", func(t *testing.T) {
+		committed := llotypes.ChannelDefinitions{1: expression(1, 100)}
+		updates := map[[32]byte]protocol.ChannelDefinitionWithID{
+			{1}: {ChannelDefinition: expression(2, 200), ChannelID: 1000},
+			{2}: {ChannelDefinition: expression(3, 200), ChannelID: 1001},
+		}
+
+		pending := cloneChannelDefinitions(committed)
+		applyChannelVotes(nil, nil, pending, nil, updates, votes, f)
+		require.Contains(t, pending, llotypes.ChannelID(1000))
+		require.NotContains(t, pending, llotypes.ChannelID(1001))
+	})
 }
 
 // TestLimits_ChannelStateWorstCaseFitsPerKeyLimit builds the largest definition

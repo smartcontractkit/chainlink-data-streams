@@ -234,8 +234,9 @@ const (
 	// logarithm and one exponential per interior gap, and the gap count is not
 	// bounded by the acceptance rule. The worst case is a maximum-depth history
 	// with a one-second gap between every pair of records. The realistic shape,
-	// costs tens of microseconds per call. Admission-only, like the other
-	// whole-set budgets.
+	// costs tens of microseconds per call. Like the other whole-set budgets,
+	// admission and the channel vote merge enforce it, and a committed set over
+	// it still verifies.
 	MaxTotalTWAPCalls = 64
 	// MaxHistoryRecordBytes is the maximum serialized size of one history
 	// record, enforced on append (StreamHistory.Append) and on chunk decode. It
