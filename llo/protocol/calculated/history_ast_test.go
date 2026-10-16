@@ -97,6 +97,10 @@ func TestAnalyzeHistoryExpression_Accepts(t *testing.T) {
 			expression: "Avg(History(s1, 1))",
 			want:       []HistoryRef{{StreamID: 1, Field: FieldValue, Count: 1}},
 		},
+		"minimum depth of a comparison function": {
+			expression: "Delta(History(s1, 2))",
+			want:       []HistoryRef{{StreamID: 1, Field: FieldValue, Count: 2}},
+		},
 		// The case a text-level rewriter gets wrong: only the parser knows this
 		// is a string, not a call.
 		"history inside a string literal is not a call": {
@@ -110,7 +114,7 @@ func TestAnalyzeHistoryExpression_Accepts(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			refs, err := analyzeHistoryExpression(tc.expression)
+			refs, _, _, err := analyzeHistoryExpression(tc.expression)
 			require.NoError(t, err)
 			assert.Equal(t, tc.want, refs)
 		})
@@ -220,10 +224,30 @@ func TestAnalyzeHistoryExpression_Rejects(t *testing.T) {
 			expression: "Avg(History(s1, 10)",
 			wantErr:    "failed to parse expression",
 		},
+		"Delta over a single record": {
+			expression: "Delta(History(s1, 1))",
+			wantErr:    "Delta requires a history depth of at least 2",
+		},
+		"PctChange over a single record": {
+			expression: "PctChange(History(s1_bid, 1))",
+			wantErr:    "PctChange requires a history depth of at least 2",
+		},
+		"Variance over a single record": {
+			expression: "Variance(History(s1, 1))",
+			wantErr:    "Variance requires a history depth of at least 2",
+		},
+		"Stddev over a single record": {
+			expression: "Stddev(History(s1, 1))",
+			wantErr:    "Stddev requires a history depth of at least 2",
+		},
+		"Spread over a single record": {
+			expression: "Spread(History(s1, 1))",
+			wantErr:    "Spread requires a history depth of at least 2",
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			refs, err := analyzeHistoryExpression(tc.expression)
+			refs, _, _, err := analyzeHistoryExpression(tc.expression)
 			require.Error(t, err)
 			require.ErrorIs(t, err, ErrHistoryExpression)
 			assert.Contains(t, err.Error(), tc.wantErr)
@@ -244,12 +268,12 @@ func TestAnalyzeHistoryExpression_FanOut(t *testing.T) {
 	for i := range calls {
 		within = append(within, fmt.Sprintf("Avg(History(s%d, %d))", i+1, perCall))
 	}
-	refs, err := analyzeHistoryExpression(strings.Join(within, " + "))
+	refs, _, _, err := analyzeHistoryExpression(strings.Join(within, " + "))
 	require.NoError(t, err)
 	assert.Len(t, refs, calls)
 
 	over := append(within, fmt.Sprintf("Avg(History(s%d, 1))", calls+1))
-	_, err = analyzeHistoryExpression(strings.Join(over, " + "))
+	_, _, _, err = analyzeHistoryExpression(strings.Join(over, " + "))
 	require.ErrorIs(t, err, ErrHistoryExpression)
 	assert.Contains(t, err.Error(), "total history depth")
 }
@@ -260,7 +284,7 @@ func TestAnalyzeHistoryExpression_FanOut(t *testing.T) {
 func TestAnalyzeHistoryExpression_ReportsEveryProblem(t *testing.T) {
 	t.Parallel()
 
-	_, err := analyzeHistoryExpression("Add(History(s1, 0), History(s2, x))")
+	_, _, _, err := analyzeHistoryExpression("Add(History(s1, 0), History(s2, x))")
 	require.ErrorIs(t, err, ErrHistoryExpression)
 	assert.Contains(t, err.Error(), "depth must be at least 1")
 	assert.Contains(t, err.Error(), "depth must be an integer literal")
@@ -273,20 +297,20 @@ func TestAnalyzeHistoryExpression_Deterministic(t *testing.T) {
 	t.Parallel()
 
 	expression := "Add(Avg(History(s7_bid, 10)), Add(Avg(History(s1, 300)), Avg(History(s7, 10))))"
-	first, err := analyzeHistoryExpression(expression)
+	first, _, _, err := analyzeHistoryExpression(expression)
 	require.NoError(t, err)
 	for range 20 {
-		again, err := analyzeHistoryExpression(expression)
+		again, _, _, err := analyzeHistoryExpression(expression)
 		require.NoError(t, err)
 		require.Equal(t, first, again)
 	}
 
 	errFirst := func() string {
-		_, err := analyzeHistoryExpression("Add(History(s1, 0), History(s2, x))")
+		_, _, _, err := analyzeHistoryExpression("Add(History(s1, 0), History(s2, x))")
 		return err.Error()
 	}()
 	for range 20 {
-		_, err := analyzeHistoryExpression("Add(History(s1, 0), History(s2, x))")
+		_, _, _, err := analyzeHistoryExpression("Add(History(s1, 0), History(s2, x))")
 		require.Equal(t, errFirst, err.Error(), "error text must be stable")
 	}
 }
@@ -451,7 +475,7 @@ func FuzzAnalyzeHistoryExpression(f *testing.F) {
 	}
 
 	f.Fuzz(func(t *testing.T, expression string) {
-		refs, err := analyzeHistoryExpression(expression)
+		refs, _, _, err := analyzeHistoryExpression(expression)
 		if err != nil {
 			require.Nil(t, refs, "a rejected expression must not yield references")
 			return
@@ -493,5 +517,8 @@ func TestRangeAcceptingFunctionsAreRegistered(t *testing.T) {
 
 	for name := range rangeAcceptingFunctions {
 		assert.Contains(t, defaultEnv, name, "%s accepts a window but is not registered", name)
+	}
+	for name := range minWindowDepth {
+		assert.True(t, rangeAcceptingFunctions[name], "%s has a minimum window depth but does not accept a window", name)
 	}
 }

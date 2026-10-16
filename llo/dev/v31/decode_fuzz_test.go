@@ -6,6 +6,7 @@ import (
 
 	"github.com/shopspring/decimal"
 
+	"github.com/smartcontractkit/chainlink-common/pkg/logger"
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
 
 	protocol "github.com/smartcontractkit/chainlink-data-streams/llo/protocol"
@@ -75,6 +76,9 @@ func FuzzDecodeObservation(f *testing.F) {
 		// bounded and canonicalized, because both feed the state transition.
 		if len(decoded.SupportedReportFormats) > protocol.MaxObservationSupportedReportFormatsLength {
 			t.Fatalf("decoded %d report formats, max %d", len(decoded.SupportedReportFormats), protocol.MaxObservationSupportedReportFormatsLength)
+		}
+		if len(decoded.AttestedPredecessorRetirement) > protocol.MaxAttestedRetirementReportBytes {
+			t.Fatalf("decoded an attested predecessor retirement of %d bytes, max %d", len(decoded.AttestedPredecessorRetirement), protocol.MaxAttestedRetirementReportBytes)
 		}
 		// Re-encoding the decoded set is what the wire has to be canonical in.
 		wire := sortedFormatsToWire(decoded.SupportedReportFormats)
@@ -175,7 +179,7 @@ func FuzzLoadKVState(f *testing.F) {
 		if _, err := loadColdKVState(kv, protocol.NewChannelCache()); err != nil {
 			return
 		}
-		s, err := loadKVState(kv, nil)
+		s, err := loadKVState(kv, nil, logger.Nop())
 		if err != nil {
 			return
 		}

@@ -10,6 +10,7 @@ import (
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
 
 	protocol "github.com/smartcontractkit/chainlink-data-streams/llo/protocol"
+	"github.com/smartcontractkit/chainlink-data-streams/llo/protocol/calculated"
 
 	"github.com/smartcontractkit/libocr/offchainreporting2plus/ocr3_1types"
 	"github.com/smartcontractkit/libocr/offchainreporting2plus/ocr3types"
@@ -46,9 +47,10 @@ type PluginFactoryParams struct {
 	DonID uint32
 	// MaxSnapshotRounds overrides DefaultMaxSnapshotRounds if non-zero. Bounds
 	// how stale this node's own stream values may be when it references them,
-	// and nothing else; it does not affect what peers can fetch. Must be >0,
-	// since a snapshot gathered for one sequence number is consumed by a later
-	// one, and must leave BlobFetchMarginRounds below BlobLifetimeRounds.
+	// and nothing else; it does not affect what peers can fetch. Must be at
+	// least MinMaxSnapshotRounds, since a snapshot gathered for one sequence
+	// number is consumed by a later one, and must leave BlobFetchMarginRounds
+	// below BlobLifetimeRounds.
 	MaxSnapshotRounds uint64
 	// BlobLifetimeRounds overrides DefaultBlobLifetimeRounds if non-zero. Bounds
 	// how long peers can still fetch a broadcast blob, and nothing else; it does
@@ -114,6 +116,15 @@ func (f *PluginFactory) NewReportingPlugin(ctx context.Context, cfg ocr3types.Re
 		return nil, nil, fmt.Errorf("aggregationFaultTolerance (%d) must not exceed consensus F (%d): a floor of %d contributions can never be met from %d observations",
 			aggregationFaultTolerance, cfg.F, 2*aggregationFaultTolerance+1, 2*cfg.F+1)
 	}
+	// Zero lets a single contributor set a stream aggregate, which a DON that
+	// tolerates Byzantine oracles must not allow.
+	if cfg.F > 0 && aggregationFaultTolerance == 0 {
+		return nil, nil, fmt.Errorf("aggregationFaultTolerance must be at least 1 when consensus F (%d) is non-zero: a floor of 1 contribution lets a single oracle set an aggregate", cfg.F)
+	}
+	if aggregationFaultTolerance < cfg.F {
+		l.Warnw("aggregationFaultTolerance is below consensus F: stream aggregates tolerate fewer Byzantine contributors than consensus tolerates oracles",
+			"aggregationFaultTolerance", aggregationFaultTolerance, "f", cfg.F, "minContributions", 2*aggregationFaultTolerance+1)
+	}
 
 	// The report cadence is a replicated state transition parameter and gates
 	// every channel (see isReportable). protocol.OffchainConfig.Validate used to
@@ -122,6 +133,16 @@ func (f *PluginFactory) NewReportingPlugin(ctx context.Context, cfg ocr3types.Re
 	// channel cadence. v31 enforces the the original rule rather than inheriting that leniency.
 	if offchainConfig.ProtocolVersion > 0 && offchainConfig.DefaultMinReportIntervalNanoseconds == 0 {
 		return nil, nil, fmt.Errorf("NewReportingPlugin: offchain config must set defaultMinReportIntervalNanoseconds to a non-zero value if protocol version is %d", offchainConfig.ProtocolVersion)
+	}
+	// A cadence above the maximum stalls every channel for its whole length.
+	if offchainConfig.DefaultMinReportIntervalNanoseconds > protocol.MaxDefaultMinReportIntervalNanoseconds {
+		return nil, nil, fmt.Errorf("NewReportingPlugin: offchain config defaultMinReportIntervalNanoseconds (%d) exceeds the maximum (%d)", offchainConfig.DefaultMinReportIntervalNanoseconds, protocol.MaxDefaultMinReportIntervalNanoseconds)
+	}
+
+	// OCR3.1 requires this to be positive. Reject a host that bypasses
+	// it rather than run a pump whose every cycle times out immediately.
+	if cfg.MaxDurationObservation <= 0 {
+		return nil, nil, fmt.Errorf("NewReportingPlugin: MaxDurationObservation (%v) must be positive", cfg.MaxDurationObservation)
 	}
 
 	blobInFlightWaitFactor := f.BlobInFlightWaitFactor
@@ -165,6 +186,7 @@ func (f *PluginFactory) NewReportingPlugin(ctx context.Context, cfg ocr3types.Re
 	// immutable generation per c/seqnr, so a round can never mix the two.
 	p.ChannelCache = protocol.NewChannelCache()
 	p.ChannelAnalysisCache = protocol.NewChannelAnalysisCache()
+	p.ExpressionPins = calculated.NewExpressionPins()
 	p.BlobPayloads = newBlobPayloadCache()
 
 	// Setup the blobpump
@@ -188,13 +210,12 @@ func (f *PluginFactory) NewReportingPlugin(ctx context.Context, cfg ocr3types.Re
 	// rejects an oversized message or write set, which fails the round for every
 	// oracle. The derivations, and which of them are currently enforced, are:
 	//
-	//	MaxObservationBytes           bounded post-decompression by
-	//	                              protocol.MaxDecompressedObservationLength,
-	//	                              itself derived from
-	//	                              MaxObservationStreamValuesLength stream
-	//	                              values plus
-	//	                              MaxObservationUpdateChannelDefinitionsLength
-	//	                              definitions.
+	//	MaxObservationBytes           the observation is not compressed and
+	//	                              carries no stream values, which travel
+	//	                              in a blob. Its size is dominated by
+	//	                              channel definition votes, held to
+	//	                              maxObservationUpdateChannelDefinitionsBytes
+	//	                              by channelUpdateVotes.
 	//	MaxReportsPlusPrecursorBytes  the precursor embeds every definition plus
 	//	                              every stream aggregate. Admission bounds
 	//	                              the aggregate count by
@@ -210,8 +231,10 @@ func (f *PluginFactory) NewReportingPlugin(ctx context.Context, cfg ocr3types.Re
 	//	                              where it is written into the aggregates.
 	//	MaxKeyValueModifiedKeys*      the per-round write set is c/defs plus r/agg
 	//	                              plus the history windows, and history is
-	//	                              held to protocol.MaxHistoryTotalBytes so it
-	//	                              cannot consume the whole budget on its own.
+	//	                              bounded by protocol.MaxHistoryPairs, which
+	//	                              protocol.MaxHistoryTotalBytes guarantees at
+	//	                              compile time fits the budget, so it cannot
+	//	                              consume the whole budget on its own.
 	//	MaxBlobPayloadBytes           enforced on the write side by
 	//	                              encodeBlobPayload.
 	info := ocr3_1types.ReportingPluginInfo1{

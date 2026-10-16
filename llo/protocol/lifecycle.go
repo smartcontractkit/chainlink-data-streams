@@ -69,8 +69,9 @@ type PredecessorRetirementReportCache interface {
 }
 
 // MaxSupportedProtocolVersion is the highest LLO protocol version this build
-// understands. See [OffchainConfig.Validate].
-const MaxSupportedProtocolVersion uint32 = 1
+// understands. It must match the highest version [OffchainConfig.Validate]
+// accepts, or a validly configured instance can never promote.
+const MaxSupportedProtocolVersion uint32 = 2
 
 // CheckCompatible reports whether this retirement report, produced by a
 // predecessor protocol instance, may be consumed by a successor running the

@@ -4,6 +4,8 @@ import (
 	"container/list"
 	"errors"
 	"fmt"
+	"strconv"
+	"strings"
 	"sync"
 
 	"github.com/expr-lang/expr/conf"
@@ -15,10 +17,11 @@ import (
 	"github.com/smartcontractkit/chainlink-data-streams/llo/protocol"
 )
 
-// maxAnalysisCacheEntries bounds the expression analysis cache. Channel
-// definitions can churn, so the cache must not grow with the number of distinct
-// expressions ever seen; a few hundred live expressions is already far more than
-// any real configuration.
+// maxAnalysisCacheEntries bounds the unpinned part of the expression analysis
+// cache. Expressions of committed definitions are pinned and do not count
+// against it, so it only bounds transient analysis by admission and peer
+// validation, which must not grow with the number of distinct expressions ever
+// seen.
 const maxAnalysisCacheEntries = 1024
 
 // parseExpression is the single parse of the DSL: it applies the expression
@@ -45,16 +48,31 @@ func parseExpression(expression string) (*parser.Tree, error) {
 //
 // Both hits and failures are cached: a rejected expression stays rejected until
 // its text changes, and re-deriving the same error every round is wasted work.
+//
+// Expressions of committed definitions are pinned (see ExpressionPins) and kept
+// outside the LRU. Admission and peer validation analyze expressions that may
+// never be committed, so without pins enough of them would evict the live ones
+// and force a recompile every round.
 type analysisCache struct {
 	mu      sync.Mutex
 	entries map[string]*list.Element
 	order   *list.List // front is most recently used
 	max     int
+	pinned  map[string]*pinnedEntry
+}
+
+// pinnedEntry is an entry held out of eviction, counted by how many pin sets
+// hold it.
+type pinnedEntry struct {
+	entry   *analysisEntry
+	holders int
 }
 
 type analysisEntry struct {
 	expression string
 	refs       []HistoryRef
+	twapCalls  int
+	names      []string
 	err        error
 
 	// program is the compiled expression, filled in on first successful
@@ -74,6 +92,7 @@ func newAnalysisCache(max int) *analysisCache {
 		entries: make(map[string]*list.Element, max),
 		order:   list.New(),
 		max:     max,
+		pinned:  make(map[string]*pinnedEntry),
 	}
 }
 
@@ -93,6 +112,34 @@ var historyAnalysisCache = newAnalysisCache(maxAnalysisCacheEntries)
 // shared with the cache: callers must not modify it.
 func AnalyzeExpressionHistory(expression string) ([]HistoryRef, error) {
 	return historyAnalysisCache.analyze(expression)
+}
+
+// ChannelTWAPCalls counts the TWAP calls across every expression a channel's
+// opts declare. It is what admission charges the channel against
+// protocol.MaxTotalTWAPCalls, and like ValidateExpression it is a pure function
+// of the definition.
+//
+// Only expressions that analyze cleanly are counted: one that does not is never
+// evaluated, so it does no TWAP work. Rejecting such expressions is
+// ValidateChannelExpressions' job. Every declared expression is counted, not
+// just those within MaxExpressionsPerChannel, so that a committed definition
+// predating that limit is still charged for what it evaluates.
+func ChannelTWAPCalls(optsCache *protocol.OptsCache, cd llotypes.ChannelDefinition, cid llotypes.ChannelID) int {
+	o, err := getCalculatedStreamOpts(optsCache, cd, cid)
+	if err != nil {
+		return 0
+	}
+	calls := 0
+	for _, abi := range o.ABI {
+		if abi.Expression == "" {
+			continue
+		}
+		entry := historyAnalysisCache.entry(abi.Expression)
+		if entry.err == nil {
+			calls += entry.twapCalls
+		}
+	}
+	return calls
 }
 
 // ValidateExpression reports whether an expression is statically well formed.
@@ -135,11 +182,21 @@ func ValidateChannelExpressions(optsCache *protocol.OptsCache, cd llotypes.Chann
 			errs = append(errs, fmt.Errorf("%w: expression is empty", ErrHistoryExpression))
 			continue
 		}
-		refs, err := AnalyzeExpressionHistory(expression)
-		if err != nil {
-			errs = append(errs, fmt.Errorf("expression %q: %w", expression, err))
+		entry := historyAnalysisCache.entry(expression)
+		if entry.err != nil {
+			errs = append(errs, fmt.Errorf("expression %q: %w", expression, entry.err))
 			continue
 		}
+		// Every name the expression reads must be bound at evaluation. A name
+		// that is not compiles against no channel environment, so the channel
+		// would be installed and fail to compile every round.
+		for _, name := range entry.names {
+			if !channelBindsName(name, aggByStream) {
+				errs = append(errs, fmt.Errorf("expression %q: %w: identifier %q is neither a function nor a field of a stream the channel observes",
+					expression, ErrUnknownIdentifier, name))
+			}
+		}
+		refs := entry.refs
 		// A History call may only read a stream the channel observes. The DSL
 		// names a stream, and the channel definition is what says which
 		// aggregation of it is meant, so a reference to a stream that is not
@@ -149,29 +206,87 @@ func ValidateChannelExpressions(optsCache *protocol.OptsCache, cd llotypes.Chann
 		// history and never reports. Reporting it here is the whole point of
 		// validating the definition.
 		for _, ref := range refs {
-			if _, ok := aggByStream[ref.StreamID]; !ok {
+			agg, ok := aggByStream[ref.StreamID]
+			if !ok {
 				errs = append(errs, fmt.Errorf("expression %q: %w: %s references stream %d, which the channel does not observe",
 					expression, ErrHistoryExpression, HistoryFunctionName, ref.StreamID))
+				continue
+			}
+			// The aggregator fixes the type of the stored value, so a field it
+			// cannot carry fails projection every round.
+			if !aggregatorCarriesField(agg, strings.TrimPrefix(ref.Field.suffix(), "_")) {
+				errs = append(errs, fmt.Errorf("expression %q: %w: %s reads the %s field of stream %d, which its %s aggregator does not produce",
+					expression, ErrHistoryExpression, HistoryFunctionName, ref.Field, ref.StreamID, agg))
 			}
 		}
 	}
 	return errors.Join(errs...)
 }
 
-func (c *analysisCache) analyze(expression string) ([]HistoryRef, error) {
-	if entry, ok := c.get(expression); ok {
-		return entry.refs, entry.err
-	}
+// ErrUnknownIdentifier is returned for an expression that reads a name a
+// channel's evaluation environment does not bind.
+var ErrUnknownIdentifier = errors.New("unknown identifier")
 
-	refs, err := analyzeHistoryExpression(expression)
-	c.put(&analysisEntry{expression: expression, refs: refs, err: err})
-	return refs, err
+// channelBindsName reports whether evaluation binds name for a channel whose
+// observed streams are aggByStream.
+func channelBindsName(name string, aggByStream map[llotypes.StreamID]llotypes.Aggregator) bool {
+	if _, ok := defaultEnv[name]; ok || name == observationsTimestampName {
+		return true
+	}
+	match := streamIdentifier.FindStringSubmatch(name)
+	if match == nil {
+		return false
+	}
+	id, err := strconv.ParseUint(match[1], 10, 32)
+	if err != nil {
+		return false
+	}
+	agg, ok := aggByStream[llotypes.StreamID(id)]
+	return ok && aggregatorCarriesField(agg, match[2])
+}
+
+// aggregatorCarriesField reports whether the value agg produces can bind the
+// stream identifier suffix field, given without its underscore.
+func aggregatorCarriesField(agg llotypes.Aggregator, field string) bool {
+	switch agg {
+	case llotypes.AggregatorMedian:
+		return field == "" || field == "timestamp"
+	case llotypes.AggregatorQuote:
+		return field == "bid" || field == "ask" || field == "benchmark"
+	default:
+		return true
+	}
+}
+
+func (c *analysisCache) analyze(expression string) ([]HistoryRef, error) {
+	entry := c.entry(expression)
+	return entry.refs, entry.err
+}
+
+func (c *analysisCache) entry(expression string) *analysisEntry {
+	if entry, ok := c.get(expression); ok {
+		return entry
+	}
+	return c.put(newAnalysisEntry(expression))
+}
+
+func newAnalysisEntry(expression string) *analysisEntry {
+	refs, twapCalls, names, err := analyzeHistoryExpression(expression)
+	return &analysisEntry{expression: expression, refs: refs, twapCalls: twapCalls, names: names, err: err}
 }
 
 func (c *analysisCache) get(expression string) (*analysisEntry, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	return c.lookupLocked(expression)
+}
 
+// lookupLocked returns the entry for expression, pinned or not, marking an
+// unpinned one as most recently used.
+func (c *analysisCache) lookupLocked(expression string) (*analysisEntry, bool) {
+	if pinned, ok := c.pinned[expression]; ok {
+		return pinned.entry, true
+	}
 	element, ok := c.entries[expression]
 	if !ok {
 		return nil, false
@@ -180,21 +295,27 @@ func (c *analysisCache) get(expression string) (*analysisEntry, bool) {
 	return element.Value.(*analysisEntry), true
 }
 
-func (c *analysisCache) put(entry *analysisEntry) {
+// put inserts entry unless one already exists for its expression, and returns
+// the cached entry. Keep the existing one: analysis is pure, so both are
+// equivalent, and the existing one may already carry a compiled program.
+func (c *analysisCache) put(entry *analysisEntry) *analysisEntry {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	if element, ok := c.entries[entry.expression]; ok {
-		element.Value = entry
-		c.order.MoveToFront(element)
-		return
+	if existing, ok := c.lookupLocked(entry.expression); ok {
+		return existing
 	}
+	c.insertLocked(entry)
+	return entry
+}
 
+// insertLocked adds entry to the front of the LRU and evicts past max.
+func (c *analysisCache) insertLocked(entry *analysisEntry) {
 	c.entries[entry.expression] = c.order.PushFront(entry)
 	for c.order.Len() > c.max {
 		oldest := c.order.Back()
 		if oldest == nil {
-			return
+			break
 		}
 		c.order.Remove(oldest)
 		delete(c.entries, oldest.Value.(*analysisEntry).expression)
@@ -207,12 +328,11 @@ func (c *analysisCache) program(expression string) *vm.Program {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	element, ok := c.entries[expression]
+	entry, ok := c.lookupLocked(expression)
 	if !ok {
 		return nil
 	}
-	c.order.MoveToFront(element)
-	return element.Value.(*analysisEntry).program
+	return entry.program
 }
 
 // storeProgram attaches a compiled program to an existing entry. It is a no-op
@@ -222,16 +342,75 @@ func (c *analysisCache) storeProgram(expression string, program *vm.Program) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	element, ok := c.entries[expression]
+	entry, ok := c.lookupLocked(expression)
 	if !ok {
 		return
 	}
-	element.Value.(*analysisEntry).program = program
-	c.order.MoveToFront(element)
+	entry.program = program
 }
 
+// pin takes one hold on each of expressions, which must be distinct. An
+// expression already cached keeps its entry, and with it any compiled program.
+// Analysis of the rest runs outside the lock and does not pass through the LRU,
+// so pinning does not evict unpinned entries.
+func (c *analysisCache) pin(expressions []string) {
+	analyzed := make([]*analysisEntry, len(expressions))
+	for i, expression := range expressions {
+		if _, ok := c.get(expression); !ok {
+			analyzed[i] = newAnalysisEntry(expression)
+		}
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for i, expression := range expressions {
+		if pinned, ok := c.pinned[expression]; ok {
+			pinned.holders++
+			continue
+		}
+		entry := analyzed[i]
+		if element, ok := c.entries[expression]; ok {
+			entry = element.Value.(*analysisEntry)
+			c.order.Remove(element)
+			delete(c.entries, expression)
+		}
+		if entry == nil {
+			// Evicted between the lookup and the lock.
+			entry = newAnalysisEntry(expression)
+		}
+		c.pinned[expression] = &pinnedEntry{entry: entry, holders: 1}
+	}
+}
+
+// unpin releases one hold on each of expressions. An expression no longer held
+// returns to the front of the LRU rather than being dropped, since a definition
+// change may bring it back.
+func (c *analysisCache) unpin(expressions []string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, expression := range expressions {
+		pinned, ok := c.pinned[expression]
+		if !ok {
+			continue
+		}
+		pinned.holders--
+		if pinned.holders > 0 {
+			continue
+		}
+		delete(c.pinned, expression)
+		c.insertLocked(pinned.entry)
+	}
+}
+
+// len returns the number of unpinned entries.
 func (c *analysisCache) len() int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.order.Len()
+}
+
+func (c *analysisCache) pinnedLen() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return len(c.pinned)
 }

@@ -19,10 +19,8 @@ import (
 // every expression of every channel is evaluated inside one state transition, so
 // per-expression cost multiplies by the channel count.
 //
-// TWAP is the one to watch. It takes a logarithm per observed bucket and an
-// exponential per bucket in the window, and all of those serialize on the
-// process-wide transcendental lock (see decimalmath.go), so its cost does not
-// parallelize across the plugin instances sharing a process.
+// TWAP is the one to watch: its cost grows with the window, and it is
+// evaluated for every channel that uses it.
 
 func benchSeries(depth int, intervalSeconds int) Series {
 	values := make([]decimal.Decimal, 0, depth)
@@ -176,9 +174,69 @@ func BenchmarkTWAPRealisticGaps(b *testing.B) {
 	}
 }
 
-// BenchmarkTWAPParallel shows what the transcendental lock costs when several
-// plugin instances evaluate TWAP at once. Compare ns/op against the serial
-// benchmark: no speedup means the lock is the limit.
+// BenchmarkTWAPMaxWindow measures one TWAP call at the longest window allowed
+// over the deepest history allowed, which is what protocol.MaxTotalTWAPCalls
+// charges every call. Records one second apart leave a head gap that costs one
+// multiplication. Records spread evenly across the window turn every missing
+// second into an interior one, the most steps. Records two seconds apart with
+// prices alternating by a large factor give the most gaps, each with a ratio
+// far from 1, the most expensive logarithm.
+func BenchmarkTWAPMaxWindow(b *testing.B) {
+	const windowSeconds = twapMaxWindowSeconds
+	const depth = protocol.MaxHistoryRecordsPerPair
+
+	for _, tc := range []struct {
+		name   string
+		window Series
+	}{
+		{"recordSpacing=1s", benchSeries(depth, 1)},
+		{fmt.Sprintf("recordSpacing=%ds", windowSeconds/depth), benchSeries(depth, windowSeconds/depth)},
+		{"recordSpacing=2s/alternating", benchAlternatingSeries(depth, 2, decimal.NewFromInt(1000))},
+	} {
+		timestamps := tc.window.Timestamps()
+		anchorNs := timestamps[len(timestamps)-1] + uint64(time.Second)
+		cfg := map[string]any{
+			"window":         time.Duration(windowSeconds) * time.Second,
+			"minSamples":     1,
+			"maxHeadGap":     windowSeconds,
+			"maxInteriorGap": windowSeconds,
+			"maxTailGap":     windowSeconds,
+		}
+		twap := twapFunc(anchorNs)
+
+		b.Run(tc.name, func(b *testing.B) {
+			b.ReportAllocs()
+			for range b.N {
+				if _, err := twap(tc.window, cfg); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
+
+// benchAlternatingSeries is benchSeries with every other price multiplied by
+// factor, so every gap interpolates across a large move.
+func benchAlternatingSeries(depth int, intervalSeconds int, factor decimal.Decimal) Series {
+	series := benchSeries(depth, intervalSeconds)
+	values := series.Values()
+	alternating := make([]decimal.Decimal, len(values))
+	for i, value := range values {
+		alternating[i] = value
+		if i%2 == 1 {
+			alternating[i] = value.Mul(factor)
+		}
+	}
+	s, err := NewSeries(alternating, series.Timestamps())
+	if err != nil {
+		panic(err)
+	}
+	return s
+}
+
+// BenchmarkTWAPParallel shows how TWAP scales when several plugin instances
+// evaluate it at once. Compare ns/op against the serial benchmark: no speedup
+// means something shared is the limit.
 func BenchmarkTWAPParallel(b *testing.B) {
 	const windowSeconds = 300
 	window := benchSeries(windowSeconds, 1)

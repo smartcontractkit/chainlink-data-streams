@@ -63,6 +63,10 @@ const (
 	// roughly one blob per round, so the unexpired-blob budget declared to
 	// libocr grows with the lifetime; this keeps that budget sane.
 	MaxBlobLifetimeRounds = 64
+	// MinMaxSnapshotRounds bounds MaxSnapshotRounds from below. A cycle gathers
+	// the snapshot for the round that kicked it, and the snapshot is first taken
+	// by the next round, so a window of one round discards every snapshot.
+	MinMaxSnapshotRounds = 2
 	// BlobBroadcastAttempts is how many times one cycle tries to broadcast the
 	// payload it gathered.
 	BlobBroadcastAttempts = 3
@@ -108,6 +112,9 @@ func ResolveBlobRounds(maxSnapshotRounds, blobLifetimeRounds uint64) (uint64, ui
 	}
 	if blobLifetimeRounds == 0 {
 		blobLifetimeRounds = DefaultBlobLifetimeRounds
+	}
+	if maxSnapshotRounds < MinMaxSnapshotRounds {
+		return 0, 0, fmt.Errorf("MaxSnapshotRounds (%d) is below MinMaxSnapshotRounds (%d)", maxSnapshotRounds, MinMaxSnapshotRounds)
 	}
 	if blobLifetimeRounds > MaxBlobLifetimeRounds {
 		return 0, 0, fmt.Errorf("BlobLifetimeRounds (%d) exceeds MaxBlobLifetimeRounds (%d)", blobLifetimeRounds, MaxBlobLifetimeRounds)
@@ -482,6 +489,18 @@ func (p *blobPump) observe(in pumpInput) (*blobSnapshot, error) {
 	if err := p.ds.Observe(ctx, sv, opts); err != nil {
 		return nil, fmt.Errorf("DataSource.Observe error: %w", err)
 	}
+	// Broadcast only the requested streams. Peers reject an observation over
+	// MaxObservationStreamValuesLength, so unrequested keys from the
+	// DataSource could void this node's whole contribution.
+	if len(sv) > len(in.streams) {
+		requested := make(protocol.StreamValues, len(in.streams))
+		for _, sid := range in.streams {
+			requested[sid] = sv[sid]
+		}
+		p.lggr.Warnw("DataSource returned unrequested streams; dropping them", "seqNr", in.seqNr, "requested", len(in.streams), "returned", len(sv))
+		sv = requested
+	}
+	dropUnobservable(sv, p.lggr, in.seqNr)
 
 	payload, err := marshalStreamValues(sv)
 	if err != nil {
@@ -553,6 +572,27 @@ func (p *blobPump) latestSeqNr() uint64 {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return p.input.seqNr
+}
+
+// dropUnobservable unsets every value peers would reject on decode, such as one
+// over MaxDecimalCoefficientBits. Peers reject the whole observation on the
+// first such value, so one bad value from the DataSource would otherwise void
+// every other value this node contributes. The check is the receiver's own
+// decode, so both sides apply the same rules.
+func dropUnobservable(sv protocol.StreamValues, lggr logger.Logger, seqNr uint64) {
+	for id, v := range sv {
+		if v == nil {
+			continue
+		}
+		pb, err := protocol.StreamValueToProto(v)
+		if err == nil {
+			_, err = streamValueFromProtoAllowNil(pb)
+		}
+		if err != nil {
+			lggr.Warnw("Dropping stream value peers would reject", "streamID", id, "err", err, "seqNr", seqNr)
+			sv[id] = nil
+		}
+	}
 }
 
 // marshalStreamValues serializes stream values into the stream-values-only

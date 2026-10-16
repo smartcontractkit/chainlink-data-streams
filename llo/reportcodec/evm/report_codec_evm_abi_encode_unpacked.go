@@ -180,10 +180,7 @@ func (r ReportCodecEVMABIEncodeUnpacked) Verify(cd llotypes.ChannelDefinition) e
 	if len(opts.ABI) != len(cd.Streams)-2 {
 		return fmt.Errorf("ABI length mismatch; expected: %d, got: %d", len(cd.Streams)-2, len(opts.ABI))
 	}
-	if opts.MaxReportRange < 0 {
-		return fmt.Errorf("maxReportRange must be non-negative; got: %s", opts.MaxReportRange)
-	}
-	return nil
+	return verifyMaxReportRange(opts.MaxReportRange)
 }
 
 // BaseSchema represents the fixed base schema that remains unchanged for all

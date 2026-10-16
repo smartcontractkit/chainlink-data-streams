@@ -18,11 +18,13 @@ import (
 )
 
 // historyExprChannel is an expression channel reading a window of stream 100.
+// It reports at nanosecond resolution so that rounds microseconds apart are not
+// a seconds overlap.
 func historyExprChannel(expression string) llotypes.ChannelDefinition {
 	return llotypes.ChannelDefinition{
 		ReportFormat: llotypes.ReportFormatEVMABIEncodeUnpackedExpr,
 		Streams:      []llotypes.Stream{{StreamID: 100, Aggregator: llotypes.AggregatorMedian}},
-		Opts:         fmt.Appendf(nil, `{"abi":[{"type":"int256","expression":%q,"expressionStreamID":999}]}`, expression),
+		Opts:         fmt.Appendf(nil, `{"TimeResolution":"ns","abi":[{"type":"int256","expression":%q,"expressionStreamID":999}]}`, expression),
 	}
 }
 
@@ -247,7 +249,7 @@ func Test_History_UnavailableOnDeniedPair(t *testing.T) {
 	for i := range protocol.MaxHistoryPairs + 1 {
 		required[histKey{streamID: llotypes.StreamID(i + 1), aggregator: llotypes.AggregatorMedian}] = 1
 	}
-	got := admitHistoryRequirements(required, logger.Test(t))
+	got := admitHistoryRequirements(required, nil)
 	require.NotEmpty(t, got.denied)
 
 	denied := got.sortedDenied()[0]
@@ -281,7 +283,7 @@ func storedHotState(t *testing.T, kv *memKV) *kvState {
 		reportedLastRound:     map[llotypes.ChannelID]bool{},
 		carryForward:          map[llotypes.StreamID]map[llotypes.Aggregator]*protocol.TimestampedStreamValue{},
 	}
-	require.NoError(t, readHotState(kv, s))
+	require.NoError(t, readHotState(kv, s, logger.Test(t)))
 	return s
 }
 

@@ -118,6 +118,11 @@ func encodePrecursor(p precursor) (ocr3_1types.ReportsPlusPrecursor, error) {
 	return b, nil
 }
 
+// decodePrecursor decodes a precursor this oracle produced, or one fetched from
+// a peer that libocr verified against the certified digest and size limit. Its
+// channel definitions are the committed set, so the per-definition stream and
+// opts caps are not applied here: they are admission-only, and rejecting a
+// committed definition would fail Reports on every oracle.
 func decodePrecursor(b ocr3_1types.ReportsPlusPrecursor) (precursor, error) {
 	pb := &protocol.LLOPrecursorProto{}
 	if err := proto.Unmarshal(b, pb); err != nil {
@@ -144,6 +149,11 @@ func decodePrecursor(b ocr3_1types.ReportsPlusPrecursor) (precursor, error) {
 	// cap is the bound here. The observation-side cap does not apply: the tally
 	// is pruned to effective formats before encoding, and the effective set may
 	// legitimately use more distinct formats than one observation may advertise.
+	//
+	// This mirrors the encode-side cap. The other collections are left
+	// unbounded on purpose: the precursor is certified state, libocr bounds its
+	// size, and the promotion round legitimately carries more validAfter
+	// entries than channels.
 	if len(pb.SupportByFormat) > protocol.MaxOutcomeChannelDefinitionsLength {
 		return precursor{}, fmt.Errorf("precursor carries too many report format support entries: %d (max %d)", len(pb.SupportByFormat), protocol.MaxOutcomeChannelDefinitionsLength)
 	}

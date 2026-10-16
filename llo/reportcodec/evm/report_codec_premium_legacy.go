@@ -154,10 +154,7 @@ func (r ReportCodecPremiumLegacy) Verify(cd llotypes.ChannelDefinition) error {
 	if len(cd.Streams) != 3 {
 		return fmt.Errorf("ReportFormatEVMPremiumLegacy requires exactly 3 streams (NativePrice, LinkPrice, Quote); got: %v", cd.Streams)
 	}
-	if opts.MaxReportRange < 0 {
-		return fmt.Errorf("maxReportRange must be non-negative; got: %s", opts.MaxReportRange)
-	}
-	return nil
+	return verifyMaxReportRange(opts.MaxReportRange)
 }
 
 func (r ReportCodecPremiumLegacy) Decode(b []byte) (*v3.Report, error) {
@@ -225,6 +222,10 @@ func ExtractReportValues(report protocol.Report) (nativePrice, linkPrice decimal
 	return nativePrice, linkPrice, quote, nil
 }
 
+// extractPrice returns a fee token price. A nil price returns zero, which
+// CalculateFee turns into a zero fee, so a fee price outage does not stop the
+// channel from reporting. Channels that must always charge a fee set
+// DisableNilStreamValues, which makes a nil aggregate unreportable.
 func extractPrice(price protocol.StreamValue) (decimal.Decimal, error) {
 	switch p := price.(type) {
 	case *protocol.Decimal:

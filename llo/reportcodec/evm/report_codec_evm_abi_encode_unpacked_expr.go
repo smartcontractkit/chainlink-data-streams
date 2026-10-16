@@ -18,6 +18,7 @@ var (
 	_ protocol.ReportCodec       = ReportCodecEVMABIEncodeUnpackedExpr{}
 	_ protocol.FeedIDer          = ReportCodecEVMABIEncodeUnpackedExpr{}
 	_ protocol.AdmissionVerifier = ReportCodecEVMABIEncodeUnpackedExpr{}
+	_ protocol.TWAPCounter       = ReportCodecEVMABIEncodeUnpackedExpr{}
 )
 
 type ReportCodecEVMABIEncodeUnpackedExpr struct {
@@ -103,10 +104,7 @@ func (r ReportCodecEVMABIEncodeUnpackedExpr) Verify(cd llotypes.ChannelDefinitio
 	if len(cd.Streams) < 3 {
 		return fmt.Errorf("expected at least 3 streams; got: %d", len(cd.Streams))
 	}
-	if opts.MaxReportRange < 0 {
-		return fmt.Errorf("maxReportRange must be non-negative; got: %s", opts.MaxReportRange)
-	}
-	return nil
+	return verifyMaxReportRange(opts.MaxReportRange)
 }
 
 // VerifyForAdmission implements protocol.AdmissionVerifier: it rejects
@@ -123,11 +121,25 @@ func (r ReportCodecEVMABIEncodeUnpackedExpr) Verify(cd llotypes.ChannelDefinitio
 //
 // nil opts cache: the definition is given directly, so the opts are decoded from
 // it rather than looked up.
+//
+// Opts keys must be canonical: the expressions and stream IDs admission checks
+// must be the ones every decoder of these bytes reads.
 func (r ReportCodecEVMABIEncodeUnpackedExpr) VerifyForAdmission(cd llotypes.ChannelDefinition) error {
+	if err := protocol.VerifyOptsKeys(cd.Opts); err != nil {
+		return fmt.Errorf("invalid Opts: %w", err)
+	}
 	if err := calculated.ValidateChannelExpressions(nil, cd, 0); err != nil {
 		return fmt.Errorf("invalid calculated stream expressions: %w", err)
 	}
 	return nil
+}
+
+// TWAPCalls implements protocol.TWAPCounter: it counts the TWAP calls across
+// the channel's expressions, so admission can bound them over the whole set.
+//
+// nil opts cache, as in VerifyForAdmission.
+func (r ReportCodecEVMABIEncodeUnpackedExpr) TWAPCalls(cd llotypes.ChannelDefinition) int {
+	return calculated.ChannelTWAPCalls(nil, cd, 0)
 }
 
 func (r ReportCodecEVMABIEncodeUnpackedExpr) buildHeader(rf BaseReportFields, resolution protocol.TimeResolution) ([]byte, error) {

@@ -24,6 +24,24 @@ func Test_ChannelHashV2(t *testing.T) {
 		// and any v3.0 instance running protocol version 2. It is a protocol
 		// change, not a refactor.
 		assert.Equal(t, "f0c21393ace2c693200c2a1a61ab915b767a0964263ccea2a86e124a664f9904", fmt.Sprintf("%x", ChannelHashV2(base)))
+
+		// Set every field non-zero so the encoding of each one is pinned, not
+		// only the fields base happens to populate.
+		full := ChannelDefinitionWithID{
+			ChannelID: 4294967295,
+			ChannelDefinition: llotypes.ChannelDefinition{
+				ReportFormat: llotypes.ReportFormat(7),
+				Streams: []llotypes.Stream{
+					{StreamID: 3, Aggregator: llotypes.AggregatorQuote},
+					{StreamID: 1, Aggregator: llotypes.AggregatorMode},
+				},
+				Opts:                   []byte(`{"feedID":"0x01","multiplier":"1000000000000000000"}`),
+				Tombstone:              true,
+				Source:                 2,
+				DisableNilStreamValues: true,
+			},
+		}
+		assert.Equal(t, "7453e6ac62c0a38ec6f08b5e86adbf3450491be64582ceb9edaf0bbe3213c2d5", fmt.Sprintf("%x", ChannelHashV2(full)))
 	})
 
 	t.Run("commits to every field Equals compares", func(t *testing.T) {

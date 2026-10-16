@@ -56,7 +56,6 @@ func TestSeriesFunctions_Golden(t *testing.T) {
 		"Variance":             {Variance, []string{"2", "4", "4", "4", "5", "5", "7", "9"}, "4"},
 		"Variance flat":        {Variance, []string{"3", "3", "3"}, "0"},
 		"Stddev":               {Stddev, []string{"2", "4", "4", "4", "5", "5", "7", "9"}, "2"},
-		"Stddev single":        {Stddev, []string{"9"}, "0"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -85,6 +84,19 @@ func TestSeriesFunctions_Errors(t *testing.T) {
 			t.Parallel()
 			_, err := fn(Series{})
 			require.Error(t, err)
+		})
+	}
+
+	comparison := map[string]func(any) (decimal.Decimal, error){
+		"Variance": Variance, "Stddev": Stddev, "Delta": Delta,
+		"PctChange": PctChange, "Spread": Spread,
+	}
+	for name, fn := range comparison {
+		t.Run(name+" rejects a single record", func(t *testing.T) {
+			t.Parallel()
+			_, err := fn(seriesOf(t, "9"))
+			require.ErrorContains(t, err, "needs at least 2")
+			require.NotErrorIs(t, err, ErrInsufficientHistory)
 		})
 	}
 

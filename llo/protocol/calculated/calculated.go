@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"math"
 	"math/big"
-	"regexp"
 	"runtime"
 	"slices"
 	"strconv"
@@ -183,10 +182,13 @@ func (e environment) release() {
 	pool.Put(e)
 }
 
+// observationsTimestampName binds the round's consensus observation timestamp.
+const observationsTimestampName = "observations_timestamp"
+
 // NewEnv returns a new environment with the default functions
 func NewEnv(observationTimestampNanoseconds uint64) environment {
 	env := pool.Get().(environment)
-	env["observations_timestamp"] = observationTimestampNanoseconds
+	env[observationsTimestampName] = observationTimestampNanoseconds
 	// TWAP's window is anchored on the round's consensus observation timestamp,
 	// not on the data, so it is bound per round. release() restores the default
 	// binding, which fails if called.
@@ -424,7 +426,7 @@ func Ln(x any) (decimal.Decimal, error) {
 	if n.IsZero() {
 		return decimal.Decimal{}, fmt.Errorf("cannot represent natural logarithm of 0")
 	}
-	return decimalLn(n, precision)
+	return lnDecimal(n, precision)
 }
 
 // Log returns the logarithms of y with base x. This is equivalent to log_x(y).
@@ -439,7 +441,7 @@ func Log(x, y any) (decimal.Decimal, error) {
 	if err != nil {
 		return decimal.Decimal{}, err
 	}
-	lnLog, err := decimalLn(log, doublePrecision) // double precision, since we're going to divide them
+	lnLog, err := lnDecimal(log, doublePrecision) // double precision, since we're going to divide them
 	if err != nil {
 		return decimal.Decimal{}, err
 	}
@@ -448,13 +450,13 @@ func Log(x, y any) (decimal.Decimal, error) {
 	if err != nil {
 		return decimal.Decimal{}, err
 	}
-	lnBase, err := decimalLn(base, doublePrecision) // double precision, since we're going to divide them
+	lnBase, err := lnDecimal(base, doublePrecision) // double precision, since we're going to divide them
 	if err != nil {
 		return decimal.Decimal{}, err
 	}
 
 	// ln(1) is 0, so base 1 has no logarithm: DivRound would panic with
-	// "decimal division by 0". Bases <= 0 are already rejected by decimalLn.
+	// "decimal division by 0". Bases <= 0 are already rejected by lnDecimal.
 	if lnLog.IsZero() {
 		return decimal.Decimal{}, fmt.Errorf("logarithm base 1 is undefined")
 	}
@@ -491,8 +493,8 @@ func IsPositive(x any) (bool, error) {
 
 // Round returns the rounded value of x to the given precision
 func Round(x any, precision int) (decimal.Decimal, error) {
-	if precision > math.MaxInt32 {
-		return decimal.Decimal{}, fmt.Errorf("precision is too large")
+	if err := checkPrecision(precision); err != nil {
+		return decimal.Decimal{}, err
 	}
 	ad, err := toDecimal(x)
 	if err != nil {
@@ -503,8 +505,8 @@ func Round(x any, precision int) (decimal.Decimal, error) {
 
 // Truncate truncates off digits from the number, without rounding.
 func Truncate(x any, precision int) (decimal.Decimal, error) {
-	if precision > math.MaxInt32 {
-		return decimal.Decimal{}, fmt.Errorf("precision is too large")
+	if err := checkPrecision(precision); err != nil {
+		return decimal.Decimal{}, err
 	}
 	n, err := toDecimal(x)
 	if err != nil {
@@ -513,20 +515,50 @@ func Truncate(x any, precision int) (decimal.Decimal, error) {
 	return n.Truncate(int32(precision)), nil
 }
 
+// checkPrecision bounds a rounding precision to the exponent range of stream values.
+func checkPrecision(precision int) error {
+	if precision > protocol.MaxDecimalExponent || precision < -protocol.MaxDecimalExponent {
+		return fmt.Errorf("precision %d out of range, expected absolute value <= %d", precision, protocol.MaxDecimalExponent)
+	}
+	return nil
+}
+
 // ParseDuration parses a duration string into a time.ParseDuration
 func ParseDuration(x string) (time.Duration, error) {
 	return time.ParseDuration(x)
 }
 
-// toDecimal converts x to a decimal.Decimal
+// toDecimal converts x to a decimal.Decimal, refusing an operand too large to
+// compute with. See checkOperand.
 func toDecimal(x any) (decimal.Decimal, error) {
+	d, err := convertToDecimal(x)
+	if err != nil {
+		return decimal.Decimal{}, err
+	}
+	if err := checkOperand(d); err != nil {
+		return decimal.Decimal{}, err
+	}
+	return d, nil
+}
+
+// convertToDecimal converts x to a decimal.Decimal.
+func convertToDecimal(x any) (decimal.Decimal, error) {
 	switch v := x.(type) {
 	case Series:
 		// Static analysis rejects windows in scalar positions, so this is a
 		// backstop for a bypassed analysis rather than an expected path.
 		return decimal.Decimal{}, fmt.Errorf("%w (length %d)", ErrSeriesAsScalar, v.Len())
 	case string:
-		return decimal.NewFromString(v)
+		// Bounded like an observed value: an operation on a literal such as
+		// "1e-2000000000" rescales its operands to the literal's exponent.
+		d, err := decimal.NewFromString(v)
+		if err != nil {
+			return decimal.Decimal{}, err
+		}
+		if err := protocol.CheckDecimalExponent(d); err != nil {
+			return decimal.Decimal{}, err
+		}
+		return d, nil
 	case int:
 		return decimal.NewFromInt(int64(v)), nil
 	case int32:
@@ -810,17 +842,23 @@ func evaluateCalculatedStreams(works []channelWork) []channelResult {
 
 // evaluationWeight estimates how much evaluation a round holds, in values that
 // will be visited: one per expression, plus one per record in each window it
-// reads. It is the cheapest predictor of cost that distinguishes the two cases
-// that matter — a round of scalar arithmetic from a round of window functions —
-// and it is derived from prepared work, so it costs nothing to compute.
+// reads, plus the longest window each TWAP call may step through. It is the
+// cheapest predictor of cost that distinguishes the two cases that matter — a
+// round of scalar arithmetic from a round of window functions — and it is
+// derived from prepared work and cached analysis, so it costs next to nothing.
+//
+// TWAP is charged its worst case because its cost follows the window it is
+// configured with rather than the records it reads: two records a day apart
+// are two values here but tens of thousands of interpolated seconds.
 func evaluationWeight(works []channelWork) int {
 	weight := 0
 	for i := range works {
-		for _, window := range works[i].windows {
+		for j, window := range works[i].windows {
 			weight++
 			for _, bound := range window {
 				weight += bound.series.Len()
 			}
+			weight += historyAnalysisCache.entry(works[i].opts.ABI[j].Expression).twapCalls * twapMaxWindowSeconds
 		}
 	}
 	return weight
@@ -842,6 +880,18 @@ func applyCalculatedStreams(lggr logger.Logger, channelDefinitions llotypes.Chan
 		if appendToDefinitions {
 			// channel definitions are inherited from the previous outcome,
 			// so we only update the channel definition streams if we haven't done it before
+			//
+			// Comparing only the trailing stream is enough, an opts change
+			// arrives with a channel update vote, which replaces the whole
+			// definition, so the appended streams never outlive the ABI they
+			// came from. The one false positive is a definition whose last
+			// observed stream shares its ID with the last calculated stream.
+			// The append is then skipped and the channel reports observed
+			// values in the expression payload, while evaluation logs the
+			// clash every round. Admission rejects that clash, so only a
+			// definition committed before the check can reach it. Kept as is:
+			// changing the check changes v30 outcomes, and v31 derives its
+			// streams through protocol.EffectiveStreams instead.
 			cd := work.cd
 			if cd.Streams[len(cd.Streams)-1].StreamID != work.opts.ABI[len(work.opts.ABI)-1].ExpressionStreamID {
 				for _, abi := range work.opts.ABI {
@@ -863,9 +913,10 @@ func applyCalculatedStreams(lggr logger.Logger, channelDefinitions llotypes.Chan
 					work.cid, abi.ExpressionStreamID, abi.Expression)
 				break
 			}
-			// A calculated value never passes through observation decode, so
-			// this is the only place its coefficient is bounded.
-			if cerr := protocol.CheckDecimalCoefficient(value); cerr != nil {
+
+			// bound the calculated value before it is stored.
+			var cerr error
+			if value, cerr = storableDecimal(value); cerr != nil {
 				err = fmt.Errorf(
 					"calculated stream value out of range, channelID: %d, expressionStreamID: %d, expression: %s: %w",
 					work.cid, abi.ExpressionStreamID, abi.Expression, cerr)
@@ -889,6 +940,25 @@ func applyCalculatedStreams(lggr logger.Logger, channelDefinitions llotypes.Chan
 		}
 		work.env.release()
 	}
+}
+
+// storableDecimal returns d in a form that decodes, or an error if it has none.
+// Only a value whose exponent is out of bounds is rewritten to its canonical
+// form, so every value storable before keeps its encoding and the outcome it is
+// part of stays the same across versions.
+func storableDecimal(d decimal.Decimal) (decimal.Decimal, error) {
+	if err := protocol.CheckDecimalCoefficient(d); err != nil {
+		return decimal.Decimal{}, err
+	}
+	if protocol.CheckDecimalExponent(d) == nil {
+		return d, nil
+	}
+	// Canonicalizing only shortens the coefficient, so it stays in bounds.
+	d = protocol.CanonicalDecimal(d)
+	if err := protocol.CheckDecimalExponent(d); err != nil {
+		return decimal.Decimal{}, err
+	}
+	return d, nil
 }
 
 // AggregatorByStream indexes a channel's non-calculated streams by stream ID.
@@ -1181,6 +1251,11 @@ func ProcessCalculatedStreamsDryRun(expression string) error {
 		return fmt.Errorf("failed to process expression: %w", result.err)
 	}
 	for i, value := range result.values {
+		// Held to the same bounds as applyCalculatedStreams, so a definition
+		// whose result cannot be stored is rejected.
+		if _, err := storableDecimal(value); err != nil {
+			return fmt.Errorf("calculated stream value out of range, expression: %s: %w", o.ABI[i].Expression, err)
+		}
 		aggr[o.ABI[i].ExpressionStreamID] = map[llotypes.Aggregator]protocol.StreamValue{
 			llotypes.AggregatorCalculated: protocol.ToDecimal(value),
 		}
@@ -1203,7 +1278,7 @@ func (v *visitor) Visit(node *ast.Node) {
 	}
 
 	if n, ok := (*node).(*ast.IdentifierNode); ok {
-		match := streamMatch.FindStringSubmatch(n.Value)
+		match := streamIdentifier.FindStringSubmatch(n.Value)
 		if len(match) > 0 {
 			id, err := strconv.ParseUint(match[1], 10, 32)
 			if err != nil {
@@ -1215,5 +1290,3 @@ func (v *visitor) Visit(node *ast.Node) {
 		}
 	}
 }
-
-var streamMatch = regexp.MustCompile(`s(\d+)(?:_(bid|ask|benchmark|timestamp))?`)

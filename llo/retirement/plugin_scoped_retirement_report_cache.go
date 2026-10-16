@@ -60,6 +60,12 @@ func (pr *pluginScopedRetirementReportCache) VerifyAttestedRetirementReport(pred
 		return protocol.RetirementReport{}, fmt.Errorf("Verify failed; failed to unmarshal protobuf: %w", err)
 	}
 
+	// Each signature costs a verification, and there can be no more valid
+	// ones than signers.
+	if len(arr.Sigs) > len(signers) {
+		return protocol.RetirementReport{}, fmt.Errorf("Verify failed; attested report carries more signatures than signers (got: %d, max: %d)", len(arr.Sigs), len(signers))
+	}
+
 	validSigs := 0
 	seenSigners := make(map[uint32]struct{}, len(signers))
 	for _, sig := range arr.Sigs {

@@ -3,6 +3,7 @@ package evm
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"math"
 
@@ -34,6 +35,9 @@ type ReportCodecEVMStreamlined struct {
 }
 
 func (rc ReportCodecEVMStreamlined) Encode(r protocol.Report, cd llotypes.ChannelDefinition, optsCache *protocol.OptsCache) (payload []byte, err error) {
+	if r.Specimen {
+		return nil, errors.New("ReportCodecEVMStreamlined does not support encoding specimen reports")
+	}
 	opts, getErr := protocol.GetOpts[ReportFormatEVMStreamlinedOpts](optsCache, r.ChannelID)
 	if getErr != nil {
 		return nil, fmt.Errorf("opts not in cache for channel %d: %w", r.ChannelID, getErr)
@@ -92,10 +96,7 @@ func (rc ReportCodecEVMStreamlined) Verify(cd llotypes.ChannelDefinition) error 
 	if len(opts.ABI) != len(cd.Streams) {
 		return fmt.Errorf("ABI length mismatch; expected: %d, got: %d", len(cd.Streams), len(opts.ABI))
 	}
-	if opts.MaxReportRange < 0 {
-		return fmt.Errorf("maxReportRange must be non-negative; got: %s", opts.MaxReportRange)
-	}
-	return nil
+	return verifyMaxReportRange(opts.MaxReportRange)
 }
 
 func (rc ReportCodecEVMStreamlined) Pack(digest types.ConfigDigest, seqNr uint64, report ocr2types.Report, sigs []ocr2types.AttributedOnchainSignature) ([]byte, error) {

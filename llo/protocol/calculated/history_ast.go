@@ -8,6 +8,7 @@ import (
 	"strconv"
 
 	"github.com/expr-lang/expr/ast"
+	"github.com/shopspring/decimal"
 
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
 
@@ -37,6 +38,10 @@ const HistoryFunctionName = "History"
 // twapFunctionName is the DSL name TWAP is registered under, shared with the
 // static analysis that validates its configuration.
 const twapFunctionName = "TWAP"
+
+// roundFunctionName is the DSL name Round is registered under, shared with the
+// static analysis that bounds its literal precision.
+const roundFunctionName = "Round"
 
 // Field selects which part of a stored stream value a window projects. One
 // stored window serves every field, so History(s1, 10), History(s1_bid, 10) and
@@ -110,10 +115,10 @@ func (r HistoryRef) String() string {
 }
 
 var (
-	// historyStreamArg matches the first argument of a History call. It is
-	// anchored, unlike streamMatch, because here the whole argument must be a
-	// stream identifier and nothing else.
-	historyStreamArg = regexp.MustCompile(`^s(\d+)(?:_(bid|ask|benchmark|timestamp))?$`)
+	// streamIdentifier matches an identifier naming a stream value, such as s1
+	// or s1_bid. It is anchored so that a longer identifier merely containing
+	// one, such as abs1, is not mistaken for it.
+	streamIdentifier = regexp.MustCompile(`^s(\d+)(?:_(bid|ask|benchmark|timestamp))?$`)
 
 	// reservedHistoryName matches the identifier namespace this pass generates.
 	// Expressions may not use it directly: allowing that would let a source
@@ -147,6 +152,17 @@ var (
 		"WMA":       true,
 		"EMA":       true,
 		"TWAP":      true,
+	}
+
+	// minWindowDepth is the smallest depth at which a window function compares
+	// more than one record. Below it the function is constant by construction,
+	// so the expression is rejected rather than left to publish that constant.
+	minWindowDepth = map[string]uint32{
+		"Variance":  2,
+		"Stddev":    2,
+		"Delta":     2,
+		"PctChange": 2,
+		"Spread":    2,
 	}
 )
 
@@ -184,6 +200,11 @@ type historyPatcher struct {
 	// maximum-length window, so their count is what bounds the bucket work an
 	// expression can ask for every round.
 	twapCalls int
+
+	// names holds every source identifier, and declared the names bound by a
+	// let, so the identifiers the environment must provide can be recovered.
+	names    map[string]bool
+	declared map[string]bool
 }
 
 func newHistoryPatcher() *historyPatcher {
@@ -191,6 +212,8 @@ func newHistoryPatcher() *historyPatcher {
 		generated: map[ast.Node]bool{},
 		approved:  map[ast.Node]bool{},
 		refByNode: map[ast.Node]HistoryRef{},
+		names:     map[string]bool{},
+		declared:  map[string]bool{},
 	}
 }
 
@@ -208,8 +231,21 @@ func newHistoryPatcher() *historyPatcher {
 func (p *historyPatcher) Visit(node *ast.Node) {
 	switch n := (*node).(type) {
 	case *ast.IdentifierNode:
+		p.names[n.Value] = true
 		if reservedHistoryName.MatchString(n.Value) {
 			p.errorf("identifier %q uses the reserved history namespace (__h<N>); use %s(s<streamID>, <N>) instead", n.Value, HistoryFunctionName)
+		}
+
+	case *ast.VariableDeclaratorNode:
+		p.declared[n.Name] = true
+
+	case *ast.StringNode:
+		// Strings that are not decimals (durations, configuration keys) are
+		// left to the functions that take them.
+		if d, err := decimal.NewFromString(n.Value); err == nil {
+			if err := protocol.CheckDecimalExponent(d); err != nil {
+				p.errorf("decimal literal %q: %s", n.Value, err)
+			}
 		}
 
 	case *ast.CallNode:
@@ -221,6 +257,14 @@ func (p *historyPatcher) Visit(node *ast.Node) {
 			p.rewrite(node, n)
 			return
 		}
+		if callee.Value == roundFunctionName && len(n.Arguments) == 2 {
+			// A computed precision is left to the runtime bound.
+			if precision, ok := integerLiteral(n.Arguments[1]); ok {
+				if err := checkPrecision(precision); err != nil {
+					p.errorf("%s: %s", roundFunctionName, err)
+				}
+			}
+		}
 		if rangeAcceptingFunctions[callee.Value] {
 			for _, arg := range n.Arguments {
 				if p.generated[arg] {
@@ -230,6 +274,7 @@ func (p *historyPatcher) Visit(node *ast.Node) {
 			if callee.Value == twapFunctionName {
 				p.checkTWAP(n)
 			}
+			p.checkWindowDepth(callee.Value, n)
 		}
 	}
 }
@@ -248,7 +293,7 @@ func (p *historyPatcher) rewrite(node *ast.Node, call *ast.CallNode) {
 		p.errorf("%s: first argument must be a stream identifier such as s10001, got %s", HistoryFunctionName, describeNode(call.Arguments[0]))
 		return
 	}
-	match := historyStreamArg.FindStringSubmatch(streamArg.Value)
+	match := streamIdentifier.FindStringSubmatch(streamArg.Value)
 	if match == nil {
 		p.errorf("%s: first argument %q is not a stream identifier", HistoryFunctionName, streamArg.Value)
 		return
@@ -356,6 +401,24 @@ func (p *historyPatcher) checkTWAP(call *ast.CallNode) {
 	}
 }
 
+// checkWindowDepth rejects a window shallower than the function needs to
+// compare records. Only a direct History argument is checked: that is the only
+// way a window reaches a function.
+func (p *historyPatcher) checkWindowDepth(name string, call *ast.CallNode) {
+	minDepth, ok := minWindowDepth[name]
+	if !ok || len(call.Arguments) == 0 {
+		return
+	}
+	ref, ok := p.refByNode[call.Arguments[0]]
+	if !ok {
+		return
+	}
+	if ref.Count < minDepth {
+		p.errorf("%s requires a history depth of at least %d but %s only keeps %d records",
+			name, minDepth, ref, ref.Count)
+	}
+}
+
 // twapConfigLiteral reads an integer-literal value out of a configuration map
 // literal, reporting whether it was present and literal.
 func twapConfigLiteral(config *ast.MapNode, key string) (int64, bool) {
@@ -373,6 +436,20 @@ func twapConfigLiteral(config *ast.MapNode, key string) (int64, bool) {
 			return 0, false
 		}
 		return int64(value.Value), true
+	}
+	return 0, false
+}
+
+// integerLiteral returns the value of an integer literal, including a negated
+// one, which the parser represents as a unary minus over the literal.
+func integerLiteral(node ast.Node) (int, bool) {
+	switch n := node.(type) {
+	case *ast.IntegerNode:
+		return n.Value, true
+	case *ast.UnaryNode:
+		if v, ok := n.Node.(*ast.IntegerNode); ok && n.Operator == "-" {
+			return -v.Value, true
+		}
 	}
 	return 0, false
 }
@@ -418,6 +495,21 @@ func (p *historyPatcher) errorf(format string, args ...any) {
 	p.errs = append(p.errs, fmt.Errorf(format, args...))
 }
 
+// freeNames returns the identifiers the expression reads from its environment,
+// sorted. A name bound by a let anywhere in the expression is excluded: scoping
+// is left to the compiler, which rejects a use outside the binding the same way
+// on every node.
+func (p *historyPatcher) freeNames() []string {
+	names := make([]string, 0, len(p.names))
+	for name := range p.names {
+		if !p.declared[name] {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+	return names
+}
+
 // sortedRefs returns the recovered references deduplicated and in a
 // deterministic order, so callers deriving persisted state from them agree
 // across nodes.
@@ -447,23 +539,24 @@ func (p *historyPatcher) sortedRefs() []HistoryRef {
 }
 
 // analyzeHistoryExpression parses an expression and recovers its History
-// references without compiling it. It is a pure function of the expression
-// string, which is what lets every node derive the same required depths from
-// replicated channel definitions.
+// references, its TWAP call count and the names it reads from its environment
+// without compiling it. It is a pure
+// function of the expression string, which is what lets every node derive the
+// same required depths and TWAP budget from replicated channel definitions.
 //
 // An expression with no History calls returns no references and no error.
-func analyzeHistoryExpression(expression string) ([]HistoryRef, error) {
+func analyzeHistoryExpression(expression string) (refs []HistoryRef, twapCalls int, names []string, err error) {
 	tree, err := parseExpression(expression)
 	if err != nil {
-		return nil, fmt.Errorf("%w: failed to parse expression: %s", ErrHistoryExpression, err)
+		return nil, 0, nil, fmt.Errorf("%w: failed to parse expression: %s", ErrHistoryExpression, err)
 	}
 
 	p := newHistoryPatcher()
 	ast.Walk(&tree.Node, p)
 	if err := p.err(); err != nil {
-		return nil, err
+		return nil, 0, nil, err
 	}
-	return p.sortedRefs(), nil
+	return p.sortedRefs(), p.twapCalls, p.freeNames(), nil
 }
 
 func describeNode(node ast.Node) string {

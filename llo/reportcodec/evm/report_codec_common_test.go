@@ -461,6 +461,30 @@ func Test_ABIEncoder_EncodePadded_EncodePacked(t *testing.T) {
 	})
 }
 
+func Test_verifyMaxReportRange(t *testing.T) {
+	tests := []struct {
+		name    string
+		in      protocol.Duration
+		wantErr string
+	}{
+		{"zero", 0, ""},
+		{"at ceiling", protocol.MaxReportRangeCeiling, ""},
+		{"negative", protocol.Duration(-time.Second), "maxReportRange must be non-negative"},
+		{"above ceiling", protocol.MaxReportRangeCeiling + 1, "maxReportRange must not exceed 168h0m0s"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := verifyMaxReportRange(tc.in)
+			if tc.wantErr == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tc.wantErr)
+		})
+	}
+}
+
 func Test_ClampReportRange(t *testing.T) {
 	const obsTs = uint64(1_700_000_000_000_000_000)
 
@@ -479,6 +503,10 @@ func Test_ClampReportRange(t *testing.T) {
 	t.Run("negative max range uses default instead of underflowing", func(t *testing.T) {
 		report := protocol.Report{ValidAfterNanoseconds: obsTs - 1e9, ObservationTimestampNanoseconds: obsTs}
 		assert.Equal(t, obsTs-1e9, ClampReportRange(logger.Nop(), report, protocol.Duration(-time.Hour)))
+	})
+	t.Run("max range above ceiling is capped to the ceiling", func(t *testing.T) {
+		report := protocol.Report{ValidAfterNanoseconds: obsTs - uint64(30*24*time.Hour), ObservationTimestampNanoseconds: obsTs}
+		assert.Equal(t, obsTs-uint64(protocol.MaxReportRangeCeiling), ClampReportRange(logger.Nop(), report, protocol.Duration(87600*time.Hour)))
 	})
 	t.Run("validAfter after observation timestamp yields zero-length range", func(t *testing.T) {
 		report := protocol.Report{ValidAfterNanoseconds: obsTs + 1e9, ObservationTimestampNanoseconds: obsTs}

@@ -373,3 +373,31 @@ func TestOptsCache_SyncTo(t *testing.T) {
 		assert.Empty(t, cache.decoded)
 	})
 }
+
+func TestVerifyOptsKeys(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		raw  string
+		err  string
+	}{
+		{name: "empty", raw: ``},
+		{name: "canonical", raw: `{"abi":[{"type":"int256","expression":"s1","expressionStreamID":1}],"feedID":"0x1"}`},
+		{name: "repeated values are not keys", raw: `{"a":"a","b":["a","a"],"c":{"a":"a"}}`},
+		{name: "same key in sibling objects", raw: `{"abi":[{"type":"a"},{"type":"b"}]}`},
+		{name: "non-ASCII key", raw: `{"abi":[{"expreſsion":"s1"}]}`, err: "is not ASCII"},
+		{name: "escaped non-ASCII key", raw: `{"abi":[{"expreſsion":"s1"}]}`, err: "is not ASCII"},
+		{name: "repeated key", raw: `{"abi":[],"abi":[]}`, err: "is repeated"},
+		{name: "key repeated under case folding", raw: `{"abi":[{"expression":"s1","EXPRESSION":"s2"}]}`, err: "is repeated"},
+		{name: "repeated key after nested value", raw: `{"a":{"b":1},"A":2}`, err: "is repeated"},
+		{name: "malformed", raw: `{"abi":`, err: "failed to scan opts"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := VerifyOptsKeys([]byte(tc.raw))
+			if tc.err == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.ErrorContains(t, err, tc.err)
+		})
+	}
+}

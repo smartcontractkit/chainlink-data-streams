@@ -31,7 +31,9 @@ var (
 type TWAPRejectionReason string
 
 const (
-	// ReasonInsufficientSamples: M < minSamples, the coverage floor.
+	// ReasonInsufficientSamples: M < minSamples, the coverage floor. It bounds the
+	// total filled buckets, N - M, across head, interior and tail gaps combined;
+	// maxInteriorGap bounds only the longest single interior run.
 	ReasonInsufficientSamples TWAPRejectionReason = "min_samples"
 	// ReasonHeadGapTooLong: Ghead > maxHeadGap, backfilled prefix too long.
 	ReasonHeadGapTooLong TWAPRejectionReason = "head_gap_too_long"
@@ -74,8 +76,15 @@ type twapConfig struct {
 	maxTailGap     int
 }
 
-// twapBucket is one second of the dense series the specification operates on.
-// price is only meaningful when observed is true.
+// twapObservation is one observed second of the window: its offset from the
+// window start and the price recorded in it.
+//
+// The specification operates on a dense series of one-second buckets. Only the
+// observed ones carry information, since every missing bucket is a function of
+// the observations either side of it, so the window is held as its observations
+// alone. That keeps the cost of a window proportional to its records rather than
+// its length: a 24 hour window over a 1024-record history costs what its records
+// and interior gaps cost, not 86400 buckets.
 //
 // The specification is written in log-price space throughout: build X[i] = ln(P[i]),
 // fill gaps in that space, then average exp of the filled series. This stores the
@@ -89,15 +98,15 @@ type twapConfig struct {
 //
 // The reason it matters is cost. Filling in log space needs a logarithm per
 // observed bucket and an exponential per bucket in the window — about 600
-// operations for a five-minute window — and they all serialize on the
-// transcendental lock. Measured: 197ms per evaluation for a 300-second window,
+// operations for a five-minute window — and they were serialized on a
+// process-wide lock at the time. Measured: 197ms per evaluation for a 300-second window,
 // and 7.2s for 32 such channels in one round, against a round budget on the
 // order of a second. Doing it this way, a fully covered window needs no
-// transcendental operations at all, and a window with gaps needs two logarithms
-// per gap plus one exponential per missing bucket.
-type twapBucket struct {
-	observed bool
-	price    decimal.Decimal
+// transcendental operations at all, and a window with gaps needs one logarithm
+// and one exponential per interior gap.
+type twapObservation struct {
+	offset int
+	price  decimal.Decimal
 }
 
 // twapFunc returns the TWAP function bound to a round's consensus observation
@@ -135,9 +144,10 @@ func twapUnbound(any, any) (decimal.Decimal, error) {
 
 func twap(series Series, cfg twapConfig, anchorSeconds int64) (decimal.Decimal, error) {
 	windowStart := anchorSeconds - cfg.windowSeconds
-	buckets := make([]twapBucket, cfg.windowSeconds)
+	n := int(cfg.windowSeconds)
 
 	values, timestamps := series.Values(), series.Timestamps()
+	observations := make([]twapObservation, 0, len(timestamps))
 	for i, ts := range timestamps {
 		seconds := int64(ts / uint64(time.Second))
 		if seconds < windowStart || seconds >= anchorSeconds {
@@ -150,12 +160,17 @@ func twap(series Series, cfg twapConfig, anchorSeconds int64) (decimal.Decimal, 
 		if !values[i].IsPositive() {
 			return decimal.Decimal{}, fmt.Errorf("TWAP: record %d: price %s must be positive", i, values[i])
 		}
-		// Timestamps are strictly increasing, so a later record legitimately
-		// overwrites an earlier one in the same bucket: newest wins.
-		buckets[seconds-windowStart] = twapBucket{observed: true, price: values[i]}
+		// Timestamps are strictly increasing, so records sharing a second are
+		// adjacent and a later one replaces an earlier one: newest wins.
+		offset := int(seconds - windowStart)
+		if last := len(observations) - 1; last >= 0 && observations[last].offset == offset {
+			observations[last].price = values[i]
+			continue
+		}
+		observations = append(observations, twapObservation{offset: offset, price: values[i]})
 	}
 
-	m, gHead, gInt, gTail := twapGapStats(buckets)
+	m, gHead, gInt, gTail := twapGapStats(observations, n)
 
 	var reasons []TWAPRejectionReason
 	// A floor of 1 observation is required for head backfill to have an anchor.
@@ -185,96 +200,67 @@ func twap(series Series, cfg twapConfig, anchorSeconds int64) (decimal.Decimal, 
 		}
 	}
 
-	return twapFillThenAverage(buckets)
+	return twapFillThenAverage(observations, n)
 }
 
-// twapGapStats measures M, Ghead, Gint and Gtail by classifying each missing run
-// by its position (spec §2, ADR 0015).
+// twapGapStats measures M, Ghead, Gint and Gtail over a window of n buckets
+// from its observations, which must be in ascending offset order (spec §2,
+// ADR 0015).
 //
 // Ghead and Gtail are kept separate from Gint deliberately: Gint is the
 // both-sides-anchored statistic, and a head or tail run has only one anchor. A
-// run spanning the whole window is classified as none of them because it has no
-// anchors at all; such a window is always rejected by the M check.
-func twapGapStats(buckets []twapBucket) (m, gHead, gInt, gTail int) {
-	n := len(buckets)
-	for i := 0; i < n; {
-		runStart := i
-		observed := buckets[i].observed
-		for i < n && buckets[i].observed == observed {
-			i++
-		}
-		runLen := i - runStart
-
-		if observed {
-			m += runLen
-			continue
-		}
-		switch {
-		case runStart == 0 && i == n:
-			// Entire window missing: no anchors, so not head, tail or interior.
-		case runStart == 0:
-			gHead = runLen
-		case i == n:
-			gTail = runLen
-		default:
-			gInt = max(gInt, runLen)
-		}
+// window with no observations has a single run with no anchors at all, which
+// is classified as none of them; such a window is always rejected by the M
+// check.
+func twapGapStats(observations []twapObservation, n int) (m, gHead, gInt, gTail int) {
+	m = len(observations)
+	if m == 0 {
+		return 0, 0, 0, 0
+	}
+	gHead = observations[0].offset
+	gTail = n - 1 - observations[m-1].offset
+	for i := 1; i < m; i++ {
+		gInt = max(gInt, observations[i].offset-observations[i-1].offset-1)
 	}
 	return m, gHead, gInt, gTail
 }
 
-// twapFillThenAverage fills every bucket per spec §4 and returns the mean price
-// over the full window.
+// twapFillThenAverage fills every bucket of a window of n buckets per spec §4
+// and returns the mean price over the full window.
 //
 // Callers must only reach this once the acceptance rule has passed, which
 // guarantees at least one observation.
-func twapFillThenAverage(buckets []twapBucket) (decimal.Decimal, error) {
-	n := len(buckets)
-	filled := make([]decimal.Decimal, n)
+func twapFillThenAverage(observations []twapObservation, n int) (decimal.Decimal, error) {
+	first, last := observations[0], observations[len(observations)-1]
 
-	for i := 0; i < n; {
-		if buckets[i].observed {
-			filled[i] = buckets[i].price // spec §4.1: X[i] passes through
-			i++
+	// Head gap: backfill the first observed price (ADR 0015). Tail gap: carry
+	// forward the last observed price (spec §4.3). Decimal multiplication and
+	// addition are exact, so a run of k copies adds price*k, the same sum as
+	// adding each copy.
+	sum := first.price.Mul(decimal.NewFromInt(int64(first.offset)))
+	sum = sum.Add(last.price.Mul(decimal.NewFromInt(int64(n - 1 - last.offset))))
+
+	for i, observation := range observations {
+		sum = sum.Add(observation.price) // spec §4.1: X[i] passes through
+		if i == 0 || observation.offset-observations[i-1].offset == 1 {
 			continue
 		}
-		runStart := i
-		for i < n && !buckets[i].observed {
-			i++
+		// Interior gap: log-linear interpolation between the bracketing
+		// anchors (spec §4.2). This is the only case that needs log space, so
+		// it is the only one that pays for it.
+		filled, err := twapInterpolate(observations[i-1], observation)
+		if err != nil {
+			return decimal.Decimal{}, err
 		}
-		switch {
-		case runStart == 0:
-			// Head gap: backfill the first observed price (ADR 0015).
-			// buckets[i] is observed, because a window with no observation at
-			// all was rejected above.
-			for k := 0; k < i; k++ {
-				filled[k] = buckets[i].price
-			}
-		case i == n:
-			// Tail gap: carry forward the last observed price (spec §4.3).
-			for k := runStart; k < n; k++ {
-				filled[k] = buckets[runStart-1].price
-			}
-		default:
-			// Interior gap: log-linear interpolation between the bracketing
-			// anchors at runStart-1 and i (spec §4.2). This is the only case
-			// that needs log space, so it is the only one that pays for it.
-			if err := twapInterpolate(buckets, filled, runStart, i); err != nil {
-				return decimal.Decimal{}, err
-			}
-		}
+		sum = sum.Add(filled)
 	}
 
 	// TWAP = mean over N (spec §4-5, denominator N not M).
-	sum := decimal.Zero
-	for _, price := range filled {
-		sum = sum.Add(price)
-	}
 	return divRoundByInt(sum, n, precision)
 }
 
-// twapInterpolate fills the missing run [runStart, rightIdx) between its
-// bracketing anchors (spec §4.2).
+// twapInterpolate fills the missing run between two adjacent observations
+// (spec §4.2) and returns the sum of the filled prices.
 //
 // Linear interpolation in log space is geometric interpolation in price space: a
 // gap between 100 and 1600 fills as 200, 400, 800, not as evenly spaced prices.
@@ -284,38 +270,58 @@ func twapFillThenAverage(buckets []twapBucket) (decimal.Decimal, error) {
 //	ratio    = (right / left) ^ (1 / span)
 //	filled[k] = filled[k-1] * ratio
 //
-// One power per gap instead of two logarithms plus one exponential per missing
-// bucket. With the spec's example thresholds a window can be missing 60 buckets,
-// which cost ~73ms the other way and a fraction of that here. Exponentials are the
-// expensive operation (~0.5ms each) and reducing their precision only helps by
-// about a factor of two, so cutting their number is the only lever that matters.
+// One logarithm and one exponential per gap instead of two logarithms plus one
+// exponential per missing bucket. With the spec's example thresholds a window
+// can be missing 60 buckets, which cost ~73ms the other way and a fraction of
+// that here.
 //
 // Determinism: the ratio is computed at a fixed precision and every step is
 // rounded, so the sequence is reproducible — the same requirement EMA has, for the
-// same reason.
-func twapInterpolate(buckets []twapBucket, filled []decimal.Decimal, runStart, rightIdx int) error {
-	leftIdx := runStart - 1
-	left, right := buckets[leftIdx].price, buckets[rightIdx].price
-
-	growth, err := divRound(right, left, doublePrecision)
+// same reason. That is also why the steps cannot be summed in closed form.
+func twapInterpolate(left, right twapObservation) (decimal.Decimal, error) {
+	ratio, err := twapStepRatio(left.price, right.price, right.offset-left.offset)
 	if err != nil {
-		return fmt.Errorf("TWAP: bucket %d: %w", leftIdx, err)
-	}
-	exponent, err := divRoundByInt(decimal.NewFromInt(1), rightIdx-leftIdx, doublePrecision)
-	if err != nil {
-		return err
-	}
-	ratio, err := decimalPow(growth, exponent, doublePrecision)
-	if err != nil {
-		return fmt.Errorf("TWAP: interpolating buckets %d..%d: %w", runStart, rightIdx-1, err)
+		return decimal.Decimal{}, fmt.Errorf("TWAP: interpolating buckets %d..%d: %w", left.offset+1, right.offset-1, err)
 	}
 
-	price := left
-	for k := runStart; k < rightIdx; k++ {
+	sum := decimal.Zero
+	price := left.price
+	for range right.offset - left.offset - 1 {
 		price = price.Mul(ratio).Round(doublePrecision)
-		filled[k] = price
+		sum = sum.Add(price)
 	}
-	return nil
+	return sum, nil
+}
+
+// twapStepRatio returns (right / left) ^ (1 / span), the per-second ratio of a
+// gap, as exp(ln(right / left) / span) rounded to doublePrecision.
+//
+// It takes the logarithm and the exponential directly rather than through
+// decimalPow. A power raises its working precision by the digits of the
+// exponent, and 1/span rounded to doublePrecision has that many, so decimalPow
+// would work at more than twice the precision the ratio is rounded to. Dividing
+// the logarithm by span also avoids rounding 1/span first.
+//
+// The exponential scales an error in its argument by the ratio, so the steps
+// before it carry expGuardDigits more places than the result. Each step of the
+// gap rounds to doublePrecision, so the ratio's error grows to at most span
+// units of that place over the gap, far below the precision the TWAP is
+// reported at.
+func twapStepRatio(left, right decimal.Decimal, span int) (decimal.Decimal, error) {
+	const working = doublePrecision + expGuardDigits
+	growth, err := divRound(right, left, working)
+	if err != nil {
+		return decimal.Decimal{}, err
+	}
+	logGrowth, err := lnDecimal(growth, working)
+	if err != nil {
+		return decimal.Decimal{}, err
+	}
+	logRatio, err := divRoundByInt(logGrowth, span, working)
+	if err != nil {
+		return decimal.Decimal{}, err
+	}
+	return expDecimal(logRatio, doublePrecision)
 }
 
 // parseTWAPConfig decodes and validates the configuration map.
@@ -377,6 +383,21 @@ func parseTWAPConfig(raw any) (twapConfig, error) {
 		return twapConfig{}, fmt.Errorf("%w: minSamples %d exceeds the %d one-second buckets in the window",
 			ErrTWAPConfig, minSamples, windowSeconds)
 	}
+	// A gap spans at most windowSeconds-1 buckets, so a larger tolerance can
+	// never be reached and is a misconfiguration rather than a looser rule.
+	for _, tolerance := range []struct {
+		key   string
+		value int
+	}{
+		{keyMaxHeadGap, maxHeadGap},
+		{keyMaxInteriorGap, maxInteriorGap},
+		{keyMaxTailGap, maxTailGap},
+	} {
+		if int64(tolerance.value) >= windowSeconds {
+			return twapConfig{}, fmt.Errorf("%w: %s %d must be less than the %d one-second buckets in the window",
+				ErrTWAPConfig, tolerance.key, tolerance.value, windowSeconds)
+		}
+	}
 
 	return twapConfig{
 		windowSeconds:  windowSeconds,
@@ -414,7 +435,7 @@ func twapWindowSeconds(raw any) (int64, error) {
 	// global. The division is exact here, but the rule holds everywhere.
 	// Compared and bounded as a decimal, before any narrowing; see decimalToInt.
 	// The upper bound also caps the per-evaluation work: the calculation
-	// allocates and fills one bucket per second of the window.
+	// steps through every missing interior second of the window.
 	secondsDecimal := nanoseconds.DivRound(perSecond, 0)
 	if secondsDecimal.LessThan(decimal.NewFromInt(1)) {
 		return 0, fmt.Errorf("%w: window must be at least one second, got %s", ErrTWAPConfig, secondsDecimal)
@@ -431,7 +452,7 @@ func twapWindowSeconds(raw any) (int64, error) {
 }
 
 // twapMaxWindowSeconds bounds the number of one-second buckets a single TWAP
-// evaluation may allocate and fill. 24 hours is far beyond any settlement window
+// evaluation may interpolate. 24 hours is far beyond any settlement window
 // while keeping the per-round work bounded.
 const twapMaxWindowSeconds = 24 * 60 * 60
 

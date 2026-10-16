@@ -170,7 +170,7 @@ func Test_Golden_KVRecords(t *testing.T) {
 
 	// The records must load back into the same projection the writers were
 	// handed.
-	s, err := loadKVState(kv, nil)
+	s, err := loadKVState(kv, nil, logger.Test(t))
 	require.NoError(t, err)
 	require.Equal(t, p.LifeCycleStage, s.lifeCycleStage)
 	require.Equal(t, p.ChannelStateSeqNr, s.channelStateSeqNr)

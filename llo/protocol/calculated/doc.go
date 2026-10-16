@@ -131,8 +131,8 @@
 // Expression results become consensus values, so identical inputs must give
 // bit-identical output on every node. See decimalmath.go: no float64 anywhere in
 // the calculation, no reliance on decimal.DivisionPrecision (a mutable global),
-// fixed rounding at every step of an iterative calculation, and a lock around
-// shopspring/decimal's transcendental functions, which are not concurrency-safe.
+// fixed rounding at every step of an iterative calculation, and logarithms and
+// exponentials of our own, since shopspring/decimal's are not concurrency-safe.
 //
 // Div and Avg are pinned to the precision they have always effectively used (16);
 // functions added with stream history use 18. Changing the former would move the

@@ -305,16 +305,32 @@ func EncodePackedBigInt(value *big.Int, typeStr string) ([]byte, error) {
 	return result, nil
 }
 
+// verifyMaxReportRange rejects a maxReportRange that is negative or above
+// MaxReportRangeCeiling.
+func verifyMaxReportRange(maxReportRange protocol.Duration) error {
+	if maxReportRange < 0 {
+		return fmt.Errorf("maxReportRange must be non-negative; got: %s", maxReportRange)
+	}
+	if maxReportRange > protocol.MaxReportRangeCeiling {
+		return fmt.Errorf("maxReportRange must not exceed %s; got: %s", protocol.MaxReportRangeCeiling, maxReportRange)
+	}
+	return nil
+}
+
 // ClampReportRange clamps the report range to the max report range if it exceeds the max range.
 // Returns the clamped valid after nanoseconds.
 // If the report range is within the max range, returns the valid after nanoseconds unchanged.
 // If the max report range is not specified, uses the default max report range.
-// A non-positive maxReportRange falls back to the default; Verify rejects
-// negative values in channel definitions, but a definition committed before
-// that check existed could still carry one.
+// A non-positive maxReportRange falls back to the default and one above
+// MaxReportRangeCeiling is capped to it. Verify rejects both in channel
+// definitions, but a definition committed before those checks existed could
+// still carry one.
 func ClampReportRange(r logger.Logger, report protocol.Report, maxReportRange protocol.Duration) uint64 {
 	if maxReportRange <= 0 {
 		maxReportRange = protocol.DefaultMaxReportRange
+	}
+	if maxReportRange > protocol.MaxReportRangeCeiling {
+		maxReportRange = protocol.MaxReportRangeCeiling
 	}
 	maxRange := uint64(maxReportRange)
 

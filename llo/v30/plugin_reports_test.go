@@ -205,6 +205,15 @@ func testReports(t *testing.T, outcomeCodec OutcomeCodec) {
 		assert.Contains(t, reportJSON, `"ChannelID":2`)
 		assert.NotContains(t, reportJSON, `"ChannelID":10`)
 		assert.Contains(t, reportJSON, `"ObservationTimestampNanoseconds":100000000000`)
+
+		// Backfill opts come from the outcome, not from the node local cache
+		// filled by Outcome().
+		p.OptsCache.Set(backfillID, []byte(`{"targetChannelId":2,"observations":{"200":{"1":"7"}}}`))
+		defer p.OptsCache.Remove(backfillID)
+		rwis, err = p.Reports(ctx, 2, encoded)
+		require.NoError(t, err)
+		require.Len(t, rwis, 1)
+		assert.Contains(t, string(rwis[0].ReportWithInfo.Report), `"ObservationTimestampNanoseconds":100000000000`)
 	})
 
 	t.Run("(bug demo) results in a report gap due to validAfter being updated even if previous report was dropped", func(t *testing.T) {

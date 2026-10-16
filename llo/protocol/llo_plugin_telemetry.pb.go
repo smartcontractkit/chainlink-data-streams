@@ -188,14 +188,18 @@ type LLOReportTelemetry struct {
 	ObservationTimestampNanoseconds uint64                 `protobuf:"varint,3,opt,name=observation_timestamp_nanoseconds,json=observationTimestampNanoseconds,proto3" json:"observation_timestamp_nanoseconds,omitempty"`
 	ReportFormat                    uint32                 `protobuf:"varint,4,opt,name=report_format,json=reportFormat,proto3" json:"report_format,omitempty"`
 	Specimen                        bool                   `protobuf:"varint,5,opt,name=specimen,proto3" json:"specimen,omitempty"`
-	StreamDefinitions               []*LLOStreamDefinition `protobuf:"bytes,6,rep,name=stream_definitions,json=streamDefinitions,proto3" json:"stream_definitions,omitempty"`
-	StreamValues                    []*LLOStreamValue      `protobuf:"bytes,7,rep,name=stream_values,json=streamValues,proto3" json:"stream_values,omitempty"`
-	ChannelOpts                     []byte                 `protobuf:"bytes,8,opt,name=channel_opts,json=channelOpts,proto3" json:"channel_opts,omitempty"`
-	SeqNr                           uint64                 `protobuf:"varint,9,opt,name=seq_nr,json=seqNr,proto3" json:"seq_nr,omitempty"`
-	ConfigDigest                    []byte                 `protobuf:"bytes,10,opt,name=config_digest,json=configDigest,proto3" json:"config_digest,omitempty"`
-	DonId                           uint32                 `protobuf:"varint,11,opt,name=don_id,json=donId,proto3" json:"don_id,omitempty"`
-	unknownFields                   protoimpl.UnknownFields
-	sizeCache                       protoimpl.SizeCache
+	// stream_definitions describes stream_values entry by entry.
+	StreamDefinitions []*LLOStreamDefinition `protobuf:"bytes,6,rep,name=stream_definitions,json=streamDefinitions,proto3" json:"stream_definitions,omitempty"`
+	// A missing value, allowed when the channel does not set
+	// disableNilStreamValues, is an entry with an empty value. A present value
+	// never has an empty value, zero included, so the two cannot be confused.
+	StreamValues  []*LLOStreamValue `protobuf:"bytes,7,rep,name=stream_values,json=streamValues,proto3" json:"stream_values,omitempty"`
+	ChannelOpts   []byte            `protobuf:"bytes,8,opt,name=channel_opts,json=channelOpts,proto3" json:"channel_opts,omitempty"`
+	SeqNr         uint64            `protobuf:"varint,9,opt,name=seq_nr,json=seqNr,proto3" json:"seq_nr,omitempty"`
+	ConfigDigest  []byte            `protobuf:"bytes,10,opt,name=config_digest,json=configDigest,proto3" json:"config_digest,omitempty"`
+	DonId         uint32            `protobuf:"varint,11,opt,name=don_id,json=donId,proto3" json:"don_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *LLOReportTelemetry) Reset() {

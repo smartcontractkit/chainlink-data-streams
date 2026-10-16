@@ -1,15 +1,6 @@
 package protocol
 
-import (
-	"crypto/sha256"
-
-	"google.golang.org/protobuf/proto"
-)
-
-// DeterministicMarshal marshals a proto message deterministically. Anything
-// whose bytes must agree across oracles has to go through this rather than
-// plain proto.Marshal, whose map and unknown-field ordering is unspecified.
-var DeterministicMarshal = proto.MarshalOptions{Deterministic: true}
+import "crypto/sha256"
 
 // ChannelHashV2 is the channel definition identity that consensus votes are
 // counted under from LLO protocol version 2 onwards, and the only channel hash
@@ -23,7 +14,7 @@ func ChannelHashV2(cd ChannelDefinitionWithID) ChannelHash {
 		ChannelID:         cd.ChannelID,
 		ChannelDefinition: ChannelDefinitionToProto(cd.ChannelDefinition),
 	}
-	b, err := DeterministicMarshal.Marshal(pb)
+	b, err := deterministicMarshal.Marshal(pb)
 	if err != nil {
 		// Marshaling a well-formed definition cannot fail; hash empty on the
 		// impossible error path rather than panicking.

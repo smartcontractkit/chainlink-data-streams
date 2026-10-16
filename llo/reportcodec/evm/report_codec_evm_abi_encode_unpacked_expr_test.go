@@ -473,6 +473,17 @@ func TestReportCodecEVMABIEncodeUnpackedExpr_Verify(t *testing.T) {
 		require.NoError(t, c.Verify(cd))
 		require.NoError(t, c.VerifyForAdmission(cd))
 	})
+	t.Run("TWAP calls are counted across expressions", func(t *testing.T) {
+		cd := llotypes.ChannelDefinition{
+			Streams:      []llotypes.Stream{{StreamID: 1, Aggregator: llotypes.AggregatorMedian}},
+			ReportFormat: llotypes.ReportFormatEVMABIEncodeUnpackedExpr,
+			Opts: []byte(`{"baseUSDFee":"1","feedID":"0x1111111111111111111111111111111111111111111111111111111111111111","ABI":[` +
+				`{"type":"int192","expression":"TWAP(History(s1, 3), {window: Duration(\"3s\"), minSamples: 1, maxHeadGap: 3, maxInteriorGap: 3, maxTailGap: 3})","expressionStreamID":998},` +
+				`{"type":"int192","expression":"Add(s1, 1)","expressionStreamID":999}]}`),
+		}
+		require.NoError(t, c.VerifyForAdmission(cd))
+		assert.Equal(t, 1, c.TWAPCalls(cd))
+	})
 	t.Run("statically invalid expression is rejected", func(t *testing.T) {
 		// A window in a scalar position can never produce a value, so accepting
 		// this definition would install a channel that never reports.
@@ -502,6 +513,24 @@ func TestReportCodecEVMABIEncodeUnpackedExpr_Verify(t *testing.T) {
 		}
 		require.NoError(t, c.Verify(cd))
 		require.Error(t, c.VerifyForAdmission(cd))
+	})
+	t.Run("non-canonical opts keys are rejected", func(t *testing.T) {
+		// "expreſſionStreamID" (U+017F) matches the stream ID field in some
+		// JSON decoders and not others, so admission could check an ID other
+		// than the one evaluation publishes.
+		cd := llotypes.ChannelDefinition{
+			Streams: []llotypes.Stream{
+				{StreamID: 1, Aggregator: llotypes.AggregatorMedian},
+				{StreamID: 2, Aggregator: llotypes.AggregatorMedian},
+				{StreamID: 3, Aggregator: llotypes.AggregatorMedian},
+			},
+			ReportFormat: llotypes.ReportFormatEVMABIEncodeUnpackedExpr,
+			Opts:         []byte(`{"baseUSDFee":"1","feedID":"0x1111111111111111111111111111111111111111111111111111111111111111","ABI":[{"type":"int192","expression":"Add(s1, s2)","expressionStreamID":999,"expreſſionStreamID":998}]}`),
+		}
+		require.NoError(t, c.Verify(cd))
+		err := c.VerifyForAdmission(cd)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "is not ASCII")
 	})
 	t.Run("ambiguous stream aggregation is rejected", func(t *testing.T) {
 		// Which aggregation a History call means would be undecidable.

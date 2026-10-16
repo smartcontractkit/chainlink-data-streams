@@ -3,13 +3,14 @@ package protocol
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"math"
+	"slices"
 	"sort"
 	"strconv"
 
 	"github.com/goccy/go-json"
 
-	"github.com/smartcontractkit/chainlink-common/pkg/logger"
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
 )
 
@@ -167,26 +168,30 @@ func (ReportCodecHistoryBackfill) Verify(cd llotypes.ChannelDefinition) error {
 
 // ReportTimestampResolutionNanos returns one tick of the target channel's observation timestamp resolution in nanoseconds.
 func ReportTimestampResolutionNanos(target llotypes.ChannelDefinition) (uint64, error) {
-	switch target.ReportFormat {
-	case llotypes.ReportFormatEVMPremiumLegacy:
-		return 1e9, nil
-	case llotypes.ReportFormatEVMABIEncodeUnpacked, llotypes.ReportFormatEVMABIEncodeUnpackedExpr:
-		res, err := TargetChannelTimeResolution(target)
-		if err != nil {
-			return 0, err
-		}
-		switch res {
-		case ResolutionMilliseconds:
-			return 1e6, nil
-		case ResolutionMicroseconds:
-			return 1e3, nil
-		case ResolutionNanoseconds:
-			return 1, nil
-		default:
-			return 1e9, nil
-		}
+	res, err := TargetChannelTimeResolution(target)
+	if err != nil {
+		return 0, err
+	}
+	nanos, ok := resolutionNanos(res)
+	if !ok {
+		return 0, fmt.Errorf("invalid time resolution %d", res)
+	}
+	return nanos, nil
+}
+
+// resolutionNanos returns the length of one tick of res in nanoseconds.
+func resolutionNanos(res TimeResolution) (uint64, bool) {
+	switch res {
+	case ResolutionSeconds:
+		return 1e9, true
+	case ResolutionMilliseconds:
+		return 1e6, true
+	case ResolutionMicroseconds:
+		return 1e3, true
+	case ResolutionNanoseconds:
+		return 1, true
 	default:
-		return 1e9, nil
+		return 0, false
 	}
 }
 
@@ -200,25 +205,24 @@ func ReportTimestampResolutionNanos(target llotypes.ChannelDefinition) (uint64, 
 // unrepresentable far-future timestamp would read as a valid past one. Keys come
 // from channel definition opts, which makes this reachable from configuration.
 func ObservationTimestampKeyToNanoseconds(rawKey uint64, res TimeResolution) (nanoseconds uint64, ok bool) {
-	var multiplier uint64
-	switch res {
-	case ResolutionMilliseconds:
-		multiplier = 1e6
-	case ResolutionMicroseconds:
-		multiplier = 1e3
-	case ResolutionNanoseconds:
-		return rawKey, true
-	case ResolutionSeconds:
-		multiplier = 1e9
-	default:
-		multiplier = 1e9
-	}
-	if rawKey > math.MaxUint64/multiplier {
+	multiplier, ok := resolutionNanos(res)
+	if !ok || rawKey > math.MaxUint64/multiplier {
 		return 0, false
 	}
 	return rawKey * multiplier, true
 }
 
+// TargetChannelTimeResolution returns the resolution the target channel's codec
+// encodes timestamps at, which is also the unit of its backfill observation keys.
+// It is the only place that maps a report format to a resolution, so an unknown
+// format is an error rather than a guess.
+//
+// The resolution is read from the target's current definition every round, not
+// fixed when the backfill was admitted. Changing a target's TimeResolution while
+// a backfill for it is in progress therefore changes what the remaining keys
+// mean. Base validation rechecks every key against the new resolution, and
+// selection skips keys that overflow, so the result is deterministic, but the
+// keys must be rewritten in the new unit together with the target change.
 func TargetChannelTimeResolution(target llotypes.ChannelDefinition) (TimeResolution, error) {
 	switch target.ReportFormat {
 	case llotypes.ReportFormatEVMABIEncodeUnpacked, llotypes.ReportFormatEVMABIEncodeUnpackedExpr:
@@ -232,8 +236,16 @@ func TargetChannelTimeResolution(target llotypes.ChannelDefinition) (TimeResolut
 			return 0, fmt.Errorf("target channel opts: %w", err)
 		}
 		return aux.TimeResolution, nil
-	default:
+	case llotypes.ReportFormatEVMPremiumLegacy, llotypes.ReportFormatJSON,
+		llotypes.ReportFormatRetirement, llotypes.ReportFormatCapabilityTrigger,
+		llotypes.ReportFormatEVMStreamlined:
 		return ResolutionSeconds, nil
+	case llotypes.ReportFormatHistoryBackfill:
+		// Rejected at admission by ValidateHistoryBackfillTarget. Resolving it
+		// keeps already committed definitions passing base validation.
+		return ResolutionSeconds, nil
+	default:
+		return 0, fmt.Errorf("unsupported history_backfill target report format %s", target.ReportFormat)
 	}
 }
 
@@ -315,33 +327,48 @@ func ValidateHistoryBackfillTarget(cd llotypes.ChannelDefinition, defs llotypes.
 	return nil
 }
 
-// DropInvalidHistoryBackfillChannels returns a copy of defs without history_backfill channels that fail validation.
-// The input defs map is not modified. nowNanos should be wall-clock nanoseconds; use 0 to skip the future-timestamp check.
-func DropInvalidHistoryBackfillChannels(lggr logger.Logger, defs llotypes.ChannelDefinitions, nowNanos uint64) llotypes.ChannelDefinitions {
-	if defs == nil {
-		return nil
+// ValidateHistoryBackfillValues parses every observation of a backfill channel
+// the way Reports will, and holds each value to the bounds an observed value
+// meets: the decimal coefficient bound, and bid <= benchmark <= ask for quotes.
+//
+// Nothing else reads the values before Reports does, so without this an
+// unparseable row is only found at selection. There it stops the channel for
+// good, because selection keeps returning the same row and the watermark never
+// moves past it.
+func ValidateHistoryBackfillValues(cd llotypes.ChannelDefinition, defs llotypes.ChannelDefinitions) error {
+	opts, err := ParseHistoryBackfillOpts(cd.Opts)
+	if err != nil {
+		return err
 	}
-	out := make(llotypes.ChannelDefinitions, len(defs))
-	for k, v := range defs {
-		out[k] = v
+	target, ok := defs[opts.TargetChannelID]
+	if !ok {
+		return nil // reported by ValidateHistoryBackfillAgainstDefinitions
 	}
-	for cid, cd := range out {
-		if cd.ReportFormat != llotypes.ReportFormatHistoryBackfill {
-			continue
+	// Sorted so that a definition with more than one bad row always reports the
+	// same one.
+	for _, rawTS := range slices.Sorted(maps.Keys(opts.Observations)) {
+		values, err := BuildBackfillStreamValues(target, opts.Observations[rawTS])
+		if err != nil {
+			return fmt.Errorf("timestamp %d: %w", rawTS, err)
 		}
-		if err := ValidateHistoryBackfillAgainstDefinitions(cd, out, nowNanos); err != nil {
-			logger.Sugared(lggr).Warnw("dropping invalid history_backfill channel definition", "channelID", cid, "err", err)
-			delete(out, cid)
+		for i, v := range values {
+			streamID := target.Streams[i].StreamID
+			if err := checkObservedStreamValue(v); err != nil {
+				return fmt.Errorf("timestamp %d: stream %d: %w", rawTS, streamID, err)
+			}
+			if q, ok := v.(*Quote); ok && !q.IsValid() {
+				return fmt.Errorf("timestamp %d: stream %d: quote violates bid <= benchmark <= ask", rawTS, streamID)
+			}
 		}
 	}
-	return out
+	return nil
 }
 
 // StreamValueFromBackfillString parses a backfill observation string for the given aggregator.
 func StreamValueFromBackfillString(agg llotypes.Aggregator, s string) (StreamValue, error) {
 	switch agg {
 	case llotypes.AggregatorQuote:
-		q := new(Quote) // {Bid: ([0-9.]+), Benchmark: ([0-9.]+), Ask: ([0-9.]+)}
+		q := new(Quote)
 		if err := q.UnmarshalText([]byte(s)); err != nil {
 			return nil, err
 		}

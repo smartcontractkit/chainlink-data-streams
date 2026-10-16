@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/expr-lang/expr/ast"
+	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -129,6 +131,17 @@ func TestValidateChannelExpressions(t *testing.T) {
 	require.ErrorContains(t, err, "which the channel does not observe")
 	assert.Contains(t, err.Error(), "stream 2")
 
+	// The aggregator fixes the type of the stored value, so a field it does
+	// not produce fails projection every round.
+	quote := llotypes.Stream{StreamID: 2, Aggregator: llotypes.AggregatorQuote}
+	require.NoError(t, ValidateChannelExpressions(nil,
+		channel([]llotypes.Stream{median(1), quote}, "Add(Avg(History(s1, 10)), Avg(History(s2_bid, 10)))"), 1))
+	err = ValidateChannelExpressions(nil,
+		channel([]llotypes.Stream{median(1), quote}, "Avg(History(s1_bid, 10))", "Avg(History(s2, 10))"), 1)
+	require.ErrorIs(t, err, ErrHistoryExpression)
+	assert.Contains(t, err.Error(), "bid field of stream 1")
+	assert.Contains(t, err.Error(), "value field of stream 2")
+
 	// Calculated streams are not observed, so an expression cannot read the
 	// history of one.
 	err = ValidateChannelExpressions(nil, channel([]llotypes.Stream{
@@ -169,6 +182,65 @@ func TestValidateChannelExpressions(t *testing.T) {
 	err = ValidateChannelExpressions(nil, cd, 1)
 	require.ErrorContains(t, err, "expression is empty")
 	assert.Contains(t, err.Error(), "abi index: 1")
+}
+
+// TestValidateChannelExpressions_Identifiers checks every name an expression
+// reads is one evaluation binds. One that is not fails to compile every round,
+// so the channel would never report.
+func TestValidateChannelExpressions_Identifiers(t *testing.T) {
+	t.Parallel()
+
+	cd := func(expression string) llotypes.ChannelDefinition {
+		return llotypes.ChannelDefinition{
+			ReportFormat: llotypes.ReportFormatEVMABIEncodeUnpackedExpr,
+			Streams: []llotypes.Stream{
+				{StreamID: 1, Aggregator: llotypes.AggregatorMedian},
+				{StreamID: 2, Aggregator: llotypes.AggregatorMedian},
+				{StreamID: 3, Aggregator: llotypes.AggregatorQuote},
+				{StreamID: 4, Aggregator: llotypes.AggregatorMode},
+				{StreamID: 900, Aggregator: llotypes.AggregatorCalculated},
+			},
+			Opts: []byte(fmt.Sprintf(`{"abi":[{"type":"int256","expression":%q,"expressionStreamID":900}]}`, expression)),
+		}
+	}
+
+	for _, expression := range []string{
+		"Add(s1, s2)",
+		"Add(s3_bid, s2_timestamp)",
+		"Add(s3_ask, s3_benchmark)",
+		"Add(s4, s4_bid)", // mode carries whatever type its contributions agree on
+		"Sub(observations_timestamp, s1_timestamp)",
+		`TWAP(History(s1, 3), {window: Duration("3s"), minSamples: 1, maxHeadGap: 3, maxInteriorGap: 3, maxTailGap: 3})`,
+		"let a = Mul(s1, s2); Add(a, 1)",
+	} {
+		t.Run("accepts "+expression, func(t *testing.T) {
+			t.Parallel()
+			require.NoError(t, ValidateChannelExpressions(nil, cd(expression), 1))
+		})
+	}
+
+	for _, tc := range []struct {
+		expression string
+		identifier string
+	}{
+		{"Add(s9999, s1)", "s9999"},
+		{"Add(s9999_bid, s1)", "s9999_bid"},
+		{"Add(s900, s1)", "s900"},     // a calculated stream is not bound
+		{"Add(s1_bid, s1)", "s1_bid"}, // a median is never a quote
+		{"Add(s3, s1)", "s3"},         // a quote has no bare value
+		{"Add(s3_timestamp, s1)", "s3_timestamp"},
+		{"Add(foo, s1)", "foo"},
+		{"Foo(s1)", "Foo"},
+		{"Add(xs1, s1)", "xs1"},
+		{"Add($env, s1)", "$env"},
+	} {
+		t.Run("rejects "+tc.expression, func(t *testing.T) {
+			t.Parallel()
+			err := ValidateChannelExpressions(nil, cd(tc.expression), 1)
+			require.ErrorIs(t, err, ErrUnknownIdentifier)
+			assert.Contains(t, err.Error(), fmt.Sprintf("identifier %q", tc.identifier))
+		})
+	}
 }
 
 // TestProcessCalculatedStreamsDryRun_Satisfiability checks the offline path
@@ -262,6 +334,52 @@ func TestValidateExpression_SizeLimits(t *testing.T) {
 	assert.Contains(t, err.Error(), "exceeds the maximum")
 }
 
+// TestValidateExpression_LiteralBounds covers the static bounds on Round
+// precision and decimal string literals. Both drive a rescale to 10^p, so an
+// out of range literal is rejected at admission rather than costing every node
+// that time and memory each round.
+func TestValidateExpression_LiteralBounds(t *testing.T) {
+	t.Parallel()
+
+	t.Run("accepts", func(t *testing.T) {
+		t.Parallel()
+		for _, expression := range []string{
+			fmt.Sprintf("Round(s1, %d)", protocol.MaxDecimalExponent),
+			fmt.Sprintf("Round(s1, -%d)", protocol.MaxDecimalExponent),
+			fmt.Sprintf(`Sum(s1, "1e-%d")`, protocol.MaxDecimalExponent),
+			// Computed precision is left to the runtime bound.
+			"Round(s1, 2000000 * 1000)",
+		} {
+			assert.NoError(t, ValidateExpression(expression), "expression %q", expression)
+		}
+	})
+
+	t.Run("rejects", func(t *testing.T) {
+		t.Parallel()
+		for _, expression := range []string{
+			fmt.Sprintf("Round(s1, %d)", protocol.MaxDecimalExponent+1),
+			fmt.Sprintf("Round(s1, -%d)", protocol.MaxDecimalExponent+1),
+			"Round(s1, 2000000000)",
+			fmt.Sprintf(`Sum(s1, "1e-%d")`, protocol.MaxDecimalExponent+1),
+			`Sum(s1, "1e2000000000")`,
+		} {
+			err := ValidateExpression(expression)
+			require.ErrorIs(t, err, ErrHistoryExpression, "expression %q", expression)
+		}
+	})
+
+	t.Run("runtime bound on computed precision", func(t *testing.T) {
+		t.Parallel()
+		env := NewEnv(0)
+		defer env.release()
+		env["s1"] = decimal.RequireFromString("1.5")
+		_, err := evalDecimal("Round(s1, 2000000 * 1000)", env)
+		require.ErrorContains(t, err, "precision 2000000000 out of range")
+		_, err = evalDecimal(`Sum(s1, "1e-" + "2000000000")`, env)
+		require.ErrorIs(t, err, protocol.ErrDecimalExponentOutOfRange)
+	})
+}
+
 // TestValidateChannelExpressions_CountLimit covers the per-channel expression
 // count. The opts byte caps bound the blob, not the number of evaluations a
 // channel costs every round.
@@ -291,4 +409,53 @@ func TestValidateChannelExpressions_CountLimit(t *testing.T) {
 	err := ValidateChannelExpressions(nil, channel(protocol.MaxExpressionsPerChannel+1), 1)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "exceeding the maximum")
+}
+
+func TestChannelTWAPCalls(t *testing.T) {
+	t.Parallel()
+
+	const twapCall = `TWAP(History(s1, 3), {window: Duration("3s"), minSamples: 1, maxHeadGap: 3, maxInteriorGap: 3, maxTailGap: 3})`
+	channel := func(expressions ...string) llotypes.ChannelDefinition {
+		abi := ""
+		for i, expression := range expressions {
+			if i > 0 {
+				abi += ","
+			}
+			abi += fmt.Sprintf(`{"type":"int256","expression":%q,"expressionStreamID":%d}`, expression, 900+i)
+		}
+		return llotypes.ChannelDefinition{
+			ReportFormat: llotypes.ReportFormatEVMABIEncodeUnpackedExpr,
+			Streams:      []llotypes.Stream{{StreamID: 1, Aggregator: llotypes.AggregatorMedian}},
+			Opts:         []byte(fmt.Sprintf(`{"abi":[%s]}`, abi)),
+		}
+	}
+
+	assert.Equal(t, 0, ChannelTWAPCalls(nil, channel("Add(s1, 1)"), 1))
+	assert.Equal(t, 3, ChannelTWAPCalls(nil, channel(
+		twapCall,
+		"Add("+twapCall+", "+twapCall+")",
+		"Add(s1, 1)",
+	), 1), "calls are summed across expressions")
+
+	// An expression that fails analysis is never evaluated, so it is not
+	// charged, while the valid expressions beside it still are.
+	tooMany := strings.TrimSuffix(strings.Repeat(twapCall+" + ", protocol.MaxTWAPCallsPerExpression+1), " + ")
+	assert.Equal(t, 1, ChannelTWAPCalls(nil, channel(tooMany, twapCall), 1))
+
+	assert.Equal(t, 0, ChannelTWAPCalls(nil, llotypes.ChannelDefinition{
+		ReportFormat: llotypes.ReportFormatEVMABIEncodeUnpackedExpr,
+		Opts:         []byte(`not json`),
+	}, 1), "opts that do not decode declare no expressions")
+}
+
+// TestVisitor_StreamIdentifiers checks the dry run only synthesizes inputs for
+// identifiers that are whole stream names, not ones that merely contain one.
+func TestVisitor_StreamIdentifiers(t *testing.T) {
+	t.Parallel()
+
+	tree, err := parseExpression("Add(Add(xs1, s2_bid), s3x)")
+	require.NoError(t, err)
+	v := &visitor{}
+	ast.Walk(&tree.Node, v)
+	assert.Equal(t, map[llotypes.StreamID]string{2: "bid"}, v.Identifiers)
 }

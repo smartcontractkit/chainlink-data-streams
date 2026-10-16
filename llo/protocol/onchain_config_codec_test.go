@@ -88,7 +88,8 @@ func Test_EVMOnchainConfigCodec(t *testing.T) {
 		b[30] = 100
 
 		_, err := c.Decode(b)
-		require.EqualError(t, err, "unexpected version of OnchainConfig, expected 1, got 25600")
+		require.ErrorIs(t, err, ErrUnsupportedOnchainConfigVersion)
+		require.EqualError(t, err, "unsupported OnchainConfig version: got 25600, supported 1; upgrade the node before publishing a config with a newer version")
 	})
 
 	t.Run("encoding nil PredecessorConfigDigest is ok", func(t *testing.T) {

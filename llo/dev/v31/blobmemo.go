@@ -40,6 +40,13 @@ const maxMemoizedPayloads = ocrtypes.MaxOracles * maxObservationBlobHandles
 // The memo enforces its own budget (maxMemoizedPayloadBytes) and simply declines
 // to store beyond it. Declining is safe because memoization is an optimization,
 // and a miss decodes and costs exactly what a hit would have.
+//
+// Only one sequence number is held at a time. If calls for two sequence numbers
+// overlap, for example the leader validating observations for the next round
+// while StateTransition still runs, each round call discards the other's
+// entries and the superseded handle misses on every get and drops every put.
+// That degrades to running without the memo and bound in the observation
+// decompression budget in decodeObservation, not the memo.
 type blobPayloadCache struct {
 	mu    sync.Mutex
 	seqNr uint64
