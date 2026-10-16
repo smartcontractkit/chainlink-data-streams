@@ -880,6 +880,18 @@ func applyCalculatedStreams(lggr logger.Logger, channelDefinitions llotypes.Chan
 		if appendToDefinitions {
 			// channel definitions are inherited from the previous outcome,
 			// so we only update the channel definition streams if we haven't done it before
+			//
+			// Comparing only the trailing stream is enough, an opts change
+			// arrives with a channel update vote, which replaces the whole
+			// definition, so the appended streams never outlive the ABI they
+			// came from. The one false positive is a definition whose last
+			// observed stream shares its ID with the last calculated stream.
+			// The append is then skipped and the channel reports observed
+			// values in the expression payload, while evaluation logs the
+			// clash every round. Admission rejects that clash, so only a
+			// definition committed before the check can reach it. Kept as is:
+			// changing the check changes v30 outcomes, and v31 derives its
+			// streams through protocol.EffectiveStreams instead.
 			cd := work.cd
 			if cd.Streams[len(cd.Streams)-1].StreamID != work.opts.ABI[len(work.opts.ABI)-1].ExpressionStreamID {
 				for _, abi := range work.opts.ABI {
