@@ -162,6 +162,10 @@ func (s *historyStore) window(k histKey) (*protocol.RingWindow, error) {
 // the header is the only thing that says which chunks exist, so when it cannot
 // be trusted there is nothing else to consult. The admitted depth is reapplied
 // so the pair starts warming again immediately.
+//
+// A reset found by a read after this round's Append also drops that appended
+// record. It is kept that way on purpose: the window is discarded either way,
+// and the lost record costs one more round of warmup.
 func (s *historyStore) reset(k histKey, cause error) *protocol.RingWindow {
 	s.lggr.Errorw("Discarding corrupt stream history; re-warming from empty",
 		"err", cause, "streamID", k.streamID, "aggregator", k.aggregator)
