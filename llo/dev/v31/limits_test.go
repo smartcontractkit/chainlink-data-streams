@@ -2,8 +2,10 @@ package llo
 
 import (
 	"fmt"
+	"maps"
 	"math"
 	"math/big"
+	"slices"
 	"strings"
 	"testing"
 
@@ -503,10 +505,8 @@ func TestLimits_PrecursorWorstCaseFitsDeclared(t *testing.T) {
 		}
 	}
 
-	support := make(map[llotypes.ReportFormat]int, protocol.MaxOutcomeChannelDefinitionsLength)
-	for i := range protocol.MaxOutcomeChannelDefinitionsLength {
-		support[llotypes.ReportFormat(math.MaxUint32-i)] = math.MaxUint32
-	}
+	// Every channel reportable, under the largest IDs.
+	reportable := slices.Sorted(maps.Keys(defs))
 
 	encoded, err := encodePrecursor(precursor{
 		LifeCycleStage:                  llotypes.LifeCycleStage(strings.Repeat("x", 32)),
@@ -515,7 +515,7 @@ func TestLimits_PrecursorWorstCaseFitsDeclared(t *testing.T) {
 		ValidAfterNanoseconds:           validAfter,
 		StreamAggregates:                aggregates,
 		ChannelStateSeqNr:               math.MaxUint64,
-		SupportByFormat:                 support,
+		ReportableChannelIDs:            reportable,
 	})
 	require.NoError(t, err)
 	require.LessOrEqual(t, len(encoded), ocr3_1types.MaxMaxReportsPlusPrecursorBytes,

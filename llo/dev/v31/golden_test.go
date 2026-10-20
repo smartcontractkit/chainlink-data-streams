@@ -73,10 +73,7 @@ func goldenPrecursor() precursor {
 				llotypes.AggregatorMode:   protocol.ToDecimal(decimal.NewFromInt(124)),
 			},
 		},
-		SupportByFormat: map[llotypes.ReportFormat]int{
-			llotypes.ReportFormatEVMPremiumLegacy: 3,
-			llotypes.ReportFormatJSON:             4,
-		},
+		ReportableChannelIDs: []llotypes.ChannelID{1, 3},
 	}
 }
 

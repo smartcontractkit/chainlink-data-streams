@@ -77,7 +77,14 @@ func selectBackfillCandidate(defs llotypes.ChannelDefinitions, validAfter map[ll
 	// it here keeps selection and emission on one path. A row that cannot be
 	// built never will be: pass over it rather than stall the backfill on it.
 	for _, c := range candidates {
-		if _, err := protocol.BuildBackfillStreamValues(target, o.Observations[c.raw]); err != nil {
+		values, err := protocol.BuildBackfillStreamValues(target, o.Observations[c.raw])
+		if err != nil {
+			skipped++
+			continue
+		}
+		// Backfill rows are fixed in the opts, so a value outside its encoded
+		// range never comes back into it.
+		if protocol.CheckEncodableValues(optsCache, target, o.TargetChannelID, values) != nil {
 			skipped++
 			continue
 		}

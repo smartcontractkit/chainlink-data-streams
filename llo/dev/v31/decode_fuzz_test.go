@@ -119,9 +119,6 @@ func FuzzDecodePrecursor(f *testing.F) {
 		if err != nil {
 			return
 		}
-		if len(p.SupportByFormat) > protocol.MaxObservationSupportedReportFormatsLength {
-			t.Fatalf("decoded %d report format support entries, max %d", len(p.SupportByFormat), protocol.MaxObservationSupportedReportFormatsLength)
-		}
 		// Re-encoding a decoded precursor must be a fixed point: encode is
 		// deterministic, so a value that survives decode has exactly one
 		// encoding, and every oracle must agree on it.

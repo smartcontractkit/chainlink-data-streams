@@ -662,7 +662,7 @@ func Test_Reports_StagingMarker(t *testing.T) {
 			},
 			ValidAfterNanoseconds: map[llotypes.ChannelID]uint64{1: 1000},
 			StreamAggregates:      protocol.StreamAggregates{100: {llotypes.AggregatorMedian: protocol.ToDecimal(decimal.NewFromInt(1))}},
-			SupportByFormat:       map[llotypes.ReportFormat]int{llotypes.ReportFormatJSON: 4},
+			ReportableChannelIDs:  []llotypes.ChannelID{1},
 		})
 		require.NoError(t, err)
 

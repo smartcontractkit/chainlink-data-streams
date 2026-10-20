@@ -20,10 +20,9 @@ import (
 )
 
 var (
-	_ protocol.ReportCodec = ReportCodecEVMABIEncodeUnpacked{}
-	_ protocol.FeedIDer    = ReportCodecEVMABIEncodeUnpacked{}
-
-	zero = big.NewInt(0)
+	_ protocol.ReportCodec       = ReportCodecEVMABIEncodeUnpacked{}
+	_ protocol.FeedIDer          = ReportCodecEVMABIEncodeUnpacked{}
+	_ protocol.AdmissionVerifier = ReportCodecEVMABIEncodeUnpacked{}
 )
 
 type ReportCodecEVMABIEncodeUnpacked struct {
@@ -127,7 +126,11 @@ func (r ReportCodecEVMABIEncodeUnpacked) Encode(report protocol.Report, cd lloty
 		return nil, fmt.Errorf("failed to build base report; %w", err)
 	}
 
-	payload, err := buildPayload(opts.ABI, report.Values[2:])
+	values, err := protocol.ABIPayload(llotypes.ReportFormatEVMABIEncodeUnpacked, len(opts.ABI), report.Values)
+	if err != nil {
+		return nil, fmt.Errorf("failed to build payload; %w", err)
+	}
+	payload, err := buildPayload(opts.ABI, values)
 	if err != nil {
 		return nil, fmt.Errorf("failed to build payload; %w", err)
 	}
@@ -183,6 +186,24 @@ func (r ReportCodecEVMABIEncodeUnpacked) Verify(cd llotypes.ChannelDefinition) e
 	return verifyMaxReportRange(opts.MaxReportRange)
 }
 
+// VerifyForAdmission implements protocol.AdmissionVerifier: it rejects ABI
+// types the payload encoder cannot encode and an expiration window that
+// overflows the header. Either fails every report of the channel.
+//
+// This is not part of Verify because definitions committed before the check
+// existed may fail it, and rejecting those would stop every oracle from
+// observing rather than just stopping that one channel from reporting.
+func (r ReportCodecEVMABIEncodeUnpacked) VerifyForAdmission(cd llotypes.ChannelDefinition) error {
+	opts := new(ReportFormatEVMABIEncodeOpts)
+	if err := opts.Decode(cd.Opts); err != nil {
+		return fmt.Errorf("invalid Opts, got: %q; %w", cd.Opts, err)
+	}
+	if err := verifyABITypes(opts.ABI, false); err != nil {
+		return err
+	}
+	return verifyExpirationWindow(opts.ExpirationWindow)
+}
+
 // BaseSchema represents the fixed base schema that remains unchanged for all
 // EVMABIEncodeUnpacked reports.
 //
@@ -211,18 +232,7 @@ func getBaseSchema(timestampType string) abi.Arguments {
 }
 
 func (r ReportCodecEVMABIEncodeUnpacked) buildHeader(rf BaseReportFields, resolution protocol.TimeResolution) ([]byte, error) {
-	var merr error
-	if rf.LinkFee == nil {
-		merr = errors.Join(merr, errors.New("linkFee may not be nil"))
-	} else if rf.LinkFee.Cmp(zero) < 0 {
-		merr = errors.Join(merr, fmt.Errorf("linkFee may not be negative (got: %s)", rf.LinkFee))
-	}
-	if rf.NativeFee == nil {
-		merr = errors.Join(merr, errors.New("nativeFee may not be nil"))
-	} else if rf.NativeFee.Cmp(zero) < 0 {
-		merr = errors.Join(merr, fmt.Errorf("nativeFee may not be negative (got: %s)", rf.NativeFee))
-	}
-	if merr != nil {
+	if merr := errors.Join(checkFee("linkFee", rf.LinkFee), checkFee("nativeFee", rf.NativeFee)); merr != nil {
 		return nil, merr
 	}
 

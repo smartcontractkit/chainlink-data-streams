@@ -104,7 +104,6 @@ func (p *Plugin) StateTransition(ctx context.Context, seqNr uint64, _ ocrtypes.A
 		ChannelStateSeqNr:               prev.channelStateSeqNr,
 		ValidAfterNanoseconds:           map[llotypes.ChannelID]uint64{},
 		StreamAggregates:                protocol.StreamAggregates{},
-		SupportByFormat:                 supportVotesForEffectiveFormats(countSupportByFormat(codecSupport), effective),
 	}
 	p.warnIfAheadOfLocalClock(out.ObservationTimestampNanoseconds, seqNr)
 
@@ -240,6 +239,13 @@ func (p *Plugin) StateTransition(ctx context.Context, seqNr uint64, _ ocrtypes.A
 	p.ExpressionPins.Set(prev.opts, effective)
 	calculated.ProcessCalculatedStreams(p.Logger, effective, out.StreamAggregates, out.ObservationTimestampNanoseconds, prev.opts, history)
 
+	// Reportability is decided once, here. Reports emits exactly these channels
+	// and the next round advances validAfter from the same decision.
+	unreportable := &unreportableTally{}
+	support := supportVotesForEffectiveFormats(countSupportByFormat(codecSupport), effective)
+	out.ReportableChannelIDs = out.reportableChannels(p.DefaultMinReportIntervalNanoseconds, p.F, support, prev.opts, unreportable)
+	unreportable.log(p.Logger, "StateTransition", seqNr)
+
 	// Flush KV mutations.
 	if err := p.flushKV(kvRW, seqNr, prev, out, pending, codecSupport, carryForward, history); err != nil {
 		return nil, err
@@ -254,6 +260,9 @@ func (p *Plugin) StateTransition(ctx context.Context, seqNr uint64, _ ocrtypes.A
 	p.captureInsufficientHistory(effective, prev.opts, history)
 	p.captureOutcomeTelemetry(out, seqNr)
 	p.captureAttributedObservationTelemetry(out, seqNr, tally.attributed)
+
+	// After telemetry, which reports every aggregate.
+	out.StreamAggregates = out.reportedAggregates(prev.opts)
 	return encodePrecursor(out)
 }
 
@@ -759,12 +768,11 @@ func (p *Plugin) flushKV(
 		}
 	}
 
-	// Reportability: persist this round's decision for each channel so the next
-	// round can advance validAfter faithfully (see prevReportable).
-	reportable := make(map[llotypes.ChannelID]bool, len(out.ChannelDefinitions))
-	for id := range out.ChannelDefinitions {
-		// nill tally, Reports() will handle the logging
-		reportable[id] = out.isReportable(id, p.DefaultMinReportIntervalNanoseconds, p.F, prev.opts, nil)
+	// Reportability: persist this round's decision so the next round can
+	// advance validAfter faithfully (see prevReportable).
+	reportable := make(map[llotypes.ChannelID]bool, len(out.ReportableChannelIDs))
+	for _, id := range out.ReportableChannelIDs {
+		reportable[id] = true
 	}
 
 	// Stream history: write modified windows, delete pairs no live channel

@@ -132,6 +132,15 @@
 // declared. DisableNilStreamValues is deprecated: v31 ignores it and behaves as
 // if it were always set.
 //
+// A channel with a value outside the integer range its report format encodes it
+// in is unreportable too (protocol.CheckEncodableValues). Such a value depends
+// on the data, so the watermark holds and the next report covers the round.
+//
+// StateTransition decides reportability once per round and carries the decision
+// in the precursor (ReportableChannelIDs), together with only the aggregates
+// those channels report. Reports emits exactly those channels, so emission and
+// the validAfter advance read the same decision.
+//
 // Cross-round timestamped-aggregate carry-forward (in the r/agg record,
 // newer-wins monotonicity) and best-effort outcome/report telemetry are also
 // implemented.

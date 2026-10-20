@@ -17,7 +17,7 @@ import (
 	"github.com/smartcontractkit/libocr/offchainreporting2/types"
 
 	protocol "github.com/smartcontractkit/chainlink-data-streams/llo/protocol"
-	ubig "github.com/smartcontractkit/chainlink-data-streams/llo/reportcodec/evm/utils"
+	"github.com/smartcontractkit/chainlink-data-streams/llo/ubig"
 
 	"github.com/smartcontractkit/chainlink-common/pkg/logger"
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"

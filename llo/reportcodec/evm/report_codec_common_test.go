@@ -17,7 +17,7 @@ import (
 	"github.com/smartcontractkit/chainlink-common/pkg/logger"
 
 	protocol "github.com/smartcontractkit/chainlink-data-streams/llo/protocol"
-	ubig "github.com/smartcontractkit/chainlink-data-streams/llo/reportcodec/evm/utils"
+	"github.com/smartcontractkit/chainlink-data-streams/llo/ubig"
 )
 
 func TestEncodePackedBigInt(t *testing.T) {

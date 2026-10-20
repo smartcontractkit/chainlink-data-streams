@@ -1170,8 +1170,8 @@ func Test_IsReportable_MinReportIntervalDoesNotOverflow(t *testing.T) {
 		StreamAggregates: protocol.StreamAggregates{
 			100: {llotypes.AggregatorMedian: protocol.ToDecimal(decimal.NewFromInt(1))},
 		},
-		SupportByFormat: map[llotypes.ReportFormat]int{llotypes.ReportFormatJSON: 4},
 	}
+	support := map[llotypes.ReportFormat]int{llotypes.ReportFormatJSON: 4}
 	gen, err := protocol.NewChannelCache().Load(1, func() (llotypes.ChannelDefinitions, error) {
 		return out.ChannelDefinitions, nil
 	})
@@ -1179,12 +1179,12 @@ func Test_IsReportable_MinReportIntervalDoesNotOverflow(t *testing.T) {
 	optsCache := gen.Opts()
 
 	// One nanosecond past validAfter, so only the interval can hold it back.
-	require.True(t, out.isReportable(1, 1, 1, optsCache, nil),
+	require.True(t, out.isReportable(1, 1, 1, support, optsCache, nil),
 		"a one nanosecond interval must not gate a report one nanosecond late")
 
 	// An interval that overflows the sum must gate, not wrap into passing.
 	for _, interval := range []uint64{math.MaxUint64, math.MaxUint64 - validAfter + 1} {
-		require.False(t, out.isReportable(1, interval, 1, optsCache, nil),
+		require.False(t, out.isReportable(1, interval, 1, support, optsCache, nil),
 			"interval %d must gate the report, not wrap", interval)
 	}
 

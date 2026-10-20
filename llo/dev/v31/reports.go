@@ -63,9 +63,9 @@ func (p *Plugin) Reports(ctx context.Context, seqNr uint64, rawPrecursor ocr3_1t
 		})
 	}
 
-	unreportable := &unreportableTally{}
-	defer unreportable.log(p.Logger, "Report", seqNr)
-	for _, cid := range out.reportableChannels(p.DefaultMinReportIntervalNanoseconds, p.F, channelOpts, unreportable) {
+	// StateTransition decided reportability and logged why channels are not
+	// reportable. Emit exactly the channels it chose.
+	for _, cid := range out.ReportableChannelIDs {
 		cd := out.ChannelDefinitions[cid]
 
 		if cd.ReportFormat == llotypes.ReportFormatHistoryBackfill {
@@ -143,10 +143,7 @@ func (p *Plugin) Reports(ctx context.Context, seqNr uint64, rawPrecursor ocr3_1t
 			p.reportNotEmitted(seqNr, cid, cd.ReportFormat, "effective_streams_underivable", "err", err)
 			continue
 		}
-		values := make([]protocol.StreamValue, 0, len(streams))
-		for _, strm := range streams {
-			values = append(values, out.StreamAggregates[strm.StreamID][strm.Aggregator])
-		}
+		values := out.reportValues(streams)
 
 		report := protocol.Report{
 			ConfigDigest:                    p.ConfigDigest,
@@ -274,11 +271,14 @@ func (t *unreportableTally) log(lggr logger.Logger, stage string, seqNr uint64) 
 // formatIsEncodable reports whether enough oracles advertised a report codec
 // for format that a report encoded with it would actually be certified.
 //
-// The tally is read from the precursor, not from p.ReportCodecs, so this stays
-// a pure function of replicated state. An oracle that cannot encode still
-// computes reportable=true when enough peers can.
-func (o precursor) formatIsEncodable(format llotypes.ReportFormat, f int, channelID llotypes.ChannelID, tally *unreportableTally) bool {
-	if supporters := o.SupportByFormat[format]; supporters < 2*f+1 {
+// support is the number of oracles whose last advertisement named each report
+// format, counted over the cumulative c/codecs record rather than over this
+// round's observations alone (see writeCodecSupport). It is read from replicated
+// state, not from p.ReportCodecs, so this stays a pure function of it. An
+// oracle that cannot encode still computes reportable=true when enough peers
+// can.
+func formatIsEncodable(support map[llotypes.ReportFormat]int, format llotypes.ReportFormat, f int, channelID llotypes.ChannelID, tally *unreportableTally) bool {
+	if supporters := support[format]; supporters < 2*f+1 {
 		tally.note("too few oracles advertise a report codec for this format", channelID,
 			"reportFormat", format, "supporters", supporters, "required", 2*f+1)
 		return false
@@ -286,12 +286,23 @@ func (o precursor) formatIsEncodable(format llotypes.ReportFormat, f int, channe
 	return true
 }
 
+// reportValues returns the aggregates a report carries for streams, in order.
+// Reportability and emission both read values through it.
+func (o precursor) reportValues(streams []llotypes.Stream) []protocol.StreamValue {
+	values := make([]protocol.StreamValue, 0, len(streams))
+	for _, strm := range streams {
+		values = append(values, o.StreamAggregates[strm.StreamID][strm.Aggregator])
+	}
+	return values
+}
+
 // reportableChannels returns the sorted set of channels reportable in this
-// (current) round (see isReportable).
-func (o precursor) reportableChannels(minReportInterval uint64, f int, optsCache *protocol.OptsCache, tally *unreportableTally) []llotypes.ChannelID {
+// (current) round (see isReportable). StateTransition calls it once and carries
+// the result in the precursor.
+func (o precursor) reportableChannels(minReportInterval uint64, f int, support map[llotypes.ReportFormat]int, optsCache *protocol.OptsCache, tally *unreportableTally) []llotypes.ChannelID {
 	reportable := make([]llotypes.ChannelID, 0, len(o.ChannelDefinitions))
 	for channelID := range o.ChannelDefinitions {
-		if o.isReportable(channelID, minReportInterval, f, optsCache, tally) {
+		if o.isReportable(channelID, minReportInterval, f, support, optsCache, tally) {
 			reportable = append(reportable, channelID)
 		}
 	}
@@ -299,7 +310,7 @@ func (o precursor) reportableChannels(minReportInterval uint64, f int, optsCache
 	return reportable
 }
 
-func (o precursor) isReportable(channelID llotypes.ChannelID, minReportInterval uint64, f int, optsCache *protocol.OptsCache, tally *unreportableTally) bool {
+func (o precursor) isReportable(channelID llotypes.ChannelID, minReportInterval uint64, f int, support map[llotypes.ReportFormat]int, optsCache *protocol.OptsCache, tally *unreportableTally) bool {
 	if o.LifeCycleStage == protocol.LifeCycleStageRetired {
 		return false
 	}
@@ -336,7 +347,7 @@ func (o precursor) isReportable(channelID llotypes.ChannelID, minReportInterval 
 		// Backfill reports are encoded with the target channel's codec, so the
 		// target's format is the one that must be encodable DON-wide. Selection
 		// above already established the target exists.
-		return o.formatIsEncodable(o.ChannelDefinitions[opts.TargetChannelID].ReportFormat, f, channelID, tally)
+		return formatIsEncodable(support, o.ChannelDefinitions[opts.TargetChannelID].ReportFormat, f, channelID, tally)
 	}
 	// Reportability and emission must agree on what the report carries. Reports
 	// derives the report's values from protocol.EffectiveStreams, so the same
@@ -347,13 +358,15 @@ func (o precursor) isReportable(channelID llotypes.ChannelID, minReportInterval 
 	// EffectiveStreams is a pure function of (definition, opts), so it is safe
 	// in the state transition. Codec lookup and Encode are not: p.ReportCodecs
 	// is node-local, and reading it here would make the state transition
-	// node-dependent. Those failure modes remain outside this predicate.
+	// node-dependent. The value range rules the codecs apply are checked here
+	// through protocol.CheckEncodableValues, which the codecs share. Other
+	// Encode failures remain outside this predicate.
 	//
 	// When one of them fails, Reports skips the channel and the watermark still
-	// advances over the round. This is deliberate. A deterministic failure fails
-	// again in every round, so holding the watermark would recover nothing and
-	// only widen the next report's interval. Reports logs each skip at error
-	// level and counts it in reportsNotEmittedMetric.
+	// advances over the round. This is deliberate. Those failures come from
+	// configuration and fail again in every round, so holding the watermark
+	// would recover nothing and only widen the next report's interval. Reports
+	// logs each skip at error level and counts it in reportsNotEmittedMetric.
 	streams, err := protocol.EffectiveStreams(optsCache, cd, channelID)
 	if err != nil {
 		tally.note("cannot derive effective streams", channelID, "err", err)
@@ -367,13 +380,21 @@ func (o precursor) isReportable(channelID llotypes.ChannelID, minReportInterval 
 	//
 	// This applies regardless of DisableNilStreamValues, which v31 ignores and
 	// treats as always set.
-	for _, strm := range streams {
-		if o.StreamAggregates[strm.StreamID][strm.Aggregator] == nil {
-			tally.note("nil stream value", channelID, "streamID", strm.StreamID, "aggregator", strm.Aggregator)
+	values := o.reportValues(streams)
+	for i, v := range values {
+		if v == nil {
+			tally.note("nil stream value", channelID, "streamID", streams[i].StreamID, "aggregator", streams[i].Aggregator)
 			return false
 		}
 	}
-	if !o.formatIsEncodable(cd.ReportFormat, f, channelID, tally) {
+	// A value outside the integer range its format encodes it in fails Encode.
+	// It depends on the data, so it can come back into range. Holding the
+	// watermark over such a round lets the next report cover it.
+	if err := protocol.CheckEncodableValues(optsCache, cd, channelID, values); err != nil {
+		tally.note("stream value not encodable", channelID, "err", err)
+		return false
+	}
+	if !formatIsEncodable(support, cd.ReportFormat, f, channelID, tally) {
 		return false
 	}
 	validAfter, ok := o.ValidAfterNanoseconds[channelID]

@@ -82,7 +82,11 @@ func (r ReportCodecEVMABIEncodeUnpackedExpr) Encode(report protocol.Report, cd l
 		return nil, fmt.Errorf("failed to build base report; %w", err)
 	}
 
-	payload, err := buildPayload(opts.ABI, report.Values[len(report.Values)-len(opts.ABI):])
+	values, err := protocol.ABIPayload(llotypes.ReportFormatEVMABIEncodeUnpackedExpr, len(opts.ABI), report.Values)
+	if err != nil {
+		return nil, fmt.Errorf("failed to build payload; %w", err)
+	}
+	payload, err := buildPayload(opts.ABI, values)
 	if err != nil {
 		return nil, fmt.Errorf("failed to build payload; %w", err)
 	}
@@ -131,7 +135,14 @@ func (r ReportCodecEVMABIEncodeUnpackedExpr) VerifyForAdmission(cd llotypes.Chan
 	if err := calculated.ValidateChannelExpressions(nil, cd, 0); err != nil {
 		return fmt.Errorf("invalid calculated stream expressions: %w", err)
 	}
-	return nil
+	opts := new(ReportFormatEVMABIEncodeOpts)
+	if err := opts.Decode(cd.Opts); err != nil {
+		return fmt.Errorf("invalid Opts, got: %q; %w", cd.Opts, err)
+	}
+	if err := verifyABITypes(opts.ABI, false); err != nil {
+		return err
+	}
+	return verifyExpirationWindow(opts.ExpirationWindow)
 }
 
 // TWAPCalls implements protocol.TWAPCounter: it counts the TWAP calls across
@@ -143,18 +154,7 @@ func (r ReportCodecEVMABIEncodeUnpackedExpr) TWAPCalls(cd llotypes.ChannelDefini
 }
 
 func (r ReportCodecEVMABIEncodeUnpackedExpr) buildHeader(rf BaseReportFields, resolution protocol.TimeResolution) ([]byte, error) {
-	var merr error
-	if rf.LinkFee == nil {
-		merr = errors.Join(merr, errors.New("linkFee may not be nil"))
-	} else if rf.LinkFee.Cmp(zero) < 0 {
-		merr = errors.Join(merr, fmt.Errorf("linkFee may not be negative (got: %s)", rf.LinkFee))
-	}
-	if rf.NativeFee == nil {
-		merr = errors.Join(merr, errors.New("nativeFee may not be nil"))
-	} else if rf.NativeFee.Cmp(zero) < 0 {
-		merr = errors.Join(merr, fmt.Errorf("nativeFee may not be negative (got: %s)", rf.NativeFee))
-	}
-	if merr != nil {
+	if merr := errors.Join(checkFee("linkFee", rf.LinkFee), checkFee("nativeFee", rf.NativeFee)); merr != nil {
 		return nil, merr
 	}
 
