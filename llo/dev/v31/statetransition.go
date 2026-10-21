@@ -143,7 +143,7 @@ func (p *Plugin) StateTransition(ctx context.Context, seqNr uint64, _ ocrtypes.A
 		// This mirrors v30, which replaces ValidAfterNanoseconds wholesale with
 		// the report's map and skips carry-forward during promotion.
 		for id, va := range promotedValidAfter {
-			out.ValidAfterNanoseconds[id] = va
+			out.ValidAfterNanoseconds[id] = p.boundPromotedValidAfter(seqNr, id, va, out.ObservationTimestampNanoseconds)
 		}
 	} else {
 		for channelID, prevValidAfter := range prev.validAfterNanoseconds {
@@ -848,7 +848,8 @@ func (p *Plugin) agreedObservationTimestamp(timestampsNanoseconds []uint64, prev
 // maxConsensusClockLead bounds how far the agreed observation timestamp may
 // sit ahead of this node's clock before it is reported. It sits well above
 // NTP skew between oracle clocks, and low enough that a forward jump costing
-// more than a few rounds of reporting is caught.
+// more than a few rounds of reporting is caught. It also bounds how far a
+// promoted predecessor watermark may lead the promotion round's timestamp.
 const maxConsensusClockLead = uint64(5 * time.Second)
 
 // warnIfAheadOfLocalClock logs when the agreed observation timestamp is ahead
@@ -867,6 +868,26 @@ func (p *Plugin) warnIfAheadOfLocalClock(agreedNanoseconds uint64, seqNr uint64)
 // than maxConsensusClockLead.
 func aheadOfClock(agreedNanoseconds, nowNanoseconds uint64) bool {
 	return agreedNanoseconds > nowNanoseconds+maxConsensusClockLead
+}
+
+// boundPromotedValidAfter caps a watermark adopted from the predecessor's
+// retirement report at the promotion round's observation timestamp when it
+// leads it by more than maxConsensusClockLead.
+//
+// An honest predecessor never sets a watermark above its own agreed
+// observation timestamp, so a legitimate entry leads only by the skew between
+// the two instances' agreed clocks. That is kept, to preserve the gapless
+// handover. A larger lead is a predecessor fault and would hold the channel
+// until the clock catches up. Capping trades it for a one-off overlap with the
+// predecessor's last report. Both inputs are agreed, so the result is
+// deterministic.
+func (p *Plugin) boundPromotedValidAfter(seqNr uint64, channelID llotypes.ChannelID, validAfterNanoseconds, observationTimestampNanoseconds uint64) uint64 {
+	if !aheadOfClock(validAfterNanoseconds, observationTimestampNanoseconds) {
+		return validAfterNanoseconds
+	}
+	p.Logger.Errorw("Capping promoted validAfter that leads the observation timestamp; the predecessor's retirement report carries a watermark it could not have reported",
+		"seqNr", seqNr, "channelID", channelID, "validAfterNanoseconds", validAfterNanoseconds, "observationTimestampNanoseconds", observationTimestampNanoseconds)
+	return observationTimestampNanoseconds
 }
 
 func medianTimestamp(timestampsNanoseconds []uint64) uint64 {

@@ -538,6 +538,40 @@ func Test_StateTransition_Promotion(t *testing.T) {
 	require.Equal(t, uint64(500), kvHotState(t, kv).validAfterNanoseconds[1])
 }
 
+// Test_StateTransition_Promotion_BoundsPromotedValidAfter covers the bound on
+// watermarks adopted from the predecessor: a lead within maxConsensusClockLead
+// is clock skew and kept, a larger lead is capped at the observation timestamp.
+func Test_StateTransition_Promotion_BoundsPromotedValidAfter(t *testing.T) {
+	ctx := tests.Context(t)
+	const promotionTs = uint64(10 * time.Second)
+	p := testPlugin(t)
+	predecessor := ocrtypes.ConfigDigest{0xAB}
+	p.PredecessorConfigDigest = &predecessor
+	p.PredecessorRetirementReportCache = &mockPredecessorRetirementReportCache{
+		report: protocol.RetirementReport{ValidAfterNanoseconds: map[llotypes.ChannelID]uint64{
+			1: promotionTs + maxConsensusClockLead,
+			2: promotionTs + maxConsensusClockLead + 1,
+		}},
+	}
+	kv := newMemKV()
+
+	_, err := p.StateTransition(ctx, 1, ocrtypes.AttributedQuery{}, []ocrtypes.AttributedObservation{ao(0, nil), ao(1, nil), ao(2, nil)}, kv, testBlobs)
+	require.NoError(t, err)
+
+	promoObs := promotionObs(promotionTs)
+	aos := make([]ocrtypes.AttributedObservation, 0, 4)
+	for i := 0; i < 4; i++ {
+		aos = append(aos, ao(i, mustEncodeObs(t, promoObs)))
+	}
+	_, err = p.StateTransition(ctx, 2, ocrtypes.AttributedQuery{}, aos, kv, testBlobs)
+	require.NoError(t, err)
+	require.Equal(t, string(protocol.LifeCycleStageProduction), string(kv.m[string(keyLifecycle)]))
+
+	validAfter := kvHotState(t, kv).validAfterNanoseconds
+	require.Equal(t, promotionTs+maxConsensusClockLead, validAfter[1], "a lead within clock skew is kept")
+	require.Equal(t, promotionTs, validAfter[2], "a larger lead is capped at the observation timestamp")
+}
+
 // Test_StateTransition_Promotion_StagingOnlyChannelTreatedAsNew guards the
 // promotion path (Finding 4): a channel the staging instance added itself, that
 // is absent from the predecessor's retirement report, was never covered by the
