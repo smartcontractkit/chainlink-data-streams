@@ -478,7 +478,7 @@ func TestReportCodecEVMABIEncodeUnpackedExpr_Verify(t *testing.T) {
 			Streams:      []llotypes.Stream{{StreamID: 1, Aggregator: llotypes.AggregatorMedian}},
 			ReportFormat: llotypes.ReportFormatEVMABIEncodeUnpackedExpr,
 			Opts: []byte(`{"baseUSDFee":"1","feedID":"0x1111111111111111111111111111111111111111111111111111111111111111","ABI":[` +
-				`{"type":"int192","expression":"TWAP(History(s1, 3), {window: Duration(\"3s\"), minSamples: 1, maxHeadGap: 3, maxInteriorGap: 3, maxTailGap: 3})","expressionStreamID":998},` +
+				`{"type":"int192","expression":"TWAP(History(s1, 3), {window: Duration(\"3s\"), minSamples: 1, maxHeadGap: 2, maxInteriorGap: 2, maxTailGap: 2})","expressionStreamID":998},` +
 				`{"type":"int192","expression":"Add(s1, 1)","expressionStreamID":999}]}`),
 		}
 		require.NoError(t, c.VerifyForAdmission(cd))

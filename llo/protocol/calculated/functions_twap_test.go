@@ -132,7 +132,7 @@ func TestTWAP_FillThenAverage(t *testing.T) {
 		{
 			name:       "insufficient samples: rejected even though every gap is within its threshold",
 			prices:     []int64{100, 0, 300, 0, 500}, // M=3, Gint=1
-			minSamples: 4, maxInterior: 4, maxTail: 4,
+			minSamples: 4, maxInterior: 1, maxTail: 1,
 			wantReasons: []TWAPRejectionReason{ReasonInsufficientSamples},
 		},
 		{
@@ -165,7 +165,7 @@ func TestTWAP_FillThenAverage(t *testing.T) {
 		{
 			name:       "multiple applicable reasons are all returned, not just the first",
 			prices:     []int64{100, 0, 0, 0, 0}, // M=1, Gtail=4
-			minSamples: 3, maxInterior: 4, maxTail: 2,
+			minSamples: 3, maxInterior: 2, maxTail: 2,
 			wantReasons: []TWAPRejectionReason{ReasonInsufficientSamples, ReasonTailGapTooLong},
 		},
 		{
@@ -436,16 +436,19 @@ func TestTWAP_ConfigValidation(t *testing.T) {
 
 	t.Run("gap tolerances must be reachable within the window", func(t *testing.T) {
 		t.Parallel()
-		// A gap spans at most window-1 buckets.
+		// A gap spans at most window-minSamples buckets.
 		for _, key := range []string{"maxHeadGap", "maxInteriorGap", "maxTailGap"} {
-			cfg := twapConfigMap(3, 1, 0, 0, 0)
-			cfg[key] = 3
-			err := call(cfg)
-			require.ErrorIs(t, err, ErrTWAPConfig, key)
-			require.ErrorContains(t, err, key+" 3 must be less than", key)
+			for _, minSamples := range []int{1, 2} {
+				cfg := twapConfigMap(3, minSamples, 0, 0, 0)
+				reachable := 3 - minSamples
+				cfg[key] = reachable + 1
+				err := call(cfg)
+				require.ErrorIs(t, err, ErrTWAPConfig, key)
+				require.ErrorContains(t, err, fmt.Sprintf("%s %d exceeds the %d buckets", key, reachable+1, reachable), key)
 
-			cfg[key] = 2
-			require.NotErrorIs(t, call(cfg), ErrTWAPConfig, key)
+				cfg[key] = reachable
+				require.NotErrorIs(t, call(cfg), ErrTWAPConfig, key)
+			}
 		}
 	})
 
@@ -455,11 +458,11 @@ func TestTWAP_ConfigValidation(t *testing.T) {
 		// property checked at configuration time. At runtime a thin window is a
 		// data condition, and must come back with the measured statistics.
 		shallow := twapSeries(t, []int64{100})
-		_, err := twapFunc(anchorNs)(shallow, twapConfigMap(3, 3, 0, 2, 2))
+		_, err := twapFunc(anchorNs)(shallow, twapConfigMap(3, 3, 0, 0, 0))
 		require.ErrorIs(t, err, ErrTWAPRejected)
 		var rejection *TWAPRejection
 		require.ErrorAs(t, err, &rejection)
-		assert.Equal(t, []TWAPRejectionReason{ReasonInsufficientSamples}, rejection.Reasons)
+		assert.Contains(t, rejection.Reasons, ReasonInsufficientSamples)
 	})
 
 	t.Run("not a configuration map", func(t *testing.T) {
@@ -519,7 +522,7 @@ func TestTWAP_RejectionMessage(t *testing.T) {
 	series := twapSeries(t, prices)
 	anchorNs := uint64(twapWindowStartSeconds+len(prices)) * uint64(time.Second)
 
-	_, err := twapFunc(anchorNs)(series, twapConfigMap(len(prices), 3, 0, 4, 2))
+	_, err := twapFunc(anchorNs)(series, twapConfigMap(len(prices), 3, 0, 2, 2))
 	require.Error(t, err)
 
 	var rejection *TWAPRejection

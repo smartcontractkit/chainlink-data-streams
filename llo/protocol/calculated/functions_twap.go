@@ -383,8 +383,11 @@ func parseTWAPConfig(raw any) (twapConfig, error) {
 		return twapConfig{}, fmt.Errorf("%w: minSamples %d exceeds the %d one-second buckets in the window",
 			ErrTWAPConfig, minSamples, windowSeconds)
 	}
-	// A gap spans at most windowSeconds-1 buckets, so a larger tolerance can
+	// An accepted window holds at least minSamples observed buckets, so a gap
+	// spans at most windowSeconds-minSamples of them. A larger tolerance can
 	// never be reached and is a misconfiguration rather than a looser rule.
+	// minSamples, not the tolerances, bounds the weight of a single sample.
+	maxGap := windowSeconds - int64(minSamples)
 	for _, tolerance := range []struct {
 		key   string
 		value int
@@ -393,9 +396,9 @@ func parseTWAPConfig(raw any) (twapConfig, error) {
 		{keyMaxInteriorGap, maxInteriorGap},
 		{keyMaxTailGap, maxTailGap},
 	} {
-		if int64(tolerance.value) >= windowSeconds {
-			return twapConfig{}, fmt.Errorf("%w: %s %d must be less than the %d one-second buckets in the window",
-				ErrTWAPConfig, tolerance.key, tolerance.value, windowSeconds)
+		if int64(tolerance.value) > maxGap {
+			return twapConfig{}, fmt.Errorf("%w: %s %d exceeds the %d buckets a gap can span in a window of %d with minSamples %d",
+				ErrTWAPConfig, tolerance.key, tolerance.value, maxGap, windowSeconds, minSamples)
 		}
 	}
 
