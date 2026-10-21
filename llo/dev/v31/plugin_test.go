@@ -2149,6 +2149,39 @@ func Test_VoteOnChannels_WithholdsOnlyInadmissibleChannels(t *testing.T) {
 	})
 }
 
+// Test_VoteOnChannels_NonReconcilingCacheRemovesOnlyTombstones covers a cache
+// that ignores the committed set and returns its own set verbatim, like the
+// static cache. Live channels missing from it get no remove vote, and only
+// committed tombstones missing from it are voted out.
+func Test_VoteOnChannels_NonReconcilingCacheRemovesOnlyTombstones(t *testing.T) {
+	live := llotypes.ChannelDefinition{
+		ReportFormat: llotypes.ReportFormatJSON,
+		Streams:      []llotypes.Stream{{StreamID: 100, Aggregator: llotypes.AggregatorMedian}},
+	}
+	tombstone := llotypes.ChannelDefinition{ReportFormat: llotypes.ReportFormatJSON, Tombstone: true}
+	committed := llotypes.ChannelDefinitions{1: live, 2: live, 8: tombstone, 9: tombstone}
+
+	vote := func(t *testing.T, desired llotypes.ChannelDefinitions) Observation {
+		t.Helper()
+		p := testPlugin(t)
+		p.ChannelDefinitionCache = &mockChannelDefinitionCache{defs: desired}
+		var obs Observation
+		p.voteOnChannels(&obs, &kvState{channelDefinitions: committed})
+		return obs
+	}
+
+	t.Run("an empty set removes only tombstones", func(t *testing.T) {
+		obs := vote(t, llotypes.ChannelDefinitions{})
+		require.Equal(t, map[llotypes.ChannelID]struct{}{8: {}, 9: {}}, obs.RemoveChannelIDs)
+		require.Empty(t, obs.UpdateChannelDefinitions)
+	})
+	t.Run("a partial set removes only absent tombstones", func(t *testing.T) {
+		obs := vote(t, llotypes.ChannelDefinitions{2: live, 9: tombstone})
+		require.Equal(t, map[llotypes.ChannelID]struct{}{8: {}}, obs.RemoveChannelIDs)
+		require.Empty(t, obs.UpdateChannelDefinitions)
+	})
+}
+
 // Test_Observation_RetirementCacheErrorsAreNotFatal guards the liveness fix:
 // both retirement caches read from node-local, asynchronously populated state,
 // so a transient failure must not fail the round. The vote is best-effort — a
