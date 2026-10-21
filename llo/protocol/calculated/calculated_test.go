@@ -1857,7 +1857,7 @@ func TestEvaluationWeight_ChargesTWAPWindow(t *testing.T) {
 
 	assert.Equal(t, 3, evaluationWeight(work("Count(History(s1, 2))")))
 
-	twap := `TWAP(History(s1, 2), {window: Duration("24h"), minSamples: 1, maxHeadGap: 86400, maxInteriorGap: 86400, maxTailGap: 86400})`
+	twap := `TWAP(History(s1, 2), {window: Duration("24h"), minSamples: 1, maxHeadGap: 86399, maxInteriorGap: 86399, maxTailGap: 86399})`
 	weight := evaluationWeight(work(twap))
 	assert.Equal(t, 3+twapMaxWindowSeconds, weight)
 	assert.GreaterOrEqual(t, weight, minParallelEvaluationWeight)

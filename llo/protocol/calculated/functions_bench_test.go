@@ -270,7 +270,7 @@ func BenchmarkProcessCalculatedStreams(b *testing.B) {
 		{"scalar", "Add(s1, s2)", 0},
 		{"avg/depth=300", "Avg(History(s1, 300))", 300},
 		{"ema/depth=300", "EMA(History(s1, 300), 20)", 300},
-		{"twap/window=300", `TWAP(History(s1, 300), {window: Duration("5m"), minSamples: 150, maxHeadGap: 300, maxInteriorGap: 300, maxTailGap: 300})`, 300},
+		{"twap/window=300", `TWAP(History(s1, 300), {window: Duration("5m"), minSamples: 150, maxHeadGap: 150, maxInteriorGap: 150, maxTailGap: 150})`, 300},
 	} {
 		for _, channels := range []int{1, 32} {
 			b.Run(fmt.Sprintf("%s/channels=%d", tc.name, channels), func(b *testing.B) {

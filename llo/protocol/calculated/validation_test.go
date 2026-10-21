@@ -68,7 +68,7 @@ func TestValidateExpression_TWAPSatisfiability(t *testing.T) {
 
 	// Exactly enough is fine.
 	require.NoError(t, ValidateExpression(
-		`TWAP(History(s1, 240), {window: Duration("4m"), minSamples: 240, maxHeadGap: 30, maxInteriorGap: 10, maxTailGap: 30})`))
+		`TWAP(History(s1, 240), {window: Duration("4m"), minSamples: 240, maxHeadGap: 0, maxInteriorGap: 0, maxTailGap: 0})`))
 
 	// A minSamples above the width of the record count must not wrap into a
 	// small value and pass. 2^32+5 would narrow to 5.
@@ -90,6 +90,71 @@ func TestValidateExpression_TWAPSatisfiability(t *testing.T) {
 
 	// Wrong arity is caught.
 	require.Error(t, ValidateExpression("TWAP(History(s1, 10))"))
+}
+
+func TestValidateExpression_TWAPLiteralConfig(t *testing.T) {
+	t.Parallel()
+
+	twap := func(config string) string {
+		return `TWAP(History(s1, 600), {` + config + `})`
+	}
+
+	t.Run("a valid literal configuration is accepted", func(t *testing.T) {
+		t.Parallel()
+		require.NoError(t, ValidateExpression(twap(`window: Duration("5m"), minSamples: 240, maxHeadGap: 60, maxInteriorGap: 10, maxTailGap: 60`)))
+		require.NoError(t, ValidateExpression(twap(`window: 300000000000, minSamples: 240, maxHeadGap: 60, maxInteriorGap: 10, maxTailGap: 60`)))
+	})
+
+	for _, tc := range []struct {
+		name    string
+		config  string
+		wantErr string
+	}{
+		{
+			name:    "gap tolerance the window cannot reach",
+			config:  `window: Duration("5m"), minSamples: 240, maxHeadGap: 61, maxInteriorGap: 10, maxTailGap: 60`,
+			wantErr: "maxHeadGap 61 exceeds the 60 buckets",
+		},
+		{
+			name:    "window over the maximum",
+			config:  `window: Duration("1000h"), minSamples: 240, maxHeadGap: 0, maxInteriorGap: 0, maxTailGap: 0`,
+			wantErr: "exceeds the maximum",
+		},
+		{
+			name:    "window not a whole number of seconds",
+			config:  `window: Duration("1500ms"), minSamples: 1, maxHeadGap: 0, maxInteriorGap: 0, maxTailGap: 0`,
+			wantErr: "whole number of seconds",
+		},
+		{
+			name:    "unparseable duration",
+			config:  `window: Duration("5 minutes"), minSamples: 240, maxHeadGap: 0, maxInteriorGap: 0, maxTailGap: 0`,
+			wantErr: "window: time: unknown unit",
+		},
+		{
+			name:    "missing key",
+			config:  `window: Duration("5m"), minSamples: 240, maxHeadGap: 0, maxInteriorGap: 0`,
+			wantErr: "maxTailGap is required",
+		},
+		{
+			name:    "unknown key",
+			config:  `window: Duration("5m"), minSamples: 240, maxHeadGap: 0, maxInteriorGap: 0, maxTailGap: 0, maxGap: 0`,
+			wantErr: "unknown keys maxGap",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			err := ValidateExpression(twap(tc.config))
+			require.ErrorIs(t, err, ErrHistoryExpression)
+			assert.Contains(t, err.Error(), ErrTWAPConfig.Error())
+			assert.Contains(t, err.Error(), tc.wantErr)
+		})
+	}
+
+	t.Run("a configuration with a non-literal value is left to evaluation", func(t *testing.T) {
+		t.Parallel()
+		require.NoError(t, ValidateExpression(twap(`window: Duration("5m"), minSamples: 240, maxHeadGap: s1, maxInteriorGap: 10, maxTailGap: 60`)))
+		require.NoError(t, ValidateExpression(twap(`window: Duration(s1), minSamples: 240, maxHeadGap: 60, maxInteriorGap: 10, maxTailGap: 60`)))
+	})
 }
 
 func TestValidateChannelExpressions(t *testing.T) {
@@ -210,7 +275,7 @@ func TestValidateChannelExpressions_Identifiers(t *testing.T) {
 		"Add(s3_ask, s3_benchmark)",
 		"Add(s4, s4_bid)", // mode carries whatever type its contributions agree on
 		"Sub(observations_timestamp, s1_timestamp)",
-		`TWAP(History(s1, 3), {window: Duration("3s"), minSamples: 1, maxHeadGap: 3, maxInteriorGap: 3, maxTailGap: 3})`,
+		`TWAP(History(s1, 3), {window: Duration("3s"), minSamples: 1, maxHeadGap: 2, maxInteriorGap: 2, maxTailGap: 2})`,
 		"let a = Mul(s1, s2); Add(a, 1)",
 	} {
 		t.Run("accepts "+expression, func(t *testing.T) {
@@ -286,7 +351,7 @@ func twapCalls(count int) string {
 	calls := make([]string, 0, count)
 	for i := range count {
 		calls = append(calls, fmt.Sprintf(
-			`TWAP(History(s%d, 1), {window: Duration("1s"), minSamples: 1, maxHeadGap: 1, maxInteriorGap: 1, maxTailGap: 1})`,
+			`TWAP(History(s%d, 1), {window: Duration("1s"), minSamples: 1, maxHeadGap: 0, maxInteriorGap: 0, maxTailGap: 0})`,
 			i+1))
 	}
 	return sumExpressions(calls)
@@ -414,7 +479,7 @@ func TestValidateChannelExpressions_CountLimit(t *testing.T) {
 func TestChannelTWAPCalls(t *testing.T) {
 	t.Parallel()
 
-	const twapCall = `TWAP(History(s1, 3), {window: Duration("3s"), minSamples: 1, maxHeadGap: 3, maxInteriorGap: 3, maxTailGap: 3})`
+	const twapCall = `TWAP(History(s1, 3), {window: Duration("3s"), minSamples: 1, maxHeadGap: 2, maxInteriorGap: 2, maxTailGap: 2})`
 	channel := func(expressions ...string) llotypes.ChannelDefinition {
 		abi := ""
 		for i, expression := range expressions {

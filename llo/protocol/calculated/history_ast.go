@@ -355,9 +355,9 @@ func (p *historyPatcher) rewrite(node *ast.Node, call *ast.CallNode) {
 // evaluation time, where the same condition would surface as a per-round
 // rejection and look like a data problem instead of a deployment mistake.
 //
-// Only literal configuration can be checked. A configuration built at runtime is
-// left to the runtime validation in functions_twap.go, which is stricter but
-// later.
+// Only literal configuration can be checked. A configuration made only of
+// literals goes through the same parseTWAPConfig as evaluation. One with any
+// value built at runtime is left to that runtime validation.
 func (p *historyPatcher) checkTWAP(call *ast.CallNode) {
 	// Counted first, and counted whatever the call looks like: this is the one
 	// TWAP check that does not depend on the configuration being literal, which
@@ -382,23 +382,81 @@ func (p *historyPatcher) checkTWAP(call *ast.CallNode) {
 		return // not a literal configuration
 	}
 
-	minSamples, found := twapConfigLiteral(config, "minSamples")
-	if !found {
+	if minSamples, found := twapConfigLiteral(config, "minSamples"); found {
+		// Compared as int64: minSamples is a literal and can be any integer the
+		// parser accepted, so narrowing it to the width of ref.Count would let a
+		// value above 2^32 wrap into a small one and pass. The runtime validation
+		// still rejects it, but the diagnostic this check exists to give would be
+		// lost.
+		if minSamples < 1 {
+			p.errorf("%s requires minSamples to be at least 1, got %d", twapFunctionName, minSamples)
+			return
+		}
+		if minSamples > int64(ref.Count) {
+			p.errorf("%s requires at least %d observations but %s only keeps %d records; increase the history depth or lower minSamples",
+				twapFunctionName, minSamples, ref, ref.Count)
+			return
+		}
+	}
+
+	// A configuration made only of literals is fixed by the expression, so the
+	// runtime rules apply to it here and a violation is a deployment mistake.
+	fields, err := twapLiteralConfig(config)
+	if err != nil {
+		p.errorf("%s: %s", twapFunctionName, err)
 		return
 	}
-	// Compared as int64: minSamples is a literal and can be any integer the
-	// parser accepted, so narrowing it to the width of ref.Count would let a
-	// value above 2^32 wrap into a small one and pass. The runtime validation
-	// still rejects it, but the diagnostic this check exists to give would be
-	// lost.
-	if minSamples < 1 {
-		p.errorf("%s requires minSamples to be at least 1, got %d", twapFunctionName, minSamples)
+	if fields == nil {
 		return
 	}
-	if minSamples > int64(ref.Count) {
-		p.errorf("%s requires at least %d observations but %s only keeps %d records; increase the history depth or lower minSamples",
-			twapFunctionName, minSamples, ref, ref.Count)
+	if _, err := parseTWAPConfig(fields); err != nil {
+		p.errorf("%s: %s", twapFunctionName, err)
 	}
+}
+
+// twapLiteralConfig returns the values of a configuration map literal as
+// evaluation would see them, or nil if any value is not a literal. A window
+// written as Duration("...") counts as a literal, and its parse error is
+// returned.
+func twapLiteralConfig(config *ast.MapNode) (map[string]any, error) {
+	fields := make(map[string]any, len(config.Pairs))
+	for _, pair := range config.Pairs {
+		kv, ok := pair.(*ast.PairNode)
+		if !ok {
+			return nil, nil
+		}
+		name, ok := kv.Key.(*ast.StringNode)
+		if !ok {
+			return nil, nil
+		}
+		if v, ok := integerLiteral(kv.Value); ok {
+			fields[name.Value] = v
+			continue
+		}
+		switch v := kv.Value.(type) {
+		case *ast.FloatNode:
+			fields[name.Value] = v.Value
+		case *ast.StringNode:
+			fields[name.Value] = v.Value
+		case *ast.CallNode:
+			callee, ok := v.Callee.(*ast.IdentifierNode)
+			if !ok || callee.Value != "Duration" || len(v.Arguments) != 1 {
+				return nil, nil
+			}
+			arg, ok := v.Arguments[0].(*ast.StringNode)
+			if !ok {
+				return nil, nil
+			}
+			d, err := ParseDuration(arg.Value)
+			if err != nil {
+				return nil, fmt.Errorf("%w: %s: %s", ErrTWAPConfig, name.Value, err)
+			}
+			fields[name.Value] = d
+		default:
+			return nil, nil
+		}
+	}
+	return fields, nil
 }
 
 // checkWindowDepth rejects a window shallower than the function needs to
