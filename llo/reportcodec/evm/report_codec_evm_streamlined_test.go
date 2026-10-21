@@ -73,6 +73,21 @@ func TestReportCodecEVMStreamlined(t *testing.T) {
 			assert.Equal(t, "00000000499602d2", hex.EncodeToString(payload[32:40]))                               // timestamp
 			assert.Equal(t, "000000000000000000000000000000000000000042f693bf", hex.EncodeToString(payload[40:])) // value
 		})
+		t.Run("does not encode specimen reports", func(t *testing.T) {
+			cd := llotypes.ChannelDefinition{
+				Opts: []byte(`{"abi":[{"type":"int128"}]}`),
+			}
+			cache := protocol.NewOptsCache()
+			cache.Set(1, cd.Opts)
+			_, err := codec.Encode(protocol.Report{
+				ChannelID: 1,
+				Values: []protocol.StreamValue{
+					protocol.ToDecimal(decimal.NewFromFloat(1123455935.123)),
+				},
+				Specimen: true,
+			}, cd, cache)
+			require.EqualError(t, err, "ReportCodecEVMStreamlined does not support encoding specimen reports")
+		})
 	})
 	t.Run("Verify", func(t *testing.T) {
 		t.Run("with valid opts", func(t *testing.T) {
@@ -113,6 +128,13 @@ func TestReportCodecEVMStreamlined(t *testing.T) {
 				})
 				require.Error(t, err)
 				require.Contains(t, err.Error(), "json: cannot unmarshal hex string of odd length")
+				err = codec.Verify(llotypes.ChannelDefinition{
+					Streams: []llotypes.Stream{
+						{StreamID: 123, Aggregator: llotypes.AggregatorMedian},
+					},
+					Opts: []byte(`{"abi":[{"type":"int160"}],"maxReportRange":"87600h"}`),
+				})
+				require.EqualError(t, err, "maxReportRange must not exceed 168h0m0s; got: 87600h0m0s")
 			})
 		})
 	})

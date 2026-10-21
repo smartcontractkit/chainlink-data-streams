@@ -1,8 +1,6 @@
 package llo
 
 import (
-	"github.com/goccy/go-json"
-
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
 
 	protocol "github.com/smartcontractkit/chainlink-data-streams/llo/protocol"
@@ -13,40 +11,38 @@ type timeResolutionOpts struct {
 	TimeResolution protocol.TimeResolution `json:"TimeResolution"`
 }
 
-// isSecondsResolution reports whether a channel's report format encodes report
-// timestamps at second-level resolution. Such channels must not emit two reports
-// whose validAfter and observation timestamp fall in the same second, otherwise
-// the reports would overlap (or be not-yet-valid) once truncated to seconds.
+// reportTimeResolution returns the resolution a channel's report format
+// truncates report timestamps to. Such channels must not emit a report whose
+// validAfter and observation timestamp fall in the same tick, otherwise the
+// encoded report would be not yet valid (ValidFrom after Timestamp).
 //
-// Unlike the v30 equivalent (which reads a node-local, incrementally mutated
-// OptsCache and is therefore non-deterministic on a cache miss), this parses the resolution directly from
-// the channel definition's opts, which are part of the replicated state — so the
-// result is deterministic across oracles.
+// It reads opts through the round OptsCache and decodes the definition's raw
+// opts on a cache miss, so the result is deterministic across oracles.
 //
 //   - ReportFormatEVMPremiumLegacy always uses seconds.
-//   - ReportFormatEVMABIEncodeUnpacked uses the TimeResolution opt, which
-//     defaults to seconds (the zero value) when unset; malformed opts are
-//     treated as non-seconds.
+//   - ReportFormatEVMABIEncodeUnpacked and ReportFormatEVMABIEncodeUnpackedExpr
+//     use the TimeResolution opt, which defaults to seconds (the zero value)
+//     when unset. ok is false when the opts cannot be read, and the caller
+//     treats such a channel as unreportable.
 //   - all other formats use full (nanosecond) resolution.
-func isSecondsResolution(cd llotypes.ChannelDefinition) bool {
+func reportTimeResolution(cd llotypes.ChannelDefinition, channelID llotypes.ChannelID, optsCache *protocol.OptsCache) (res protocol.TimeResolution, ok bool) {
 	switch cd.ReportFormat {
 	case llotypes.ReportFormatEVMPremiumLegacy:
-		return true
-	case llotypes.ReportFormatEVMABIEncodeUnpacked:
-		var o timeResolutionOpts // TimeResolution zero value == ResolutionSeconds
-		if len(cd.Opts) > 0 {
-			if err := json.Unmarshal(cd.Opts, &o); err != nil {
-				return false
-			}
+		return protocol.ResolutionSeconds, true
+	case llotypes.ReportFormatEVMABIEncodeUnpacked, llotypes.ReportFormatEVMABIEncodeUnpackedExpr:
+		o, err := protocol.GetOptsOrDecode[timeResolutionOpts](optsCache, cd, channelID)
+		if err != nil {
+			return 0, false
 		}
-		return o.TimeResolution == protocol.ResolutionSeconds
+		return o.TimeResolution, true
 	default:
-		return false
+		return protocol.ResolutionNanoseconds, true
 	}
 }
 
-// secondsOverlap reports whether validAfterNs and obsTsNs collapse to the same
-// (or an inverted) second, which would make a seconds-resolution report invalid.
-func secondsOverlap(validAfterNs, obsTsNs uint64) bool {
-	return validAfterNs/1e9 >= obsTsNs/1e9
+// tickOverlap reports whether validAfterNs and obsTsNs collapse to the same
+// (or an inverted) tick at res. It truncates with protocol.ConvertTimestamp,
+// the same conversion the codecs apply when encoding.
+func tickOverlap(validAfterNs, obsTsNs uint64, res protocol.TimeResolution) bool {
+	return protocol.ConvertTimestamp(validAfterNs, res) >= protocol.ConvertTimestamp(obsTsNs, res)
 }

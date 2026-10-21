@@ -20,6 +20,7 @@ func (p *Plugin) ProcessCalculatedStreams(outcome *Outcome) {
 	// nil HistoryReader: v30 has no replicated key-value state, so there is
 	// nowhere for stream history to live. Expressions using History fail closed
 	// rather than evaluating against an empty window.
+	p.ExpressionPins.Set(p.OptsCache, outcome.ChannelDefinitions)
 	calculated.ProcessCalculatedStreamsWithDefinitionAppend(p.Logger, outcome.ChannelDefinitions, outcome.StreamAggregates, outcome.ObservationTimestampNanoseconds, p.OptsCache, nil)
 }
 

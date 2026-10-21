@@ -265,9 +265,15 @@ func (v handoverVerifier) Verify(_ ocrtypes.OnchainPublicKey, _ ocrtypes.ConfigD
 // transmitter stores, signed by two of four signers (f+1 with F=1).
 func attest(t *testing.T, raw []byte) []byte {
 	t.Helper()
+	return attestAt(t, raw, handoverV30SeqNrRR)
+}
+
+// attestAt is attest at the given predecessor seqNr.
+func attestAt(t *testing.T, raw []byte, seqNr uint64) []byte {
+	t.Helper()
 	b, err := proto.Marshal(&protocol.AttestedRetirementReport{
 		RetirementReport: raw,
-		SeqNr:            handoverV30SeqNrRR,
+		SeqNr:            seqNr,
 		Sigs: []*protocol.AttributedOnchainSignature{
 			{Signer: 0, Signature: []byte("sig0")},
 			{Signer: 1, Signature: []byte("sig1")},
@@ -696,6 +702,146 @@ func Test_Handover_RejectsIncompatibleProtocolVersion(t *testing.T) {
 	require.Equal(t, protocol.LifeCycleStageStaging, newInst.lifeCycleStage(),
 		"instance must stay in staging on a retirement report from an unsupported protocol version")
 	require.NotContains(t, newInst.validAfter(), handoverChannelID)
+}
+
+// Test_Handover_RetirementReportFrozenAfterRetirement pins the invariant that
+// makes the successor's choice among attested retirement reports irrelevant:
+// once retired, a predecessor of either version emits the same
+// ValidAfterNanoseconds every round, however its observations move on.
+func Test_Handover_RetirementReportFrozenAfterRetirement(t *testing.T) {
+	const pendingChannelID, votedChannelID = llotypes.ChannelID(2), llotypes.ChannelID(3)
+
+	// Every round after retirement keeps voting to add a channel and remove
+	// one, with an advancing timestamp.
+	retiredUpdate := llotypes.ChannelDefinitions{votedChannelID: handoverChannel()}
+	retiredRemove := map[llotypes.ChannelID]struct{}{handoverChannelID: {}}
+
+	requireFrozen := func(t *testing.T, retired []byte, next func() []byte) {
+		t.Helper()
+		first, err := protocol.StandardRetirementReportCodec{}.Decode(retired)
+		require.NoError(t, err)
+		require.Contains(t, first.ValidAfterNanoseconds, handoverChannelID)
+		require.Contains(t, first.ValidAfterNanoseconds, pendingChannelID, "a channel added before retiring must be handed over")
+		require.NotZero(t, first.ValidAfterNanoseconds[handoverBackfillChannelID], "the backfill must have made progress before retiring")
+
+		for range 3 {
+			raw := next()
+			require.NotEmpty(t, raw, "a retired instance must emit a retirement report every round")
+			got, err := protocol.StandardRetirementReportCodec{}.Decode(raw)
+			require.NoError(t, err)
+			require.Equal(t, first, got, "retirement report must not change after retiring")
+		}
+	}
+
+	t.Run("v30", func(t *testing.T) {
+		old := newV30Instance(t, ocrtypes.ConfigDigest{0x30}, nil, nil)
+		ts := handoverTickNanos * 10
+		old.round(v30.Observation{UnixTimestampNanoseconds: ts})
+		ts += handoverTickNanos
+		old.round(v30.Observation{UnixTimestampNanoseconds: ts, UpdateChannelDefinitions: handoverBackfillDefs(), StreamValues: handoverStreamValues()})
+		for range 2 {
+			ts += handoverTickNanos
+			old.round(v30.Observation{UnixTimestampNanoseconds: ts, StreamValues: handoverStreamValues()})
+		}
+		ts += handoverTickNanos
+		old.round(v30.Observation{
+			UnixTimestampNanoseconds: ts,
+			UpdateChannelDefinitions: llotypes.ChannelDefinitions{pendingChannelID: handoverChannel()},
+			StreamValues:             handoverStreamValues(),
+		})
+		ts += handoverTickNanos
+		old.round(v30.Observation{UnixTimestampNanoseconds: ts, ShouldRetire: true, StreamValues: handoverStreamValues()})
+		require.Equal(t, protocol.LifeCycleStageRetired, old.outcome().LifeCycleStage)
+
+		requireFrozen(t, old.retirementRR, func() []byte {
+			ts += handoverTickNanos
+			old.retirementRR = nil
+			old.round(v30.Observation{
+				UnixTimestampNanoseconds: ts,
+				ShouldRetire:             true,
+				UpdateChannelDefinitions: retiredUpdate,
+				RemoveChannelIDs:         retiredRemove,
+				StreamValues:             handoverStreamValues(),
+			})
+			return old.retirementRR
+		})
+	})
+
+	t.Run("v31", func(t *testing.T) {
+		old := newV31Instance(t, ocrtypes.ConfigDigest{0x31}, nil, nil)
+		old.round(Observation{}) // bootstrap -> production
+		ts := handoverTickNanos * 10
+		old.round(Observation{UnixTimestampNanoseconds: ts, UpdateChannelDefinitions: handoverBackfillDefs(), StreamValues: handoverStreamValues()})
+		for range 2 {
+			ts += handoverTickNanos
+			old.round(Observation{UnixTimestampNanoseconds: ts, StreamValues: handoverStreamValues()})
+		}
+		// Agreed in the round before retiring, so it takes effect on the
+		// retiring round itself.
+		ts += handoverTickNanos
+		old.round(Observation{
+			UnixTimestampNanoseconds: ts,
+			UpdateChannelDefinitions: llotypes.ChannelDefinitions{pendingChannelID: handoverChannel()},
+			StreamValues:             handoverStreamValues(),
+		})
+		ts += handoverTickNanos
+		old.round(Observation{UnixTimestampNanoseconds: ts, ShouldRetire: true, StreamValues: handoverStreamValues()})
+		require.Equal(t, protocol.LifeCycleStageRetired, old.lifeCycleStage())
+
+		requireFrozen(t, old.retirementRR, func() []byte {
+			ts += handoverTickNanos
+			old.retirementRR = nil
+			old.round(Observation{
+				UnixTimestampNanoseconds: ts,
+				ShouldRetire:             true,
+				UpdateChannelDefinitions: retiredUpdate,
+				RemoveChannelIDs:         retiredRemove,
+				StreamValues:             handoverStreamValues(),
+			})
+			return old.retirementRR
+		})
+	})
+}
+
+// Test_Handover_DivergentRetirementsRefusePromotion covers the guard for a
+// broken freeze: when two validly signed retirement reports in one round carry
+// different watermarks, the aos order would pick one, so the successor stays
+// in staging instead. Reports that differ only in the attested envelope agree
+// and still promote.
+func Test_Handover_DivergentRetirementsRefusePromotion(t *testing.T) {
+	v30Digest := ocrtypes.ConfigDigest{0x30}
+	encode := func(validAfter uint64) []byte {
+		raw, err := protocol.StandardRetirementReportCodec{}.Encode(protocol.RetirementReport{
+			ProtocolVersion:       handoverProtocolV,
+			ValidAfterNanoseconds: map[llotypes.ChannelID]uint64{handoverChannelID: validAfter},
+		})
+		require.NoError(t, err)
+		return raw
+	}
+	withRetirement := func(attested []byte) Observation {
+		return Observation{UnixTimestampNanoseconds: handoverTickNanos, AttestedPredecessorRetirement: attested, PredecessorSigners: handoverPredecessorSigners, PredecessorF: 1}
+	}
+
+	t.Run("different watermarks", func(t *testing.T) {
+		stale, fresh := attestAt(t, encode(500), 40), attestAt(t, encode(600), 41)
+		newInst := newV31Instance(t, ocrtypes.ConfigDigest{0x31}, &v30Digest, newPredecessorCache(t, fresh, true))
+		newInst.round(Observation{})
+
+		require.NoError(t, newInst.tryRound(withRetirement(stale), withRetirement(fresh), withRetirement(fresh), withRetirement(fresh)))
+		require.Equal(t, protocol.LifeCycleStageStaging, newInst.lifeCycleStage(),
+			"instance must stay in staging when valid retirement reports disagree")
+		require.NotContains(t, newInst.validAfter(), handoverChannelID)
+	})
+
+	t.Run("same watermarks in different envelopes", func(t *testing.T) {
+		first, later := attestAt(t, encode(500), 40), attestAt(t, encode(500), 41)
+		newInst := newV31Instance(t, ocrtypes.ConfigDigest{0x31}, &v30Digest, newPredecessorCache(t, first, true))
+		newInst.round(Observation{})
+
+		require.NoError(t, newInst.tryRound(withRetirement(first), withRetirement(later), withRetirement(first), withRetirement(later)))
+		require.Equal(t, protocol.LifeCycleStageProduction, newInst.lifeCycleStage())
+		require.Equal(t, uint64(500), newInst.validAfter()[handoverChannelID])
+	})
 }
 
 // --- backfill guard ---

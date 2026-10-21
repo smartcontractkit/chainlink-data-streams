@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"math"
+	"math/big"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -12,6 +13,7 @@ import (
 	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/smartcontractkit/chainlink-common/pkg/logger"
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
@@ -90,6 +92,45 @@ func Test_blobPump_TakeKicksNextCycle(t *testing.T) {
 
 	// Taking a snapshot also kicks, so the pump keeps running.
 	require.Eventually(t, func() bool { return p.Cycles() >= 2 }, tests.WaitTimeout(t), 10*time.Millisecond)
+}
+
+func Test_blobPump_DropsUnrequestedStreams(t *testing.T) {
+	ds := mockDS()
+	ds.vals[999] = protocol.ToDecimal(decimal.NewFromInt(9))
+	p := testPump(t, ds, newFakeBroadcaster(), time.Minute)
+
+	p.SetInput(pumpInputFor(2))
+	p.Take(t.Context(), 2)
+	require.Eventually(t, func() bool { return p.Cycles() >= 1 }, tests.WaitTimeout(t), 10*time.Millisecond)
+
+	p.SetInput(pumpInputFor(3))
+	snap, reason := p.Take(t.Context(), 3)
+	require.NotNil(t, snap, "reason: %s", reason)
+	require.Equal(t, 1, snap.streamCount)
+}
+
+func Test_dropUnobservable(t *testing.T) {
+	over := new(big.Int).Lsh(big.NewInt(1), protocol.MaxDecimalCoefficientBits+1)
+	sv := protocol.StreamValues{
+		1: protocol.ToDecimal(decimal.NewFromInt(7)),
+		2: protocol.ToDecimal(decimal.NewFromBigInt(over, 0)),
+		3: nil,
+	}
+	dropUnobservable(sv, logger.Test(t), 1)
+	assert.Equal(t, protocol.ToDecimal(decimal.NewFromInt(7)), sv[1])
+	assert.Nil(t, sv[2])
+	assert.Nil(t, sv[3])
+
+	// What is left decodes on the receiving side.
+	payload, err := marshalStreamValues(sv)
+	require.NoError(t, err)
+	raw, err := decodeBlobPayload(payload, maxDecompressedBlobPayloadBytes)
+	require.NoError(t, err)
+	chunk := &protocol.LLOObservationProto{}
+	require.NoError(t, proto.Unmarshal(raw, chunk))
+	require.Len(t, chunk.StreamValues, 1)
+	_, err = streamValueFromProtoAllowNil(chunk.StreamValues[1])
+	require.NoError(t, err)
 }
 
 // Test_blobPump_TakeIsSingleUse guards against two rounds referencing the same
@@ -696,6 +737,11 @@ func Test_ResolveBlobRounds(t *testing.T) {
 		assert.Equal(t, uint64(DefaultBlobLifetimeRounds), life)
 	})
 
+	t.Run("rejects a snapshot window below the minimum", func(t *testing.T) {
+		_, _, err := ResolveBlobRounds(1, 0)
+		require.ErrorContains(t, err, "below MinMaxSnapshotRounds")
+	})
+
 	t.Run("rejects a lifetime past the maximum", func(t *testing.T) {
 		_, _, err := ResolveBlobRounds(0, MaxBlobLifetimeRounds+1)
 		require.ErrorContains(t, err, "exceeds MaxBlobLifetimeRounds")
@@ -707,7 +753,7 @@ func Test_ResolveBlobRounds(t *testing.T) {
 	})
 
 	t.Run("rejects a lifetime shorter than the margin", func(t *testing.T) {
-		_, _, err := ResolveBlobRounds(1, 1)
+		_, _, err := ResolveBlobRounds(MinMaxSnapshotRounds, 1)
 		require.ErrorContains(t, err, "rounds of fetch margin")
 	})
 

@@ -97,6 +97,21 @@ func TestTWAP_FillThenAverage(t *testing.T) {
 			want: "620",
 		},
 		{
+			// maxInteriorGap bounds each run, not their total. The total is
+			// bounded by minSamples, so the window is accepted at M == minSamples.
+			name:       "several interior gaps each at the threshold: accepted at the coverage floor",
+			prices:     []int64{100, 0, 400, 0, 1600}, // M=3, two runs of Gint=1
+			minSamples: 3, maxInterior: 1,
+			// Interpolating in log space doubles each step: 100,200,400,800,1600.
+			want: "620",
+		},
+		{
+			name:       "several interior gaps each at the threshold: rejected below the coverage floor",
+			prices:     []int64{100, 0, 400, 0, 1600},
+			minSamples: 4, maxInterior: 1,
+			wantReasons: []TWAPRejectionReason{ReasonInsufficientSamples},
+		},
+		{
 			name:       "interior gap one over the threshold: rejected",
 			prices:     []int64{100, 0, 0, 0, 1600},
 			minSamples: 2, maxInterior: 2,
@@ -117,7 +132,7 @@ func TestTWAP_FillThenAverage(t *testing.T) {
 		{
 			name:       "insufficient samples: rejected even though every gap is within its threshold",
 			prices:     []int64{100, 0, 300, 0, 500}, // M=3, Gint=1
-			minSamples: 4, maxInterior: 5, maxTail: 5,
+			minSamples: 4, maxInterior: 1, maxTail: 1,
 			wantReasons: []TWAPRejectionReason{ReasonInsufficientSamples},
 		},
 		{
@@ -150,7 +165,7 @@ func TestTWAP_FillThenAverage(t *testing.T) {
 		{
 			name:       "multiple applicable reasons are all returned, not just the first",
 			prices:     []int64{100, 0, 0, 0, 0}, // M=1, Gtail=4
-			minSamples: 3, maxInterior: 5, maxTail: 2,
+			minSamples: 3, maxInterior: 2, maxTail: 2,
 			wantReasons: []TWAPRejectionReason{ReasonInsufficientSamples, ReasonTailGapTooLong},
 		},
 		{
@@ -181,6 +196,44 @@ func TestTWAP_FillThenAverage(t *testing.T) {
 			}
 			require.NoError(t, err)
 			assertClose(t, tc.want, got)
+		})
+	}
+}
+
+// TestTWAP_StepRatio checks the per-second ratio of a gap against a power taken
+// at twice the precision: it must be within one unit at doublePrecision.
+func TestTWAP_StepRatio(t *testing.T) {
+	t.Parallel()
+
+	ulp := decimal.New(1, -doublePrecision)
+	for _, tc := range []struct {
+		left, right string
+		span        int
+	}{
+		{"100", "1600", 4},
+		{"1600", "100", 4},
+		{"100", "100", 7},
+		{"1234.56789012", "1234.56789013", 2},
+		{"1234.56789012", "1851.85183518", 2},
+		{"1234.56789012", "1234567.89012", 2},
+		{"1234567.89012", "1234.56789012", 3},
+		{"0.000012345", "98765.4321", 84},
+		{"98765.4321", "98765.4322", 86400},
+	} {
+		t.Run(fmt.Sprintf("%s->%s/span=%d", tc.left, tc.right, tc.span), func(t *testing.T) {
+			left, right := decimal.RequireFromString(tc.left), decimal.RequireFromString(tc.right)
+			got, err := twapStepRatio(left, right, tc.span)
+			require.NoError(t, err)
+
+			const refPrecision = 2 * doublePrecision
+			growth, err := divRound(right, left, refPrecision)
+			require.NoError(t, err)
+			exponent, err := divRoundByInt(decimal.NewFromInt(1), tc.span, refPrecision)
+			require.NoError(t, err)
+			want, err := decimalPow(growth, exponent, refPrecision)
+			require.NoError(t, err)
+
+			assert.True(t, got.Sub(want).Abs().LessThanOrEqual(ulp), "ratio %s, want %s", got, want)
 		})
 	}
 }
@@ -219,11 +272,13 @@ func TestTWAP_GapStats(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			buckets := make([]twapBucket, len(tc.observed))
+			var observations []twapObservation
 			for i, observed := range tc.observed {
-				buckets[i] = twapBucket{observed: observed, price: decimal.NewFromInt(1)}
+				if observed {
+					observations = append(observations, twapObservation{offset: i, price: decimal.NewFromInt(1)})
+				}
 			}
-			m, head, interior, tail := twapGapStats(buckets)
+			m, head, interior, tail := twapGapStats(observations, len(tc.observed))
 			assert.Equal(t, tc.wantM, m, "M")
 			assert.Equal(t, tc.wantHead, head, "Ghead")
 			assert.Equal(t, tc.wantInt, interior, "Gint")
@@ -239,7 +294,7 @@ func TestTWAP_HalfOpenWindow(t *testing.T) {
 
 	const windowSeconds = 3
 	anchorSeconds := uint64(twapWindowStartSeconds + windowSeconds)
-	cfg := twapConfigMap(windowSeconds, 1, windowSeconds, windowSeconds, windowSeconds)
+	cfg := twapConfigMap(windowSeconds, 1, windowSeconds-1, windowSeconds-1, windowSeconds-1)
 
 	// An observation exactly at the anchor is excluded, leaving the window empty.
 	series, err := NewSeries(
@@ -379,17 +434,35 @@ func TestTWAP_ConfigValidation(t *testing.T) {
 		require.ErrorContains(t, call(twapConfigMap(3, 4, 0, 0, 0)), "exceeds the")
 	})
 
+	t.Run("gap tolerances must be reachable within the window", func(t *testing.T) {
+		t.Parallel()
+		// A gap spans at most window-minSamples buckets.
+		for _, key := range []string{"maxHeadGap", "maxInteriorGap", "maxTailGap"} {
+			for _, minSamples := range []int{1, 2} {
+				cfg := twapConfigMap(3, minSamples, 0, 0, 0)
+				reachable := 3 - minSamples
+				cfg[key] = reachable + 1
+				err := call(cfg)
+				require.ErrorIs(t, err, ErrTWAPConfig, key)
+				require.ErrorContains(t, err, fmt.Sprintf("%s %d exceeds the %d buckets", key, reachable+1, reachable), key)
+
+				cfg[key] = reachable
+				require.NotErrorIs(t, call(cfg), ErrTWAPConfig, key)
+			}
+		}
+	})
+
 	t.Run("a window too thin to satisfy minSamples is a rejection, not a config error", func(t *testing.T) {
 		t.Parallel()
 		// Whether the requested depth can ever supply minSamples is a static
 		// property checked at configuration time. At runtime a thin window is a
 		// data condition, and must come back with the measured statistics.
 		shallow := twapSeries(t, []int64{100})
-		_, err := twapFunc(anchorNs)(shallow, twapConfigMap(3, 3, 0, 2, 2))
+		_, err := twapFunc(anchorNs)(shallow, twapConfigMap(3, 3, 0, 0, 0))
 		require.ErrorIs(t, err, ErrTWAPRejected)
 		var rejection *TWAPRejection
 		require.ErrorAs(t, err, &rejection)
-		assert.Equal(t, []TWAPRejectionReason{ReasonInsufficientSamples}, rejection.Reasons)
+		assert.Contains(t, rejection.Reasons, ReasonInsufficientSamples)
 	})
 
 	t.Run("not a configuration map", func(t *testing.T) {
@@ -449,7 +522,7 @@ func TestTWAP_RejectionMessage(t *testing.T) {
 	series := twapSeries(t, prices)
 	anchorNs := uint64(twapWindowStartSeconds+len(prices)) * uint64(time.Second)
 
-	_, err := twapFunc(anchorNs)(series, twapConfigMap(len(prices), 3, 0, 5, 2))
+	_, err := twapFunc(anchorNs)(series, twapConfigMap(len(prices), 3, 0, 2, 2))
 	require.Error(t, err)
 
 	var rejection *TWAPRejection

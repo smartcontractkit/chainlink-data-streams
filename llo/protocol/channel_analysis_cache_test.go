@@ -152,6 +152,53 @@ func Test_ChannelAnalysisCache(t *testing.T) {
 		require.Equal(t, int64(2), verifies)
 	})
 
+	t.Run("a read-only view hits existing entries and records none", func(t *testing.T) {
+		codec := &countingReportCodec{}
+		cache := NewChannelAnalysisCache()
+		committed := llotypes.ChannelDefinitions{1: cacheTestDef(`{"a":1}`)}
+		proposed := llotypes.ChannelDefinitions{1: cacheTestDef(`{"a":2}`)}
+
+		require.NoError(t, VerifyChannelDefinitionsWithCache(countingCodecs(codec), committed, cache))
+		require.NoError(t, VerifyChannelDefinitionsWithCache(countingCodecs(codec), committed, cache.ReadOnly()))
+		verifies, _, _ := codec.calls()
+		require.Equal(t, int64(1), verifies)
+
+		require.NoError(t, VerifyChannelDefinitionsWithCache(countingCodecs(codec), proposed, cache.ReadOnly()))
+		require.NoError(t, VerifyChannelDefinitionsWithCache(countingCodecs(codec), proposed, cache.ReadOnly()))
+		verifies, _, _ = codec.calls()
+		require.Equal(t, int64(3), verifies)
+
+		// Prune through a view is a no-op.
+		cache.ReadOnly().Prune(llotypes.ChannelDefinitions{})
+		require.NoError(t, VerifyChannelDefinitionsWithCache(countingCodecs(codec), committed, cache))
+		verifies, _, _ = codec.calls()
+		require.Equal(t, int64(3), verifies)
+	})
+
+	t.Run("peer proposals verified read-only do not evict this node's entries", func(t *testing.T) {
+		codec := &countingReportCodec{}
+		cache := NewChannelAnalysisCache()
+		committed := llotypes.ChannelDefinitions{1: cacheTestDef(`{"a":1}`)}
+		desired := llotypes.ChannelDefinitions{1: cacheTestDef(`{"a":2}`)}
+
+		require.NoError(t, VerifyChannelDefinitionsWithCache(countingCodecs(codec), committed, cache))
+		require.NoError(t, VerifyChannelDefinitionsWithCache(countingCodecs(codec), desired, cache))
+
+		// More distinct proposals for the channel than the cache retains, as
+		// faulty peers may send in a single round.
+		for i := 0; i < 2*channelFactsRetained; i++ {
+			peer := llotypes.ChannelDefinitions{1: cacheTestDef(fmt.Sprintf(`{"b":%d}`, i))}
+			require.NoError(t, VerifyChannelDefinitionsWithCache(countingCodecs(codec), peer, cache.ReadOnly()))
+		}
+		verifies, _, _ := codec.calls()
+		require.Equal(t, int64(2+2*channelFactsRetained), verifies)
+
+		require.NoError(t, VerifyChannelDefinitionsWithCache(countingCodecs(codec), committed, cache))
+		require.NoError(t, VerifyChannelDefinitionsWithCache(countingCodecs(codec), desired, cache.ReadOnly()))
+		verifies, _, _ = codec.calls()
+		require.Equal(t, int64(2+2*channelFactsRetained), verifies)
+	})
+
 	t.Run("a nil cache memoizes nothing", func(t *testing.T) {
 		codec := &countingReportCodec{}
 		defs := llotypes.ChannelDefinitions{1: cacheTestDef(`{"a":1}`)}
@@ -165,6 +212,7 @@ func Test_ChannelAnalysisCache(t *testing.T) {
 		var nilCache *ChannelAnalysisCache
 		nilCache.Prune(defs)
 		require.NoError(t, VerifyChannelDefinitionsWithCache(countingCodecs(codec), defs, nilCache))
+		require.Nil(t, nilCache.ReadOnly())
 	})
 }
 
@@ -241,7 +289,7 @@ func requireSameError(t *testing.T, want, got error) {
 
 // Test_ChannelAnalysisCache_Concurrent exercises the access pattern of a round:
 // Observation warming the cache while several ValidateObservation goroutines
-// read it and each advocate a different update.
+// read it through read-only views and each advocate a different update.
 func Test_ChannelAnalysisCache_Concurrent(t *testing.T) {
 	codec := &countingReportCodec{}
 	codecs := countingCodecs(codec)
@@ -264,7 +312,7 @@ func Test_ChannelAnalysisCache_Concurrent(t *testing.T) {
 				updated := CloneChannelDefinitions(committed)
 				channelID := llotypes.ChannelID(i%50 + 1)
 				updated[channelID] = cacheTestDef(fmt.Sprintf(`{"a":%d,"b":%d}`, channelID, j))
-				requireSameError(t, VerifyChannelDefinitions(codecs, updated), VerifyChannelDefinitionsWithCache(codecs, updated, cache))
+				requireSameError(t, VerifyChannelDefinitions(codecs, updated), VerifyChannelDefinitionsWithCache(codecs, updated, cache.ReadOnly()))
 			}
 		}(i)
 	}

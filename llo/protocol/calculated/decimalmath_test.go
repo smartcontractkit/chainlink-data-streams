@@ -1,6 +1,8 @@
 package calculated
 
 import (
+	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -97,17 +99,17 @@ func TestDivAndAvgPinnedToLegacyPrecision(t *testing.T) {
 	assertDecimal(t, "2.3333333333333333", got)
 }
 
-// TestTranscendentalsAreConcurrencySafe guards the lock around
-// shopspring/decimal's transcendental functions.
+// TestTranscendentalsAreConcurrencySafe guards against shared state in the
+// logarithm and exponential.
 //
-// ExpTaylor memoizes factorials in an unsynchronized package-level slice it
-// appends to, and Ln reads through the same path, so concurrent calls race. An
-// append racing with a read can produce a corrupted value rather than a merely
-// stale one, which in a consensus path means nodes disagreeing. A node runs
-// several plugin instances in one process, each evaluating on its own goroutine,
-// so this is reachable in production.
+// shopspring/decimal's ExpTaylor memoizes factorials in an unsynchronized
+// package-level slice it appends to, and its Ln reads through the same path, so
+// concurrent calls race. An append racing with a read can produce a corrupted
+// value rather than a merely stale one, which in a consensus path means nodes
+// disagreeing. A node runs several plugin instances in one process, each
+// evaluating on its own goroutine, so this is reachable in production.
 //
-// Run under -race, this fails if the guard is removed.
+// Run under -race, this fails if any of these functions reaches either again.
 func TestTranscendentalsAreConcurrencySafe(t *testing.T) {
 	t.Parallel()
 
@@ -159,6 +161,9 @@ func Test_checkPow(t *testing.T) {
 		{"absurd exponent is refused by the cheap gate", "2", "100001", "exceeds the maximum magnitude of 100000"},
 		{"largest storable result", "10", "1000", ""},
 		{"base near one with a large exponent", "1.0001", "100000", ""},
+		// The logarithm is tiny, so only the size bound refuses these.
+		{"long base near one", "1." + strings.Repeat("0", 56) + "1", "100000", "exceeds the maximum of 2097152"},
+		{"long base near one, negative exponent", "1." + strings.Repeat("0", 56) + "1", "-100000", "exceeds the maximum of 2097152"},
 		{"square root", "4", "0.5", ""},
 		{"zero base has no logarithm", "0", "3", ""},
 	} {
@@ -184,4 +189,190 @@ func Test_checkPow(t *testing.T) {
 			require.ErrorContains(t, err, tc.wantErr)
 		})
 	}
+}
+
+func Test_checkOperand(t *testing.T) {
+	t.Parallel()
+
+	// Squaring a stored value repeatedly doubles its coefficient each time. 17
+	// squarings took over four minutes in the logarithm before operands were
+	// bounded.
+	squarings := `let a0 = "1` + strings.Repeat("7", 57) + `"; `
+	for i := 1; i <= 17; i++ {
+		squarings += fmt.Sprintf("let a%d = Mul(a%d, a%d); ", i, i-1, i-1)
+	}
+
+	for _, tc := range []struct {
+		name    string
+		stmt    string
+		wantErr string
+	}{
+		{"coefficient grown by repeated squaring", squarings + "Ln(a17)", "exceeds the maximum of 768"},
+		{"long literal coefficient", `Ln("1` + strings.Repeat("7", 300) + `")`, "exceeds the maximum of 768"},
+		{"exponent grown by repeated squaring", `let a = Mul("1e-1000", "1e-1000"); let b = Mul(a, a); let c = Mul(b, b); Add(c, 1)`, "exceeds the maximum magnitude of 4000"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			start := time.Now()
+			_, err := evalDecimal(tc.stmt, NewEnv(1))
+			require.Less(t, time.Since(start), time.Second)
+			require.ErrorContains(t, err, tc.wantErr)
+		})
+	}
+
+	t.Run("product of four stored values", func(t *testing.T) {
+		t.Parallel()
+
+		v := `"1` + strings.Repeat("7", 57) + `e-1000"`
+		_, err := evalDecimal(fmt.Sprintf("Round(Mul(Mul(%[1]s, %[1]s), Mul(%[1]s, %[1]s)), 0)", v), NewEnv(1))
+		require.NoError(t, err)
+	})
+}
+
+// libraryMu serializes the tests' reference calls into shopspring/decimal's Ln
+// and ExpTaylor, which share an unsynchronized factorial cache.
+var libraryMu sync.Mutex
+
+func Test_lnDecimal(t *testing.T) {
+	t.Parallel()
+
+	t.Run("correctly rounded", func(t *testing.T) {
+		t.Parallel()
+
+		// decimal.Ln is reliable given 30 spare places. At the places asked for
+		// it is not: it misses the last place for about 0.8% of arguments, and
+		// is the reference only because the spare places absorb that.
+		for _, x := range []string{
+			"1", "10", "0.1", "2", "9.99999", "1.00000001", "0.99999999",
+			"34.382783417947313786", "103108677640616370", "0.000000000726289154090313027",
+			"1777777777777777777777777777777777777777777777777777777777e-1000",
+			"1777777777777777777777777777777777777777777777777777777777e1000",
+		} {
+			for _, places := range []int32{8, 18, 36, 50} {
+				d := decimal.RequireFromString(x)
+				got, err := lnDecimal(d, places)
+				require.NoError(t, err)
+				libraryMu.Lock()
+				want, err := d.Ln(places + 30)
+				libraryMu.Unlock()
+				require.NoError(t, err)
+				assertDecimal(t, want.Round(places).String(), got)
+			}
+		}
+	})
+
+	t.Run("high precision is cheap", func(t *testing.T) {
+		t.Parallel()
+
+		// decimal.Ln took 0.84 seconds for this at 500 places.
+		start := time.Now()
+		got, err := lnDecimal(decimal.RequireFromString("103108677640616370"), 500)
+		require.Less(t, time.Since(start), 100*time.Millisecond)
+		require.NoError(t, err)
+
+		more, err := lnDecimal(decimal.RequireFromString("103108677640616370"), 530)
+		require.NoError(t, err)
+		assertDecimal(t, more.Round(500).String(), got)
+	})
+
+	t.Run("inverse of exp", func(t *testing.T) {
+		t.Parallel()
+
+		got, err := lnDecimal(decimal.RequireFromString("2.718281828459045235360287471352662497757"), 36)
+		require.NoError(t, err)
+		assertDecimal(t, "1", got.Round(30))
+	})
+
+	t.Run("refuses non-positive arguments", func(t *testing.T) {
+		t.Parallel()
+
+		_, err := lnDecimal(decimal.Zero, 18)
+		require.ErrorContains(t, err, "natural logarithm of 0")
+		_, err = lnDecimal(decimal.NewFromInt(-1), 18)
+		require.ErrorContains(t, err, "negative")
+	})
+}
+
+func Test_expDecimal(t *testing.T) {
+	t.Parallel()
+
+	t.Run("correctly rounded", func(t *testing.T) {
+		t.Parallel()
+
+		// ExpTaylor is reliable given 30 spare places, and is cheap for these
+		// arguments. At the places asked for it is not: it misses the last place
+		// for a few percent of arguments, and is the reference only because the
+		// spare places absorb that.
+		for _, x := range []string{"0.0750760398084", "0.0275472644968", "7.28050264449", "12.4774569258", "1", "-1", "-0.5", "-12.4774569258"} {
+			for _, places := range []int32{18, 36, 50} {
+				d := decimal.RequireFromString(x)
+				got, err := expDecimal(d, places)
+				require.NoError(t, err)
+				libraryMu.Lock()
+				want, err := d.Abs().ExpTaylor(places + 30)
+				libraryMu.Unlock()
+				require.NoError(t, err)
+				if d.IsNegative() {
+					// ExpTaylor's contract, kept: the reciprocal is rounded to
+					// one spare place before the final rounding.
+					want = decimal.New(1, 0).DivRound(want, places+1)
+				}
+				assertDecimal(t, want.Round(places).String(), got)
+			}
+		}
+	})
+
+	t.Run("large arguments are cheap", func(t *testing.T) {
+		t.Parallel()
+
+		// ExpTaylor needs about e*|x| terms for these, and took seconds for
+		// exp(1085).
+		for _, x := range []string{"2400", "-2400", "1085.5", "-1085.5"} {
+			d := decimal.RequireFromString(x)
+			start := time.Now()
+			got, err := expDecimal(d, 36)
+			require.Less(t, time.Since(start), time.Second)
+			require.NoError(t, err)
+
+			more, err := expDecimal(d, 66)
+			require.NoError(t, err)
+			if d.IsPositive() {
+				assertDecimal(t, more.Round(36).String(), got)
+			}
+		}
+	})
+
+	t.Run("zero", func(t *testing.T) {
+		t.Parallel()
+
+		got, err := expDecimal(decimal.Zero, 18)
+		require.NoError(t, err)
+		assertDecimal(t, "1", got)
+	})
+
+	t.Run("argument beyond the bound", func(t *testing.T) {
+		t.Parallel()
+
+		_, err := expDecimal(decimal.NewFromInt(2401), 18)
+		require.ErrorContains(t, err, "exceeds the maximum magnitude of 2400")
+	})
+}
+
+func TestPowFractionalExponentIsCheap(t *testing.T) {
+	t.Parallel()
+
+	// A stored value at the coefficient and exponent bounds. Its square root
+	// took 4.4 seconds when the exponential went through ExpTaylor.
+	stored := "1" + strings.Repeat("7", 57) + "e-1000"
+	start := time.Now()
+	got, err := Sqrt(stored)
+	require.Less(t, time.Since(start), time.Second)
+	require.NoError(t, err)
+	assertDecimal(t, "0", got)
+
+	start = time.Now()
+	_, err = Pow("1"+strings.Repeat("7", 57)+"e100", "0.75")
+	require.Less(t, time.Since(start), time.Second)
+	require.NoError(t, err)
 }

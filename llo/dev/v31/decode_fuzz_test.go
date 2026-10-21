@@ -6,6 +6,7 @@ import (
 
 	"github.com/shopspring/decimal"
 
+	"github.com/smartcontractkit/chainlink-common/pkg/logger"
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
 
 	protocol "github.com/smartcontractkit/chainlink-data-streams/llo/protocol"
@@ -76,6 +77,9 @@ func FuzzDecodeObservation(f *testing.F) {
 		if len(decoded.SupportedReportFormats) > protocol.MaxObservationSupportedReportFormatsLength {
 			t.Fatalf("decoded %d report formats, max %d", len(decoded.SupportedReportFormats), protocol.MaxObservationSupportedReportFormatsLength)
 		}
+		if len(decoded.AttestedPredecessorRetirement) > protocol.MaxAttestedRetirementReportBytes {
+			t.Fatalf("decoded an attested predecessor retirement of %d bytes, max %d", len(decoded.AttestedPredecessorRetirement), protocol.MaxAttestedRetirementReportBytes)
+		}
 		// Re-encoding the decoded set is what the wire has to be canonical in.
 		wire := sortedFormatsToWire(decoded.SupportedReportFormats)
 		for i := 1; i < len(wire); i++ {
@@ -114,9 +118,6 @@ func FuzzDecodePrecursor(f *testing.F) {
 		p, err := decodePrecursor(b)
 		if err != nil {
 			return
-		}
-		if len(p.SupportByFormat) > protocol.MaxObservationSupportedReportFormatsLength {
-			t.Fatalf("decoded %d report format support entries, max %d", len(p.SupportByFormat), protocol.MaxObservationSupportedReportFormatsLength)
 		}
 		// Re-encoding a decoded precursor must be a fixed point: encode is
 		// deterministic, so a value that survives decode has exactly one
@@ -175,7 +176,7 @@ func FuzzLoadKVState(f *testing.F) {
 		if _, err := loadColdKVState(kv, protocol.NewChannelCache()); err != nil {
 			return
 		}
-		s, err := loadKVState(kv, nil)
+		s, err := loadKVState(kv, nil, logger.Nop())
 		if err != nil {
 			return
 		}

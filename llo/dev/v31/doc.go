@@ -126,11 +126,24 @@
 // in both the current-round (isReportable) and previous-round (prevReportable)
 // reportability checks.
 //
-// DisableNilStreamValues (a channel with any nil stream aggregate is
-// unreportable; for expression channels the expected calculated streams are
-// taken from the channel's opts, which is where they are declared), cross-round
-// timestamped-aggregate carry-forward (in the r/agg record, newer-wins
-// monotonicity), and best-effort outcome/report telemetry are also implemented.
+// A channel with any nil value among its effective streams is unreportable,
+// since no codec encodes a missing value. For expression channels the expected
+// calculated streams are taken from the channel's opts, which is where they are
+// declared. DisableNilStreamValues is deprecated: v31 ignores it and behaves as
+// if it were always set.
+//
+// A channel with a value outside the integer range its report format encodes it
+// in is unreportable too (protocol.CheckEncodableValues). Such a value depends
+// on the data, so the watermark holds and the next report covers the round.
+//
+// StateTransition decides reportability once per round and carries the decision
+// in the precursor (ReportableChannelIDs), together with only the aggregates
+// those channels report. Reports emits exactly those channels, so emission and
+// the validAfter advance read the same decision.
+//
+// Cross-round timestamped-aggregate carry-forward (in the r/agg record,
+// newer-wins monotonicity) and best-effort outcome/report telemetry are also
+// implemented.
 // Reportability is persisted per channel each round (also in r/agg) so the next
 // round can advance validAfter faithfully without re-deriving it from
 // aggregates that are not otherwise persisted.
@@ -138,10 +151,9 @@
 // Calculated streams (EVMABIEncodeUnpackedExpr channels) are supported via the
 // expression engine in llo/protocol/calculated, run at the end of
 // StateTransition. A channel whose expressions did not produce every calculated
-// stream its opts declare is not reportable, regardless of
-// DisableNilStreamValues: the codec would have nothing to encode, so the report
-// is skipped, and counting the channel as reported would advance validAfter over
-// a round that emitted nothing.
+// stream its opts declare is not reportable: the codec would have nothing to
+// encode, so the report is skipped, and counting the channel as reported would
+// advance validAfter over a round that emitted nothing.
 //
 // Evaluation writes stream aggregates and nothing else. It does not touch the
 // channel definitions, so a persisted definition is exactly what was voted on
@@ -201,8 +213,9 @@
 //     any live channel's expressions ask for) from the channel definitions and
 //     their opts. Both are replicated and expression analysis is a pure function
 //     of the expression string, so every oracle computes the same depths — they
-//     become persisted state. Pairs beyond MaxHistoryPairs are denied history
-//     entirely, in (streamID, aggregator) order; channels reading them do not
+//     become persisted state. Pairs already holding a window are admitted
+//     first, then new pairs, each in (streamID, aggregator) order. Pairs beyond
+//     MaxHistoryPairs are denied history entirely; channels reading them do not
 //     report, rather than silently evaluating over a shorter window. The pair cap
 //     is the only admission rule: per-round cost no longer depends on depth, so
 //     MaxHistoryPairs of them fit the byte budget by construction.

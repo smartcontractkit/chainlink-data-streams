@@ -3,6 +3,7 @@ package protocol
 import (
 	"errors"
 	"fmt"
+	"math"
 	"time"
 
 	"github.com/goccy/go-json"
@@ -13,6 +14,8 @@ import (
 const (
 	// DefaultMaxReportRange is the default maximum range of the report if unset in the opts.
 	DefaultMaxReportRange = Duration(5 * time.Minute)
+	// MaxReportRangeCeiling is the largest maximum report range a channel may set.
+	MaxReportRangeCeiling = Duration(7 * 24 * time.Hour)
 )
 
 type ReportCodec interface {
@@ -54,6 +57,17 @@ type AdmissionVerifier interface {
 // unique by construction and so needs no check.
 type FeedIDer interface {
 	FeedID(llotypes.ChannelDefinition) (feedID [32]byte, ok bool, err error)
+}
+
+// TWAPCounter is optionally implemented by a ReportCodec whose channels
+// evaluate expressions. It exists so that admission can bound the TWAP calls of
+// the whole definition set (see MaxTotalTWAPCalls) without parsing expressions
+// itself.
+//
+// TWAPCalls must be a pure function of the definition, like Verify, and is only
+// consulted for definitions Verify accepted.
+type TWAPCounter interface {
+	TWAPCalls(llotypes.ChannelDefinition) int
 }
 
 type ChannelDefinitionWithID struct {
@@ -160,6 +174,10 @@ func (d *Duration) UnmarshalJSON(b []byte) error {
 	}
 	switch value := v.(type) {
 	case float64:
+		// Reject magnitudes int64 cannot hold
+		if math.IsNaN(value) || value >= float64(math.MaxInt64) || value < float64(math.MinInt64) {
+			return fmt.Errorf("duration out of range: %v", value)
+		}
 		*d = Duration(time.Duration(value))
 		return nil
 	case string:

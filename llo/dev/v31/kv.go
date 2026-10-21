@@ -122,7 +122,7 @@ type kvState struct {
 	validAfterNanoseconds map[llotypes.ChannelID]uint64
 	// reportedLastRound[cid] is the persisted reportability decision from the
 	// previous round's StateTransition. It bakes in every reportability check
-	// (min-interval, seconds-resolution, DisableNilStreamValues), so the current
+	// (min-interval, seconds-resolution, nil stream values), so the current
 	// round can advance validAfter faithfully without re-deriving it from
 	// aggregates that are not persisted.
 	reportedLastRound map[llotypes.ChannelID]bool
@@ -138,12 +138,12 @@ type kvState struct {
 //
 // cache may be nil, in which case the channel definitions are always re-read
 // and decoded.
-func loadKVState(r ocr3_1types.KeyValueStateReader, cache *protocol.ChannelCache) (*kvState, error) {
+func loadKVState(r ocr3_1types.KeyValueStateReader, cache *protocol.ChannelCache, lggr logger.Logger) (*kvState, error) {
 	s, err := loadColdKVState(r, cache)
 	if err != nil {
 		return nil, err
 	}
-	if err := readHotState(r, s); err != nil {
+	if err := readHotState(r, s, lggr); err != nil {
 		return nil, err
 	}
 	return s, nil
@@ -259,6 +259,13 @@ func writeCodecSupport(w ocr3_1types.KeyValueStateReadWriter, support map[common
 }
 
 // readChannelState reads and decodes the c/defs record.
+//
+// Unlike decodeHistoryIndex it applies no count cap. The record is this
+// plugin's own committed state, written only by StateTransition from verified
+// definitions, whose count is capped at MaxOutcomeChannelDefinitionsLength.
+// libocr bounds the record to MaxMaxKeyValueValueBytes, which bounds what the
+// decode can allocate. A peer cannot inject records, and every oracle reads
+// the same bytes.
 func readChannelState(r ocr3_1types.KeyValueStateReader) (llotypes.ChannelDefinitions, error) {
 	b, err := r.Read(keyChannelState)
 	if err != nil {
@@ -281,8 +288,11 @@ func readChannelState(r ocr3_1types.KeyValueStateReader) (llotypes.ChannelDefini
 	return defs, nil
 }
 
-// readHotState reads and decodes the r/agg record into s.
-func readHotState(r ocr3_1types.KeyValueStateReader, s *kvState) error {
+// readHotState reads and decodes the r/agg record into s. Counts are not
+// capped, for the same reasons as in readChannelState: writeHotState truncates
+// aggregates to MaxPersistedAggregates, channels are capped by verification,
+// and the record is bounded in bytes.
+func readHotState(r ocr3_1types.KeyValueStateReader, s *kvState, lggr logger.Logger) error {
 	b, err := r.Read(keyHotState)
 	if err != nil {
 		return fmt.Errorf("read hot state: %w", err)
@@ -306,12 +316,19 @@ func readHotState(r ocr3_1types.KeyValueStateReader, s *kvState) error {
 		if err != nil {
 			return fmt.Errorf("unmarshal carry-forward aggregate for stream %d: %w", sa.StreamID, err)
 		}
+		agg := llotypes.Aggregator(sa.Aggregator)
 		tsv, ok := sv.(*protocol.TimestampedStreamValue)
 		if !ok {
-			// Only timestamped values are persisted; ignore anything else.
+			// writeHotState only persists timestamped values. Skip anything else
+			// rather than fail: the record is replicated, so an error would halt
+			// every node on the same state.
+			lggr.Errorw("Discarding non-timestamped carry-forward aggregate from hot state",
+				"streamID", sa.StreamID,
+				"aggregator", agg,
+				"type", fmt.Sprintf("%T", sv),
+			)
 			continue
 		}
-		agg := llotypes.Aggregator(sa.Aggregator)
 		if s.carryForward[sa.StreamID] == nil {
 			s.carryForward[sa.StreamID] = map[llotypes.Aggregator]*protocol.TimestampedStreamValue{}
 		}
@@ -549,6 +566,11 @@ func writeHistoryIndex(w ocr3_1types.KeyValueStateReadWriter, keys []histKey) er
 // round from the required set, which is capped there, with orphans dropped in
 // the same commit — so a longer index is corruption and is rejected instead of
 // sizing an allocation from it.
+//
+// The rejection fails every StateTransition, as an undecodable c/defs or r/agg
+// record does, rather than resetting history. Only a writer bug can produce it,
+// and every oracle reads the same bytes, so the DON halts together and loudly
+// instead of silently discarding every window.
 func decodeHistoryIndex(b []byte) ([]histKey, error) {
 	n := len(b) / 8
 	if n > protocol.MaxHistoryPairs {

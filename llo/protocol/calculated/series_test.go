@@ -523,3 +523,62 @@ func TestProcessCalculatedStreams_CoefficientBound(t *testing.T) {
 		assert.True(t, decimal.NewFromInt(5).Equal(value.Decimal()), "got %s", value.Decimal())
 	})
 }
+
+func TestProcessCalculatedStreams_ExponentBound(t *testing.T) {
+	t.Parallel()
+
+	process := func(t *testing.T, expression string) protocol.StreamValue {
+		t.Helper()
+		defs := llotypes.ChannelDefinitions{
+			1: historyChannel(medianStreams(1, 2), expression),
+		}
+		aggregates := protocol.StreamAggregates{
+			1: {llotypes.AggregatorMedian: protocol.ToDecimal(decimal.NewFromInt(2))},
+			2: {llotypes.AggregatorMedian: protocol.ToDecimal(decimal.NewFromInt(3))},
+		}
+		ProcessCalculatedStreams(logger.Test(t), defs, aggregates, 1_000, protocol.NewOptsCache(), newStubHistoryReader())
+		return aggregates[999][llotypes.AggregatorCalculated]
+	}
+
+	t.Run("a value that would not decode writes no aggregate", func(t *testing.T) {
+		t.Parallel()
+
+		// Each operand is in bounds, but a product adds their exponents.
+		for _, expression := range []string{
+			`Add(s1, Mul("1e1000", "1e1000"))`,
+			`Add(s1, Mul("1e-1000", "1e-1000"))`,
+		} {
+			assert.Nil(t, process(t, expression), expression)
+			assert.Error(t, ProcessCalculatedStreamsDryRun(expression), expression)
+		}
+	})
+
+	t.Run("a value whose canonical form is in bounds is written", func(t *testing.T) {
+		t.Parallel()
+
+		for _, tc := range []struct {
+			expression string
+			want       decimal.Decimal
+		}{
+			{`Mul(s1, Mul("10e-1000", "1e-1"))`, decimal.New(2, -1000)},
+			{`Mul(s1, Mul("0e-1000", "1e-1000"))`, decimal.New(0, 0)},
+		} {
+			got := process(t, tc.expression)
+			require.NotNil(t, got, tc.expression)
+			value, ok := got.(*protocol.Decimal)
+			require.True(t, ok)
+			assert.True(t, tc.want.Equal(value.Decimal()), "%s: got %s", tc.expression, value.Decimal())
+			assert.NoError(t, protocol.CheckDecimalExponent(value.Decimal()), tc.expression)
+			assert.NoError(t, ProcessCalculatedStreamsDryRun(tc.expression), tc.expression)
+		}
+	})
+
+	t.Run("a value within the bounds keeps its encoding", func(t *testing.T) {
+		t.Parallel()
+
+		value, ok := process(t, `Mul(s1, "1.500")`).(*protocol.Decimal)
+		require.True(t, ok)
+		assert.Equal(t, int32(-3), value.Decimal().Exponent())
+		assert.Equal(t, "3000", value.Decimal().Coefficient().String())
+	})
+}

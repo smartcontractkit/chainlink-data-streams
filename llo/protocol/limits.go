@@ -40,6 +40,13 @@ const (
 	// largest key any supported chain uses is well under this; the headroom
 	// stops a peer from padding its observation with oversized entries.
 	MaxPredecessorSignerBytes = 128
+	// MaxAttestedRetirementReportBytes bounds the attested predecessor
+	// retirement report an observation may carry. Every oracle hashes it once
+	// per signature while verifying, so the cap stops a peer from padding it up
+	// to the observation limit. The largest honest one, MaxRetirementReportChannels
+	// entries signed by MaxObservationPredecessorSignersLength oracles, encodes
+	// to about 137 KiB.
+	MaxAttestedRetirementReportBytes = 192 << 10
 	// Maximum allowed number of streams per channel
 	MaxStreamsPerChannel = 10_000
 	// MaxDecimalExponent bounds the absolute value of the base-10 exponent of
@@ -54,13 +61,17 @@ const (
 	// exponent can still carry an arbitrarily long coefficient and be
 	// arbitrarily large on the wire.
 	//
-	// 192 bits is 58 decimal digits, derived from MaxHistoryRecordBytes
-	// A timestamped quote, the largest shape a stream value takes carrying
-	// three coefficients at this bound measures 125B as a history record,
-	// the most that fits the 128B per-record limit.
-	// One step up (224 bits) measures 137 B, which observation decode would accept
-	// and history would then refuse, leaving a gap in the series for a value the round agreed on.
-	// Asserted by TestDecimalCoefficientBoundFitsHistoryRecord.
+	// 192 bits is 58 decimal digits, derived from MaxHistoryRecordBytes. A
+	// timestamped quote, the largest shape decode admits at one nesting level,
+	// carrying three coefficients at this bound measures 125 B as a history
+	// record, the most that fits the 128 B per-record limit. One step up
+	// (224 bits) measures 137 B, which observation decode would accept and
+	// history would then refuse, leaving a gap in the series for a value the
+	// round agreed on. Asserted by TestDecimalCoefficientBoundFitsHistoryRecord.
+	//
+	// The timestamped quote is a conservative worst case. v31 observation
+	// validation only admits a timestamped value wrapping a Decimal, so the
+	// largest value that reaches history is a quote at this bound, 109 B.
 	//
 	// For scale, the fixtures in the size table below are 57 bits (an 18-digit
 	// price) and 124 bits (38 digits), so this is ~3x and ~1.5x those.
@@ -78,6 +89,13 @@ const (
 	// MaxOutcomeChannelDefinitionsLength is the maximum number of channels that
 	// can be supported
 	MaxOutcomeChannelDefinitionsLength = MaxReportCount
+
+	// MaxRetirementReportChannels bounds the ValidAfterNanoseconds entries a
+	// decoded retirement report may carry. v30 keeps a removed channel's
+	// watermark until an explicit removal vote, so an honest report can exceed
+	// the live channel count. Twice the definitions cap leaves room for that
+	// without rejecting a legitimate handover.
+	MaxRetirementReportChannels = 2 * MaxOutcomeChannelDefinitionsLength
 
 	// MaxTotalStreamEntries bounds the sum of len(cd.Streams) over the whole
 	// definition set.
@@ -162,17 +180,19 @@ const (
 	// request. Note this is per pair, not per stream: a stream aggregated two
 	// ways holds two windows of up to this depth each.
 	MaxHistoryRecordsPerPair = 1024
-	// MaxHistoryPairs bounds how many pairs may have history at once. Pairs are
-	// ordered by (streamID, aggregator) and those beyond the cap are denied
-	// history; channels referencing them become unreportable rather than
-	// silently getting a shortened window. A stream aggregated two ways
-	// consumes two of these, not one.
+	// MaxHistoryPairs bounds how many pairs may have history at once. Pairs
+	// already holding a window come first, then new pairs, each ordered by
+	// (streamID, aggregator), and those beyond the cap are denied history,
+	// channels referencing them become unreportable rather than silently
+	// getting a shortened window. A stream aggregated two ways consumes
+	// two of these, not one.
 	MaxHistoryPairs = 128
-	// MaxHistoryTotalBytes bounds the estimated total history bytes rewritten
-	// per round (sum over pairs of requiredCount * MaxHistoryRecordBytes). The
-	// OCR3.1 per-round budget for modified keys plus values is 10 MiB and is
-	// shared with channel definitions and the other key prefixes, so history is
-	// held well below it.
+	// MaxHistoryTotalBytes bounds the history bytes rewritten per round. The
+	// worst case is MaxHistoryPairs * MaxHistoryPairRoundBytes, held under this
+	// bound at compile time, so admission enforces only the pair cap. The OCR3.1
+	// per-round budget for modified keys plus values is 10 MiB and is shared
+	// with channel definitions and the other key prefixes, so history is held
+	// well below it.
 	MaxHistoryTotalBytes = 4 << 20
 	// MaxHistoryRecordsPerExpression bounds the total history depth a single
 	// expression may request, summed over all of its History calls. Each
@@ -187,8 +207,8 @@ const (
 	// History depth is not a bound on TWAP work. A TWAP call needs only a
 	// depth-1 history window, so MaxHistoryRecordsPerExpression permits
 	// thousands of calls in one expression, and each is free to request the
-	// longest window allowed — one-second buckets allocated and filled every
-	// round, per channel, on the consensus path.
+	// longest window allowed — up to that many one-second buckets interpolated
+	// every round, per channel, on the consensus path.
 	//
 	// Capping the count rather than pricing each call by its window is
 	// deliberate: the count is syntactic, so it holds for a configuration built
@@ -202,11 +222,26 @@ const (
 	// oracle must reject the same expression, so it is never per-node
 	// configurable.
 	MaxTWAPCallsPerExpression = 4
+	// MaxTotalTWAPCalls bounds the TWAP calls across the whole definition set.
+	//
+	// MaxTWAPCallsPerExpression bounds one expression, but expressions are
+	// bounded only by MaxTotalCalculatedStreams and MaxTotalOptsBytes, which
+	// between them admit thousands of maximum-length TWAP calls, all evaluated
+	// every round on every oracle. Like the per-expression cap, this charges
+	// every call its worst case.
+	//
+	// A call costs one multiplication per missing interior second plus one
+	// logarithm and one exponential per interior gap, and the gap count is not
+	// bounded by the acceptance rule. The worst case is a maximum-depth history
+	// with a one-second gap between every pair of records. The realistic shape,
+	// costs tens of microseconds per call. Like the other whole-set budgets,
+	// admission and the channel vote merge enforce it, and a committed set over
+	// it still verifies.
+	MaxTotalTWAPCalls = 64
 	// MaxHistoryRecordBytes is the maximum serialized size of one history
-	// record, enforced on append (StreamHistory.Append) and used as the
-	// per-record size when admitting pairs against MaxHistoryTotalBytes.
-	// Enforcing the same number that the budget assumes is what makes the
-	// budget a real bound rather than an estimate.
+	// record, enforced on append (StreamHistory.Append) and on chunk decode. It
+	// sizes MaxHistoryPairRoundBytes, so enforcing it is what makes the
+	// per-round budget a real bound rather than an estimate.
 	//
 	// It has to be enforced rather than assumed because MaxDecimalExponent
 	// bounds a decimal's exponent but not its coefficient length: a 1000-digit
@@ -234,7 +269,7 @@ const (
 	// Changing it changes the stored layout and requires resetting every window.
 	//
 	// It must divide MaxHistoryRecordsPerPair, so that a window at maximum depth
-	// is an exact number of chunks (asserted by TestHistoryChunkLimits).
+	// is an exact number of chunks (asserted below at compile time).
 	MaxHistoryChunkRecords = 64
 	// MaxHistoryChunkSlots is the size of the ring: the number of distinct chunk
 	// slots one pair may occupy.
@@ -251,6 +286,9 @@ const (
 	// every slot. Reuse of a slot across a lap of the ring is caught by the
 	// sequence stored inside each chunk.
 	MaxHistoryChunkSlots = MaxHistoryRecordsPerPair/MaxHistoryChunkRecords + 2
+	// The chunk size must divide the maximum depth, or the floor above
+	// undersizes the ring by one slot. Fail compilation otherwise.
+	_ = uint(0 - MaxHistoryRecordsPerPair%MaxHistoryChunkRecords)
 	// MaxHistoryRetainedRecords is the most records a window may hold. Retention
 	// works in whole chunks, so a window overshoots its required depth by up to
 	// one chunk less one record. Readers ask for an exact depth and never see
@@ -270,6 +308,9 @@ const (
 	// independent of the window depth, where the single-blob layout charged
 	// requiredCount * MaxHistoryRecordBytes every round.
 	MaxHistoryPairRoundBytes = MaxHistoryChunkRecords*MaxHistoryRecordBytes + MaxHistoryHeaderBytes
+	// Admission enforces only MaxHistoryPairs, so every admitted pair at its
+	// worst case must fit MaxHistoryTotalBytes. Fail compilation otherwise.
+	_ = uint(MaxHistoryTotalBytes - MaxHistoryPairs*MaxHistoryPairRoundBytes)
 
 	// MaxDecompressedObservationLength bounds the size of an observation after
 	// zstd decompression.
@@ -279,10 +320,14 @@ const (
 	// MaxObservationUpdateChannelDefinitionsLength channel definitions of up
 	// to MaxStreamsPerChannel streams each, which lands in the low single-digit
 	// MiB range. 16 MiB leaves generous headroom.
+	//
+	// This bounds the v30 observation and the v31 stream-values blob. The
+	// v31 observation itself is not compressed and is bounded by the libocr
+	// observation limit instead (see the v31 PluginFactory).
 	MaxDecompressedObservationLength = 16 << 20
 
 	// MaxPersistedAggregates bounds how many (streamID, aggregator) pairs may
-	// carry a timestamped aggregate forward across rounds in the v3.1 r/agg
+	// carry a timestamped aggregate forward across rounds in the v31 r/agg
 	// record.
 	MaxPersistedAggregates = 2 * MaxObservationStreamValuesLength
 

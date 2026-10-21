@@ -64,6 +64,34 @@ func Test_IsTelemetryEmitter(t *testing.T) {
 	}
 }
 
+func Test_makeReportTelemetry_EffectiveStreams(t *testing.T) {
+	cid := llotypes.ChannelID(5)
+	cd := llotypes.ChannelDefinition{
+		ReportFormat: llotypes.ReportFormatEVMABIEncodeUnpackedExpr,
+		Opts:         []byte(`{"abi":[{"type":"int256","expression":"Add(s1, s2)","expressionStreamID":999}]}`),
+		Streams: []llotypes.Stream{
+			{StreamID: 1, Aggregator: llotypes.AggregatorMedian},
+			{StreamID: 2, Aggregator: llotypes.AggregatorMedian},
+		},
+	}
+	streams, err := protocol.EffectiveStreams(protocol.NewOptsCache(), cd, cid)
+	require.NoError(t, err)
+	require.Len(t, streams, 3)
+
+	values := []protocol.StreamValue{
+		protocol.ToDecimal(decimal.NewFromInt(3)),
+		protocol.ToDecimal(decimal.NewFromInt(4)),
+		protocol.ToDecimal(decimal.NewFromInt(7)),
+	}
+	rt, err := makeReportTelemetry(protocol.Report{ChannelID: cid, Values: values}, cd, streams, 0)
+	require.NoError(t, err)
+
+	// Definitions line up with values, including the calculated stream.
+	require.Len(t, rt.StreamDefinitions, len(rt.StreamValues))
+	assert.Equal(t, uint32(999), rt.StreamDefinitions[2].StreamID)
+	assert.Equal(t, uint32(llotypes.AggregatorCalculated), rt.StreamDefinitions[2].Aggregator)
+}
+
 func Test_AttributedObservationTelemetry_StateTransition(t *testing.T) {
 	ctx := tests.Context(t)
 	p := testPlugin(t)
@@ -634,7 +662,7 @@ func Test_Reports_StagingMarker(t *testing.T) {
 			},
 			ValidAfterNanoseconds: map[llotypes.ChannelID]uint64{1: 1000},
 			StreamAggregates:      protocol.StreamAggregates{100: {llotypes.AggregatorMedian: protocol.ToDecimal(decimal.NewFromInt(1))}},
-			SupportByFormat:       map[llotypes.ReportFormat]int{llotypes.ReportFormatJSON: 4},
+			ReportableChannelIDs:  []llotypes.ChannelID{1},
 		})
 		require.NoError(t, err)
 

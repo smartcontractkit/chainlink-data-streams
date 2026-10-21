@@ -53,6 +53,14 @@ const observationWireVersion byte = 1
 // can force per round; see also maxObservationDecompressedBytes.
 const maxObservationBlobHandles = 4
 
+// maxObservationUpdateChannelDefinitionsBytes bounds the encoded size of the
+// channel definitions one observation votes to add or change. Stream values
+// travel in a blob, so these votes are the only part of the observation that
+// can approach ocr3_1types.MaxMaxObservationBytes: five definitions at the
+// admission caps encode to more than it. The remainder covers the other fields,
+// whose worst case TestLimits_ObservationWorstCaseFitsDeclared measures.
+const maxObservationUpdateChannelDefinitionsBytes = 384 << 10
+
 // maxObservationDecompressedBytes bounds the TOTAL decompressed blob bytes a
 // single observation may cause, across all of its handles. Without it, the
 // per-blob cap alone would let one peer force
@@ -123,8 +131,10 @@ func frameObservation(handles [][]byte, mainBytes []byte) []byte {
 //   - A blob-fetch failure is node-local and possibly transient: one oracle may
 //     fail to fetch while others succeed. Dropping the observation on only some
 //     oracles would make StateTransition non-deterministic and could halt the
-//     protocol. Callers inside StateTransition must propagate this (aborting and
-//     uniformly retrying the round) rather than skipping the observation.
+//     protocol. Callers inside StateTransition must propagate this rather than
+//     skip the observation. The error costs only this oracle's Prepare for the
+//     round: the others commit without it when they reach quorum, and this
+//     oracle adopts the committed state through state sync.
 type blobFetchError struct{ err error }
 
 func (e *blobFetchError) Error() string { return e.err.Error() }
@@ -188,6 +198,12 @@ func decodeObservation(ctx context.Context, raw ocrtypes.Observation, bf ocr3_1t
 	// Fetch and merge blob-carried stream values. The decompression budget is
 	// shared across handles, so a peer cannot multiply the work it imposes by
 	// naming several blobs.
+	//
+	// A handle is not checked against the citing oracle: any oracle may cite a
+	// blob another oracle submitted. This does not inflate contributions, since
+	// libocr guarantees at most one observation per oracle, and citing a peer's
+	// blob gains a faulty oracle nothing it could not get by submitting the
+	// same values itself.
 	budget := maxObservationDecompressedBytes
 	for _, h := range handles {
 		entry, ok := memo.get(h.key)
@@ -244,6 +260,14 @@ func decodeObservation(ctx context.Context, raw ocrtypes.Observation, bf ocr3_1t
 }
 
 func observationFromProto(main *protocol.LLOObservationProto) (Observation, error) {
+	// Bound the channel votes before copying them, and before decodeObservation
+	// fetches any blob, so an oversized observation costs no fetch.
+	if len(main.RemoveChannelIDs) > protocol.MaxObservationRemoveChannelIDsLength {
+		return Observation{}, fmt.Errorf("observation removes too many channels: %d (max %d)", len(main.RemoveChannelIDs), protocol.MaxObservationRemoveChannelIDsLength)
+	}
+	if len(main.UpdateChannelDefinitions) > protocol.MaxObservationUpdateChannelDefinitionsLength {
+		return Observation{}, fmt.Errorf("observation updates too many channels: %d (max %d)", len(main.UpdateChannelDefinitions), protocol.MaxObservationUpdateChannelDefinitionsLength)
+	}
 	obs := Observation{
 		AttestedPredecessorRetirement: main.AttestedPredecessorRetirement,
 		ShouldRetire:                  main.ShouldRetire,
@@ -276,25 +300,49 @@ func observationFromProto(main *protocol.LLOObservationProto) (Observation, erro
 		return Observation{}, fmt.Errorf("observation advertises too many report formats: %d (max %d)", len(main.SupportedReportFormats), protocol.MaxObservationSupportedReportFormatsLength)
 	}
 
-	if len(main.PredecessorSigners) > protocol.MaxObservationPredecessorSignersLength {
-		return Observation{}, fmt.Errorf("observation carries too many predecessor signers: %d (max %d)", len(main.PredecessorSigners), protocol.MaxObservationPredecessorSignersLength)
+	if err := validateAttestedPredecessorRetirement(main.AttestedPredecessorRetirement); err != nil {
+		return Observation{}, fmt.Errorf("observation carries %w", err)
 	}
-	for i, signer := range main.PredecessorSigners {
-		if len(signer) == 0 || len(signer) > protocol.MaxPredecessorSignerBytes {
-			return Observation{}, fmt.Errorf("observation carries predecessor signer %d of invalid length %d (max %d)", i, len(signer), protocol.MaxPredecessorSignerBytes)
-		}
-	}
-	// f indexes nothing, but a set that cannot reach f+1 valid signatures could
-	// never verify a report, so treat it as malformed rather than carrying it
-	// into the vote.
-	if main.PredecessorF > 0 && int(main.PredecessorF) >= len(main.PredecessorSigners) {
-		return Observation{}, fmt.Errorf("observation carries predecessor f=%d for a signer set of %d", main.PredecessorF, len(main.PredecessorSigners))
+	if err := validatePredecessorConfig(main.PredecessorSigners, main.PredecessorF); err != nil {
+		return Observation{}, fmt.Errorf("observation carries %w", err)
 	}
 	obs.PredecessorSigners = main.PredecessorSigners
 	obs.PredecessorF = uint8(main.PredecessorF)
 
 	obs.SupportedReportFormats = formatsFromWire(main.SupportedReportFormats)
 	return obs, nil
+}
+
+// validateAttestedPredecessorRetirement bounds the attested predecessor
+// retirement an observation may carry. Observation applies it before
+// broadcasting, so a node never sends a report its peers would reject.
+func validateAttestedPredecessorRetirement(report []byte) error {
+	if len(report) > protocol.MaxAttestedRetirementReportBytes {
+		return fmt.Errorf("an attested predecessor retirement of %d bytes (max %d)", len(report), protocol.MaxAttestedRetirementReportBytes)
+	}
+	return nil
+}
+
+// validatePredecessorConfig bounds the predecessor config vote an observation
+// may carry. An empty signer set passes, as it means no vote. Observation
+// applies it before broadcasting, so a node never sends a vote its peers would
+// reject.
+func validatePredecessorConfig(signers [][]byte, f uint32) error {
+	if len(signers) > protocol.MaxObservationPredecessorSignersLength {
+		return fmt.Errorf("too many predecessor signers: %d (max %d)", len(signers), protocol.MaxObservationPredecessorSignersLength)
+	}
+	for i, signer := range signers {
+		if len(signer) == 0 || len(signer) > protocol.MaxPredecessorSignerBytes {
+			return fmt.Errorf("predecessor signer %d of invalid length %d (max %d)", i, len(signer), protocol.MaxPredecessorSignerBytes)
+		}
+	}
+	// f indexes nothing, but a set that cannot reach f+1 valid signatures could
+	// never verify a report, so treat it as malformed rather than carrying it
+	// into the vote.
+	if f > 0 && int(f) >= len(signers) {
+		return fmt.Errorf("predecessor f=%d for a signer set of %d", f, len(signers))
+	}
+	return nil
 }
 
 // sortedFormatsToWire returns the formats sorted ascending. nil in, nil out, so

@@ -17,11 +17,11 @@ import (
 
 type StreamValue interface {
 	// Binary marshaler/unmarshaler used for protobufs
-	// Unmarshal should NOT panic on nil receiver, but instead return ErrNilStreamValue
+	// Marshal and Unmarshal should NOT panic on nil receiver, but instead return ErrNilStreamValue
 	encoding.BinaryMarshaler
 	encoding.BinaryUnmarshaler
 	// TextMarshaler needed for JSON serialization and logging
-	// Unmarshal should NOT panic on nil receiver, but instead return ErrNilStreamValue
+	// Marshal and Unmarshal should NOT panic on nil receiver, but instead return ErrNilStreamValue
 	encoding.TextMarshaler
 	encoding.TextUnmarshaler
 	// Type is needed for proto serialization so we know how to unserialize it
@@ -60,6 +60,12 @@ var (
 // coordinated across versions.
 //
 // Bounding observations bounds everything written from them going forward.
+//
+// The bounds apply per decimal, not per shape. Up to MaxStreamValueNesting
+// timestamped levels decode here, and past one level a value at the
+// coefficient bound outgrows MaxHistoryRecordBytes. Callers rely on the
+// plugin's observation validation to restrict which shapes are admitted (see
+// v31 Plugin.ValidateObservation).
 func UnmarshalObservedProtoStreamValue(enc *LLOStreamValue) (StreamValue, error) {
 	sv, err := UnmarshalProtoStreamValue(enc)
 	if err != nil {
@@ -119,6 +125,12 @@ func checkDecimalCoefficient(d decimal.Decimal) error {
 		return fmt.Errorf("%w: got %d bits, expected <= %d", ErrDecimalCoefficientOutOfRange, bits, MaxDecimalCoefficientBits)
 	}
 	return nil
+}
+
+// CheckDecimalExponent bounds the exponent of a decimal parsed from an
+// expression literal or about to be written into state. See MaxDecimalExponent.
+func CheckDecimalExponent(d decimal.Decimal) error {
+	return checkDecimalExponent(d)
 }
 
 // checkDecimalExponent bounds the exponent of a decimal decoded from an
@@ -303,6 +315,9 @@ func (v *Quote) MarshalBinary() (b []byte, err error) {
 }
 
 func (v *Quote) UnmarshalBinary(data []byte) error {
+	if v == nil {
+		return ErrNilStreamValue
+	}
 	q := new(LLOStreamValueQuote)
 	if err := proto.Unmarshal(data, q); err != nil {
 		return err
@@ -323,7 +338,7 @@ func (v *Quote) MarshalText() ([]byte, error) {
 	return []byte(fmt.Sprintf("Q{Bid: %s, Benchmark: %s, Ask: %s}", v.Bid.String(), v.Benchmark.String(), v.Ask.String())), nil
 }
 
-var quoteRegex = regexp.MustCompile(`Q\{Bid: ([0-9.]+), Benchmark: ([0-9.]+), Ask: ([0-9.]+)\}`)
+var quoteRegex = regexp.MustCompile(`^Q\{Bid: (-?[0-9.]+), Benchmark: (-?[0-9.]+), Ask: (-?[0-9.]+)\}$`)
 
 func (v *Quote) UnmarshalText(data []byte) error {
 	if v == nil {
@@ -443,6 +458,9 @@ func (v *TimestampedStreamValue) UnmarshalBinary(data []byte) error {
 // unmarshalBinary carries the nesting depth reached so far. See
 // unmarshalProtoStreamValue.
 func (v *TimestampedStreamValue) unmarshalBinary(data []byte, depth int) error {
+	if v == nil {
+		return ErrNilStreamValue
+	}
 	t := new(LLOTimestampedStreamValue)
 	if err := proto.Unmarshal(data, t); err != nil {
 		return err
@@ -457,7 +475,7 @@ func (v *TimestampedStreamValue) unmarshalBinary(data []byte, depth int) error {
 }
 
 func (v *TimestampedStreamValue) MarshalText() ([]byte, error) {
-	if v == nil {
+	if v == nil || v.StreamValue == nil {
 		return nil, ErrNilStreamValue
 	}
 	serializedSv, err := v.StreamValue.MarshalText()

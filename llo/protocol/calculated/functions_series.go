@@ -67,7 +67,7 @@ func Median(x any) (decimal.Decimal, error) {
 // Population rather than sample variance: the window is the whole series being
 // described, not a sample drawn from a larger one.
 func Variance(x any) (decimal.Decimal, error) {
-	series, err := window("Variance", x)
+	series, err := comparisonWindow("Variance", x)
 	if err != nil {
 		return decimal.Decimal{}, err
 	}
@@ -103,7 +103,7 @@ func Stddev(x any) (decimal.Decimal, error) {
 
 // Delta returns the change across a history window: newest minus oldest.
 func Delta(x any) (decimal.Decimal, error) {
-	series, err := window("Delta", x)
+	series, err := comparisonWindow("Delta", x)
 	if err != nil {
 		return decimal.Decimal{}, err
 	}
@@ -122,7 +122,7 @@ func Delta(x any) (decimal.Decimal, error) {
 // (newest - oldest) / oldest. It is a fraction, not a percentage: 0.05 is a 5%
 // rise.
 func PctChange(x any) (decimal.Decimal, error) {
-	series, err := window("PctChange", x)
+	series, err := comparisonWindow("PctChange", x)
 	if err != nil {
 		return decimal.Decimal{}, err
 	}
@@ -142,7 +142,7 @@ func PctChange(x any) (decimal.Decimal, error) {
 
 // Spread returns the range of a history window: maximum minus minimum.
 func Spread(x any) (decimal.Decimal, error) {
-	series, err := window("Spread", x)
+	series, err := comparisonWindow("Spread", x)
 	if err != nil {
 		return decimal.Decimal{}, err
 	}

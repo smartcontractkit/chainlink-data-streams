@@ -20,14 +20,15 @@ import (
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
 
 	protocol "github.com/smartcontractkit/chainlink-data-streams/llo/protocol"
-	ubig "github.com/smartcontractkit/chainlink-data-streams/llo/reportcodec/evm/utils"
 	v3 "github.com/smartcontractkit/chainlink-data-streams/llo/reportcodec/evm/v3"
+	"github.com/smartcontractkit/chainlink-data-streams/llo/ubig"
 )
 
 var (
-	_            protocol.ReportCodec = ReportCodecPremiumLegacy{}
-	_            protocol.FeedIDer    = ReportCodecPremiumLegacy{}
-	PayloadTypes                      = getPayloadTypes()
+	_            protocol.ReportCodec       = ReportCodecPremiumLegacy{}
+	_            protocol.FeedIDer          = ReportCodecPremiumLegacy{}
+	_            protocol.AdmissionVerifier = ReportCodecPremiumLegacy{}
+	PayloadTypes                            = getPayloadTypes()
 )
 
 func getPayloadTypes() abi.Arguments {
@@ -154,10 +155,25 @@ func (r ReportCodecPremiumLegacy) Verify(cd llotypes.ChannelDefinition) error {
 	if len(cd.Streams) != 3 {
 		return fmt.Errorf("ReportFormatEVMPremiumLegacy requires exactly 3 streams (NativePrice, LinkPrice, Quote); got: %v", cd.Streams)
 	}
-	if opts.MaxReportRange < 0 {
-		return fmt.Errorf("maxReportRange must be non-negative; got: %s", opts.MaxReportRange)
+	return verifyMaxReportRange(opts.MaxReportRange)
+}
+
+// VerifyForAdmission implements protocol.AdmissionVerifier: it rejects a zero
+// multiplier and an expiration window that overflows the uint32 expiresAt.
+// Either fails every report of the channel.
+//
+// This is not part of Verify because definitions committed before the check
+// existed may fail it, and rejecting those would stop every oracle from
+// observing rather than just stopping that one channel from reporting.
+func (r ReportCodecPremiumLegacy) VerifyForAdmission(cd llotypes.ChannelDefinition) error {
+	opts := ReportFormatEVMPremiumLegacyOpts{}
+	if err := (&opts).Decode(cd.Opts); err != nil {
+		return fmt.Errorf("invalid Opts, got: %q; %w", cd.Opts, err)
 	}
-	return nil
+	if opts.Multiplier != nil && opts.Multiplier.IsZero() {
+		return errors.New("multiplier, if specified in channel opts, must be non-zero")
+	}
+	return verifyExpirationWindow(opts.ExpirationWindow)
 }
 
 func (r ReportCodecPremiumLegacy) Decode(b []byte) (*v3.Report, error) {
@@ -225,6 +241,10 @@ func ExtractReportValues(report protocol.Report) (nativePrice, linkPrice decimal
 	return nativePrice, linkPrice, quote, nil
 }
 
+// extractPrice returns a fee token price. A nil price returns zero, which
+// CalculateFee turns into a zero fee, so a fee price outage does not stop the
+// channel from reporting. Channels that must always charge a fee set
+// DisableNilStreamValues, which makes a nil aggregate unreportable.
 func extractPrice(price protocol.StreamValue) (decimal.Decimal, error) {
 	switch p := price.(type) {
 	case *protocol.Decimal:

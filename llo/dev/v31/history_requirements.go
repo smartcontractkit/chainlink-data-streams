@@ -34,8 +34,11 @@ type historyRequirements struct {
 // Channels whose expressions cannot be analyzed, or that aggregate one stream
 // two ways, contribute nothing: they cannot be evaluated either (see
 // calculated.ProcessCalculatedStreams), so reserving history for them would keep
-// dead windows alive.
-func computeHistoryRequirements(defs llotypes.ChannelDefinitions, optsCache *protocol.OptsCache, lggr logger.Logger) historyRequirements {
+// dead windows alive. They are logged at debug level only, since evaluation
+// reports the same channel at error level every round.
+//
+// incumbents are the pairs already holding a window (see admitHistoryRequirements).
+func computeHistoryRequirements(defs llotypes.ChannelDefinitions, optsCache *protocol.OptsCache, incumbents []histKey, lggr logger.Logger) historyRequirements {
 	required := map[histKey]uint32{}
 
 	// Channels are visited in sorted order so that logging and the
@@ -54,14 +57,14 @@ func computeHistoryRequirements(defs llotypes.ChannelDefinitions, optsCache *pro
 
 		aggByStream, err := calculated.AggregatorByStream(cd)
 		if err != nil {
-			lggr.Errorw("Skipping history requirements for channel with ambiguous stream aggregators",
+			lggr.Debugw("Skipping history requirements for channel with ambiguous stream aggregators",
 				"channelID", cid, "err", err)
 			continue
 		}
 
 		expressions, err := calculated.Expressions(optsCache, cd, cid)
 		if err != nil {
-			lggr.Errorw("Skipping history requirements for channel with unresolvable opts",
+			lggr.Debugw("Skipping history requirements for channel with unresolvable opts",
 				"channelID", cid, "err", err)
 			continue
 		}
@@ -69,14 +72,14 @@ func computeHistoryRequirements(defs llotypes.ChannelDefinitions, optsCache *pro
 		for _, expression := range expressions {
 			refs, err := calculated.AnalyzeExpressionHistory(expression)
 			if err != nil {
-				lggr.Errorw("Skipping history requirements for invalid expression",
+				lggr.Debugw("Skipping history requirements for invalid expression",
 					"channelID", cid, "expression", expression, "err", err)
 				continue
 			}
 			for _, ref := range refs {
 				aggregator, ok := aggByStream[ref.StreamID]
 				if !ok {
-					lggr.Errorw("Expression reads history for a stream the channel does not observe",
+					lggr.Debugw("Expression reads history for a stream the channel does not observe",
 						"channelID", cid, "streamID", ref.StreamID, "expression", expression)
 					continue
 				}
@@ -90,15 +93,19 @@ func computeHistoryRequirements(defs llotypes.ChannelDefinitions, optsCache *pro
 		}
 	}
 
-	return admitHistoryRequirements(required, lggr)
+	return admitHistoryRequirements(required, incumbents)
 }
 
 // admitHistoryRequirements applies the pair and byte caps.
 //
-// Pairs are considered in (streamID, aggregator) order and admitted until a cap
-// is reached; the rest are denied. Ordering by key rather than by, say, depth or
-// channel count is what makes the outcome identical on every oracle — the
-// admission decision is part of what determines persisted state.
+// Required incumbents, the pairs already holding a window, are admitted first,
+// then the remaining pairs, each group in (streamID, aggregator) order, until a
+// cap is reached; the rest are denied. Admitting incumbents first stops a new
+// pair with a lower key from evicting a warm window once the cap is reached.
+// Incumbents come from the replicated history index and the order is by key
+// rather than by, say, depth or channel count, which is what makes the outcome
+// identical on every oracle, the admission decision is part of what
+// determines persisted state.
 //
 // Denial is deliberately visible and total for the pair: a channel referencing a
 // denied pair produces no value and does not report, rather than silently
@@ -107,22 +114,31 @@ func computeHistoryRequirements(defs llotypes.ChannelDefinitions, optsCache *pro
 // The pair cap is the only rule. Under the chunked layout a round rewrites one
 // chunk and one header per pair whatever the depth, so a pair's cost against the
 // per-round byte budget is a constant — MaxHistoryPairs of them fit inside
-// MaxHistoryTotalBytes by construction, which TestHistoryBudgetFitsPairCap
-// asserts. That was not true of the single-blob layout, where cost scaled with
+// MaxHistoryTotalBytes by construction, which limits.go asserts at compile
+// time. That was not true of the single-blob layout, where cost scaled with
 // depth and the budget denied pairs long before the cap did.
-func admitHistoryRequirements(required map[histKey]uint32, lggr logger.Logger) historyRequirements {
+func admitHistoryRequirements(required map[histKey]uint32, incumbents []histKey) historyRequirements {
+	held := make(map[histKey]struct{}, len(incumbents))
 	keys := make([]histKey, 0, len(required))
-	for key := range required {
-		keys = append(keys, key)
+	for _, key := range incumbents {
+		if _, ok := required[key]; ok {
+			held[key] = struct{}{}
+			keys = append(keys, key)
+		}
 	}
 	sortHistKeys(keys)
+	newcomers := make([]histKey, 0, len(required)-len(keys))
+	for key := range required {
+		if _, ok := held[key]; !ok {
+			newcomers = append(newcomers, key)
+		}
+	}
+	sortHistKeys(newcomers)
+	keys = append(keys, newcomers...)
 
 	out := historyRequirements{depths: make(map[histKey]uint32, len(keys))}
 	for _, key := range keys {
 		if len(out.depths) >= protocol.MaxHistoryPairs {
-			lggr.Errorw("Denying stream history: too many pairs require history",
-				"streamID", key.streamID, "aggregator", key.aggregator,
-				"depth", required[key], "maxPairs", protocol.MaxHistoryPairs)
 			out.denied = append(out.denied, key)
 			continue
 		}

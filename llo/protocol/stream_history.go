@@ -28,9 +28,9 @@ var (
 )
 
 // deterministicMarshal is the marshaller for anything whose bytes are compared
-// across oracles: replicated KeyValueState (history headers and chunks), and the
-// serialized stream values ModeAggregator counts to pick a mode. A
-// non-deterministic encoding there would halt the DON.
+// across oracles: channel definition hashes, replicated KeyValueState (history
+// headers and chunks), and the serialized stream values ModeAggregator counts
+// to pick a mode. A non-deterministic encoding there would halt the DON.
 //
 // None of the messages marshalled through it has a map field today, and
 // Deterministic only orders map entries, so it is currently a no-op. It is

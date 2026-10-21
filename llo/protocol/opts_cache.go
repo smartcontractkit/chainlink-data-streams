@@ -3,8 +3,11 @@ package protocol
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"reflect"
+	"strings"
 	sync "sync"
+	"unicode/utf8"
 
 	"github.com/goccy/go-json"
 
@@ -19,7 +22,8 @@ type optsCacheKey struct {
 // OptsCache caches decoded channel definition options keyed by (ChannelID, target type).
 // Raw opts bytes are stored via Set during channel definition changes in Outcome().
 // Decoded values are produced lazily on the first GetOpts call for a given (channelID, type)
-// and reused until the channel is updated or removed.
+// and reused until the channel is updated or removed. Callers share each decoded
+// value, so they must not modify it.
 type OptsCache struct {
 	mu      sync.Mutex
 	raw     map[llotypes.ChannelID]llotypes.ChannelOpts
@@ -112,6 +116,10 @@ func (c *OptsCache) SyncTo(channelDefinitions llotypes.ChannelDefinitions) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	if c.sealed {
+		return
+	}
+
 	for channelID, cd := range channelDefinitions {
 		if existing, ok := c.raw[channelID]; ok && bytes.Equal(existing, cd.Opts) {
 			continue
@@ -148,8 +156,12 @@ func (c *OptsCache) ResetTo(channelDefinitions llotypes.ChannelDefinitions) {
 
 // GetOpts returns decoded channel opts of type T for the given channel.
 // On the first call for a given (channelID, T) after Set, the raw bytes are
-// decoded via json.Unmarshal and the result is cached. Subsequent calls return
+// decoded via decodeOpts and the result is cached. Subsequent calls return
 // the cached value directly.
+//
+// The returned value shares its slices, maps and pointers with the cache and
+// with every other caller. Treat it as read-only. Copy any field before
+// modifying it.
 //
 // Returns an error if the channel is not in the cache or decoding fails.
 // The caller must pass a valid opts cache.
@@ -172,13 +184,98 @@ func GetOpts[T any](c *OptsCache, channelID llotypes.ChannelID) (T, error) {
 		return zero, fmt.Errorf("channel %d not in opts cache", channelID)
 	}
 
-	var result T
-	if len(raw) > 0 {
-		if err := json.Unmarshal(raw, &result); err != nil {
-			return zero, fmt.Errorf("failed to decode opts for channel %d: %w", channelID, err)
-		}
+	result, err := decodeOpts[T](raw)
+	if err != nil {
+		return zero, fmt.Errorf("failed to decode opts for channel %d: %w", channelID, err)
 	}
 
 	c.decoded[key] = result
 	return result, nil
+}
+
+// GetOptsOrDecode returns the channel opts of type T from the cache, and
+// decodes the definition's raw opts on a cache miss or a nil cache. The
+// fallback keeps the result identical across oracles whether or not their
+// cache holds the channel. The same read-only rule as GetOpts applies.
+func GetOptsOrDecode[T any](c *OptsCache, cd llotypes.ChannelDefinition, channelID llotypes.ChannelID) (T, error) {
+	if c != nil {
+		if o, err := GetOpts[T](c, channelID); err == nil {
+			return o, nil
+		}
+	}
+	return decodeOpts[T](cd.Opts)
+}
+
+// decodeOpts is the single decode of raw channel opts. The cache and every
+// cache miss fallback go through it, so a definition reads the same whichever
+// path decodes it. JSON libraries disagree on some inputs, such as keys that
+// only match a field under Unicode case folding.
+func decodeOpts[T any](raw []byte) (T, error) {
+	var result T
+	if len(raw) == 0 {
+		return result, nil
+	}
+	err := json.Unmarshal(raw, &result)
+	return result, err
+}
+
+// VerifyOptsKeys rejects opts whose object keys, at any depth, are not ASCII or
+// repeat under ASCII case folding. JSON decoders resolve such keys differently,
+// so the same bytes could decode to different values in different places.
+func VerifyOptsKeys(raw []byte) error {
+	type object struct {
+		seen      map[string]struct{}
+		expectKey bool
+	}
+	var stack []*object
+
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	for {
+		tok, err := dec.Token()
+		if err == io.EOF {
+			if len(stack) > 0 {
+				return fmt.Errorf("failed to scan opts: %w", io.ErrUnexpectedEOF)
+			}
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("failed to scan opts: %w", err)
+		}
+
+		var top *object
+		if len(stack) > 0 {
+			top = stack[len(stack)-1]
+		}
+
+		if key, ok := tok.(string); ok && top != nil && top.expectKey {
+			for i := 0; i < len(key); i++ {
+				if key[i] >= utf8.RuneSelf {
+					return fmt.Errorf("opts key %q is not ASCII", key)
+				}
+			}
+			folded := strings.ToLower(key)
+			if _, dup := top.seen[folded]; dup {
+				return fmt.Errorf("opts key %q is repeated", key)
+			}
+			top.seen[folded] = struct{}{}
+			top.expectKey = false
+			continue
+		}
+
+		switch tok {
+		case json.Delim('}'), json.Delim(']'):
+			stack = stack[:len(stack)-1]
+			continue
+		}
+		// Any other token starts a value, which completes the pending key.
+		if top != nil && top.seen != nil {
+			top.expectKey = true
+		}
+		switch tok {
+		case json.Delim('{'):
+			stack = append(stack, &object{seen: map[string]struct{}{}, expectKey: true})
+		case json.Delim('['):
+			stack = append(stack, &object{})
+		}
+	}
 }

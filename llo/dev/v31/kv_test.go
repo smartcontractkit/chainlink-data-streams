@@ -6,6 +6,8 @@ import (
 
 	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap/zapcore"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/smartcontractkit/chainlink-common/pkg/logger"
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
@@ -62,7 +64,7 @@ func Test_ChannelCache_StaleSeqNrForcesReload(t *testing.T) {
 	require.NoError(t, writeHotState(kv, 0, nil, nil, nil, logger.Test(t)))
 
 	cache := protocol.NewChannelCache()
-	s, err := loadKVState(kv, cache)
+	s, err := loadKVState(kv, cache, logger.Test(t))
 	require.NoError(t, err)
 	require.Equal(t, uint64(5), s.channelStateSeqNr)
 	require.Len(t, s.channelDefinitions, 1)
@@ -71,7 +73,7 @@ func Test_ChannelCache_StaleSeqNrForcesReload(t *testing.T) {
 	// the cache: the comparison is equality, not "cached is newer".
 	require.NoError(t, writeChannelState(kv, 4, llotypes.ChannelDefinitions{}))
 	before := kv.readCount(keyChannelState)
-	s, err = loadKVState(kv, cache)
+	s, err = loadKVState(kv, cache, logger.Test(t))
 	require.NoError(t, err)
 	require.Greater(t, kv.readCount(keyChannelState), before)
 	require.Empty(t, s.channelDefinitions)
@@ -160,7 +162,7 @@ func Test_KVRecords_DeterministicAndRoundTrip(t *testing.T) {
 	require.NoError(t, writeHotState(kv, 1_234, validAfter, reportable, carry, logger.Test(t)))
 	require.Equal(t, uint64(9), binary.BigEndian.Uint64(kv.m[string(keyChannelSeqNr)]))
 
-	s, err := loadKVState(kv, nil)
+	s, err := loadKVState(kv, nil, logger.Test(t))
 	require.NoError(t, err)
 	require.Equal(t, defs, s.channelDefinitions)
 	require.Equal(t, uint64(1_234), s.observationTimestampNs)
@@ -170,6 +172,37 @@ func Test_KVRecords_DeterministicAndRoundTrip(t *testing.T) {
 	require.Len(t, s.carryForward, 2)
 	require.Equal(t, uint64(1), s.carryForward[100][llotypes.AggregatorMedian].ObservedAtNanoseconds)
 	require.Equal(t, uint64(2), s.carryForward[200][llotypes.AggregatorMode].ObservedAtNanoseconds)
+}
+
+func Test_HotState_DiscardsNonTimestampedCarryForward(t *testing.T) {
+	// writeHotState only persists timestamped values, so hand-build a record
+	// that holds a plain decimal next to a timestamped one.
+	plain, err := protocol.ToDecimal(decimal.NewFromInt(7)).MarshalBinary()
+	require.NoError(t, err)
+	tsv := &protocol.TimestampedStreamValue{ObservedAtNanoseconds: 42, StreamValue: protocol.ToDecimal(decimal.NewFromInt(8))}
+	timestamped, err := tsv.MarshalBinary()
+	require.NoError(t, err)
+	b, err := proto.Marshal(&protocol.LLOHotStateProto{
+		StreamAggregates: []*protocol.LLOStreamAggregate{
+			{StreamID: 100, Aggregator: uint32(llotypes.AggregatorMedian), StreamValue: &protocol.LLOStreamValue{Type: protocol.LLOStreamValue_Decimal, Value: plain}},
+			{StreamID: 200, Aggregator: uint32(llotypes.AggregatorMedian), StreamValue: &protocol.LLOStreamValue{Type: tsv.Type(), Value: timestamped}},
+		},
+	})
+	require.NoError(t, err)
+	kv := newMemKV()
+	require.NoError(t, kv.Write(keyHotState, b))
+
+	lggr, observed := logger.TestObserved(t, zapcore.ErrorLevel)
+	s := &kvState{
+		validAfterNanoseconds: map[llotypes.ChannelID]uint64{},
+		reportedLastRound:     map[llotypes.ChannelID]bool{},
+		carryForward:          map[llotypes.StreamID]map[llotypes.Aggregator]*protocol.TimestampedStreamValue{},
+	}
+	require.NoError(t, readHotState(kv, s, lggr))
+
+	require.Len(t, s.carryForward, 1)
+	require.Equal(t, uint64(42), s.carryForward[200][llotypes.AggregatorMedian].ObservedAtNanoseconds)
+	require.Equal(t, 1, observed.FilterMessage("Discarding non-timestamped carry-forward aggregate from hot state").Len())
 }
 
 // Test_DeferredDefinitions_TakeEffectNextRound covers the core rule: an agreed

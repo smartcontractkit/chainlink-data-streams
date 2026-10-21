@@ -60,6 +60,12 @@ func (o *dsOpts) LifeCycleStage() llotypes.LifeCycleStage { return o.lifeCycleSt
 // DataSource observes stream values. For each known streamID, Observe should
 // set the observed value in the passed protocol.StreamValues. Unknown/failed streams
 // should be left unset. Shared across all LLO plugin versions.
+//
+// Observe owns streamValues only until it returns, including when it returns
+// because ctx is done. The caller reads and serializes the map right after, so
+// an implementation that fills it from other goroutines must stop them, or stop
+// them writing, before returning. Observe should not add streams that are not
+// requested.
 type DataSource interface {
 	Observe(ctx context.Context, streamValues protocol.StreamValues, opts DSOpts) error
 }
