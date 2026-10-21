@@ -349,6 +349,35 @@ func (o precursor) isReportable(channelID llotypes.ChannelID, minReportInterval 
 		// above already established the target exists.
 		return formatIsEncodable(support, o.ChannelDefinitions[opts.TargetChannelID].ReportFormat, f, channelID, tally)
 	}
+	validAfter, ok := o.ValidAfterNanoseconds[channelID]
+	if !ok {
+		return false
+	}
+	if o.ObservationTimestampNanoseconds < protocol.SaturatingAdd(validAfter, minReportInterval) || o.ObservationTimestampNanoseconds <= validAfter {
+		return false
+	}
+	// The codec reads the same opts, so a channel whose opts do not decode
+	// cannot be encoded. Treat it as unreportable so validAfter does not advance
+	// over a round that emitted nothing.
+	res, ok := reportTimeResolution(cd, channelID, optsCache)
+	if !ok {
+		tally.note("channel opts cannot be decoded", channelID)
+		return false
+	}
+	// Require validAfter and the observation timestamp to fall in distinct ticks
+	// of the report format resolution, so the encoded validity window is not
+	// inverted.
+	if tickOverlap(validAfter, o.ObservationTimestampNanoseconds, res) {
+		return false
+	}
+	if !formatIsEncodable(support, cd.ReportFormat, f, channelID, tally) {
+		return false
+	}
+	// The time gates and codec support above depend only on agreed state. Run
+	// them before the value checks so a channel that cannot report this round
+	// is not tallied for values it would not carry, and a missing codec is not
+	// masked by a transient missing value.
+	//
 	// Reportability and emission must agree on what the report carries. Reports
 	// derives the report's values from protocol.EffectiveStreams, so the same
 	// derivation has to succeed here: if it fails there, the report is skipped
@@ -394,26 +423,5 @@ func (o precursor) isReportable(channelID llotypes.ChannelID, minReportInterval 
 		tally.note("stream value not encodable", channelID, "err", err)
 		return false
 	}
-	if !formatIsEncodable(support, cd.ReportFormat, f, channelID, tally) {
-		return false
-	}
-	validAfter, ok := o.ValidAfterNanoseconds[channelID]
-	if !ok {
-		return false
-	}
-	if o.ObservationTimestampNanoseconds < protocol.SaturatingAdd(validAfter, minReportInterval) || o.ObservationTimestampNanoseconds <= validAfter {
-		return false
-	}
-	// The codec reads the same opts, so a channel whose opts do not decode
-	// cannot be encoded. Treat it as unreportable so validAfter does not advance
-	// over a round that emitted nothing.
-	res, ok := reportTimeResolution(cd, channelID, optsCache)
-	if !ok {
-		tally.note("channel opts cannot be decoded", channelID)
-		return false
-	}
-	// Require validAfter and the observation timestamp to fall in distinct ticks
-	// of the report format resolution, so the encoded validity window is not
-	// inverted.
-	return !tickOverlap(validAfter, o.ObservationTimestampNanoseconds, res)
+	return true
 }

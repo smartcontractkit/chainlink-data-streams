@@ -2244,6 +2244,59 @@ func Test_UnreportableTally_CollapsesPerChannelWarnings(t *testing.T) {
 	require.Empty(t, out.reportableChannels(0, 1, out.supportFor(0), protocol.NewOptsCache(), nil))
 }
 
+// Test_IsReportable_TimeGatesRunBeforeValueChecks covers a channel the time
+// gates hold back not being tallied for a missing value it would not carry,
+// and missing codec support being tallied ahead of a missing value.
+func Test_IsReportable_TimeGatesRunBeforeValueChecks(t *testing.T) {
+	const (
+		cid    = llotypes.ChannelID(1)
+		second = uint64(1_000_000_000)
+	)
+	// Seconds resolution, and no aggregate for the channel's stream.
+	out := precursor{
+		LifeCycleStage: protocol.LifeCycleStageProduction,
+		ChannelDefinitions: llotypes.ChannelDefinitions{cid: {
+			ReportFormat: llotypes.ReportFormatEVMPremiumLegacy,
+			Streams:      []llotypes.Stream{{StreamID: 1, Aggregator: llotypes.AggregatorMedian}},
+		}},
+		ValidAfterNanoseconds: map[llotypes.ChannelID]uint64{cid: 10 * second},
+		StreamAggregates:      protocol.StreamAggregates{},
+	}
+
+	t.Run("min report interval", func(t *testing.T) {
+		o := out
+		o.ObservationTimestampNanoseconds = 12 * second
+		tally := &unreportableTally{}
+		require.False(t, o.isReportable(cid, 5*second, 1, o.supportFor(4), protocol.NewOptsCache(), tally))
+		require.Empty(t, tally.reasons)
+	})
+
+	t.Run("tick overlap", func(t *testing.T) {
+		o := out
+		o.ObservationTimestampNanoseconds = 10*second + 500_000_000
+		tally := &unreportableTally{}
+		require.False(t, o.isReportable(cid, 0, 1, o.supportFor(4), protocol.NewOptsCache(), tally))
+		require.Empty(t, tally.reasons)
+	})
+
+	t.Run("past the time gates", func(t *testing.T) {
+		o := out
+		o.ObservationTimestampNanoseconds = 11 * second
+		tally := &unreportableTally{}
+		require.False(t, o.isReportable(cid, 0, 1, o.supportFor(4), protocol.NewOptsCache(), tally))
+		require.Contains(t, tally.reasons, "nil stream value")
+	})
+
+	t.Run("codec support before values", func(t *testing.T) {
+		o := out
+		o.ObservationTimestampNanoseconds = 11 * second
+		tally := &unreportableTally{}
+		require.False(t, o.isReportable(cid, 0, 1, o.supportFor(0), protocol.NewOptsCache(), tally))
+		require.Len(t, tally.reasons, 1)
+		require.Contains(t, tally.reasons, "too few oracles advertise a report codec for this format")
+	})
+}
+
 // Test_StateTransition_BackfillValidAfterRequiresPreviousReport covers the
 // backfill watermark advancing only over a row the previous round actually
 // reported.
