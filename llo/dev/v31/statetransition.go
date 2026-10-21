@@ -96,7 +96,9 @@ func (p *Plugin) StateTransition(ctx context.Context, seqNr uint64, _ ocrtypes.A
 	// The definitions in effect for this round are the ones Observation read.
 	// Changes agreed below land in pending and take effect next round.
 	effective := cloneChannelDefinitions(prev.channelDefinitions)
-	pending := cloneChannelDefinitions(prev.channelDefinitions)
+	// pending stays nil unless this round applies channel votes. Most rounds
+	// carry none, so this saves a deep copy per round.
+	var pending llotypes.ChannelDefinitions
 
 	out := precursor{
 		ObservationTimestampNanoseconds: p.agreedObservationTimestamp(tally.timestampsNanoseconds, prev.observationTimestampNs, seqNr),
@@ -126,7 +128,8 @@ func (p *Plugin) StateTransition(ctx context.Context, seqNr uint64, _ ocrtypes.A
 
 	// Channel definition changes (skipped once retired). These apply to pending
 	// only: they take effect next round.
-	if out.LifeCycleStage != protocol.LifeCycleStageRetired {
+	if out.LifeCycleStage != protocol.LifeCycleStageRetired && tally.hasChannelVotes() {
+		pending = cloneChannelDefinitions(prev.channelDefinitions)
 		applyChannelVotes(p.ReportCodecs, p.ChannelAnalysisCache.ReadOnly(), pending, tally.removeChannelVotesByID, tally.updateChannelDefinitionsByHash, tally.updateChannelVotesByHash, p.F)
 	}
 
@@ -289,6 +292,12 @@ type observationTally struct {
 	// attributed is every observation as decoded, in aos order. Collected only
 	// for attributed observation telemetry.
 	attributed []attributedObservation
+}
+
+// hasChannelVotes reports whether any observation voted to remove, add or
+// update a channel.
+func (t observationTally) hasChannelVotes() bool {
+	return len(t.removeChannelVotesByID) > 0 || len(t.updateChannelVotesByHash) > 0
 }
 
 func (p *Plugin) decodeObservations(ctx context.Context, aos []ocrtypes.AttributedObservation, bf ocr3_1types.BlobFetcher, memo *roundBlobPayloads, collect bool) (observationTally, error) {
@@ -750,8 +759,9 @@ func (p *Plugin) flushKV(
 
 	// Channel definitions: persist the PENDING set, which becomes the effective
 	// set of the next round. Rewrite the whole record only if it changed;
-	// removed channels disappear by not being part of pending.
-	if channelDefinitionsChanged(prev.channelDefinitions, pending) {
+	// removed channels disappear by not being part of pending. A nil pending
+	// means the round applied no votes.
+	if pending != nil && channelDefinitionsChanged(prev.channelDefinitions, pending) {
 		if err := writeChannelState(kvRW, seqNr, pending); err != nil {
 			return err
 		}
