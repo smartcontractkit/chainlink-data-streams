@@ -73,18 +73,6 @@ jobs:
           go-version-file: go.mod
           go-test-cmd: make test-ci
 
-  ci-sonarqube:
-    needs: [ci-lint, ci-test]
-    if: ${{ always() }}
-    runs-on: ubuntu-latest
-    steps:
-      - name: ci-sonarqube
-        uses: smartcontractkit/.github/actions/ci-sonarqube-go@3e11dbc45e4c8b18dd996fb417ccf22056176388 # ci-sonarqube-go@0.1.0
-        with:
-          # sonarqube inputs
-          sonar-token: ${{ secrets.SONAR_TOKEN }}
-          sonar-host-url: ${{ secrets.SONAR_HOST_URL }}
-
   cd-release:
     runs-on: ubuntu-latest
     permissions:
