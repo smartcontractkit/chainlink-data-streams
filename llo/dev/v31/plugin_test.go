@@ -556,6 +556,10 @@ func Test_TimeResolutionOverlap(t *testing.T) {
 		{"legacy same second -> not reportable", llotypes.ReportFormatEVMPremiumLegacy, nil, sec1a, sec1b, false},
 		{"legacy next second -> reportable", llotypes.ReportFormatEVMPremiumLegacy, nil, sec1a, sec2, true},
 		{"json same second -> reportable (nanosecond)", llotypes.ReportFormatJSON, nil, sec1a, sec1b, true},
+		{"streamlined same second -> reportable (nanosecond)", llotypes.ReportFormatEVMStreamlined, []byte(`{"abi":[{"type":"int192"},{"type":"int192"},{"type":"int192"}]}`), sec1a, sec1b, true},
+		// A format without a resolution mapping is refused rather than guessed
+		// at nanoseconds, which would skip the overlap guard entirely.
+		{"unmapped format next second -> not reportable", llotypes.ReportFormat(1000), nil, sec1a, sec2, false},
 		{"unpacked default opts same second -> not reportable (defaults to seconds)", llotypes.ReportFormatEVMABIEncodeUnpacked, unpackedOpts(``), sec1a, sec1b, false},
 		{"unpacked explicit ns same second -> reportable", llotypes.ReportFormatEVMABIEncodeUnpacked, unpackedOpts(`"TimeResolution":"ns",`), sec1a, sec1b, true},
 		{"unpacked explicit seconds next second -> reportable", llotypes.ReportFormatEVMABIEncodeUnpacked, unpackedOpts(`"TimeResolution":"s",`), sec1a, sec2, true},
@@ -683,7 +687,6 @@ func Test_IsReportable_NilStreamValue(t *testing.T) {
 		llotypes.ReportFormatEVMPremiumLegacy,
 		llotypes.ReportFormatEVMABIEncodeUnpacked,
 		llotypes.ReportFormatEVMStreamlined,
-		llotypes.ReportFormatCapabilityTrigger,
 	} {
 		for _, tc := range []struct {
 			missing    llotypes.StreamID

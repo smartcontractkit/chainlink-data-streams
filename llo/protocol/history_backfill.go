@@ -212,9 +212,13 @@ func ObservationTimestampKeyToNanoseconds(rawKey uint64, res TimeResolution) (na
 	return rawKey * multiplier, true
 }
 
-// TargetChannelTimeResolution returns the resolution the target channel's codec
-// encodes timestamps at, which is also the unit of its backfill observation keys.
-// It is the only place that maps a report format to a resolution, so an unknown
+// TargetChannelTimeResolution returns the unit of a history_backfill target's
+// observation keys, which is also the tick a backfill report spans.
+//
+// Formats whose codec truncates timestamps use that truncation, read through
+// ReportTimeResolution. The other formats keep a fixed seconds unit: it is the
+// key convention committed definitions were written in, not what their codec
+// encodes, and changing it would reinterpret every committed key. An unknown
 // format is an error rather than a guess.
 //
 // The resolution is read from the target's current definition every round, not
@@ -225,20 +229,14 @@ func ObservationTimestampKeyToNanoseconds(rawKey uint64, res TimeResolution) (na
 // keys must be rewritten in the new unit together with the target change.
 func TargetChannelTimeResolution(target llotypes.ChannelDefinition) (TimeResolution, error) {
 	switch target.ReportFormat {
-	case llotypes.ReportFormatEVMABIEncodeUnpacked, llotypes.ReportFormatEVMABIEncodeUnpackedExpr:
-		if len(target.Opts) == 0 {
-			return ResolutionSeconds, nil
+	case llotypes.ReportFormatEVMPremiumLegacy, llotypes.ReportFormatEVMABIEncodeUnpacked, llotypes.ReportFormatEVMABIEncodeUnpackedExpr:
+		res, err := ReportTimeResolution(nil, target, 0)
+		if err != nil {
+			return 0, fmt.Errorf("target %w", err)
 		}
-		var aux struct {
-			TimeResolution TimeResolution `json:"TimeResolution"`
-		}
-		if err := json.Unmarshal(target.Opts, &aux); err != nil {
-			return 0, fmt.Errorf("target channel opts: %w", err)
-		}
-		return aux.TimeResolution, nil
-	case llotypes.ReportFormatEVMPremiumLegacy, llotypes.ReportFormatJSON,
-		llotypes.ReportFormatRetirement, llotypes.ReportFormatCapabilityTrigger,
-		llotypes.ReportFormatEVMStreamlined:
+		return res, nil
+	case llotypes.ReportFormatJSON, llotypes.ReportFormatRetirement,
+		llotypes.ReportFormatCapabilityTrigger, llotypes.ReportFormatEVMStreamlined:
 		return ResolutionSeconds, nil
 	case llotypes.ReportFormatHistoryBackfill:
 		// Rejected at admission by ValidateHistoryBackfillTarget. Resolving it

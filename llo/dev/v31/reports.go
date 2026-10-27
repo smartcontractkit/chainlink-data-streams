@@ -357,11 +357,12 @@ func (o precursor) isReportable(channelID llotypes.ChannelID, minReportInterval 
 		return false
 	}
 	// The codec reads the same opts, so a channel whose opts do not decode
-	// cannot be encoded. Treat it as unreportable so validAfter does not advance
-	// over a round that emitted nothing.
-	res, ok := reportTimeResolution(cd, channelID, optsCache)
-	if !ok {
-		tally.note("channel opts cannot be decoded", channelID)
+	// cannot be encoded. A format without a resolution mapping is refused the
+	// same way rather than guessed. Treat both as unreportable so validAfter
+	// does not advance over a round that emitted nothing.
+	res, err := protocol.ReportTimeResolution(optsCache, cd, channelID)
+	if err != nil {
+		tally.note("channel time resolution unavailable", channelID, "err", err)
 		return false
 	}
 	// Require validAfter and the observation timestamp to fall in distinct ticks
