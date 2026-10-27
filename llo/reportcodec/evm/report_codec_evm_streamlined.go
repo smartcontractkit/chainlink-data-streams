@@ -3,6 +3,7 @@ package evm
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"math"
 
@@ -21,8 +22,9 @@ import (
 )
 
 var (
-	_ protocol.ReportCodec = ReportCodecEVMStreamlined{}
-	_ protocol.FeedIDer    = ReportCodecEVMStreamlined{}
+	_ protocol.ReportCodec       = ReportCodecEVMStreamlined{}
+	_ protocol.FeedIDer          = ReportCodecEVMStreamlined{}
+	_ protocol.AdmissionVerifier = ReportCodecEVMStreamlined{}
 )
 
 func NewReportCodecStreamlined(lggr logger.Logger) ReportCodecEVMStreamlined {
@@ -34,6 +36,9 @@ type ReportCodecEVMStreamlined struct {
 }
 
 func (rc ReportCodecEVMStreamlined) Encode(r protocol.Report, cd llotypes.ChannelDefinition, optsCache *protocol.OptsCache) (payload []byte, err error) {
+	if r.Specimen {
+		return nil, errors.New("ReportCodecEVMStreamlined does not support encoding specimen reports")
+	}
 	opts, getErr := protocol.GetOpts[ReportFormatEVMStreamlinedOpts](optsCache, r.ChannelID)
 	if getErr != nil {
 		return nil, fmt.Errorf("opts not in cache for channel %d: %w", r.ChannelID, getErr)
@@ -51,12 +56,13 @@ func (rc ReportCodecEVMStreamlined) Encode(r protocol.Report, cd llotypes.Channe
 		payload = opts.FeedID.Bytes()
 	}
 	payload = append(payload, encodePackedUint64(r.ValidAfterNanoseconds)...)
-	if len(opts.ABI) != len(r.Values) {
-		return nil, fmt.Errorf("ABI and values length mismatch; ABI: %d, Values: %d", len(opts.ABI), len(r.Values))
+	values, err := protocol.ABIPayload(llotypes.ReportFormatEVMStreamlined, len(opts.ABI), r.Values)
+	if err != nil {
+		return nil, err
 	}
 	// Pack-encode the rest of the values
 	for i, encoder := range opts.ABI {
-		b, err := encoder.EncodePacked(r.Values[i])
+		b, err := encoder.EncodePacked(values[i])
 		if err != nil {
 			return nil, fmt.Errorf("failed to encode stream value at index %d; %w", i, err)
 		}
@@ -92,8 +98,44 @@ func (rc ReportCodecEVMStreamlined) Verify(cd llotypes.ChannelDefinition) error 
 	if len(opts.ABI) != len(cd.Streams) {
 		return fmt.Errorf("ABI length mismatch; expected: %d, got: %d", len(cd.Streams), len(opts.ABI))
 	}
-	if opts.MaxReportRange < 0 {
-		return fmt.Errorf("maxReportRange must be non-negative; got: %s", opts.MaxReportRange)
+	return verifyMaxReportRange(opts.MaxReportRange)
+}
+
+// VerifyForAdmission implements protocol.AdmissionVerifier: it rejects ABI
+// types the packed encoder cannot encode, and an ABI whose largest report
+// exceeds the uint16 length prefix Pack writes. Both fail every report of the
+// channel, the second only after it was signed.
+//
+// This is not part of Verify because definitions committed before the check
+// existed may fail it, and rejecting those would stop every oracle from
+// observing rather than just stopping that one channel from reporting.
+func (rc ReportCodecEVMStreamlined) VerifyForAdmission(cd llotypes.ChannelDefinition) error {
+	opts := ReportFormatEVMStreamlinedOpts{}
+	if err := (&opts).Decode(cd.Opts); err != nil {
+		return fmt.Errorf("failed to decode opts; got: '%s'; %w", cd.Opts, err)
+	}
+	if err := verifyABITypes(opts.ABI, true); err != nil {
+		return err
+	}
+	// Feed ID or report format and channel ID, then validAfter.
+	size := 4 + 4 + 8
+	if opts.FeedID != nil {
+		size = 32 + 8
+	}
+	for _, enc := range opts.ABI {
+		for _, e := range enc.encoders {
+			if e.Type == ZeroBytesSentinel {
+				continue
+			}
+			s, err := protocol.ParseSolidityInt(e.Type)
+			if err != nil {
+				return err
+			}
+			size += int(s.Bits / 8) //nolint:gosec // G115 at most 32
+		}
+	}
+	if size > math.MaxUint16 {
+		return fmt.Errorf("largest report is %d bytes, exceeds maximum size %d", size, math.MaxUint16)
 	}
 	return nil
 }

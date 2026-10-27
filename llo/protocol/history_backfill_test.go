@@ -3,6 +3,7 @@ package protocol
 import (
 	"fmt"
 	"math"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -27,7 +28,7 @@ func Test_ObservationTimestampKeyToNanoseconds_Overflow(t *testing.T) {
 		{"milliseconds overflow", math.MaxUint64/uint64(1e6) + 1, ResolutionMilliseconds, 0, false},
 		{"microseconds overflow", math.MaxUint64/uint64(1e3) + 1, ResolutionMicroseconds, 0, false},
 		{"nanoseconds never overflow", math.MaxUint64, ResolutionNanoseconds, math.MaxUint64, true},
-		{"unknown resolution is treated as seconds", math.MaxUint64, TimeResolution(200), 0, false},
+		{"unknown resolution is rejected", 1, TimeResolution(200), 0, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got, ok := ObservationTimestampKeyToNanoseconds(tc.rawKey, tc.res)
@@ -42,6 +43,47 @@ func Test_ObservationTimestampKeyToNanoseconds_Overflow(t *testing.T) {
 	// does not compile.
 	rawKey, multiplier := math.MaxUint64/uint64(1e9)+1, uint64(1e9)
 	require.Less(t, rawKey*multiplier, uint64(1_700_000_000)*multiplier)
+}
+
+func Test_TargetChannelTimeResolution_CoversEveryReportFormat(t *testing.T) {
+	// A new report format must be mapped on purpose: guessing its resolution
+	// would publish backfill reports with the wrong validAfter window.
+	for _, rf := range llotypes.ReportFormats {
+		t.Run(rf.String(), func(t *testing.T) {
+			target := llotypes.ChannelDefinition{ReportFormat: rf}
+			_, err := TargetChannelTimeResolution(target)
+			require.NoError(t, err)
+			_, err = ReportTimestampResolutionNanos(target)
+			require.NoError(t, err)
+		})
+	}
+
+	_, err := TargetChannelTimeResolution(llotypes.ChannelDefinition{ReportFormat: llotypes.ReportFormat(1000)})
+	require.ErrorContains(t, err, "unsupported history_backfill target report format")
+	_, err = ReportTimestampResolutionNanos(llotypes.ChannelDefinition{ReportFormat: llotypes.ReportFormat(1000)})
+	require.ErrorContains(t, err, "unsupported history_backfill target report format")
+}
+
+func Test_ReportTimestampResolutionNanos(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		cd   llotypes.ChannelDefinition
+		want uint64
+	}{
+		{"premium legacy", llotypes.ChannelDefinition{ReportFormat: llotypes.ReportFormatEVMPremiumLegacy}, 1e9},
+		{"json", llotypes.ChannelDefinition{ReportFormat: llotypes.ReportFormatJSON}, 1e9},
+		{"abi without opts", llotypes.ChannelDefinition{ReportFormat: llotypes.ReportFormatEVMABIEncodeUnpacked}, 1e9},
+		{"abi seconds", llotypes.ChannelDefinition{ReportFormat: llotypes.ReportFormatEVMABIEncodeUnpacked, Opts: []byte(`{"TimeResolution":"s"}`)}, 1e9},
+		{"abi milliseconds", llotypes.ChannelDefinition{ReportFormat: llotypes.ReportFormatEVMABIEncodeUnpacked, Opts: []byte(`{"TimeResolution":"ms"}`)}, 1e6},
+		{"abi microseconds", llotypes.ChannelDefinition{ReportFormat: llotypes.ReportFormatEVMABIEncodeUnpacked, Opts: []byte(`{"TimeResolution":"us"}`)}, 1e3},
+		{"abi expr nanoseconds", llotypes.ChannelDefinition{ReportFormat: llotypes.ReportFormatEVMABIEncodeUnpackedExpr, Opts: []byte(`{"TimeResolution":"ns"}`)}, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := ReportTimestampResolutionNanos(tc.cd)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, got)
+		})
+	}
 }
 
 func Test_GetHistoryBackfillOpts(t *testing.T) {
@@ -119,5 +161,72 @@ func Test_ValidateHistoryBackfillTarget(t *testing.T) {
 		require.NoError(t, VerifyChannelDefinitions(codecs, defs))
 		err := VerifyChannelDefinitionsForAdmission(codecs, defs, map[llotypes.ChannelID]struct{}{1: {}})
 		require.ErrorContains(t, err, "is itself a history_backfill channel")
+	})
+
+	// Turning a committed backfill channel target into a backfill channel
+	// leaves the backfill channel own definition unchanged, so only the
+	// target is being admitted.
+	t.Run("admitting only the target is rejected", func(t *testing.T) {
+		defs := llotypes.ChannelDefinitions{1: backfill(2), 2: backfill(3), 3: reportable}
+		codecs := map[llotypes.ReportFormat]ReportCodec{}
+		err := VerifyChannelDefinitionsForAdmission(codecs, defs, map[llotypes.ChannelID]struct{}{2: {}})
+		require.ErrorContains(t, err, "invalid history backfill channel 1: target channel 2 is itself a history_backfill channel")
+	})
+}
+
+func Test_ValidateHistoryBackfillValues(t *testing.T) {
+	backfill := func(agg llotypes.Aggregator, value string) llotypes.ChannelDefinition {
+		return llotypes.ChannelDefinition{
+			ReportFormat: llotypes.ReportFormatHistoryBackfill,
+			Streams:      []llotypes.Stream{{StreamID: 1, Aggregator: agg}},
+			Opts:         llotypes.ChannelOpts(fmt.Sprintf(`{"targetChannelId":2,"observations":{"1700000000":{"1":%q}}}`, value)),
+		}
+	}
+	target := func(agg llotypes.Aggregator) llotypes.ChannelDefinition {
+		return llotypes.ChannelDefinition{
+			ReportFormat: llotypes.ReportFormatEVMPremiumLegacy,
+			Streams:      []llotypes.Stream{{StreamID: 1, Aggregator: agg}},
+		}
+	}
+	// 59 nines is 196 bits, one digit past what MaxDecimalCoefficientBits admits.
+	oversized := strings.Repeat("9", 59)
+
+	for _, tc := range []struct {
+		name    string
+		agg     llotypes.Aggregator
+		value   string
+		wantErr string
+	}{
+		{"a decimal is accepted", llotypes.AggregatorMedian, "1.5", ""},
+		{"a valid quote is accepted", llotypes.AggregatorQuote, "Q{Bid: 1, Benchmark: 2, Ask: 3}", ""},
+		{"an unparseable decimal is rejected", llotypes.AggregatorMedian, "not a number", "timestamp 1700000000: stream 1:"},
+		{"an oversized decimal coefficient is rejected", llotypes.AggregatorMedian, oversized, ErrDecimalCoefficientOutOfRange.Error()},
+		{"an oversized quote coefficient is rejected", llotypes.AggregatorQuote, fmt.Sprintf("Q{Bid: 1, Benchmark: 2, Ask: %s}", oversized), ErrDecimalCoefficientOutOfRange.Error()},
+		{"an inverted quote is rejected", llotypes.AggregatorQuote, "Q{Bid: 3, Benchmark: 2, Ask: 1}", "quote violates bid <= benchmark <= ask"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			defs := llotypes.ChannelDefinitions{1: backfill(tc.agg, tc.value), 2: target(tc.agg)}
+			err := ValidateHistoryBackfillValues(defs[1], defs)
+			if tc.wantErr == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.ErrorContains(t, err, tc.wantErr)
+		})
+	}
+
+	t.Run("a missing target is left to ValidateHistoryBackfillAgainstDefinitions", func(t *testing.T) {
+		defs := llotypes.ChannelDefinitions{1: backfill(llotypes.AggregatorMedian, "not a number")}
+		require.NoError(t, ValidateHistoryBackfillValues(defs[1], defs))
+	})
+
+	// The rule is admission-only: committed rows are left to the runtime path,
+	// but no new one is installable.
+	t.Run("committed definitions keep working", func(t *testing.T) {
+		defs := llotypes.ChannelDefinitions{1: backfill(llotypes.AggregatorQuote, "Q{Bid: 3, Benchmark: 2, Ask: 1}"), 2: target(llotypes.AggregatorQuote)}
+		codecs := map[llotypes.ReportFormat]ReportCodec{}
+		require.NoError(t, VerifyChannelDefinitions(codecs, defs))
+		err := VerifyChannelDefinitionsForAdmission(codecs, defs, map[llotypes.ChannelID]struct{}{1: {}})
+		require.ErrorContains(t, err, "quote violates bid <= benchmark <= ask")
 	})
 }

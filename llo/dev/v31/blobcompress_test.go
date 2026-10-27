@@ -1,6 +1,7 @@
 package llo
 
 import (
+	"bytes"
 	"strings"
 	"testing"
 
@@ -106,6 +107,40 @@ func Test_decodeBlobPayload_Errors(t *testing.T) {
 		require.NoError(t, err)
 		assert.Len(t, got, 4096)
 	})
+}
+
+func Test_decodeBlobPayload_UndeclaredSize(t *testing.T) {
+	// A streaming encoder does not know the content size up front, so the frame
+	// omits it and the header check cannot reject the payload.
+	var buf bytes.Buffer
+	buf.WriteByte(blobCodecZstd)
+	enc, err := zstd.NewWriter(&buf)
+	require.NoError(t, err)
+	_, err = enc.Write(make([]byte, 1<<20))
+	require.NoError(t, err)
+	require.NoError(t, enc.Close())
+
+	var hdr zstd.Header
+	require.NoError(t, hdr.Decode(buf.Bytes()[1:]))
+	require.False(t, hdr.HasFCS)
+
+	// Stopped by the decoder, not by the length check after it.
+	_, err = decodeBlobPayload(buf.Bytes(), 4096)
+	require.ErrorIs(t, err, zstd.ErrDecoderSizeExceeded)
+
+	got, err := decodeBlobPayload(buf.Bytes(), 1<<20)
+	require.NoError(t, err)
+	assert.Len(t, got, 1<<20)
+}
+
+func Test_encodeBlobPayload_DeclaresContentSize(t *testing.T) {
+	framed, err := encodeBlobPayload(make([]byte, 4096))
+	require.NoError(t, err)
+	require.Equal(t, blobCodecZstd, framed[0])
+	var hdr zstd.Header
+	require.NoError(t, hdr.Decode(framed[1:]))
+	require.True(t, hdr.HasFCS)
+	assert.Equal(t, uint64(4096), hdr.FrameContentSize)
 }
 
 func Test_encodeBlobPayload_RejectsOversized(t *testing.T) {

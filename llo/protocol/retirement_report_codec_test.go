@@ -1,6 +1,7 @@
 package protocol
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
@@ -32,5 +33,26 @@ func Test_StandardRetirementReportCodec(t *testing.T) {
 		require.NoError(t, err)
 
 		require.Equal(t, rr, decoded)
+	})
+
+	reportWithChannels := func(n int) []byte {
+		rr := RetirementReport{ProtocolVersion: 1, ValidAfterNanoseconds: make(map[llotypes.ChannelID]uint64, n)}
+		for i := range n {
+			rr.ValidAfterNanoseconds[llotypes.ChannelID(i)] = uint64(i)
+		}
+		encoded, err := codec.Encode(rr)
+		require.NoError(t, err)
+		return encoded
+	}
+
+	t.Run("decodes a report at MaxRetirementReportChannels", func(t *testing.T) {
+		decoded, err := codec.Decode(reportWithChannels(MaxRetirementReportChannels))
+		require.NoError(t, err)
+		assert.Len(t, decoded.ValidAfterNanoseconds, MaxRetirementReportChannels)
+	})
+
+	t.Run("rejects a report over MaxRetirementReportChannels", func(t *testing.T) {
+		_, err := codec.Decode(reportWithChannels(MaxRetirementReportChannels + 1))
+		require.ErrorContains(t, err, fmt.Sprintf("retirement report has %d channels, max %d", MaxRetirementReportChannels+1, MaxRetirementReportChannels))
 	})
 }

@@ -4,8 +4,6 @@ import (
 	"fmt"
 	"math"
 	"math/big"
-	"regexp"
-	"strconv"
 
 	"github.com/goccy/go-json"
 
@@ -15,7 +13,7 @@ import (
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
 
 	protocol "github.com/smartcontractkit/chainlink-data-streams/llo/protocol"
-	ubig "github.com/smartcontractkit/chainlink-data-streams/llo/reportcodec/evm/utils"
+	"github.com/smartcontractkit/chainlink-data-streams/llo/ubig"
 )
 
 // Extracts nanosecond timestamps as uint32 number of seconds
@@ -146,22 +144,10 @@ type singleABIEncoder struct {
 	ExpressionStreamID llotypes.StreamID `json:"expressionStreamId,omitempty"`
 }
 
-// getNormalizedMultiplier returns the multiplier as a decimal.Decimal, defaulting
-// to 1 if the multiplier is nil.
-//
-// Negative multipliers are ok and will work as expected, flipping the sign of
-// the value.
-func (a singleABIEncoder) getNormalizedMultiplier() (multiplier decimal.Decimal) {
-	if a.Multiplier == nil {
-		multiplier = decimal.NewFromInt(1)
-	} else {
-		multiplier = decimal.NewFromBigInt(a.Multiplier.ToInt(), 0)
-	}
-	return
-}
-
+// applyMultiplier scales d the same way protocol.ABIElement.Scale does, so the
+// reportability check and the encoder range check the same integer.
 func (a singleABIEncoder) applyMultiplier(d decimal.Decimal) *big.Int {
-	return d.Mul(a.getNormalizedMultiplier()).BigInt()
+	return protocol.ABIElement{Type: a.Type, Multiplier: a.Multiplier}.Scale(d)
 }
 
 // EncodePadded uses standard ABI encoding to encode the stream value, padding
@@ -219,7 +205,7 @@ func padWithOnes(b []byte) []byte {
 	return padded
 }
 
-const ZeroBytesSentinel = "bytes0"
+const ZeroBytesSentinel = protocol.ABIZeroBytes
 
 func (a singleABIEncoder) encodeUint64Packed(v uint64) ([]byte, error) {
 	if a.Type == ZeroBytesSentinel {
@@ -246,58 +232,28 @@ func (a singleABIEncoder) encodePacked(sv protocol.StreamValue) ([]byte, error) 
 	return EncodePackedBigInt(v, a.Type)
 }
 
-// regex to match Solidity integer types (uint/int) and extract bit width
-var typeRegex = regexp.MustCompile(`^(u?int)(8|16|24|32|40|48|56|64|72|80|88|96|104|112|120|128|136|144|152|160|168|176|184|192|200|208|216|224|232|240|248|256)$`)
-
 // EncodePackedBigInt converts a *big.Int to packed EVM bytes according to the Solidity type.
 // For unsigned types ("uintN"), the value must be non-negative and fit in N bits.
 // For signed types ("intN"), the value must be between -2^(N-1) and 2^(N-1)-1; then the function returns the two's complement representation in N bits.
+// The range rule is protocol.SolidityInt.Check, which the reportability check also applies.
 func EncodePackedBigInt(value *big.Int, typeStr string) ([]byte, error) {
-	// Validate and extract type and bit width.
-	matches := typeRegex.FindStringSubmatch(typeStr)
-	if len(matches) != 3 {
-		return nil, fmt.Errorf("invalid Solidity type: %s", typeStr)
-	}
-	typePrefix := matches[1] // "uint" or "int"
-	bitWidthI, err := strconv.Atoi(matches[2])
+	s, err := protocol.ParseSolidityInt(typeStr)
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse bit width: %w", err)
+		return nil, err
 	}
-	bitWidth := uint(bitWidthI) //nolint:gosec // G115 // bit width is never above 256, so no overflow issues
-	byteLen := bitWidth / 8
-
-	// For unsigned integers, value must be non-negative and within range.
-	if typePrefix == "uint" {
-		if value.Sign() < 0 {
-			return nil, fmt.Errorf("negative value provided for unsigned type %s", typeStr)
-		}
-		// Check that value fits in bitWidth bits.
-		// maxSize = 2^bitWidth
-		maxSize := new(big.Int).Lsh(big.NewInt(1), bitWidth)
-		if value.Cmp(maxSize) >= 0 {
-			return nil, fmt.Errorf("value %s out of range for type %s", value.String(), typeStr)
-		}
-		// Create a byte slice of fixed length and fill it with the big-endian bytes.
+	if err := s.Check(value); err != nil {
+		return nil, err
+	}
+	byteLen := s.Bits / 8
+	if !s.Signed {
 		result := make([]byte, byteLen)
 		value.FillBytes(result)
 		return result, nil
 	}
 
-	// For signed integers, first ensure that value fits in the representable range.
-	// The valid range is from -2^(bitWidth-1) to 2^(bitWidth-1)-1.
-	// 2^(bitWidth-1)
-	minInt := new(big.Int).Lsh(big.NewInt(1), bitWidth-1)
-	// -2^(bitWidth-1)
-	minInt.Neg(minInt)
-	// 2^(bitWidth-1) - 1
-	maxInt := new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), bitWidth-1), big.NewInt(1))
-	if value.Cmp(minInt) < 0 || value.Cmp(maxInt) > 0 {
-		return nil, fmt.Errorf("value %s out of range for type %s", value.String(), typeStr)
-	}
-
 	// Solidity uses two's complement in fixed N-bit representation.
 	// twoPow = 2^bitWidth
-	twoPow := new(big.Int).Lsh(big.NewInt(1), bitWidth)
+	twoPow := new(big.Int).Lsh(big.NewInt(1), s.Bits)
 	// Compute the modulo to obtain the two's complement representation.
 	modValue := new(big.Int).Mod(value, twoPow)
 	result := make([]byte, byteLen)
@@ -305,16 +261,32 @@ func EncodePackedBigInt(value *big.Int, typeStr string) ([]byte, error) {
 	return result, nil
 }
 
+// verifyMaxReportRange rejects a maxReportRange that is negative or above
+// MaxReportRangeCeiling.
+func verifyMaxReportRange(maxReportRange protocol.Duration) error {
+	if maxReportRange < 0 {
+		return fmt.Errorf("maxReportRange must be non-negative; got: %s", maxReportRange)
+	}
+	if maxReportRange > protocol.MaxReportRangeCeiling {
+		return fmt.Errorf("maxReportRange must not exceed %s; got: %s", protocol.MaxReportRangeCeiling, maxReportRange)
+	}
+	return nil
+}
+
 // ClampReportRange clamps the report range to the max report range if it exceeds the max range.
 // Returns the clamped valid after nanoseconds.
 // If the report range is within the max range, returns the valid after nanoseconds unchanged.
 // If the max report range is not specified, uses the default max report range.
-// A non-positive maxReportRange falls back to the default; Verify rejects
-// negative values in channel definitions, but a definition committed before
-// that check existed could still carry one.
+// A non-positive maxReportRange falls back to the default and one above
+// MaxReportRangeCeiling is capped to it. Verify rejects both in channel
+// definitions, but a definition committed before those checks existed could
+// still carry one.
 func ClampReportRange(r logger.Logger, report protocol.Report, maxReportRange protocol.Duration) uint64 {
 	if maxReportRange <= 0 {
 		maxReportRange = protocol.DefaultMaxReportRange
+	}
+	if maxReportRange > protocol.MaxReportRangeCeiling {
+		maxReportRange = protocol.MaxReportRangeCeiling
 	}
 	maxRange := uint64(maxReportRange)
 
@@ -342,4 +314,48 @@ func ClampReportRange(r logger.Logger, report protocol.Report, maxReportRange pr
 	}
 
 	return report.ValidAfterNanoseconds
+}
+
+// checkFee returns an error when fee cannot be encoded as a uint192. abi.Pack
+// does not range check, so an out of range fee would wrap into a different one.
+func checkFee(name string, fee *big.Int) error {
+	if fee == nil {
+		return fmt.Errorf("%s may not be nil", name)
+	}
+	if fee.Sign() < 0 {
+		return fmt.Errorf("%s may not be negative (got: %s)", name, fee)
+	}
+	if err := protocol.CheckSolidityInt(fee, "uint192"); err != nil {
+		return fmt.Errorf("%s: %w", name, err)
+	}
+	return nil
+}
+
+// MaxExpirationWindow bounds the expirationWindow opt, in seconds. On seconds
+// resolution the report encodes expiresAt as a uint32, so a larger window would
+// overflow it long before the timestamp itself does.
+const MaxExpirationWindow = 365 * 24 * 60 * 60
+
+func verifyExpirationWindow(expirationWindow uint32) error {
+	if expirationWindow > MaxExpirationWindow {
+		return fmt.Errorf("expirationWindow must not exceed %d seconds; got: %d", MaxExpirationWindow, expirationWindow)
+	}
+	return nil
+}
+
+// verifyABITypes rejects ABI element types the encoders cannot encode, which
+// would fail every report of the channel. packed allows ZeroBytesSentinel,
+// which only packed encoding accepts.
+func verifyABITypes(abi []ABIEncoder, packed bool) error {
+	for i, enc := range abi {
+		for j, e := range enc.encoders {
+			if packed && e.Type == ZeroBytesSentinel {
+				continue
+			}
+			if _, err := protocol.ParseSolidityInt(e.Type); err != nil {
+				return fmt.Errorf("abi[%d][%d]: %w", i, j, err)
+			}
+		}
+	}
+	return nil
 }

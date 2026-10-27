@@ -3,8 +3,8 @@ package llo
 import (
 	"context"
 	"fmt"
-	"math"
 	"sort"
+	"strconv"
 
 	"github.com/smartcontractkit/chainlink-common/pkg/logger"
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
@@ -63,30 +63,34 @@ func (p *Plugin) Reports(ctx context.Context, seqNr uint64, rawPrecursor ocr3_1t
 		})
 	}
 
-	unreportable := &unreportableTally{}
-	defer unreportable.log(p.Logger, "Report", seqNr)
-	for _, cid := range out.reportableChannels(p.DefaultMinReportIntervalNanoseconds, p.F, channelOpts, unreportable) {
+	// StateTransition decided reportability and logged why channels are not
+	// reportable. Emit exactly the channels it chose.
+	for _, cid := range out.ReportableChannelIDs {
 		cd := out.ChannelDefinitions[cid]
 
 		if cd.ReportFormat == llotypes.ReportFormatHistoryBackfill {
-			tsNanos, rawTS, opts, ok := selectBackfillCandidate(out.ChannelDefinitions, out.ValidAfterNanoseconds, out.ObservationTimestampNanoseconds, cid, channelOpts)
+			tsNanos, rawTS, opts, skipped, ok := selectBackfillCandidate(out.ChannelDefinitions, out.ValidAfterNanoseconds, out.ObservationTimestampNanoseconds, cid, channelOpts)
 			if !ok {
-				p.Logger.Warnw("backfill channel was reportable but selection failed", "channelID", cid, "stage", "Report", "seqNr", seqNr)
+				p.reportNotEmitted(seqNr, cid, cd.ReportFormat, "backfill_selection_failed")
 				continue
+			}
+			if skipped > 0 {
+				p.Logger.Errorw("Skipped unemittable backfill rows; the watermark advances past them", "channelID", cid, "skipped", skipped, "selectedTimestampNanoseconds", tsNanos, "stage", "Report", "seqNr", seqNr)
+				reportsNotEmittedMetric.WithLabelValues(strconv.FormatUint(uint64(p.DonID), 10), cd.ReportFormat.String(), "backfill_row_unemittable").Add(float64(skipped))
 			}
 			targetCD, exists := out.ChannelDefinitions[opts.TargetChannelID]
 			if !exists {
-				p.Logger.Warnw("missing target channel for history_backfill", "channelID", cid, "targetChannelID", opts.TargetChannelID, "stage", "Report", "seqNr", seqNr)
+				p.reportNotEmitted(seqNr, cid, cd.ReportFormat, "backfill_target_missing", "targetChannelID", opts.TargetChannelID)
 				continue
 			}
 			values, err := protocol.BuildBackfillStreamValues(targetCD, opts.Observations[rawTS])
 			if err != nil {
-				p.Logger.Warnw("Error building backfill stream values", "err", err, "channelID", cid, "stage", "Report", "seqNr", seqNr)
+				p.reportNotEmitted(seqNr, cid, cd.ReportFormat, "backfill_values_unbuildable", "err", err)
 				continue
 			}
 			resNanos, err := protocol.ReportTimestampResolutionNanos(targetCD)
 			if err != nil {
-				p.Logger.Warnw("Error resolving history_backfill report timestamp resolution", "err", err, "channelID", cid, "stage", "Report", "seqNr", seqNr)
+				p.reportNotEmitted(seqNr, cid, cd.ReportFormat, "backfill_resolution_invalid", "err", err)
 				continue
 			}
 			// The backfill report spans one resolution tick ending at the selected observation time.
@@ -107,15 +111,15 @@ func (p *Plugin) Reports(ctx context.Context, seqNr uint64, rawPrecursor ocr3_1t
 			reportForEncode := report
 			reportForEncode.ChannelID = opts.TargetChannelID
 
-			p.captureReportTelemetry(reportForEncode, targetCD, out.LifeCycleStage)
+			p.captureReportTelemetry(reportForEncode, targetCD, targetCD.Streams, out.LifeCycleStage)
 			codec, exists := p.ReportCodecs[targetCD.ReportFormat]
 			if !exists {
-				p.Logger.Warnw("Error encoding backfill report; codec missing for target ReportFormat", "reportFormat", targetCD.ReportFormat, "channelID", cid, "targetChannelID", opts.TargetChannelID, "stage", "Report", "seqNr", seqNr)
+				p.reportNotEmitted(seqNr, cid, targetCD.ReportFormat, "codec_missing", "targetChannelID", opts.TargetChannelID)
 				continue
 			}
 			encoded, err := codec.Encode(reportForEncode, targetCD, channelOpts)
 			if err != nil {
-				p.Logger.Warnw("Error encoding backfill report", "reportFormat", targetCD.ReportFormat, "err", err, "channelID", cid, "stage", "Report", "seqNr", seqNr)
+				p.reportNotEmitted(seqNr, cid, targetCD.ReportFormat, "encode_failed", "targetChannelID", opts.TargetChannelID, "err", err)
 				continue
 			}
 			rwis = append(rwis, ocr3types.ReportPlus[llotypes.ReportInfo]{
@@ -136,13 +140,10 @@ func (p *Plugin) Reports(ctx context.Context, seqNr uint64, rawPrecursor ocr3_1t
 		// encodes as its payload.
 		streams, err := protocol.EffectiveStreams(channelOpts, cd, cid)
 		if err != nil {
-			p.Logger.Warnw("Error encoding report; cannot derive effective streams", "err", err, "channelID", cid, "stage", "Report", "seqNr", seqNr)
+			p.reportNotEmitted(seqNr, cid, cd.ReportFormat, "effective_streams_underivable", "err", err)
 			continue
 		}
-		values := make([]protocol.StreamValue, 0, len(streams))
-		for _, strm := range streams {
-			values = append(values, out.StreamAggregates[strm.StreamID][strm.Aggregator])
-		}
+		values := out.reportValues(streams)
 
 		report := protocol.Report{
 			ConfigDigest:                    p.ConfigDigest,
@@ -154,16 +155,16 @@ func (p *Plugin) Reports(ctx context.Context, seqNr uint64, rawPrecursor ocr3_1t
 			Specimen:                        out.LifeCycleStage != protocol.LifeCycleStageProduction,
 		}
 
-		p.captureReportTelemetry(report, cd, out.LifeCycleStage)
+		p.captureReportTelemetry(report, cd, streams, out.LifeCycleStage)
 
 		codec, exists := p.ReportCodecs[cd.ReportFormat]
 		if !exists {
-			p.Logger.Warnw("Error encoding report; codec missing for ReportFormat", "reportFormat", cd.ReportFormat, "channelID", cid, "stage", "Report", "seqNr", seqNr)
+			p.reportNotEmitted(seqNr, cid, cd.ReportFormat, "codec_missing")
 			continue
 		}
 		encoded, encErr := codec.Encode(report, cd, channelOpts)
 		if encErr != nil {
-			p.Logger.Warnw("Error encoding report", "reportFormat", cd.ReportFormat, "err", encErr, "channelID", cid, "stage", "Report", "seqNr", seqNr)
+			p.reportNotEmitted(seqNr, cid, cd.ReportFormat, "encode_failed", "err", encErr)
 			continue
 		}
 		rwis = append(rwis, ocr3types.ReportPlus[llotypes.ReportInfo]{
@@ -270,11 +271,14 @@ func (t *unreportableTally) log(lggr logger.Logger, stage string, seqNr uint64) 
 // formatIsEncodable reports whether enough oracles advertised a report codec
 // for format that a report encoded with it would actually be certified.
 //
-// The tally is read from the precursor, not from p.ReportCodecs, so this stays
-// a pure function of replicated state. An oracle that cannot encode still
-// computes reportable=true when enough peers can.
-func (o precursor) formatIsEncodable(format llotypes.ReportFormat, f int, channelID llotypes.ChannelID, tally *unreportableTally) bool {
-	if supporters := o.SupportByFormat[format]; supporters < 2*f+1 {
+// support is the number of oracles whose last advertisement named each report
+// format, counted over the cumulative c/codecs record rather than over this
+// round's observations alone (see writeCodecSupport). It is read from replicated
+// state, not from p.ReportCodecs, so this stays a pure function of it. An
+// oracle that cannot encode still computes reportable=true when enough peers
+// can.
+func formatIsEncodable(support map[llotypes.ReportFormat]int, format llotypes.ReportFormat, f int, channelID llotypes.ChannelID, tally *unreportableTally) bool {
+	if supporters := support[format]; supporters < 2*f+1 {
 		tally.note("too few oracles advertise a report codec for this format", channelID,
 			"reportFormat", format, "supporters", supporters, "required", 2*f+1)
 		return false
@@ -282,29 +286,23 @@ func (o precursor) formatIsEncodable(format llotypes.ReportFormat, f int, channe
 	return true
 }
 
-// reportableChannels returns the sorted set of channels reportable in this
-// (current) round (see isReportable).
-// saturatingAdd returns a+b, clamped to MaxUint64 instead of wrapping.
-//
-// validAfter is a nanosecond wall-clock timestamp, so it already sits around
-// 1.7e18, and the offchain config puts no upper bound on
-// DefaultMinReportIntervalNanoseconds (see protocol.OffchainConfig.Validate).
-// A large enough
-// interval would wrap the sum to a small number, the cadence comparison would
-// then always pass, and the interval would silently stop gating anything. The
-// config is replicated, so every oracle would do it identically: a silent loss
-// of the cadence, not a fork.
-func saturatingAdd(a, b uint64) uint64 {
-	if sum := a + b; sum >= a {
-		return sum
+// reportValues returns the aggregates a report carries for streams, in order.
+// Reportability and emission both read values through it.
+func (o precursor) reportValues(streams []llotypes.Stream) []protocol.StreamValue {
+	values := make([]protocol.StreamValue, 0, len(streams))
+	for _, strm := range streams {
+		values = append(values, o.StreamAggregates[strm.StreamID][strm.Aggregator])
 	}
-	return math.MaxUint64
+	return values
 }
 
-func (o precursor) reportableChannels(minReportInterval uint64, f int, optsCache *protocol.OptsCache, tally *unreportableTally) []llotypes.ChannelID {
+// reportableChannels returns the sorted set of channels reportable in this
+// (current) round (see isReportable). StateTransition calls it once and carries
+// the result in the precursor.
+func (o precursor) reportableChannels(minReportInterval uint64, f int, support map[llotypes.ReportFormat]int, optsCache *protocol.OptsCache, tally *unreportableTally) []llotypes.ChannelID {
 	reportable := make([]llotypes.ChannelID, 0, len(o.ChannelDefinitions))
 	for channelID := range o.ChannelDefinitions {
-		if o.isReportable(channelID, minReportInterval, f, optsCache, tally) {
+		if o.isReportable(channelID, minReportInterval, f, support, optsCache, tally) {
 			reportable = append(reportable, channelID)
 		}
 	}
@@ -312,7 +310,7 @@ func (o precursor) reportableChannels(minReportInterval uint64, f int, optsCache
 	return reportable
 }
 
-func (o precursor) isReportable(channelID llotypes.ChannelID, minReportInterval uint64, f int, optsCache *protocol.OptsCache, tally *unreportableTally) bool {
+func (o precursor) isReportable(channelID llotypes.ChannelID, minReportInterval uint64, f int, support map[llotypes.ReportFormat]int, optsCache *protocol.OptsCache, tally *unreportableTally) bool {
 	if o.LifeCycleStage == protocol.LifeCycleStageRetired {
 		return false
 	}
@@ -339,24 +337,48 @@ func (o precursor) isReportable(channelID llotypes.ChannelID, minReportInterval 
 			// condition to the watermark, so the two stay consistent.
 			return false
 		}
-		_, _, opts, ok := selectBackfillCandidate(o.ChannelDefinitions, o.ValidAfterNanoseconds, o.ObservationTimestampNanoseconds, channelID, optsCache)
+		_, _, opts, skipped, ok := selectBackfillCandidate(o.ChannelDefinitions, o.ValidAfterNanoseconds, o.ObservationTimestampNanoseconds, channelID, optsCache)
 		if !ok {
+			if skipped > 0 {
+				tally.note("no emittable backfill row", channelID, "skipped", skipped)
+			}
 			return false
 		}
 		// Backfill reports are encoded with the target channel's codec, so the
 		// target's format is the one that must be encodable DON-wide. Selection
 		// above already established the target exists.
-		return o.formatIsEncodable(o.ChannelDefinitions[opts.TargetChannelID].ReportFormat, f, channelID, tally)
+		return formatIsEncodable(support, o.ChannelDefinitions[opts.TargetChannelID].ReportFormat, f, channelID, tally)
 	}
-	// When DisableNilStreamValues is set, every stream must have a (non-nil)
-	// aggregate value for the channel to be reportable.
-	if cd.DisableNilStreamValues {
-		for _, strm := range cd.Streams {
-			if o.StreamAggregates[strm.StreamID][strm.Aggregator] == nil {
-				return false
-			}
-		}
+	validAfter, ok := o.ValidAfterNanoseconds[channelID]
+	if !ok {
+		return false
 	}
+	if o.ObservationTimestampNanoseconds < protocol.SaturatingAdd(validAfter, minReportInterval) || o.ObservationTimestampNanoseconds <= validAfter {
+		return false
+	}
+	// The codec reads the same opts, so a channel whose opts do not decode
+	// cannot be encoded. A format without a resolution mapping is refused the
+	// same way rather than guessed. Treat both as unreportable so validAfter
+	// does not advance over a round that emitted nothing.
+	res, err := protocol.ReportTimeResolution(optsCache, cd, channelID)
+	if err != nil {
+		tally.note("channel time resolution unavailable", channelID, "err", err)
+		return false
+	}
+	// Require validAfter and the observation timestamp to fall in distinct ticks
+	// of the report format resolution, so the encoded validity window is not
+	// inverted.
+	if tickOverlap(validAfter, o.ObservationTimestampNanoseconds, res) {
+		return false
+	}
+	if !formatIsEncodable(support, cd.ReportFormat, f, channelID, tally) {
+		return false
+	}
+	// The time gates and codec support above depend only on agreed state. Run
+	// them before the value checks so a channel that cannot report this round
+	// is not tallied for values it would not carry, and a missing codec is not
+	// masked by a transient missing value.
+	//
 	// Reportability and emission must agree on what the report carries. Reports
 	// derives the report's values from protocol.EffectiveStreams, so the same
 	// derivation has to succeed here: if it fails there, the report is skipped
@@ -366,39 +388,40 @@ func (o precursor) isReportable(channelID llotypes.ChannelID, minReportInterval 
 	// EffectiveStreams is a pure function of (definition, opts), so it is safe
 	// in the state transition. Codec lookup and Encode are not: p.ReportCodecs
 	// is node-local, and reading it here would make the state transition
-	// node-dependent. Those failure modes remain outside this predicate.
+	// node-dependent. The value range rules the codecs apply are checked here
+	// through protocol.CheckEncodableValues, which the codecs share. Other
+	// Encode failures remain outside this predicate.
+	//
+	// When one of them fails, Reports skips the channel and the watermark still
+	// advances over the round. This is deliberate. Those failures come from
+	// configuration and fail again in every round, so holding the watermark
+	// would recover nothing and only widen the next report's interval. Reports
+	// logs each skip at error level and counts it in reportsNotEmittedMetric.
 	streams, err := protocol.EffectiveStreams(optsCache, cd, channelID)
 	if err != nil {
 		tally.note("cannot derive effective streams", channelID, "err", err)
 		return false
 	}
-	// Calculated streams are derived state, and unlike observed streams a
-	// missing one cannot be reported around: the codec has nothing to encode.
-	// A channel whose expressions failed (bad input, eval error, or history
-	// still warming up) has no aggregate for them. Observed streams stay
-	// nil-permitted here; that is what DisableNilStreamValues above governs.
-	for _, strm := range streams {
-		if strm.Aggregator != llotypes.AggregatorCalculated {
-			continue
-		}
-		if o.StreamAggregates[strm.StreamID][strm.Aggregator] == nil {
-			tally.note("nil calculated stream value", channelID, "streamID", strm.StreamID)
+	// Every value the report carries must be present. Codecs do not encode a
+	// missing value, and a missing calculated stream means its expression failed
+	// (bad input, eval error, or history still warming up). Holding the
+	// watermark over such a round lets the next report cover it once the values
+	// are back.
+	//
+	// This applies regardless of DisableNilStreamValues, which v31 ignores and
+	// treats as always set.
+	values := o.reportValues(streams)
+	for i, v := range values {
+		if v == nil {
+			tally.note("nil stream value", channelID, "streamID", streams[i].StreamID, "aggregator", streams[i].Aggregator)
 			return false
 		}
 	}
-	if !o.formatIsEncodable(cd.ReportFormat, f, channelID, tally) {
-		return false
-	}
-	validAfter, ok := o.ValidAfterNanoseconds[channelID]
-	if !ok {
-		return false
-	}
-	if o.ObservationTimestampNanoseconds < saturatingAdd(validAfter, minReportInterval) || o.ObservationTimestampNanoseconds <= validAfter {
-		return false
-	}
-	// For seconds-resolution report formats, also require a full second between
-	// validAfter and the observation timestamp to prevent overlapping reports.
-	if isSecondsResolution(cd) && secondsOverlap(validAfter, o.ObservationTimestampNanoseconds) {
+	// A value outside the integer range its format encodes it in fails Encode.
+	// It depends on the data, so it can come back into range. Holding the
+	// watermark over such a round lets the next report cover it.
+	if err := protocol.CheckEncodableValues(optsCache, cd, channelID, values); err != nil {
+		tally.note("stream value not encodable", channelID, "err", err)
 		return false
 	}
 	return true

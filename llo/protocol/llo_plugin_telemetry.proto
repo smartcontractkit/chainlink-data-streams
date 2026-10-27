@@ -36,7 +36,11 @@ message LLOReportTelemetry {
   uint64 observation_timestamp_nanoseconds = 3;
   uint32 report_format = 4;
   bool specimen = 5;
+  // stream_definitions describes stream_values entry by entry.
   repeated LLOStreamDefinition stream_definitions = 6;
+  // A missing value, allowed when the channel does not set
+  // disableNilStreamValues, is an entry with an empty value. A present value
+  // never has an empty value, zero included, so the two cannot be confused.
   repeated LLOStreamValue stream_values = 7;
   bytes channel_opts = 8;
 

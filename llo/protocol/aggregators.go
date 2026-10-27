@@ -2,6 +2,7 @@ package protocol
 
 import (
 	"fmt"
+	"math/big"
 	"slices"
 	"sort"
 
@@ -15,6 +16,7 @@ import (
 // minContributions usable values of the selected type.
 type AggregatorFunc func(contributions []StreamValue, minContributions int) (StreamValue, error)
 
+// GetAggregatorFunc returns the v30 aggregator for a.
 func GetAggregatorFunc(a llotypes.Aggregator) AggregatorFunc {
 	switch a {
 	case llotypes.AggregatorMedian:
@@ -28,31 +30,53 @@ func GetAggregatorFunc(a llotypes.Aggregator) AggregatorFunc {
 	}
 }
 
+// GetAggregatorFuncV31 returns the v31 aggregator for a. It differs from
+// GetAggregatorFunc only in the median, see MedianAggregatorV31.
+func GetAggregatorFuncV31(a llotypes.Aggregator) AggregatorFunc {
+	if a == llotypes.AggregatorMedian {
+		return MedianAggregatorV31
+	}
+	return GetAggregatorFunc(a)
+}
+
+// MedianAggregator is the v30 median.
 func MedianAggregator(values []StreamValue, minContributions int) (StreamValue, error) {
+	return medianAggregator(values, minContributions, true)
+}
+
+// MedianAggregatorV31 is the v31 median
+func MedianAggregatorV31(values []StreamValue, minContributions int) (StreamValue, error) {
+	return medianAggregator(values, minContributions, false)
+}
+
+func medianAggregator(values []StreamValue, minContributions int, countSkippedTimestamps bool) (StreamValue, error) {
 	typ, typValues := mostCommonType(values)
 
 	switch typ {
 	case LLOStreamValue_TimestampedStreamValue:
-		svalues := make([]StreamValue, len(typValues))
-		timestamps := make([]uint64, len(typValues))
-		for i, value := range typValues {
+		svalues := make([]StreamValue, 0, len(typValues))
+		timestamps := make([]uint64, 0, len(typValues))
+		for _, value := range typValues {
 			v, is := value.(*TimestampedStreamValue)
 			if !is {
 				return nil, fmt.Errorf("invariant violation, expected TimestampedStreamValue, got %T", value)
 			}
-			if v.StreamValue.Type() != LLOStreamValue_Decimal {
+			if v == nil || v.StreamValue == nil || v.StreamValue.Type() != LLOStreamValue_Decimal {
 				// Only decimal is allowed for now, for simplicity.
 				//
 				// NOTE: This could get into an infinite loop if a malicious node sends
 				// a TimestampedStreamValue with nested TimestampedStreamValues inside
 				// it, so you definitely want to discard those.
+				if countSkippedTimestamps {
+					timestamps = append(timestamps, 0)
+				}
 				continue
 			}
-			svalues[i] = v.StreamValue
-			timestamps[i] = v.ObservedAtNanoseconds
+			svalues = append(svalues, v.StreamValue)
+			timestamps = append(timestamps, v.ObservedAtNanoseconds)
 		}
 
-		medianValue, err := MedianAggregator(svalues, minContributions)
+		medianValue, err := medianAggregator(svalues, minContributions, countSkippedTimestamps)
 		if err != nil {
 			return nil, err
 		}
@@ -95,18 +119,31 @@ func MedianAggregator(values []StreamValue, minContributions int) (StreamValue, 
 // There must be at least minContributions contributions in agreement in order
 // to produce a value
 // nil contributions are ignored
+//
+// Values are compared in canonical form (see canonicalModeValue), so decimals
+// that differ only in scale agree. A TimestampedStreamValue votes on its inner
+// value alone, and the result carries the median timestamp of the
+// contributions that agreed on it.
 func ModeAggregator(values []StreamValue, minContributions int) (StreamValue, error) {
 	largestBucketType, largestBucket := mostCommonType(values)
 
 	// find the most common value in the bucket
-	// use serialized representation for comparison/equality
+	// use serialized canonical representation for comparison/equality
 	counts := make(map[string]int)
+	timestamps := make(map[string][]uint64)
 	for _, value := range largestBucket {
-		b, err := value.MarshalBinary()
+		canonical, observedAt, err := canonicalModeValue(value)
+		if err != nil {
+			return nil, err
+		}
+		b, err := canonical.MarshalBinary()
 		if err != nil {
 			return nil, fmt.Errorf("failed to marshal value: %w", err)
 		}
 		counts[string(b)]++
+		if largestBucketType == LLOStreamValue_TimestampedStreamValue {
+			timestamps[string(b)] = append(timestamps[string(b)], observedAt)
+		}
 	}
 	var modeSerialized []byte
 	var modeCount int
@@ -131,7 +168,77 @@ func ModeAggregator(values []StreamValue, minContributions int) (StreamValue, er
 	if err != nil {
 		return nil, fmt.Errorf("failed to unmarshal value: %w", err)
 	}
+	if tsv, ok := val.(*TimestampedStreamValue); ok {
+		ts := timestamps[string(modeSerialized)]
+		slices.Sort(ts)
+		tsv.ObservedAtNanoseconds = ts[len(ts)/2]
+	}
 	return val, nil
+}
+
+// canonicalModeValue returns the form of v that ModeAggregator votes on.
+// A TimestampedStreamValue has its timestamp cleared and returned separately,
+// since honest oracles rarely observe at the same nanosecond.
+func canonicalModeValue(v StreamValue) (StreamValue, uint64, error) {
+	tsv, ok := v.(*TimestampedStreamValue)
+	if !ok {
+		return canonicalStreamValue(v), 0, nil
+	}
+	if tsv == nil || tsv.StreamValue == nil {
+		return nil, 0, ErrNilStreamValue
+	}
+	return &TimestampedStreamValue{StreamValue: canonicalStreamValue(tsv.StreamValue)}, tsv.ObservedAtNanoseconds, nil
+}
+
+// canonicalStreamValue rewrites the decimals in v to canonical form, so equal
+// values serialize to equal bytes. Other types are returned unchanged.
+func canonicalStreamValue(v StreamValue) StreamValue {
+	switch v := v.(type) {
+	case *Decimal:
+		if v == nil {
+			return v
+		}
+		return ToDecimal(canonicalDecimal(v.Decimal()))
+	case *Quote:
+		if v == nil {
+			return v
+		}
+		return &Quote{
+			Bid:       canonicalDecimal(v.Bid),
+			Benchmark: canonicalDecimal(v.Benchmark),
+			Ask:       canonicalDecimal(v.Ask),
+		}
+	default:
+		return v
+	}
+}
+
+// CanonicalDecimal returns the canonical form of d. See canonicalDecimal.
+func CanonicalDecimal(d decimal.Decimal) decimal.Decimal {
+	return canonicalDecimal(d)
+}
+
+// canonicalDecimal strips trailing zeros from the coefficient of d, so 1.0
+// and 1.00 both become 1. Zero becomes 0e0. Stripping stops at
+// MaxDecimalExponent so the result still decodes. The form stays unique, as
+// it is the smallest coefficient for that value with an exponent in bounds.
+func canonicalDecimal(d decimal.Decimal) decimal.Decimal {
+	coef := d.Coefficient()
+	if coef.Sign() == 0 {
+		return decimal.New(0, 0)
+	}
+	exp := d.Exponent()
+	ten := big.NewInt(10)
+	quo, rem := new(big.Int), new(big.Int)
+	for exp < MaxDecimalExponent {
+		quo.QuoRem(coef, ten, rem)
+		if rem.Sign() != 0 {
+			break
+		}
+		coef, quo = quo, coef
+		exp++
+	}
+	return decimal.NewFromBigInt(coef, exp)
 }
 
 func mostCommonType(values []StreamValue) (LLOStreamValue_Type, []StreamValue) {

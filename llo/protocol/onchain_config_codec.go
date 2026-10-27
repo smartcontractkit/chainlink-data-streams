@@ -1,8 +1,8 @@
 package protocol
 
 import (
+	"errors"
 	"fmt"
-	"math"
 	"math/big"
 
 	"github.com/smartcontractkit/libocr/bigbigendian"
@@ -14,6 +14,10 @@ const onchainConfigVersion = 1
 var onchainConfigVersionBig = big.NewInt(onchainConfigVersion)
 
 const onchainConfigEncodedLength = 2 * 32 // 2x 32bit evm word: version and predecessorConfigDigest
+
+// ErrUnsupportedOnchainConfigVersion is returned when decoding an onchain
+// config whose version this node does not support.
+var ErrUnsupportedOnchainConfigVersion = errors.New("unsupported OnchainConfig version")
 
 type OnchainConfig struct {
 	Version                 uint8
@@ -32,8 +36,12 @@ var _ OnchainConfigCodec = EVMOnchainConfigCodec{}
 //
 // An encoded onchain config is expected to be in the format
 // <version><predecessorConfigDigest>
-// where version is a uint8 and min and max are in the format
-// returned by EncodeValueInt192.
+// where each field is a 32 byte EVM word and a zero predecessorConfigDigest
+// means no predecessor.
+//
+// Decode rejects any version other than onchainConfigVersion, since a node
+// cannot safely interpret the semantics of a newer version. Upgrade nodes
+// before publishing a config with a newer version.
 type EVMOnchainConfigCodec struct{}
 
 func (EVMOnchainConfigCodec) Decode(b []byte) (OnchainConfig, error) {
@@ -46,15 +54,11 @@ func (EVMOnchainConfigCodec) Decode(b []byte) (OnchainConfig, error) {
 		return OnchainConfig{}, err
 	}
 	if v.Cmp(onchainConfigVersionBig) != 0 {
-		return OnchainConfig{}, fmt.Errorf("unexpected version of OnchainConfig, expected %v, got %v", onchainConfigVersion, v)
-	}
-	version := v.Uint64()
-	if version > math.MaxUint8 {
-		return OnchainConfig{}, fmt.Errorf("version of OnchainConfig is too large, expected <= %v, got %v", math.MaxUint8, v)
+		return OnchainConfig{}, fmt.Errorf("%w: got %v, supported %v; upgrade the node before publishing a config with a newer version", ErrUnsupportedOnchainConfigVersion, v, onchainConfigVersion)
 	}
 
 	o := OnchainConfig{
-		Version: uint8(version),
+		Version: onchainConfigVersion,
 	}
 
 	cd := types.ConfigDigest(b[32:64])

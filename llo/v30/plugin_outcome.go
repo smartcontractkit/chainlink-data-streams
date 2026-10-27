@@ -397,6 +397,14 @@ func (p *Plugin) decodeObservations(aos []types.AttributedObservation, outctx oc
 			// verified locally (e.g. the predecessor's ConfigSet row has not
 			// been loaded into the RetirementReportCache yet), since every
 			// honest oracle attaches the same bytes.
+			//
+			// The verdict is node local: the signer set comes from this node's
+			// cache, which the config poller fills asynchronously. A node whose
+			// cache lags does not promote in the same round as the others and
+			// computes a different outcome. An outcome needs 2f+1 matching
+			// signatures to commit, so if more than f nodes lag the handover
+			// stalls until the caches converge. It cannot fork. v31 agrees on
+			// the signer set before verifying (see electPredecessorConfig).
 			pcd := *p.PredecessorConfigDigest
 			retirementReport, err3 := p.PredecessorRetirementReportCache.CheckAttestedRetirementReport(pcd, observation.AttestedPredecessorRetirement)
 			if err3 != nil {

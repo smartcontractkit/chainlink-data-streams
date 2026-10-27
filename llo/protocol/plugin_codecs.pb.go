@@ -1278,9 +1278,14 @@ func (x *LLOHotStateProto) GetStreamAggregates() []*LLOStreamAggregate {
 // from, so that consumers can tell whether their decoded-opts cache already
 // matches these definitions.
 //
+// reportableChannelIDs is the reportability decision StateTransition made for
+// the round, so Reports emits exactly the channels whose watermark advances.
+// streamAggregates carries only the values those channels report.
+//
 // NOTE: must serialize deterministically, hence use of repeated tuple instead of
-// maps. channelDefinitions and validAfterNanoseconds MUST be sorted ascending by
-// channelID; streamAggregates MUST be sorted ascending by (streamID, aggregator).
+// maps. channelDefinitions, validAfterNanoseconds and reportableChannelIDs MUST
+// be sorted ascending by channelID; streamAggregates MUST be sorted ascending by
+// (streamID, aggregator).
 type LLOPrecursorProto struct {
 	state                           protoimpl.MessageState                       `protogen:"open.v1"`
 	LifeCycleStage                  string                                       `protobuf:"bytes,1,opt,name=lifeCycleStage,proto3" json:"lifeCycleStage,omitempty"`
@@ -1289,10 +1294,9 @@ type LLOPrecursorProto struct {
 	ValidAfterNanoseconds           []*LLOChannelIDAndValidAfterNanosecondsProto `protobuf:"bytes,4,rep,name=validAfterNanoseconds,proto3" json:"validAfterNanoseconds,omitempty"`
 	StreamAggregates                []*LLOStreamAggregate                        `protobuf:"bytes,5,rep,name=streamAggregates,proto3" json:"streamAggregates,omitempty"`
 	ChannelStateSeqNr               uint64                                       `protobuf:"varint,6,opt,name=channelStateSeqNr,proto3" json:"channelStateSeqNr,omitempty"`
-	// supportByFormat MUST be sorted ascending by reportFormat.
-	SupportByFormat []*LLOReportFormatSupportProto `protobuf:"bytes,7,rep,name=supportByFormat,proto3" json:"supportByFormat,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	ReportableChannelIDs            []uint32                                     `protobuf:"varint,7,rep,packed,name=reportableChannelIDs,proto3" json:"reportableChannelIDs,omitempty"`
+	unknownFields                   protoimpl.UnknownFields
+	sizeCache                       protoimpl.SizeCache
 }
 
 func (x *LLOPrecursorProto) Reset() {
@@ -1367,65 +1371,11 @@ func (x *LLOPrecursorProto) GetChannelStateSeqNr() uint64 {
 	return 0
 }
 
-func (x *LLOPrecursorProto) GetSupportByFormat() []*LLOReportFormatSupportProto {
+func (x *LLOPrecursorProto) GetReportableChannelIDs() []uint32 {
 	if x != nil {
-		return x.SupportByFormat
+		return x.ReportableChannelIDs
 	}
 	return nil
-}
-
-// LLOReportFormatSupportProto is the number of oracles that advertised a report
-// codec for one report format in the round that produced the precursor.
-type LLOReportFormatSupportProto struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	ReportFormat  uint32                 `protobuf:"varint,1,opt,name=reportFormat,proto3" json:"reportFormat,omitempty"`
-	OracleCount   uint32                 `protobuf:"varint,2,opt,name=oracleCount,proto3" json:"oracleCount,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *LLOReportFormatSupportProto) Reset() {
-	*x = LLOReportFormatSupportProto{}
-	mi := &file_plugin_codecs_proto_msgTypes[19]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *LLOReportFormatSupportProto) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*LLOReportFormatSupportProto) ProtoMessage() {}
-
-func (x *LLOReportFormatSupportProto) ProtoReflect() protoreflect.Message {
-	mi := &file_plugin_codecs_proto_msgTypes[19]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use LLOReportFormatSupportProto.ProtoReflect.Descriptor instead.
-func (*LLOReportFormatSupportProto) Descriptor() ([]byte, []int) {
-	return file_plugin_codecs_proto_rawDescGZIP(), []int{19}
-}
-
-func (x *LLOReportFormatSupportProto) GetReportFormat() uint32 {
-	if x != nil {
-		return x.ReportFormat
-	}
-	return 0
-}
-
-func (x *LLOReportFormatSupportProto) GetOracleCount() uint32 {
-	if x != nil {
-		return x.OracleCount
-	}
-	return 0
 }
 
 // LLOCodecSupportProto is the v31 KeyValueState record (c/codecs) holding the
@@ -1441,7 +1391,7 @@ type LLOCodecSupportProto struct {
 
 func (x *LLOCodecSupportProto) Reset() {
 	*x = LLOCodecSupportProto{}
-	mi := &file_plugin_codecs_proto_msgTypes[20]
+	mi := &file_plugin_codecs_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1453,7 +1403,7 @@ func (x *LLOCodecSupportProto) String() string {
 func (*LLOCodecSupportProto) ProtoMessage() {}
 
 func (x *LLOCodecSupportProto) ProtoReflect() protoreflect.Message {
-	mi := &file_plugin_codecs_proto_msgTypes[20]
+	mi := &file_plugin_codecs_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1466,7 +1416,7 @@ func (x *LLOCodecSupportProto) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LLOCodecSupportProto.ProtoReflect.Descriptor instead.
 func (*LLOCodecSupportProto) Descriptor() ([]byte, []int) {
-	return file_plugin_codecs_proto_rawDescGZIP(), []int{20}
+	return file_plugin_codecs_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *LLOCodecSupportProto) GetOracles() []*LLOOracleCodecSupportProto {
@@ -1488,7 +1438,7 @@ type LLOOracleCodecSupportProto struct {
 
 func (x *LLOOracleCodecSupportProto) Reset() {
 	*x = LLOOracleCodecSupportProto{}
-	mi := &file_plugin_codecs_proto_msgTypes[21]
+	mi := &file_plugin_codecs_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1500,7 +1450,7 @@ func (x *LLOOracleCodecSupportProto) String() string {
 func (*LLOOracleCodecSupportProto) ProtoMessage() {}
 
 func (x *LLOOracleCodecSupportProto) ProtoReflect() protoreflect.Message {
-	mi := &file_plugin_codecs_proto_msgTypes[21]
+	mi := &file_plugin_codecs_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1513,7 +1463,7 @@ func (x *LLOOracleCodecSupportProto) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LLOOracleCodecSupportProto.ProtoReflect.Descriptor instead.
 func (*LLOOracleCodecSupportProto) Descriptor() ([]byte, []int) {
-	return file_plugin_codecs_proto_rawDescGZIP(), []int{21}
+	return file_plugin_codecs_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *LLOOracleCodecSupportProto) GetOracleID() uint32 {
@@ -1627,18 +1577,15 @@ const file_plugin_codecs_proto_rawDesc = "" +
 	"\x1fobservationTimestampNanoseconds\x18\x01 \x01(\x04R\x1fobservationTimestampNanoseconds\x12c\n" +
 	"\x15validAfterNanoseconds\x18\x02 \x03(\v2-.v1.LLOChannelIDAndValidAfterNanosecondsProtoR\x15validAfterNanoseconds\x122\n" +
 	"\x14reportableChannelIDs\x18\x03 \x03(\rR\x14reportableChannelIDs\x12B\n" +
-	"\x10streamAggregates\x18\x04 \x03(\v2\x16.v1.LLOStreamAggregateR\x10streamAggregates\"\xfb\x03\n" +
+	"\x10streamAggregates\x18\x04 \x03(\v2\x16.v1.LLOStreamAggregateR\x10streamAggregates\"\xe4\x03\n" +
 	"\x11LLOPrecursorProto\x12&\n" +
 	"\x0elifeCycleStage\x18\x01 \x01(\tR\x0elifeCycleStage\x12H\n" +
 	"\x1fobservationTimestampNanoseconds\x18\x02 \x01(\x04R\x1fobservationTimestampNanoseconds\x12R\n" +
 	"\x12channelDefinitions\x18\x03 \x03(\v2\".v1.LLOChannelIDAndDefinitionProtoR\x12channelDefinitions\x12c\n" +
 	"\x15validAfterNanoseconds\x18\x04 \x03(\v2-.v1.LLOChannelIDAndValidAfterNanosecondsProtoR\x15validAfterNanoseconds\x12B\n" +
 	"\x10streamAggregates\x18\x05 \x03(\v2\x16.v1.LLOStreamAggregateR\x10streamAggregates\x12,\n" +
-	"\x11channelStateSeqNr\x18\x06 \x01(\x04R\x11channelStateSeqNr\x12I\n" +
-	"\x0fsupportByFormat\x18\a \x03(\v2\x1f.v1.LLOReportFormatSupportProtoR\x0fsupportByFormat\"c\n" +
-	"\x1bLLOReportFormatSupportProto\x12\"\n" +
-	"\freportFormat\x18\x01 \x01(\rR\freportFormat\x12 \n" +
-	"\voracleCount\x18\x02 \x01(\rR\voracleCount\"P\n" +
+	"\x11channelStateSeqNr\x18\x06 \x01(\x04R\x11channelStateSeqNr\x122\n" +
+	"\x14reportableChannelIDs\x18\a \x03(\rR\x14reportableChannelIDs\"P\n" +
 	"\x14LLOCodecSupportProto\x128\n" +
 	"\aoracles\x18\x01 \x03(\v2\x1e.v1.LLOOracleCodecSupportProtoR\aoracles\"^\n" +
 	"\x1aLLOOracleCodecSupportProto\x12\x1a\n" +
@@ -1659,7 +1606,7 @@ func file_plugin_codecs_proto_rawDescGZIP() []byte {
 }
 
 var file_plugin_codecs_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_plugin_codecs_proto_msgTypes = make([]protoimpl.MessageInfo, 24)
+var file_plugin_codecs_proto_msgTypes = make([]protoimpl.MessageInfo, 23)
 var file_plugin_codecs_proto_goTypes = []any{
 	(LLOStreamValue_Type)(0),                          // 0: v1.LLOStreamValue.Type
 	(*LLOObservationProto)(nil),                       // 1: v1.LLOObservationProto
@@ -1681,15 +1628,14 @@ var file_plugin_codecs_proto_goTypes = []any{
 	(*LLOChannelStateProto)(nil),                      // 17: v1.LLOChannelStateProto
 	(*LLOHotStateProto)(nil),                          // 18: v1.LLOHotStateProto
 	(*LLOPrecursorProto)(nil),                         // 19: v1.LLOPrecursorProto
-	(*LLOReportFormatSupportProto)(nil),               // 20: v1.LLOReportFormatSupportProto
-	(*LLOCodecSupportProto)(nil),                      // 21: v1.LLOCodecSupportProto
-	(*LLOOracleCodecSupportProto)(nil),                // 22: v1.LLOOracleCodecSupportProto
-	nil,                                               // 23: v1.LLOObservationProto.UpdateChannelDefinitionsEntry
-	nil,                                               // 24: v1.LLOObservationProto.StreamValuesEntry
+	(*LLOCodecSupportProto)(nil),                      // 20: v1.LLOCodecSupportProto
+	(*LLOOracleCodecSupportProto)(nil),                // 21: v1.LLOOracleCodecSupportProto
+	nil,                                               // 22: v1.LLOObservationProto.UpdateChannelDefinitionsEntry
+	nil,                                               // 23: v1.LLOObservationProto.StreamValuesEntry
 }
 var file_plugin_codecs_proto_depIdxs = []int32{
-	23, // 0: v1.LLOObservationProto.updateChannelDefinitions:type_name -> v1.LLOObservationProto.UpdateChannelDefinitionsEntry
-	24, // 1: v1.LLOObservationProto.streamValues:type_name -> v1.LLOObservationProto.StreamValuesEntry
+	22, // 0: v1.LLOObservationProto.updateChannelDefinitions:type_name -> v1.LLOObservationProto.UpdateChannelDefinitionsEntry
+	23, // 1: v1.LLOObservationProto.streamValues:type_name -> v1.LLOObservationProto.StreamValuesEntry
 	0,  // 2: v1.LLOStreamValue.type:type_name -> v1.LLOStreamValue.Type
 	2,  // 3: v1.LLOTimestampedStreamValue.streamValue:type_name -> v1.LLOStreamValue
 	2,  // 4: v1.LLOStreamHistoryRecord.value:type_name -> v1.LLOStreamValue
@@ -1709,15 +1655,14 @@ var file_plugin_codecs_proto_depIdxs = []int32{
 	13, // 18: v1.LLOPrecursorProto.channelDefinitions:type_name -> v1.LLOChannelIDAndDefinitionProto
 	15, // 19: v1.LLOPrecursorProto.validAfterNanoseconds:type_name -> v1.LLOChannelIDAndValidAfterNanosecondsProto
 	16, // 20: v1.LLOPrecursorProto.streamAggregates:type_name -> v1.LLOStreamAggregate
-	20, // 21: v1.LLOPrecursorProto.supportByFormat:type_name -> v1.LLOReportFormatSupportProto
-	22, // 22: v1.LLOCodecSupportProto.oracles:type_name -> v1.LLOOracleCodecSupportProto
-	8,  // 23: v1.LLOObservationProto.UpdateChannelDefinitionsEntry.value:type_name -> v1.LLOChannelDefinitionProto
-	2,  // 24: v1.LLOObservationProto.StreamValuesEntry.value:type_name -> v1.LLOStreamValue
-	25, // [25:25] is the sub-list for method output_type
-	25, // [25:25] is the sub-list for method input_type
-	25, // [25:25] is the sub-list for extension type_name
-	25, // [25:25] is the sub-list for extension extendee
-	0,  // [0:25] is the sub-list for field type_name
+	21, // 21: v1.LLOCodecSupportProto.oracles:type_name -> v1.LLOOracleCodecSupportProto
+	8,  // 22: v1.LLOObservationProto.UpdateChannelDefinitionsEntry.value:type_name -> v1.LLOChannelDefinitionProto
+	2,  // 23: v1.LLOObservationProto.StreamValuesEntry.value:type_name -> v1.LLOStreamValue
+	24, // [24:24] is the sub-list for method output_type
+	24, // [24:24] is the sub-list for method input_type
+	24, // [24:24] is the sub-list for extension type_name
+	24, // [24:24] is the sub-list for extension extendee
+	0,  // [0:24] is the sub-list for field type_name
 }
 
 func init() { file_plugin_codecs_proto_init() }
@@ -1731,7 +1676,7 @@ func file_plugin_codecs_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_plugin_codecs_proto_rawDesc), len(file_plugin_codecs_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   24,
+			NumMessages:   23,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

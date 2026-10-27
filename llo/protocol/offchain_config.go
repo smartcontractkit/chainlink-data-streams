@@ -4,9 +4,27 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"time"
 
 	"google.golang.org/protobuf/proto"
 )
+
+// MaxDefaultMinReportIntervalNanoseconds bounds the report cadence. The
+// interval gates every channel, so a larger value stalls all reporting for its
+// whole length. LLO v31 enforces it (see llo/dev/v31.NewReportingPlugin).
+const MaxDefaultMinReportIntervalNanoseconds = uint64(5 * time.Second)
+
+// SaturatingAdd returns a+b, clamped to MaxUint64 instead of wrapping.
+//
+// Use it for validAfter+DefaultMinReportIntervalNanoseconds. A wrapped sum is
+// small, so the cadence comparison would always pass and the interval would
+// silently stop gating anything. Clamping makes the gate fail closed.
+func SaturatingAdd(a, b uint64) uint64 {
+	if sum := a + b; sum >= a {
+		return sum
+	}
+	return math.MaxUint64
+}
 
 type OffchainConfig struct {
 	ProtocolVersion uint32
@@ -29,6 +47,9 @@ type OffchainConfig struct {
 	// There is no default. The right value depends on the DON's observed
 	// per-stream omission rate, so a default would either silently weaken
 	// safety or silently stall reporting.
+	//
+	// LLO v31 bounds it to [1, F], or to 0 when F is 0. Values below F
+	// tolerate fewer Byzantine contributors than consensus tolerates oracles.
 	AggregationFaultTolerance *uint32
 }
 

@@ -1,6 +1,7 @@
 package protocol
 
 import (
+	"math"
 	"testing"
 	"time"
 
@@ -79,6 +80,8 @@ func TestDuration_UnmarshalJSON(t *testing.T) {
 			{"zero", `0`, Duration(0)},
 			{"one billion (1s)", `1000000000`, Duration(time.Second)},
 			{"fractional", `1500000000.0`, Duration(1500 * time.Millisecond)},
+			{"largest in range", `9.2e18`, Duration(9.2e18)},
+			{"smallest in range", `-9223372036854775808`, Duration(math.MinInt64)},
 		}
 		for _, tc := range tests {
 			t.Run(tc.name, func(t *testing.T) {
@@ -101,6 +104,9 @@ func TestDuration_UnmarshalJSON(t *testing.T) {
 			{"null", `null`},
 			{"array", `[1,2]`},
 			{"object", `{"key":"val"}`},
+			{"above int64 range", `9223372036854775808`},
+			{"far above int64 range", `1e300`},
+			{"far below int64 range", `-1e300`},
 		}
 		for _, tc := range tests {
 			t.Run(tc.name, func(t *testing.T) {

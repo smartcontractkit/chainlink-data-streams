@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/smartcontractkit/chainlink-common/pkg/logger"
+	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
 )
 
 // TestCaptureHistoryTelemetry_DeletesReclaimedPairs pins the per-pair gauge
@@ -52,4 +53,23 @@ func TestCaptureHistoryTelemetry_DeletesReclaimedPairs(t *testing.T) {
 		"satisfied gauge must not outlive the pair")
 	assert.False(t, historyBytesMetric.DeleteLabelValues(donID, streamID, aggregator),
 		"bytes gauge must not outlive the pair")
+}
+
+// TestChannelHistorySatisfied_ReadsOnlyLoadedPairs pins that the insufficient
+// history count, captured after the flush, reads no state. A pair evaluation
+// loaded is judged by its depth. A pair it never reached belongs to a channel
+// skipped for another reason and is neither read nor counted.
+func TestChannelHistorySatisfied_ReadsOnlyLoadedPairs(t *testing.T) {
+	kv := newCountingKV()
+	s := newTestHistoryStore(t, kv)
+	aggByStream := map[llotypes.StreamID]llotypes.Aggregator{1: testAggMedian, 2: testAggMedian}
+
+	assert.True(t, channelHistorySatisfied([]string{"Avg(History(s2, 4))"}, aggByStream, s))
+	assert.Zero(t, historyKeyReads(kv, 2, testAggMedian), "an unloaded pair must not be read")
+
+	_, err := s.Load(1, testAggMedian)
+	require.NoError(t, err)
+	reads := historyKeyReads(kv, 1, testAggMedian)
+	assert.False(t, channelHistorySatisfied([]string{"Avg(History(s1, 4))"}, aggByStream, s))
+	assert.Equal(t, reads, historyKeyReads(kv, 1, testAggMedian), "a loaded pair must not be read again")
 }

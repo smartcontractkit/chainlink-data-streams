@@ -18,6 +18,7 @@ var (
 	_ protocol.ReportCodec       = ReportCodecEVMABIEncodeUnpackedExpr{}
 	_ protocol.FeedIDer          = ReportCodecEVMABIEncodeUnpackedExpr{}
 	_ protocol.AdmissionVerifier = ReportCodecEVMABIEncodeUnpackedExpr{}
+	_ protocol.TWAPCounter       = ReportCodecEVMABIEncodeUnpackedExpr{}
 )
 
 type ReportCodecEVMABIEncodeUnpackedExpr struct {
@@ -81,7 +82,11 @@ func (r ReportCodecEVMABIEncodeUnpackedExpr) Encode(report protocol.Report, cd l
 		return nil, fmt.Errorf("failed to build base report; %w", err)
 	}
 
-	payload, err := buildPayload(opts.ABI, report.Values[len(report.Values)-len(opts.ABI):])
+	values, err := protocol.ABIPayload(llotypes.ReportFormatEVMABIEncodeUnpackedExpr, len(opts.ABI), report.Values)
+	if err != nil {
+		return nil, fmt.Errorf("failed to build payload; %w", err)
+	}
+	payload, err := buildPayload(opts.ABI, values)
 	if err != nil {
 		return nil, fmt.Errorf("failed to build payload; %w", err)
 	}
@@ -103,10 +108,7 @@ func (r ReportCodecEVMABIEncodeUnpackedExpr) Verify(cd llotypes.ChannelDefinitio
 	if len(cd.Streams) < 3 {
 		return fmt.Errorf("expected at least 3 streams; got: %d", len(cd.Streams))
 	}
-	if opts.MaxReportRange < 0 {
-		return fmt.Errorf("maxReportRange must be non-negative; got: %s", opts.MaxReportRange)
-	}
-	return nil
+	return verifyMaxReportRange(opts.MaxReportRange)
 }
 
 // VerifyForAdmission implements protocol.AdmissionVerifier: it rejects
@@ -123,26 +125,36 @@ func (r ReportCodecEVMABIEncodeUnpackedExpr) Verify(cd llotypes.ChannelDefinitio
 //
 // nil opts cache: the definition is given directly, so the opts are decoded from
 // it rather than looked up.
+//
+// Opts keys must be canonical: the expressions and stream IDs admission checks
+// must be the ones every decoder of these bytes reads.
 func (r ReportCodecEVMABIEncodeUnpackedExpr) VerifyForAdmission(cd llotypes.ChannelDefinition) error {
+	if err := protocol.VerifyOptsKeys(cd.Opts); err != nil {
+		return fmt.Errorf("invalid Opts: %w", err)
+	}
 	if err := calculated.ValidateChannelExpressions(nil, cd, 0); err != nil {
 		return fmt.Errorf("invalid calculated stream expressions: %w", err)
 	}
-	return nil
+	opts := new(ReportFormatEVMABIEncodeOpts)
+	if err := opts.Decode(cd.Opts); err != nil {
+		return fmt.Errorf("invalid Opts, got: %q; %w", cd.Opts, err)
+	}
+	if err := verifyABITypes(opts.ABI, false); err != nil {
+		return err
+	}
+	return verifyExpirationWindow(opts.ExpirationWindow)
+}
+
+// TWAPCalls implements protocol.TWAPCounter: it counts the TWAP calls across
+// the channel's expressions, so admission can bound them over the whole set.
+//
+// nil opts cache, as in VerifyForAdmission.
+func (r ReportCodecEVMABIEncodeUnpackedExpr) TWAPCalls(cd llotypes.ChannelDefinition) int {
+	return calculated.ChannelTWAPCalls(nil, cd, 0)
 }
 
 func (r ReportCodecEVMABIEncodeUnpackedExpr) buildHeader(rf BaseReportFields, resolution protocol.TimeResolution) ([]byte, error) {
-	var merr error
-	if rf.LinkFee == nil {
-		merr = errors.Join(merr, errors.New("linkFee may not be nil"))
-	} else if rf.LinkFee.Cmp(zero) < 0 {
-		merr = errors.Join(merr, fmt.Errorf("linkFee may not be negative (got: %s)", rf.LinkFee))
-	}
-	if rf.NativeFee == nil {
-		merr = errors.Join(merr, errors.New("nativeFee may not be nil"))
-	} else if rf.NativeFee.Cmp(zero) < 0 {
-		merr = errors.Join(merr, fmt.Errorf("nativeFee may not be negative (got: %s)", rf.NativeFee))
-	}
-	if merr != nil {
+	if merr := errors.Join(checkFee("linkFee", rf.LinkFee), checkFee("nativeFee", rf.NativeFee)); merr != nil {
 		return nil, merr
 	}
 

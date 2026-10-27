@@ -27,6 +27,37 @@ func Test_TimestampedStreamValue_MarshalBinary(t *testing.T) {
 	require.Equal(t, sv, sv2)
 }
 
+func Test_TimestampedStreamValue_NilInnerValue(t *testing.T) {
+	sv := &TimestampedStreamValue{ObservedAtNanoseconds: 123}
+
+	t.Run("MarshalBinary", func(t *testing.T) {
+		_, err := sv.MarshalBinary()
+		require.ErrorIs(t, err, ErrNilStreamValue)
+	})
+	t.Run("MarshalText", func(t *testing.T) {
+		_, err := sv.MarshalText()
+		require.ErrorIs(t, err, ErrNilStreamValue)
+	})
+	t.Run("NewTypedTextStreamValue", func(t *testing.T) {
+		_, err := NewTypedTextStreamValue(sv)
+		require.ErrorIs(t, err, ErrNilStreamValue)
+	})
+}
+
+func Test_StreamValue_UnmarshalNilReceiver(t *testing.T) {
+	for _, sv := range []StreamValue{
+		(*Decimal)(nil),
+		(*Quote)(nil),
+		(*TimestampedStreamValue)(nil),
+	} {
+		t.Run(reflect.TypeOf(sv).Elem().Name(), func(t *testing.T) {
+			require.ErrorIs(t, sv.UnmarshalBinary(nil), ErrNilStreamValue)
+			require.ErrorIs(t, sv.UnmarshalText(nil), ErrNilStreamValue)
+			require.ErrorIs(t, Decode(sv, nil), ErrNilStreamValue)
+		})
+	}
+}
+
 func Test_Decimal_ExponentBound(t *testing.T) {
 	// A decimal with an unbounded exponent is only 6 bytes on the wire but
 	// costs hundreds of MB to compare during aggregation, so it must be
@@ -96,6 +127,36 @@ func Test_Decimal_ExponentBound(t *testing.T) {
 
 		err = (&Quote{}).UnmarshalBinary(b)
 		require.ErrorIs(t, err, ErrDecimalExponentOutOfRange)
+	})
+}
+
+func Test_Quote_UnmarshalText(t *testing.T) {
+	t.Run("round trips negative values", func(t *testing.T) {
+		q := &Quote{
+			Bid:       decimal.RequireFromString("-2.5"),
+			Benchmark: decimal.RequireFromString("-1"),
+			Ask:       decimal.RequireFromString("0.5"),
+		}
+		b, err := q.MarshalText()
+		require.NoError(t, err)
+
+		q2 := new(Quote)
+		require.NoError(t, q2.UnmarshalText(b))
+		assert.True(t, q.Bid.Equal(q2.Bid))
+		assert.True(t, q.Benchmark.Equal(q2.Benchmark))
+		assert.True(t, q.Ask.Equal(q2.Ask))
+	})
+
+	t.Run("rejects input that is not exactly one quote", func(t *testing.T) {
+		for _, s := range []string{
+			"garbage Q{Bid: 1, Benchmark: 2, Ask: 3}",
+			"Q{Bid: 1, Benchmark: 2, Ask: 3} garbage",
+			"Q{Bid: 1, Benchmark: 2, Ask: 3}Q{Bid: 9, Benchmark: 9, Ask: 9}",
+			"Q{Bid: --1, Benchmark: 2, Ask: 3}",
+			"Q{Bid: 1.2.3, Benchmark: 2, Ask: 3}",
+		} {
+			require.Error(t, new(Quote).UnmarshalText([]byte(s)), s)
+		}
 	})
 }
 

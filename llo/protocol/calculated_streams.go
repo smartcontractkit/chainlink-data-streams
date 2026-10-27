@@ -1,7 +1,6 @@
 package protocol
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 
@@ -44,8 +43,8 @@ func DecodeCalculatedStreamOpts(optsCache *OptsCache, cd llotypes.ChannelDefinit
 		o, err = GetOpts[CalculatedStreamOpts](optsCache, cid)
 	}
 	if optsCache == nil || err != nil {
-		o = CalculatedStreamOpts{}
-		if uerr := json.Unmarshal(cd.Opts, &o); uerr != nil {
+		var uerr error
+		if o, uerr = decodeOpts[CalculatedStreamOpts](cd.Opts); uerr != nil {
 			return o, fmt.Errorf("failed to decode calculated stream opts: %w", uerr)
 		}
 	}
@@ -117,7 +116,8 @@ func EffectiveStreams(optsCache *OptsCache, cd llotypes.ChannelDefinition, cid l
 // streams a channel is expected to produce.
 //
 // Returns an error if the opts cannot be resolved, declare no expressions, or
-// declare a zero expression stream ID.
+// declare a zero expression stream ID. On a zero ID it also returns the IDs
+// declared before it, which evaluation still produces.
 func CalculatedStreamIDs(optsCache *OptsCache, cd llotypes.ChannelDefinition, cid llotypes.ChannelID) ([]llotypes.StreamID, error) {
 	o, err := DecodeCalculatedStreamOpts(optsCache, cd, cid)
 	if err != nil {

@@ -3,6 +3,7 @@ package llo
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
@@ -26,15 +27,11 @@ type precursor struct {
 	// ChannelDefinitions came from. It lets Reports tell whether the decoded-opts
 	// cache already matches these definitions without walking every channel.
 	ChannelStateSeqNr uint64
-	// SupportByFormat is the number of oracles whose last advertisement named
-	// each report format, counted over the cumulative c/codecs record rather
-	// than over this round's observations alone (see writeCodecSupport).
-	//
-	// Snapshotted rather than recomputed so that reportability and the
-	// validAfter advance for a round read the identical number: Reports runs
-	// against this precursor, and StateTransition persists reportedLastRound
-	// from the same object (see isReportable).
-	SupportByFormat map[llotypes.ReportFormat]int
+	// ReportableChannelIDs is the sorted set of channels StateTransition found
+	// reportable this round (see isReportable). Reports emits exactly these, and
+	// the next round advances validAfter from the same decision, so the two
+	// cannot disagree.
+	ReportableChannelIDs []llotypes.ChannelID
 }
 
 func encodePrecursor(p precursor) (ocr3_1types.ReportsPlusPrecursor, error) {
@@ -92,23 +89,15 @@ func encodePrecursor(p precursor) (ocr3_1types.ReportsPlusPrecursor, error) {
 		})
 	}
 
-	if len(p.SupportByFormat) > protocol.MaxOutcomeChannelDefinitionsLength {
-		return nil, fmt.Errorf("too many report format support entries: %d (max %d)", len(p.SupportByFormat), protocol.MaxOutcomeChannelDefinitionsLength)
-	}
-	if len(p.SupportByFormat) > 0 {
-		pb.SupportByFormat = make([]*protocol.LLOReportFormatSupportProto, 0, len(p.SupportByFormat))
-		for format, count := range p.SupportByFormat {
-			if count < 0 {
-				return nil, fmt.Errorf("negative support count for report format %v: %d", format, count)
+	if len(p.ReportableChannelIDs) > 0 {
+		pb.ReportableChannelIDs = make([]uint32, 0, len(p.ReportableChannelIDs))
+		for _, id := range p.ReportableChannelIDs {
+			if _, ok := p.ChannelDefinitions[id]; !ok {
+				return nil, fmt.Errorf("reportable channel %d has no definition", id)
 			}
-			pb.SupportByFormat = append(pb.SupportByFormat, &protocol.LLOReportFormatSupportProto{
-				ReportFormat: uint32(format),
-				OracleCount:  uint32(count),
-			})
+			pb.ReportableChannelIDs = append(pb.ReportableChannelIDs, id)
 		}
-		sort.Slice(pb.SupportByFormat, func(i, j int) bool {
-			return pb.SupportByFormat[i].ReportFormat < pb.SupportByFormat[j].ReportFormat
-		})
+		slices.Sort(pb.ReportableChannelIDs)
 	}
 
 	b, err := deterministicMarshal.Marshal(pb)
@@ -118,6 +107,11 @@ func encodePrecursor(p precursor) (ocr3_1types.ReportsPlusPrecursor, error) {
 	return b, nil
 }
 
+// decodePrecursor decodes a precursor this oracle produced, or one fetched from
+// a peer that libocr verified against the certified digest and size limit. Its
+// channel definitions are the committed set, so the per-definition stream and
+// opts caps are not applied here: they are admission-only, and rejecting a
+// committed definition would fail Reports on every oracle.
 func decodePrecursor(b ocr3_1types.ReportsPlusPrecursor) (precursor, error) {
 	pb := &protocol.LLOPrecursorProto{}
 	if err := proto.Unmarshal(b, pb); err != nil {
@@ -140,17 +134,21 @@ func decodePrecursor(b ocr3_1types.ReportsPlusPrecursor) (precursor, error) {
 	for _, va := range pb.ValidAfterNanoseconds {
 		p.ValidAfterNanoseconds[va.ChannelID] = va.ValidAfterNanoseconds
 	}
-	// One entry per report format in the effective channel set, so the channel
-	// cap is the bound here. The observation-side cap does not apply: the tally
-	// is pruned to effective formats before encoding, and the effective set may
-	// legitimately use more distinct formats than one observation may advertise.
-	if len(pb.SupportByFormat) > protocol.MaxOutcomeChannelDefinitionsLength {
-		return precursor{}, fmt.Errorf("precursor carries too many report format support entries: %d (max %d)", len(pb.SupportByFormat), protocol.MaxOutcomeChannelDefinitionsLength)
-	}
-	if len(pb.SupportByFormat) > 0 {
-		p.SupportByFormat = make(map[llotypes.ReportFormat]int, len(pb.SupportByFormat))
-		for _, sup := range pb.SupportByFormat {
-			p.SupportByFormat[llotypes.ReportFormat(sup.ReportFormat)] = int(sup.OracleCount)
+	// Every reportable channel must have a definition and appear once, in
+	// ascending order, so Reports emits each at most once. The collections are
+	// otherwise left unbounded on purpose: the precursor is certified state,
+	// libocr bounds its size, and the promotion round legitimately carries more
+	// validAfter entries than channels.
+	if len(pb.ReportableChannelIDs) > 0 {
+		p.ReportableChannelIDs = make([]llotypes.ChannelID, 0, len(pb.ReportableChannelIDs))
+		for i, id := range pb.ReportableChannelIDs {
+			if i > 0 && id <= pb.ReportableChannelIDs[i-1] {
+				return precursor{}, fmt.Errorf("reportable channel IDs not strictly ascending at index %d", i)
+			}
+			if _, ok := p.ChannelDefinitions[id]; !ok {
+				return precursor{}, fmt.Errorf("reportable channel %d has no definition", id)
+			}
+			p.ReportableChannelIDs = append(p.ReportableChannelIDs, id)
 		}
 	}
 	for _, sa := range pb.StreamAggregates {
@@ -164,4 +162,30 @@ func decodePrecursor(b ocr3_1types.ReportsPlusPrecursor) (precursor, error) {
 		p.StreamAggregates[sa.StreamID][llotypes.Aggregator(sa.Aggregator)] = sv
 	}
 	return p, nil
+}
+
+// reportedAggregates returns the aggregates the reportable channels report,
+// which is all Reports reads from StreamAggregates. Backfill reports carry
+// their values in the backfill opts.
+func (o precursor) reportedAggregates(optsCache *protocol.OptsCache) protocol.StreamAggregates {
+	reported := protocol.StreamAggregates{}
+	for _, cid := range o.ReportableChannelIDs {
+		cd := o.ChannelDefinitions[cid]
+		if cd.ReportFormat == llotypes.ReportFormatHistoryBackfill {
+			continue
+		}
+		// isReportable derived the same streams, so this does not fail for a
+		// reportable channel.
+		streams, err := protocol.EffectiveStreams(optsCache, cd, cid)
+		if err != nil {
+			continue
+		}
+		for _, strm := range streams {
+			if reported[strm.StreamID] == nil {
+				reported[strm.StreamID] = map[llotypes.Aggregator]protocol.StreamValue{}
+			}
+			reported[strm.StreamID][strm.Aggregator] = o.StreamAggregates[strm.StreamID][strm.Aggregator]
+		}
+	}
+	return reported
 }

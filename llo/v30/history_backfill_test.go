@@ -6,9 +6,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/smartcontractkit/chainlink-common/pkg/logger"
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
-	"github.com/smartcontractkit/chainlink-common/pkg/utils/tests"
 
 	protocol "github.com/smartcontractkit/chainlink-data-streams/llo/protocol"
 )
@@ -86,26 +84,6 @@ func TestValidateHistoryBackfillAgainstDefinitions_invalidTargetOpts(t *testing.
 	err := protocol.ValidateHistoryBackfillAgainstDefinitions(defs[10], defs, 0)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "target channel opts")
-}
-
-func TestDropInvalidHistoryBackfillChannels_dropsInvalid(t *testing.T) {
-	tests.Context(t)
-	lggr := logger.Test(t)
-	streams := []llotypes.Stream{{StreamID: 1, Aggregator: llotypes.AggregatorMedian}}
-	defs := llotypes.ChannelDefinitions{
-		2: {ReportFormat: llotypes.ReportFormatJSON, Streams: streams},
-		10: {
-			ReportFormat: llotypes.ReportFormatHistoryBackfill,
-			Streams:      streams,
-			Opts:         []byte(`{"targetChannelId":99,"observations":{"1":{"1":"1"}}}`),
-		},
-	}
-	ref := uint64(time.Now().Add(time.Hour).UnixNano())
-	out := protocol.DropInvalidHistoryBackfillChannels(lggr, defs, ref)
-	_, ok := out[10]
-	require.False(t, ok)
-	_, still := defs[10]
-	require.True(t, still, "input definitions map must not be mutated")
 }
 
 func FuzzParseHistoryBackfillOpts(f *testing.F) {

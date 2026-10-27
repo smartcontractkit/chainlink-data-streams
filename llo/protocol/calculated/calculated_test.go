@@ -33,6 +33,21 @@ func TestToDecimal(t *testing.T) {
 			expectError: true,
 		},
 		{
+			name:     "string exponent at the bound",
+			input:    "1e-1000",
+			expected: decimal.New(1, -1000),
+		},
+		{
+			name:        "string exponent below the bound",
+			input:       "1e-1001",
+			expectError: true,
+		},
+		{
+			name:        "string exponent above the bound",
+			input:       "1e2000000000",
+			expectError: true,
+		},
+		{
 			name:     "int",
 			input:    123,
 			expected: decimal.NewFromInt(123),
@@ -1038,9 +1053,45 @@ func TestRound(t *testing.T) {
 			expected:  "120",
 		},
 		{
+			name:      "precision at the upper bound",
+			input:     "123.456",
+			precision: protocol.MaxDecimalExponent,
+			expected:  "123.456",
+		},
+		{
+			name:      "precision at the lower bound",
+			input:     "123.456",
+			precision: -protocol.MaxDecimalExponent,
+			expected:  "0",
+		},
+		{
+			name:        "precision above the bound",
+			input:       "123.456",
+			precision:   protocol.MaxDecimalExponent + 1,
+			expectError: true,
+		},
+		{
+			name:        "precision below the bound",
+			input:       "123.456",
+			precision:   -protocol.MaxDecimalExponent - 1,
+			expectError: true,
+		},
+		{
 			name:        "precision too large",
 			input:       "123.456",
 			precision:   math.MaxInt32 + 1,
+			expectError: true,
+		},
+		{
+			name:        "precision near MaxInt32",
+			input:       "123.456",
+			precision:   math.MaxInt32,
+			expectError: true,
+		},
+		{
+			name:        "precision near MinInt32",
+			input:       "123.456",
+			precision:   math.MinInt32,
 			expectError: true,
 		},
 		{
@@ -1086,6 +1137,21 @@ func TestTruncate(t *testing.T) {
 			name:      "pi 2",
 			precision: 2,
 			expected:  "3.14",
+		},
+		{
+			name:        "precision above the bound",
+			precision:   protocol.MaxDecimalExponent + 1,
+			expectError: true,
+		},
+		{
+			name:        "precision near MaxInt32",
+			precision:   math.MaxInt32,
+			expectError: true,
+		},
+		{
+			name:        "precision near MinInt32",
+			precision:   math.MinInt32,
+			expectError: true,
 		},
 	}
 
@@ -1773,4 +1839,26 @@ func Test_environment_SetStreamValue_NestedNil(t *testing.T) {
 	err := env.SetStreamValue(1, &protocol.TimestampedStreamValue{ObservedAtNanoseconds: 1, StreamValue: nil})
 	require.ErrorContains(t, err, "stream value is nil")
 	require.NotContains(t, env, "s1")
+}
+
+// TestEvaluationWeight_ChargesTWAPWindow checks that a TWAP call over a shallow
+// window still counts as heavy: two records a day apart are two values to read
+// but tens of thousands of seconds to interpolate.
+func TestEvaluationWeight_ChargesTWAPWindow(t *testing.T) {
+	t.Parallel()
+
+	shallow := []boundSeries{{name: "w", series: benchSeries(2, 1)}}
+	work := func(expression string) []channelWork {
+		return []channelWork{{
+			opts:    calculatedStreamOpts{ABI: []protocol.CalculatedStreamABI{{Expression: expression, ExpressionStreamID: 900}}},
+			windows: [][]boundSeries{shallow},
+		}}
+	}
+
+	assert.Equal(t, 3, evaluationWeight(work("Count(History(s1, 2))")))
+
+	twap := `TWAP(History(s1, 2), {window: Duration("24h"), minSamples: 1, maxHeadGap: 86399, maxInteriorGap: 86399, maxTailGap: 86399})`
+	weight := evaluationWeight(work(twap))
+	assert.Equal(t, 3+twapMaxWindowSeconds, weight)
+	assert.GreaterOrEqual(t, weight, minParallelEvaluationWeight)
 }

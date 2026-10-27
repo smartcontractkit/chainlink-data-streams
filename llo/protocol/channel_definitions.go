@@ -105,12 +105,11 @@ func (f admissionFinding) appliesTo(admitting map[llotypes.ChannelID]struct{}) b
 // For a DON where all participants share the same version this is unreachable,
 // as ValidateObservation runs the same baseline checks over the merged set,
 // but a version skew can make it reachable.
-// Report the finding and carry on, which is the same treatment the
-// admission-only findings get in voteOnChannels.
+// Report the finding and carry on.
 //
 // Attributing the findings instead lets the caller drop just those channels and
-// keep going, which is the same treatment the admission-only findings already
-// get. The returned error carries the whole-set baseline findings, which
+// keep going, which is the same treatment InadmissibleChannelIDsWithCache gives
+// the channels being admitted. The returned error carries the whole-set baseline findings, which
 // implicate no particular channel and so cannot be skipped selectively.
 func UnverifiableChannelIDs(codecs map[llotypes.ReportFormat]ReportCodec, channelDefs llotypes.ChannelDefinitions) (map[llotypes.ChannelID]struct{}, error) {
 	return UnverifiableChannelIDsWithCache(codecs, channelDefs, nil)
@@ -125,6 +124,55 @@ func UnverifiableChannelIDsWithCache(codecs map[llotypes.ReportFormat]ReportCode
 		ids[channelID] = struct{}{}
 	}
 	return ids, res.setErr()
+}
+
+// InadmissibleChannelIDsWithCache returns the channels of admitting that any
+// baseline or admission-only finding implicates, so that a node can withhold
+// its vote for just those instead of for the whole set. Findings against
+// channels outside admitting are left out: those are already committed, and
+// UnverifiableChannelIDs reports them.
+//
+// The returned error carries the findings that implicate no particular channel,
+// which cannot be withheld selectively. A whole-set budget only applies when
+// something is being admitted, the same as in VerifyChannelDefinitionsForAdmission.
+// The unique stream ID budget is reported only once no channel is implicated,
+// since withholding an implicated channel may bring the set back within it.
+//
+// The per-definition checks are memoized in cache. A nil cache memoizes
+// nothing.
+func InadmissibleChannelIDsWithCache(codecs map[llotypes.ReportFormat]ReportCodec, channelDefs llotypes.ChannelDefinitions, admitting map[llotypes.ChannelID]struct{}, cache *ChannelAnalysisCache) (map[llotypes.ChannelID]struct{}, error) {
+	res := analyzeChannelDefinitions(codecs, channelDefs, cache)
+	if res.wholeSetErr != nil {
+		return nil, res.wholeSetErr
+	}
+
+	ids := make(map[llotypes.ChannelID]struct{})
+	implicate := func(channelID llotypes.ChannelID) {
+		if _, ok := admitting[channelID]; ok {
+			ids[channelID] = struct{}{}
+		}
+	}
+	for channelID := range res.channelErrs {
+		implicate(channelID)
+	}
+
+	var setErr error
+	for _, finding := range res.admissionFindings {
+		if finding.wholeSet {
+			if finding.appliesTo(admitting) {
+				setErr = errors.Join(setErr, finding.err)
+			}
+			continue
+		}
+		for _, channelID := range finding.channels {
+			implicate(channelID)
+		}
+	}
+
+	if setErr == nil && len(ids) == 0 && len(admitting) > 0 && res.uniqueStreamIDs > MaxObservationStreamValuesLength {
+		setErr = fmt.Errorf("too many unique stream IDs, got: %d/%d", res.uniqueStreamIDs, MaxObservationStreamValuesLength)
+	}
+	return ids, setErr
 }
 
 // verifyResult is the outcome of analyzing a definition set: baseline findings
@@ -231,20 +279,22 @@ func analyzeChannelDefinitions(codecs map[llotypes.ReportFormat]ReportCodec, cha
 		res.admissionFindings = append(res.admissionFindings, admissionFinding{wholeSet: true, err: err})
 	}
 
-	// Whole-set budgets, accumulated over the channels the loop below visits
-	// (tombstones excluded: they carry neither streams nor opts that anything
-	// reads) and checked once at the end.
-	var totalStreamEntries, totalOptsBytes int
+	// The facts of each channel, derived once per analysis: the budget and the
+	// checks below both read them, and cache may not record.
+	derived := make(map[llotypes.ChannelID]channelFacts, len(channelDefs))
+	factsOf := func(channelID llotypes.ChannelID, cd llotypes.ChannelDefinition) channelFacts {
+		facts, ok := derived[channelID]
+		if !ok {
+			facts = channelFactsFor(cache, codecs, channelID, cd)
+			derived[channelID] = facts
+		}
+		return facts
+	}
 
-	// Every (streamID, aggregator) pair that will hold an aggregate. Distinct
-	// pairs, not stream entries: several channels naming the same pair cost one
-	// aggregate between them. Bounded by MaxPersistedAggregates, which is what
-	// the r/agg record can carry.
-	aggregatedPairs := make(map[streamAggregatorPair]struct{}, len(channelDefs))
-	// Calculated streams declared across the set. Counted separately from the
-	// pairs above because they are recomputed each round rather than carried
-	// forward, so they cost precursor bytes but no r/agg bytes.
-	var totalCalculatedStreams int
+	// Whole-set budgets, measured the same way the state transition
+	// enforces them. Tombstones count: nothing reads their streams or opts, but
+	// they are persisted in the definitions record all the same.
+	budget := newChannelDefinitionsBudget(channelDefs, factsOf)
 
 	uniqueStreamIDs := make(map[llotypes.StreamID]struct{}, len(channelDefs))
 	// Owners of every stream ID that will hold an aggregate: observed streams
@@ -260,7 +310,21 @@ func analyzeChannelDefinitions(codecs map[llotypes.ReportFormat]ReportCodec, cha
 
 	for _, channelID := range channelIDs {
 		cd := channelDefs[channelID]
+
+		// Opts are opaque bytes, so length is the only thing that can be
+		// checked here. Admission-only: a committed definition carrying an
+		// oversized blob is left alone rather than failing verification on every
+		// oracle, every round.
+		if len(cd.Opts) > MaxChannelOptsBytes {
+			admit(fmt.Errorf("ChannelDefinition with ID %d has opts that are too long, got: %d/%d", channelID, len(cd.Opts), MaxChannelOptsBytes), channelID)
+		}
+
+		// A tombstone is persisted as is, so its streams are bounded like any
+		// other. Admission-only, so that a committed tombstone stays reapable.
 		if cd.Tombstone {
+			if len(cd.Streams) > MaxStreamsPerChannel {
+				admit(fmt.Errorf("ChannelDefinition with ID %d has too many streams, got: %d/%d", channelID, len(cd.Streams), MaxStreamsPerChannel), channelID)
+			}
 			continue
 		}
 
@@ -272,15 +336,6 @@ func analyzeChannelDefinitions(codecs map[llotypes.ReportFormat]ReportCodec, cha
 			base(fmt.Errorf("ChannelDefinition with ID %d has too many streams, got: %d/%d", channelID, len(cd.Streams), MaxStreamsPerChannel), channelID)
 			continue
 		}
-		totalStreamEntries += len(cd.Streams)
-		// Opts are opaque bytes, so length is the only thing that can be
-		// checked here. Admission-only: a committed definition carrying an
-		// oversized blob is left alone rather than failing verification on every
-		// oracle, every round.
-		if len(cd.Opts) > MaxChannelOptsBytes {
-			admit(fmt.Errorf("ChannelDefinition with ID %d has opts that are too long, got: %d/%d", channelID, len(cd.Opts), MaxChannelOptsBytes), channelID)
-		}
-		totalOptsBytes += len(cd.Opts)
 		for _, strm := range cd.Streams {
 			if strm.Aggregator == 0 {
 				base(fmt.Errorf("ChannelDefinition with ID %d has stream %d with zero aggregator (this may indicate an uninitialized struct)", channelID, strm.StreamID), channelID)
@@ -295,12 +350,6 @@ func analyzeChannelDefinitions(codecs map[llotypes.ReportFormat]ReportCodec, cha
 				admit(fmt.Errorf("ChannelDefinition with ID %d has stream %d with unknown aggregator %d", channelID, strm.StreamID, strm.Aggregator), channelID)
 			}
 			uniqueStreamIDs[strm.StreamID] = struct{}{}
-			// Pairs that aggregation actually produces a value for: calculated
-			// streams are recomputed each round rather than aggregated, and
-			// history backfill channels are not aggregated at all.
-			if strm.Aggregator != llotypes.AggregatorCalculated && cd.ReportFormat != llotypes.ReportFormatHistoryBackfill {
-				aggregatedPairs[streamAggregatorPair{streamID: strm.StreamID, aggregator: strm.Aggregator}] = struct{}{}
-			}
 			// Calculated streams are derived from the opts that declare them and
 			// are not stored on the definition, so anything listed here is
 			// observed. Definitions written by older code may still carry their
@@ -312,13 +361,15 @@ func analyzeChannelDefinitions(codecs map[llotypes.ReportFormat]ReportCodec, cha
 				}
 			}
 		}
-		facts := channelFactsFor(cache, codecs, channelID, cd)
+		facts := factsOf(channelID, cd)
 
 		if HasCalculatedStreams(cd) {
 			if facts.calculatedErr != nil {
 				admit(fmt.Errorf("invalid ChannelDefinition with ID %d: %w", channelID, facts.calculatedErr), channelID)
 			}
-			totalCalculatedStreams += len(facts.calculatedIDs)
+			// Keep the IDs declared before a failing entry: evaluation still
+			// produces them, so they occupy their stream IDs and count against
+			// the budget like any other.
 			for _, streamID := range facts.calculatedIDs {
 				if owner, ok := calculatedBy[streamID]; ok {
 					admit(fmt.Errorf("ChannelDefinition with ID %d declares calculated stream %d already declared by channel %d", channelID, streamID, owner), channelID, owner)
@@ -348,7 +399,16 @@ func analyzeChannelDefinitions(codecs map[llotypes.ReportFormat]ReportCodec, cha
 			if err := ValidateHistoryBackfillAgainstDefinitions(cd, channelDefs, 0); err != nil {
 				base(fmt.Errorf("invalid history backfill channel %d: %w", channelID, err), channelID)
 			}
+			// The target report format decides this as much as the backfill
+			// channel does, so changing either one is what installs the pair.
 			if err := ValidateHistoryBackfillTarget(cd, channelDefs); err != nil {
+				implicated := []llotypes.ChannelID{channelID}
+				if opts, perr := ParseHistoryBackfillOpts(cd.Opts); perr == nil {
+					implicated = append(implicated, opts.TargetChannelID)
+				}
+				admit(fmt.Errorf("invalid history backfill channel %d: %w", channelID, err), implicated...)
+			}
+			if err := ValidateHistoryBackfillValues(cd, channelDefs); err != nil {
 				admit(fmt.Errorf("invalid history backfill channel %d: %w", channelID, err), channelID)
 			}
 		}
@@ -367,19 +427,10 @@ func analyzeChannelDefinitions(codecs map[llotypes.ReportFormat]ReportCodec, cha
 	}
 
 	// Whole-set budgets. Each is what the sizes of the channel-definitions
-	// record, the precursor and the carry-forward record actually depend on;
-	// see the limits they name.
-	if totalStreamEntries > MaxTotalStreamEntries {
-		admitSet(fmt.Errorf("too many stream entries across all channels, got: %d/%d", totalStreamEntries, MaxTotalStreamEntries))
-	}
-	if len(aggregatedPairs) > MaxPersistedAggregates {
-		admitSet(fmt.Errorf("too many aggregated (stream, aggregator) pairs across all channels, got: %d/%d", len(aggregatedPairs), MaxPersistedAggregates))
-	}
-	if totalCalculatedStreams > MaxTotalCalculatedStreams {
-		admitSet(fmt.Errorf("too many calculated streams across all channels, got: %d/%d", totalCalculatedStreams, MaxTotalCalculatedStreams))
-	}
-	if totalOptsBytes > MaxTotalOptsBytes {
-		admitSet(fmt.Errorf("too many opts bytes across all channels, got: %d/%d", totalOptsBytes, MaxTotalOptsBytes))
+	// record, the precursor and the carry-forward record, or the per-round
+	// evaluation work, actually depend on; see the limits they name.
+	if err := budget.Err(); err != nil {
+		admitSet(err)
 	}
 
 	res.uniqueStreamIDs = len(uniqueStreamIDs)
@@ -403,6 +454,14 @@ func sortedStreamIDs(m map[llotypes.StreamID]llotypes.ChannelID) []llotypes.Stre
 	return ids
 }
 
+// SubtractChannelDefinitions returns the channels in minuend that are absent
+// from subtrahend, keeping the limit lowest channel IDs.
+//
+// Keep the lowest IDs rather than rotating across rounds: a removal needs
+// matching votes, and a fixed prefix maximizes the overlap between oracles
+// whose desired sets differ slightly. Fairness is not a goal. Removed channels
+// leave the committed set, so the next round reaches the following IDs, and
+// only the channel definitions owner can refill the prefix.
 func SubtractChannelDefinitions(minuend llotypes.ChannelDefinitions, subtrahend llotypes.ChannelDefinitions, limit int) llotypes.ChannelDefinitions {
 	differenceList := []ChannelDefinitionWithID{}
 	for channelID, channelDefinition := range minuend {

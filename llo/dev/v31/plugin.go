@@ -13,12 +13,14 @@ import (
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
 
 	"github.com/smartcontractkit/chainlink-data-streams/llo/protocol"
+	"github.com/smartcontractkit/chainlink-data-streams/llo/protocol/calculated"
 
 	"github.com/smartcontractkit/libocr/commontypes"
 	"github.com/smartcontractkit/libocr/offchainreporting2plus/ocr3_1types"
 	"github.com/smartcontractkit/libocr/offchainreporting2plus/ocr3types"
 	ocrtypes "github.com/smartcontractkit/libocr/offchainreporting2plus/types"
 	"github.com/smartcontractkit/libocr/quorumhelper"
+	"google.golang.org/protobuf/proto"
 )
 
 // Config holds v31 plugin behavior toggles.
@@ -47,8 +49,10 @@ type Plugin struct {
 	F                                int
 	OracleID                         commontypes.OracleID
 	RetirementReportCodec            protocol.RetirementReportCodec
-	ReportCodecs                     map[llotypes.ReportFormat]protocol.ReportCodec
-	DonID                            uint32
+	// ReportCodecs must not change after construction: ChannelAnalysisCache
+	// keys the facts derived from them by definition alone.
+	ReportCodecs map[llotypes.ReportFormat]protocol.ReportCodec
+	DonID        uint32
 	// ChannelCache memoizes the channel definitions record, together with the
 	// opts decoded from it, across rounds so it is re-read only when its
 	// sequence number changes. May be nil, in which case a fresh generation is
@@ -63,8 +67,16 @@ type Plugin struct {
 	// desired ones in Observation, and the set each update-carrying observation
 	// advocates in ValidateObservation. One cache is shared by all of them, so
 	// the parallel ValidateObservation calls hit what Observation already
-	// decoded. May be nil, in which case nothing is memoized.
+	// decoded. Only Observation records entries: ValidateObservation reads
+	// through a read-only view, so peers cannot evict them. May be nil, in
+	// which case nothing is memoized.
 	ChannelAnalysisCache *protocol.ChannelAnalysisCache
+
+	// ExpressionPins keeps the expressions this instance evaluates in the
+	// shared analysis cache, so expressions analyzed for admission and peer
+	// validation cannot evict their compiled programs. May be nil, in which
+	// case nothing is pinned.
+	ExpressionPins *calculated.ExpressionPins
 
 	// BlobPayloads memoizes blob payloads decoded within one round, so a handle
 	// referenced by an observation is fetched and decompressed once for
@@ -156,12 +168,15 @@ func (p *Plugin) Observation(ctx context.Context, seqNr uint64, _ ocrtypes.Attri
 
 		if p.PredecessorConfigDigest != nil && state.lifeCycleStage == protocol.LifeCycleStageStaging {
 			obs.AttestedPredecessorRetirement, err = p.PredecessorRetirementReportCache.AttestedRetirementReport(*p.PredecessorConfigDigest)
+			if err == nil {
+				err = validateAttestedPredecessorRetirement(obs.AttestedPredecessorRetirement)
+			}
 			if err != nil {
 				// Best-effort: the state transition only needs one node to
 				// supply a valid retirement report, so omit it rather than
 				// failing the round.
 				obs.AttestedPredecessorRetirement = nil
-				p.Logger.Errorw("Failed to fetch attested retirement report from cache, omitting it from this observation", "stage", "Observation", "seqNr", seqNr, "err", err)
+				p.Logger.Errorw("Failed to fetch a usable attested retirement report from cache, omitting it from this observation", "stage", "Observation", "seqNr", seqNr, "err", err)
 			}
 			if len(obs.AttestedPredecessorRetirement) != 0 {
 				p.voteOnPredecessorConfig(&obs, seqNr)
@@ -298,8 +313,12 @@ func (p *Plugin) voteOnPredecessorConfig(obs *Observation, seqNr uint64) {
 		p.Logger.Warnw("Predecessor config not in the local cache yet, not voting on it this round", "stage", "Observation", "seqNr", seqNr, "predecessorConfigDigest", *p.PredecessorConfigDigest)
 		return
 	}
-	if len(signers) == 0 || len(signers) > protocol.MaxObservationPredecessorSignersLength {
-		p.Logger.Errorw("Local predecessor config has an unusable signer set, not voting on it", "stage", "Observation", "seqNr", seqNr, "signers", len(signers))
+	if len(signers) == 0 {
+		p.Logger.Errorw("Local predecessor config has an empty signer set, not voting on it", "stage", "Observation", "seqNr", seqNr)
+		return
+	}
+	if err := validatePredecessorConfig(signers, uint32(f)); err != nil {
+		p.Logger.Errorw("Local predecessor config is unusable, not voting on it", "stage", "Observation", "seqNr", seqNr, "err", err)
 		return
 	}
 	obs.PredecessorSigners = signers
@@ -325,50 +344,31 @@ func (p *Plugin) voteOnPredecessorConfig(obs *Observation, seqNr uint64) {
 //     the owner omits it from a later file. So a channel leaves the committed
 //     set only after the DON has already agreed it is a tombstone.
 //
-// This function must not assume that, because the contract does not require it.
-// Definitions may be implemented by anything, and the static cache shipped for
-// benchmarks and the dummy relayer ignores the committed set entirely and
-// returns its configured JSON verbatim. Everything below is therefore written
-// against the weaker guarantee: the desired set is one node's opinion, votes
-// decide, and an absent channel means "not mentioned", which is only treated as
-// "remove" when the set as a whole is credible. See the empty-set case below.
+// This function enforces the same rule rather than assume it, because the
+// contract does not require it. Definitions may be implemented by anything, and
+// the static cache shipped for benchmarks and the dummy relayer ignores the
+// committed set entirely and returns its configured JSON verbatim. So the
+// desired set is one node's opinion, votes decide, and an absent channel only
+// means "remove" when it is already a committed tombstone. Removing a live
+// channel with the static cache takes a tombstone first, as it does onchain.
 func (p *Plugin) voteOnChannels(obs *Observation, state *kvState) {
 	obs.RemoveChannelIDs = map[llotypes.ChannelID]struct{}{}
 
 	expectedChannelDefs := p.ChannelDefinitionCache.Definitions(state.channelDefinitions)
-	// Only the channels this node would vote to add or change are held to the
-	// admission-only checks; the ones already committed are not, or a
-	// grandfathered channel would freeze channel voting entirely.
-	admitting := protocol.ChangedChannelIDs(state.channelDefinitions, expectedChannelDefs)
-	if err := protocol.VerifyChannelDefinitionsForAdmissionWithCache(p.ReportCodecs, expectedChannelDefs, admitting, p.ChannelAnalysisCache); err != nil {
-		// Don't halt on an invalid channel-definitions file; just don't vote.
-		p.Logger.Errorw("ChannelDefinitionCache.Definitions is invalid", "err", err)
-		return
-	}
 
-	// An empty desired set against a non-empty committed one is not read as
-	// "remove every channel". Under the reconciliation above the onchain cache
-	// cannot produce that for live channels, but nothing in the interface says
-	// so, and an implementation that returns nothing before it has loaded
-	// anything, or on a source it could not read, would make every live channel
-	// a removal candidate. Every node would do it from the same input, so the
-	// channels would really go.
-	//
-	// Tombstoned channels stay removable. An empty desired set is exactly what
-	// the onchain cache produces on the last reap: the owner omits the
-	// tombstones it wants dropped, and when every committed channel is a
-	// tombstone the merge comes back empty. Abstaining there would stop the
-	// removal the DON has already agreed to and strand those channels in the
-	// definitions permanently.
-	removable := state.channelDefinitions
-	if len(expectedChannelDefs) == 0 && len(state.channelDefinitions) > 0 {
-		removable = llotypes.ChannelDefinitions{}
-		for channelID, cd := range state.channelDefinitions {
-			if cd.Tombstone {
-				removable[channelID] = cd
-			}
+	// Only tombstoned channels are removal candidates. A live channel missing
+	// from the desired set is not read as "remove": a cache that returns a
+	// partial set, before it has loaded or from a source it could not read,
+	// would otherwise get those channels removed, since every node would vote
+	// the same way from the same input. Removal stays a two step decision: the
+	// DON first agrees on the tombstone, then on dropping it. Reaping only
+	// shrinks the committed set, so it is voted on even when the desired set
+	// fails verification.
+	removable := llotypes.ChannelDefinitions{}
+	for channelID, cd := range state.channelDefinitions {
+		if cd.Tombstone {
+			removable[channelID] = cd
 		}
-		p.Logger.Warnw("ChannelDefinitionCache.Definitions is empty while channels are committed; voting to remove only the tombstoned ones", "committed", len(state.channelDefinitions), "removable", len(removable))
 	}
 
 	removeChannelDefinitions := protocol.SubtractChannelDefinitions(removable, expectedChannelDefs, protocol.MaxObservationRemoveChannelIDsLength)
@@ -376,20 +376,84 @@ func (p *Plugin) voteOnChannels(obs *Observation, state *kvState) {
 		obs.RemoveChannelIDs[channelID] = struct{}{}
 	}
 
-	obs.UpdateChannelDefinitions = make(llotypes.ChannelDefinitions)
-	expectedChannelIDs := maps.Keys(expectedChannelDefs)
+	admissible, skipped, err := admissibleChannelDefinitions(p.ReportCodecs, state.channelDefinitions, expectedChannelDefs, p.ChannelAnalysisCache)
+	if len(skipped) > 0 {
+		p.Logger.Errorw("ChannelDefinitionCache.Definitions has inadmissible channels, not voting for them", "channelIDs", sortedChannelIDSet(skipped))
+	}
+	if err != nil {
+		// Don't halt on an invalid channel-definitions file; just don't vote
+		// for any update.
+		p.Logger.Errorw("ChannelDefinitionCache.Definitions is invalid", "err", err)
+		return
+	}
+	obs.UpdateChannelDefinitions = channelUpdateVotes(state.channelDefinitions, admissible)
+}
+
+// admissibleChannelDefinitions returns expected with every channel that fails
+// admission reverted to its committed definition, or dropped if it has none,
+// together with the channels it reverted. Only the channels being added or
+// changed are held to the admission-only checks; the ones already committed
+// are not, or a grandfathered channel would freeze channel voting entirely.
+//
+// Reverting a channel can expose a finding against another one, such as a
+// history backfill channel whose target was reverted, so the result is
+// verified once more and rejected as a whole if it still fails. An error means
+// no update is admissible.
+func admissibleChannelDefinitions(codecs map[llotypes.ReportFormat]protocol.ReportCodec, committed, expected llotypes.ChannelDefinitions, cache *protocol.ChannelAnalysisCache) (llotypes.ChannelDefinitions, map[llotypes.ChannelID]struct{}, error) {
+	admitting := protocol.ChangedChannelIDs(committed, expected)
+	skipped, err := protocol.InadmissibleChannelIDsWithCache(codecs, expected, admitting, cache)
+	if err != nil || len(skipped) == 0 {
+		return expected, skipped, err
+	}
+
+	// expected may share its backing map with the committed set.
+	admissible := cloneChannelDefinitions(expected)
+	for channelID := range skipped {
+		if prev, ok := committed[channelID]; ok {
+			admissible[channelID] = prev
+		} else {
+			delete(admissible, channelID)
+		}
+	}
+
+	admitting = protocol.ChangedChannelIDs(committed, admissible)
+	rest, err := protocol.InadmissibleChannelIDsWithCache(codecs, admissible, admitting, cache)
+	if err == nil && len(rest) > 0 {
+		err = fmt.Errorf("channels %v fail admission once channels %v are withheld", sortedChannelIDSet(rest), sortedChannelIDSet(skipped))
+	}
+	if err != nil {
+		return nil, skipped, err
+	}
+	return admissible, skipped, nil
+}
+
+// channelUpdateVotes returns the channels in expected that are new or changed
+// against committed, in channel ID order, up to
+// MaxObservationUpdateChannelDefinitionsLength channels and
+// maxObservationUpdateChannelDefinitionsBytes encoded bytes. Admission bounds
+// a single definition well below the byte budget, so the first change always
+// fits, and the rest are voted on in later rounds.
+func channelUpdateVotes(committed, expected llotypes.ChannelDefinitions) llotypes.ChannelDefinitions {
+	updates := make(llotypes.ChannelDefinitions)
+	expectedChannelIDs := maps.Keys(expected)
 	sortChannelIDs(expectedChannelIDs)
+	size := 0
 	for _, channelID := range expectedChannelIDs {
-		prev, exists := state.channelDefinitions[channelID]
-		channelDefinition := expectedChannelDefs[channelID]
+		prev, exists := committed[channelID]
+		channelDefinition := expected[channelID]
 		if exists && prev.Equals(channelDefinition) {
 			continue
 		}
-		obs.UpdateChannelDefinitions[channelID] = channelDefinition
-		if len(obs.UpdateChannelDefinitions) >= protocol.MaxObservationUpdateChannelDefinitionsLength {
+		size += proto.Size(protocol.ChannelDefinitionToProto(channelDefinition))
+		if size > maxObservationUpdateChannelDefinitionsBytes {
+			break
+		}
+		updates[channelID] = channelDefinition
+		if len(updates) >= protocol.MaxObservationUpdateChannelDefinitionsLength {
 			break
 		}
 	}
+	return updates
 }
 
 // ValidateObservation checks an observation is well-formed. Blob-referenced
@@ -420,15 +484,6 @@ func (p *Plugin) ValidateObservation(ctx context.Context, seqNr uint64, _ ocrtyp
 	if len(observation.PredecessorSigners) != 0 && len(observation.AttestedPredecessorRetirement) == 0 {
 		return errors.New("PredecessorSigners is not empty even though this observation carries no AttestedPredecessorRetirement")
 	}
-	if len(observation.UpdateChannelDefinitions) > protocol.MaxObservationUpdateChannelDefinitionsLength {
-		return fmt.Errorf("UpdateChannelDefinitions is too long: %v vs %v", len(observation.UpdateChannelDefinitions), protocol.MaxObservationUpdateChannelDefinitionsLength)
-	}
-	if len(observation.RemoveChannelIDs) > protocol.MaxObservationRemoveChannelIDsLength {
-		return fmt.Errorf("RemoveChannelIDs is too long: %v vs %v", len(observation.RemoveChannelIDs), protocol.MaxObservationRemoveChannelIDsLength)
-	}
-	if len(observation.SupportedReportFormats) > protocol.MaxObservationSupportedReportFormatsLength {
-		return fmt.Errorf("SupportedReportFormats is too long: %v vs %v", len(observation.SupportedReportFormats), protocol.MaxObservationSupportedReportFormatsLength)
-	}
 
 	// Only the baseline checks run here. A definition is installed on more than
 	// f votes for its exact hash, so at least one honest oracle must have voted
@@ -441,7 +496,8 @@ func (p *Plugin) ValidateObservation(ctx context.Context, seqNr uint64, _ ocrtyp
 	//
 	// Whole-set budgets cannot be enforced per observation anyway, votes from
 	// different oracles combine, and what gets committed is decided by the
-	// per-hash threshold, not by any single observation.
+	// per-hash threshold, not by any single observation. applyChannelVotes
+	// enforces them on the merged set instead.
 	defsForVerify := observation.UpdateChannelDefinitions
 	if len(observation.UpdateChannelDefinitions) > 0 {
 		state, serr := loadColdKVState(kvReader, p.ChannelCache)
@@ -467,7 +523,7 @@ func (p *Plugin) ValidateObservation(ctx context.Context, seqNr uint64, _ ocrtyp
 	// updates from a staler one, which costs update-voting liveness only. An
 	// observation that votes no update has nothing to verify here, so rounds
 	// themselves are unaffected.
-	if err := protocol.VerifyChannelDefinitionsWithCache(p.ReportCodecs, defsForVerify, p.ChannelAnalysisCache); err != nil {
+	if err := protocol.VerifyChannelDefinitionsWithCache(p.ReportCodecs, defsForVerify, p.ChannelAnalysisCache.ReadOnly()); err != nil {
 		return fmt.Errorf("UpdateChannelDefinitions is invalid: %w", err)
 	}
 
@@ -506,6 +562,7 @@ func (p *Plugin) ShouldTransmitAcceptedReport(context.Context, uint64, ocr3types
 }
 
 func (p *Plugin) Close() error {
+	p.ExpressionPins.Release()
 	if p.attributedObservationTelemeter != nil {
 		p.attributedObservationTelemeter.Close()
 	}

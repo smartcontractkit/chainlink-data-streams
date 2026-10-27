@@ -58,8 +58,8 @@ type V31Config struct {
 	VerboseLogging bool `json:"verboseLogging" toml:"verboseLogging"`
 
 	// MaxSnapshotRounds bounds how stale this node's own stream values may be
-	// when it references them. Must leave BlobFetchMarginRounds below
-	// BlobLifetimeRounds.
+	// when it references them. Must be at least 2 and leave
+	// BlobFetchMarginRounds below BlobLifetimeRounds.
 	MaxSnapshotRounds uint64 `json:"maxSnapshotRounds" toml:"maxSnapshotRounds"`
 
 	// BlobLifetimeRounds bounds how long peers can still fetch a broadcast

@@ -1,4 +1,4 @@
-package utils
+package ubig
 
 import (
 	"database/sql/driver"

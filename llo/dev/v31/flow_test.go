@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -17,6 +18,7 @@ import (
 	"github.com/smartcontractkit/chainlink-common/pkg/utils/tests"
 
 	protocol "github.com/smartcontractkit/chainlink-data-streams/llo/protocol"
+	"github.com/smartcontractkit/chainlink-data-streams/llo/reportcodec"
 
 	"github.com/smartcontractkit/libocr/offchainreporting2plus/ocr3types"
 	ocrtypes "github.com/smartcontractkit/libocr/offchainreporting2plus/types"
@@ -139,6 +141,8 @@ type mockPredecessorRetirementReportCache struct {
 	// signers overrides testPredecessorSigners; f is the predecessor's f.
 	signers [][]byte
 	f       uint8
+	// attested overrides the attested retirement report the cache returns.
+	attested []byte
 	// verifyErr makes VerifyAttestedRetirementReport fail deterministically.
 	verifyErr error
 }
@@ -153,6 +157,9 @@ func (m *mockPredecessorRetirementReportCache) localSigners() [][]byte {
 func (m *mockPredecessorRetirementReportCache) AttestedRetirementReport(ocrtypes.ConfigDigest) ([]byte, error) {
 	if m.err != nil {
 		return nil, m.err
+	}
+	if m.attested != nil {
+		return m.attested, nil
 	}
 	return []byte("attested"), nil
 }
@@ -227,8 +234,20 @@ func Test_Factory_NewReportingPlugin_aggregationFaultTolerance(t *testing.T) {
 		_, _, err := f.NewReportingPlugin(ctx, ocr3types.ReportingPluginConfig{N: 4, F: 1, ConfigDigest: ocrtypes.ConfigDigest{9}, OffchainConfig: mustEncodeOffchainConfig(t, 2)}, nil)
 		require.EqualError(t, err, "aggregationFaultTolerance (2) must not exceed consensus F (1): a floor of 5 contributions can never be met from 3 observations")
 	})
-	t.Run("accepts zero", func(t *testing.T) {
-		p, _, err := f.NewReportingPlugin(ctx, ocr3types.ReportingPluginConfig{N: 4, F: 1, ConfigDigest: ocrtypes.ConfigDigest{9}, OffchainConfig: mustEncodeOffchainConfig(t, 0)}, nil)
+	t.Run("refuses zero when consensus F is non-zero", func(t *testing.T) {
+		_, _, err := f.NewReportingPlugin(ctx, ocr3types.ReportingPluginConfig{N: 4, F: 1, ConfigDigest: ocrtypes.ConfigDigest{9}, OffchainConfig: mustEncodeOffchainConfig(t, 0)}, nil)
+		require.EqualError(t, err, "aggregationFaultTolerance must be at least 1 when consensus F (1) is non-zero: a floor of 1 contribution lets a single oracle set an aggregate")
+	})
+	t.Run("accepts below consensus F", func(t *testing.T) {
+		p, _, err := f.NewReportingPlugin(ctx, ocr3types.ReportingPluginConfig{N: 7, F: 2, ConfigDigest: ocrtypes.ConfigDigest{9}, OffchainConfig: mustEncodeOffchainConfig(t, 1), MaxDurationObservation: time.Second}, nil)
+		require.NoError(t, err)
+		pl, ok := p.(*Plugin)
+		require.True(t, ok)
+		require.Equal(t, 3, pl.minContributions())
+		require.NoError(t, pl.Close())
+	})
+	t.Run("accepts zero when consensus F is zero", func(t *testing.T) {
+		p, _, err := f.NewReportingPlugin(ctx, ocr3types.ReportingPluginConfig{N: 1, F: 0, ConfigDigest: ocrtypes.ConfigDigest{9}, OffchainConfig: mustEncodeOffchainConfig(t, 0), MaxDurationObservation: time.Second}, nil)
 		require.NoError(t, err)
 		pl, ok := p.(*Plugin)
 		require.True(t, ok)
@@ -258,7 +277,7 @@ func Test_Factory_NewReportingPlugin_reportCadence(t *testing.T) {
 
 	newPlugin := func(t *testing.T, offchainConfig []byte) error {
 		t.Helper()
-		p, _, err := f.NewReportingPlugin(ctx, ocr3types.ReportingPluginConfig{N: 4, F: 1, ConfigDigest: ocrtypes.ConfigDigest{9}, OffchainConfig: offchainConfig}, nil)
+		p, _, err := f.NewReportingPlugin(ctx, ocr3types.ReportingPluginConfig{N: 4, F: 1, ConfigDigest: ocrtypes.ConfigDigest{9}, OffchainConfig: offchainConfig, MaxDurationObservation: time.Second}, nil)
 		if err == nil {
 			require.NoError(t, p.Close())
 		}
@@ -277,6 +296,14 @@ func Test_Factory_NewReportingPlugin_reportCadence(t *testing.T) {
 	t.Run("accepts a non-zero cadence", func(t *testing.T) {
 		for _, protocolVersion := range []uint32{1, 2} {
 			require.NoError(t, newPlugin(t, encode(t, protocolVersion, 1000)))
+			require.NoError(t, newPlugin(t, encode(t, protocolVersion, protocol.MaxDefaultMinReportIntervalNanoseconds)))
+		}
+	})
+
+	t.Run("refuses to start on a cadence above the maximum", func(t *testing.T) {
+		for _, protocolVersion := range []uint32{1, 2} {
+			err := newPlugin(t, encode(t, protocolVersion, protocol.MaxDefaultMinReportIntervalNanoseconds+1))
+			require.EqualError(t, err, fmt.Sprintf("NewReportingPlugin: offchain config defaultMinReportIntervalNanoseconds (%d) exceeds the maximum (%d)", protocol.MaxDefaultMinReportIntervalNanoseconds+1, protocol.MaxDefaultMinReportIntervalNanoseconds))
 		}
 	})
 
@@ -287,9 +314,50 @@ func Test_Factory_NewReportingPlugin_reportCadence(t *testing.T) {
 	})
 }
 
+func Test_Factory_NewReportingPlugin_maxDurationObservation(t *testing.T) {
+	ctx := tests.Context(t)
+	f := NewPluginFactory(PluginFactoryParams{
+		OnchainConfigCodec: mockOnchainConfigCodec{},
+		Logger:             logger.Test(t),
+	})
+	base := ocr3types.ReportingPluginConfig{N: 4, F: 1, ConfigDigest: ocrtypes.ConfigDigest{9}, OffchainConfig: mustEncodeOffchainConfig(t, 1)}
+
+	// The pump derives its observation timeout from this value, so zero would
+	// expire every cycle's context before it starts.
+	t.Run("refuses to start when not positive", func(t *testing.T) {
+		for _, d := range []time.Duration{0, -time.Second} {
+			cfg := base
+			cfg.MaxDurationObservation = d
+			_, _, err := f.NewReportingPlugin(ctx, cfg, nil)
+			require.EqualError(t, err, fmt.Sprintf("NewReportingPlugin: MaxDurationObservation (%v) must be positive", d))
+		}
+	})
+
+	t.Run("refuses to start when not positive even with a blob observation override", func(t *testing.T) {
+		f := NewPluginFactory(PluginFactoryParams{
+			OnchainConfigCodec:         mockOnchainConfigCodec{},
+			Logger:                     logger.Test(t),
+			MaxDurationBlobObservation: time.Second,
+		})
+		_, _, err := f.NewReportingPlugin(ctx, base, nil)
+		require.EqualError(t, err, "NewReportingPlugin: MaxDurationObservation (0s) must be positive")
+	})
+
+	t.Run("derives the pump timeouts when positive", func(t *testing.T) {
+		cfg := base
+		cfg.MaxDurationObservation = time.Second
+		p, _, err := f.NewReportingPlugin(ctx, cfg, nil)
+		require.NoError(t, err)
+		pump := p.(*Plugin).pump
+		require.Equal(t, DefaultBlobObservationDurationMultiplier*time.Second, pump.observationTimeout)
+		require.Equal(t, time.Second/time.Duration(defaultBlobInFlightWaitFactor), pump.inFlightWait)
+		require.NoError(t, p.Close())
+	})
+}
+
 func Test_Factory_MaxRoundPeriod(t *testing.T) {
 	ctx := tests.Context(t)
-	base := ocr3types.ReportingPluginConfig{N: 4, F: 1, ConfigDigest: ocrtypes.ConfigDigest{9}, OffchainConfig: mustEncodeOffchainConfig(t, 1)}
+	base := ocr3types.ReportingPluginConfig{N: 4, F: 1, ConfigDigest: ocrtypes.ConfigDigest{9}, OffchainConfig: mustEncodeOffchainConfig(t, 1), MaxDurationObservation: time.Second}
 
 	newPump := func(t *testing.T, params PluginFactoryParams, cfg ocr3types.ReportingPluginConfig) *blobPump {
 		t.Helper()
@@ -317,7 +385,7 @@ func Test_Factory_NewReportingPlugin(t *testing.T) {
 		OnchainConfigCodec: mockOnchainConfigCodec{},
 		Logger:             logger.Test(t),
 	})
-	p, info, err := f.NewReportingPlugin(ctx, ocr3types.ReportingPluginConfig{N: 4, F: 1, ConfigDigest: ocrtypes.ConfigDigest{9}, OffchainConfig: mustEncodeOffchainConfig(t, 1)}, nil)
+	p, info, err := f.NewReportingPlugin(ctx, ocr3types.ReportingPluginConfig{N: 4, F: 1, ConfigDigest: ocrtypes.ConfigDigest{9}, OffchainConfig: mustEncodeOffchainConfig(t, 1), MaxDurationObservation: time.Second}, nil)
 	require.NoError(t, err)
 
 	info1, ok := info.(interface{ Validate() error })
@@ -470,6 +538,40 @@ func Test_StateTransition_Promotion(t *testing.T) {
 	require.Equal(t, uint64(500), kvHotState(t, kv).validAfterNanoseconds[1])
 }
 
+// Test_StateTransition_Promotion_BoundsPromotedValidAfter covers the bound on
+// watermarks adopted from the predecessor: a lead within maxConsensusClockLead
+// is clock skew and kept, a larger lead is capped at the observation timestamp.
+func Test_StateTransition_Promotion_BoundsPromotedValidAfter(t *testing.T) {
+	ctx := tests.Context(t)
+	const promotionTs = uint64(10 * time.Second)
+	p := testPlugin(t)
+	predecessor := ocrtypes.ConfigDigest{0xAB}
+	p.PredecessorConfigDigest = &predecessor
+	p.PredecessorRetirementReportCache = &mockPredecessorRetirementReportCache{
+		report: protocol.RetirementReport{ValidAfterNanoseconds: map[llotypes.ChannelID]uint64{
+			1: promotionTs + maxConsensusClockLead,
+			2: promotionTs + maxConsensusClockLead + 1,
+		}},
+	}
+	kv := newMemKV()
+
+	_, err := p.StateTransition(ctx, 1, ocrtypes.AttributedQuery{}, []ocrtypes.AttributedObservation{ao(0, nil), ao(1, nil), ao(2, nil)}, kv, testBlobs)
+	require.NoError(t, err)
+
+	promoObs := promotionObs(promotionTs)
+	aos := make([]ocrtypes.AttributedObservation, 0, 4)
+	for i := 0; i < 4; i++ {
+		aos = append(aos, ao(i, mustEncodeObs(t, promoObs)))
+	}
+	_, err = p.StateTransition(ctx, 2, ocrtypes.AttributedQuery{}, aos, kv, testBlobs)
+	require.NoError(t, err)
+	require.Equal(t, string(protocol.LifeCycleStageProduction), string(kv.m[string(keyLifecycle)]))
+
+	validAfter := kvHotState(t, kv).validAfterNanoseconds
+	require.Equal(t, promotionTs+maxConsensusClockLead, validAfter[1], "a lead within clock skew is kept")
+	require.Equal(t, promotionTs, validAfter[2], "a larger lead is capped at the observation timestamp")
+}
+
 // Test_StateTransition_Promotion_StagingOnlyChannelTreatedAsNew guards the
 // promotion path (Finding 4): a channel the staging instance added itself, that
 // is absent from the predecessor's retirement report, was never covered by the
@@ -576,6 +678,53 @@ func Test_StateTransition_Retirement(t *testing.T) {
 	require.Len(t, reports, 1)
 	require.Equal(t, llotypes.ReportFormatRetirement, reports[0].ReportWithInfo.Info.ReportFormat)
 	require.Equal(t, protocol.LifeCycleStageRetired, reports[0].ReportWithInfo.Info.LifeCycleStage)
+}
+
+// Test_StateTransition_RetirementThreshold pins retirement at f+1 votes out of
+// the 2f+1 observations a round may carry: f votes must not retire, and
+// staging instances never retire on votes.
+func Test_StateTransition_RetirementThreshold(t *testing.T) {
+	ctx := tests.Context(t)
+
+	// retireRound returns 2f+1 observations, the first votes of which vote to
+	// retire.
+	retireRound := func(t *testing.T, votes int) []ocrtypes.AttributedObservation {
+		aos := make([]ocrtypes.AttributedObservation, 0, 3)
+		for i := 0; i < 3; i++ {
+			obs := Observation{UnixTimestampNanoseconds: 2000, ShouldRetire: i < votes}
+			aos = append(aos, ao(i, mustEncodeObs(t, obs)))
+		}
+		return aos
+	}
+
+	productionPlugin := func(t *testing.T) (*Plugin, *memKV) {
+		p := testPlugin(t)
+		kv := newMemKV()
+		_, err := p.StateTransition(ctx, 1, ocrtypes.AttributedQuery{}, []ocrtypes.AttributedObservation{ao(0, nil), ao(1, nil), ao(2, nil)}, kv, testBlobs)
+		require.NoError(t, err)
+		return p, kv
+	}
+
+	for _, tc := range []struct {
+		name  string
+		setup func(t *testing.T) (*Plugin, *memKV)
+		votes int
+		want  llotypes.LifeCycleStage
+	}{
+		{"production with f votes", productionPlugin, 1, protocol.LifeCycleStageProduction},
+		{"production with f+1 votes", productionPlugin, 2, protocol.LifeCycleStageRetired},
+		{"staging with f+1 votes", func(t *testing.T) (*Plugin, *memKV) {
+			return stagedPlugin(t, &mockPredecessorRetirementReportCache{})
+		}, 2, protocol.LifeCycleStageStaging},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p, kv := tc.setup(t)
+			require.Equal(t, 1, p.F)
+			_, err := p.StateTransition(ctx, 2, ocrtypes.AttributedQuery{}, retireRound(t, tc.votes), kv, testBlobs)
+			require.NoError(t, err)
+			require.Equal(t, string(tc.want), string(kv.m[string(keyLifecycle)]))
+		})
+	}
 }
 
 // Test_ValidateObservation_RemoveAddSwapAtBudget pins that the set verified is
@@ -823,6 +972,29 @@ func Test_Observation_PredecessorConfigVote(t *testing.T) {
 		require.Empty(t, obs.AttestedPredecessorRetirement)
 		require.Empty(t, obs.PredecessorSigners, "the signer set is dead weight without a report")
 	})
+
+	// A local entry that peers would reject must be left out, not broadcast,
+	// or every peer drops this node's whole observation.
+	for name, prrc := range map[string]*mockPredecessorRetirementReportCache{
+		"empty signer key":     {signers: [][]byte{{0x01}, {}, {0x03}, {0x04}}},
+		"oversized signer key": {signers: [][]byte{{0x01}, make([]byte, protocol.MaxPredecessorSignerBytes+1), {0x03}, {0x04}}},
+		"f out of range":       {f: uint8(len(testPredecessorSigners))},
+	} {
+		t.Run("abstains on a local config peers would reject: "+name, func(t *testing.T) {
+			p, kv := stagedObserver(t, prrc)
+			obs := observe(t, p, kv)
+			require.NotEmpty(t, obs.AttestedPredecessorRetirement)
+			require.Empty(t, obs.PredecessorSigners)
+			require.Zero(t, obs.PredecessorF)
+		})
+	}
+
+	t.Run("omits a local report peers would reject", func(t *testing.T) {
+		p, kv := stagedObserver(t, &mockPredecessorRetirementReportCache{attested: make([]byte, protocol.MaxAttestedRetirementReportBytes+1)})
+		obs := observe(t, p, kv)
+		require.Empty(t, obs.AttestedPredecessorRetirement)
+		require.Empty(t, obs.PredecessorSigners)
+	})
 }
 
 // Test_EncodeObservation_IsDeterministic covers the encoder builds repeated fields
@@ -870,11 +1042,11 @@ func Test_MarshalStreamValues_IsDeterministic(t *testing.T) {
 	}
 }
 
-// Test_Observation_EmptyDesiredSetRemovesOnlyTombstones covers that
-// the onchain cache reaps a tombstone by having the owner omit it,
-// so an all-tombstoned committed set legitimately merges to empty,
-// and abstaining there would strand those channels forever.
-func Test_Observation_EmptyDesiredSetRemovesOnlyTombstones(t *testing.T) {
+// Test_Observation_RemovesOnlyTombstones covers that a channel missing from
+// the desired set is voted out only when it is a committed tombstone, which is
+// how the onchain cache reaps it. A live channel missing from a partial or
+// empty set is kept.
+func Test_Observation_RemovesOnlyTombstones(t *testing.T) {
 	ctx := tests.Context(t)
 
 	live := jsonChannel()
@@ -882,8 +1054,8 @@ func Test_Observation_EmptyDesiredSetRemovesOnlyTombstones(t *testing.T) {
 	tombstoned.Tombstone = true
 
 	// observeRemovals commits defs, then asks what the node votes to remove
-	// once the definitions source has gone empty.
-	observeRemovals := func(t *testing.T, defs llotypes.ChannelDefinitions) map[llotypes.ChannelID]struct{} {
+	// once the definitions source returns desired.
+	observeRemovals := func(t *testing.T, defs, desired llotypes.ChannelDefinitions) map[llotypes.ChannelID]struct{} {
 		t.Helper()
 		p := testPlugin(t)
 		p.ShouldRetireCache = &mockShouldRetireCache{}
@@ -901,54 +1073,117 @@ func Test_Observation_EmptyDesiredSetRemovesOnlyTombstones(t *testing.T) {
 		require.NoError(t, err)
 		require.Len(t, kvChannelDefs(t, kv), len(defs))
 
-		cdc.defs = llotypes.ChannelDefinitions{}
+		cdc.defs = desired
 		obsBytes, err := p.Observation(ctx, 3, ocrtypes.AttributedQuery{}, kv, nil)
 		require.NoError(t, err)
 		obs, err := decodeObservation(ctx, obsBytes, testBlobs, nil)
 		require.NoError(t, err)
 		return obs.RemoveChannelIDs
 	}
+	empty := llotypes.ChannelDefinitions{}
 
 	t.Run("live channels are never removed by an empty set", func(t *testing.T) {
-		require.Empty(t, observeRemovals(t, llotypes.ChannelDefinitions{1: live, 2: live}))
+		require.Empty(t, observeRemovals(t, llotypes.ChannelDefinitions{1: live, 2: live}, empty))
 	})
 
 	t.Run("tombstoned channels still are", func(t *testing.T) {
 		require.Equal(t,
 			map[llotypes.ChannelID]struct{}{2: {}},
-			observeRemovals(t, llotypes.ChannelDefinitions{1: live, 2: tombstoned}))
+			observeRemovals(t, llotypes.ChannelDefinitions{1: live, 2: tombstoned}, empty))
 	})
 
 	t.Run("an all-tombstoned set can be reaped to empty", func(t *testing.T) {
 		require.Equal(t,
 			map[llotypes.ChannelID]struct{}{1: {}, 2: {}},
-			observeRemovals(t, llotypes.ChannelDefinitions{1: tombstoned, 2: tombstoned}))
+			observeRemovals(t, llotypes.ChannelDefinitions{1: tombstoned, 2: tombstoned}, empty))
 	})
 
-	t.Run("a non-empty desired set is still a genuine opinion", func(t *testing.T) {
-		p := testPlugin(t)
-		p.ShouldRetireCache = &mockShouldRetireCache{}
-		cdc := &mockChannelDefinitionCache{defs: llotypes.ChannelDefinitions{1: live, 2: live}}
-		p.ChannelDefinitionCache = cdc
-		kv := newMemKV()
+	t.Run("live channels are never removed by a partial set", func(t *testing.T) {
+		require.Empty(t, observeRemovals(t,
+			llotypes.ChannelDefinitions{1: live, 2: live, 3: live},
+			llotypes.ChannelDefinitions{1: live}))
+	})
 
-		_, err := p.StateTransition(ctx, 1, ocrtypes.AttributedQuery{}, []ocrtypes.AttributedObservation{ao(0, nil), ao(1, nil), ao(2, nil)}, kv, testBlobs)
-		require.NoError(t, err)
-		agree := make([]ocrtypes.AttributedObservation, 0, 4)
-		for i := 0; i < 4; i++ {
-			agree = append(agree, ao(i, mustEncodeObs(t, Observation{UnixTimestampNanoseconds: 1000, UpdateChannelDefinitions: cdc.defs})))
-		}
-		_, err = p.StateTransition(ctx, 2, ocrtypes.AttributedQuery{}, agree, kv, testBlobs)
-		require.NoError(t, err)
+	t.Run("tombstoned channels are removed from a partial set", func(t *testing.T) {
+		require.Equal(t,
+			map[llotypes.ChannelID]struct{}{3: {}},
+			observeRemovals(t,
+				llotypes.ChannelDefinitions{1: live, 2: live, 3: tombstoned},
+				llotypes.ChannelDefinitions{1: live}))
+	})
+}
 
-		// Dropping one channel while still reporting the other is an opinion,
-		// so the dropped one is voted off even though it is live.
-		cdc.defs = llotypes.ChannelDefinitions{1: live}
-		obsBytes, err := p.Observation(ctx, 3, ocrtypes.AttributedQuery{}, kv, nil)
-		require.NoError(t, err)
-		obs, err := decodeObservation(ctx, obsBytes, testBlobs, nil)
-		require.NoError(t, err)
-		require.Equal(t, map[llotypes.ChannelID]struct{}{2: {}}, obs.RemoveChannelIDs)
+// Test_ApplyChannelVotes_UpdateWinsOverSameRoundRemoval covers polling skew
+// across a reap: some oracles read a file that omits a committed tombstone and
+// vote to remove it, others read a newer one that reuses the channel ID, and
+// both cross the threshold in the same round. The new definition is kept.
+func Test_ApplyChannelVotes_UpdateWinsOverSameRoundRemoval(t *testing.T) {
+	const f = 1
+	tombstoned := jsonChannel()
+	tombstoned.Tombstone = true
+	readded := jsonChannel()
+	readded.Streams = []llotypes.Stream{{StreamID: 200, Aggregator: llotypes.AggregatorMedian}}
+
+	pending := llotypes.ChannelDefinitions{1: jsonChannel(), 2: tombstoned}
+	readdedWithID := protocol.ChannelDefinitionWithID{ChannelDefinition: readded, ChannelID: 2}
+	h := makeChannelHash(readdedWithID)
+	applyChannelVotes(nil, nil, pending,
+		map[llotypes.ChannelID]int{2: f + 1},
+		map[[32]byte]protocol.ChannelDefinitionWithID{h: readdedWithID},
+		map[[32]byte]int{h: f + 1}, f)
+
+	require.Equal(t, llotypes.ChannelDefinitions{1: jsonChannel(), 2: readded}, pending)
+}
+
+// Test_ApplyChannelVotes_ContestedUpdateIsSkipped covers polling skew across
+// two publications in quick succession: oracles split between two new
+// definitions of the same channel, and both cross the threshold in the same
+// round. Definitions carry no version, so neither is applied.
+func Test_ApplyChannelVotes_ContestedUpdateIsSkipped(t *testing.T) {
+	const f = 1
+	withStream := func(id llotypes.StreamID) protocol.ChannelDefinitionWithID {
+		cd := jsonChannel()
+		cd.Streams = []llotypes.Stream{{StreamID: id, Aggregator: llotypes.AggregatorMedian}}
+		return protocol.ChannelDefinitionWithID{ChannelDefinition: cd, ChannelID: 2}
+	}
+	x, y := withStream(200), withStream(300)
+	hx, hy := makeChannelHash(x), makeChannelHash(y)
+	updates := map[[32]byte]protocol.ChannelDefinitionWithID{hx: x, hy: y}
+
+	t.Run("both past the threshold leaves the channel unchanged", func(t *testing.T) {
+		pending := llotypes.ChannelDefinitions{1: jsonChannel(), 2: jsonChannel()}
+		applyChannelVotes(nil, nil, pending, nil, updates, map[[32]byte]int{hx: f + 1, hy: f + 1}, f)
+		require.Equal(t, llotypes.ChannelDefinitions{1: jsonChannel(), 2: jsonChannel()}, pending)
+	})
+
+	t.Run("both past the threshold adds nothing", func(t *testing.T) {
+		pending := llotypes.ChannelDefinitions{1: jsonChannel()}
+		applyChannelVotes(nil, nil, pending, nil, updates, map[[32]byte]int{hx: f + 1, hy: f + 1}, f)
+		require.Equal(t, llotypes.ChannelDefinitions{1: jsonChannel()}, pending)
+	})
+
+	t.Run("one past the threshold is applied", func(t *testing.T) {
+		pending := llotypes.ChannelDefinitions{1: jsonChannel(), 2: jsonChannel()}
+		applyChannelVotes(nil, nil, pending, nil, updates, map[[32]byte]int{hx: f, hy: f + 1}, f)
+		require.Equal(t, llotypes.ChannelDefinitions{1: jsonChannel(), 2: y.ChannelDefinition}, pending)
+	})
+
+	t.Run("other channels still apply", func(t *testing.T) {
+		other := protocol.ChannelDefinitionWithID{ChannelDefinition: x.ChannelDefinition, ChannelID: 3}
+		ho := makeChannelHash(other)
+		pending := llotypes.ChannelDefinitions{1: jsonChannel(), 2: jsonChannel()}
+		applyChannelVotes(nil, nil, pending, nil,
+			map[[32]byte]protocol.ChannelDefinitionWithID{hx: x, hy: y, ho: other},
+			map[[32]byte]int{hx: f + 1, hy: f + 1, ho: f + 1}, f)
+		require.Equal(t, llotypes.ChannelDefinitions{1: jsonChannel(), 2: jsonChannel(), 3: x.ChannelDefinition}, pending)
+	})
+
+	t.Run("a same round removal still applies", func(t *testing.T) {
+		tombstoned := jsonChannel()
+		tombstoned.Tombstone = true
+		pending := llotypes.ChannelDefinitions{1: jsonChannel(), 2: tombstoned}
+		applyChannelVotes(nil, nil, pending, map[llotypes.ChannelID]int{2: f + 1}, updates, map[[32]byte]int{hx: f + 1, hy: f + 1}, f)
+		require.Equal(t, llotypes.ChannelDefinitions{1: jsonChannel()}, pending)
 	})
 }
 
@@ -969,8 +1204,8 @@ func Test_IsReportable_MinReportIntervalDoesNotOverflow(t *testing.T) {
 		StreamAggregates: protocol.StreamAggregates{
 			100: {llotypes.AggregatorMedian: protocol.ToDecimal(decimal.NewFromInt(1))},
 		},
-		SupportByFormat: map[llotypes.ReportFormat]int{llotypes.ReportFormatJSON: 4},
 	}
+	support := map[llotypes.ReportFormat]int{llotypes.ReportFormatJSON: 4}
 	gen, err := protocol.NewChannelCache().Load(1, func() (llotypes.ChannelDefinitions, error) {
 		return out.ChannelDefinitions, nil
 	})
@@ -978,15 +1213,60 @@ func Test_IsReportable_MinReportIntervalDoesNotOverflow(t *testing.T) {
 	optsCache := gen.Opts()
 
 	// One nanosecond past validAfter, so only the interval can hold it back.
-	require.True(t, out.isReportable(1, 1, 1, optsCache, nil),
+	require.True(t, out.isReportable(1, 1, 1, support, optsCache, nil),
 		"a one nanosecond interval must not gate a report one nanosecond late")
 
 	// An interval that overflows the sum must gate, not wrap into passing.
 	for _, interval := range []uint64{math.MaxUint64, math.MaxUint64 - validAfter + 1} {
-		require.False(t, out.isReportable(1, interval, 1, optsCache, nil),
+		require.False(t, out.isReportable(1, interval, 1, support, optsCache, nil),
 			"interval %d must gate the report, not wrap", interval)
 	}
 
-	require.Equal(t, uint64(math.MaxUint64), saturatingAdd(validAfter, math.MaxUint64))
-	require.Equal(t, uint64(9), saturatingAdd(4, 5))
+	require.Equal(t, uint64(math.MaxUint64), protocol.SaturatingAdd(validAfter, math.MaxUint64))
+	require.Equal(t, uint64(9), protocol.SaturatingAdd(4, 5))
+}
+
+// verifyCountingCodec counts how often channel definitions are decoded, which
+// the channel analysis cache is there to avoid.
+type verifyCountingCodec struct {
+	reportcodec.JSONReportCodec
+	verifies atomic.Int64
+}
+
+func (c *verifyCountingCodec) Verify(cd llotypes.ChannelDefinition) error {
+	c.verifies.Add(1)
+	return c.JSONReportCodec.Verify(cd)
+}
+
+// Test_ValidateObservation_DoesNotEvictChannelAnalysisCache pins that peer
+// observations cannot displace what this node cached from its own inputs: more
+// distinct updates of one channel than the cache retains leave the committed
+// definition cached, and are not cached themselves.
+func Test_ValidateObservation_DoesNotEvictChannelAnalysisCache(t *testing.T) {
+	ctx := tests.Context(t)
+	p := testPlugin(t)
+	codec := &verifyCountingCodec{}
+	p.ReportCodecs = map[llotypes.ReportFormat]protocol.ReportCodec{llotypes.ReportFormatJSON: codec}
+	p.ChannelAnalysisCache = protocol.NewChannelAnalysisCache()
+	kv := newMemKV()
+
+	committed := llotypes.ChannelDefinitions{1: jsonChannel()}
+	require.NoError(t, writeChannelState(kv, 1, committed))
+	// What Observation does with the committed set.
+	require.NoError(t, protocol.VerifyChannelDefinitionsWithCache(p.ReportCodecs, committed, p.ChannelAnalysisCache))
+	require.Equal(t, int64(1), codec.verifies.Load())
+
+	const updates = 6
+	for round := 0; round < 2; round++ {
+		for i := 0; i < updates; i++ {
+			cd := jsonChannel()
+			cd.Streams[0].StreamID = llotypes.StreamID(200 + i) //nolint:gosec // small test constant
+			obs := Observation{UnixTimestampNanoseconds: 1_000, UpdateChannelDefinitions: llotypes.ChannelDefinitions{1: cd}}
+			require.NoError(t, p.ValidateObservation(ctx, 2, ocrtypes.AttributedQuery{}, ao(i%4, mustEncodeObs(t, obs)), kv, testBlobs))
+		}
+	}
+	require.Equal(t, int64(1+2*updates), codec.verifies.Load(), "peer updates must not be cached")
+
+	require.NoError(t, protocol.VerifyChannelDefinitionsWithCache(p.ReportCodecs, committed, p.ChannelAnalysisCache))
+	require.Equal(t, int64(1+2*updates), codec.verifies.Load(), "committed definition must still be cached")
 }

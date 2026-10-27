@@ -214,9 +214,14 @@ message LLOHotStateProto {
 // from, so that consumers can tell whether their decoded-opts cache already
 // matches these definitions.
 //
+// reportableChannelIDs is the reportability decision StateTransition made for
+// the round, so Reports emits exactly the channels whose watermark advances.
+// streamAggregates carries only the values those channels report.
+//
 // NOTE: must serialize deterministically, hence use of repeated tuple instead of
-// maps. channelDefinitions and validAfterNanoseconds MUST be sorted ascending by
-// channelID; streamAggregates MUST be sorted ascending by (streamID, aggregator).
+// maps. channelDefinitions, validAfterNanoseconds and reportableChannelIDs MUST
+// be sorted ascending by channelID; streamAggregates MUST be sorted ascending by
+// (streamID, aggregator).
 message LLOPrecursorProto {
     string lifeCycleStage = 1;
     uint64 observationTimestampNanoseconds = 2;
@@ -224,15 +229,7 @@ message LLOPrecursorProto {
     repeated LLOChannelIDAndValidAfterNanosecondsProto validAfterNanoseconds = 4;
     repeated LLOStreamAggregate streamAggregates = 5;
     uint64 channelStateSeqNr = 6;
-    // supportByFormat MUST be sorted ascending by reportFormat.
-    repeated LLOReportFormatSupportProto supportByFormat = 7;
-}
-
-// LLOReportFormatSupportProto is the number of oracles that advertised a report
-// codec for one report format in the round that produced the precursor.
-message LLOReportFormatSupportProto {
-    uint32 reportFormat = 1;
-    uint32 oracleCount = 2;
+    repeated uint32 reportableChannelIDs = 7;
 }
 
 // LLOCodecSupportProto is the v31 KeyValueState record (c/codecs) holding the

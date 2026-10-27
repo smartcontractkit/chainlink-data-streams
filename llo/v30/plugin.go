@@ -12,6 +12,7 @@ import (
 
 	"github.com/smartcontractkit/chainlink-data-streams/llo/datasource"
 	"github.com/smartcontractkit/chainlink-data-streams/llo/protocol"
+	"github.com/smartcontractkit/chainlink-data-streams/llo/protocol/calculated"
 
 	"github.com/smartcontractkit/chainlink-common/pkg/logger"
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
@@ -183,6 +184,7 @@ func (f *PluginFactory) NewReportingPlugin(ctx context.Context, cfg ocr3types.Re
 		cfg.MaxDurationObservation,
 		offchainConfig.ProtocolVersion,
 		offchainConfig.DefaultMinReportIntervalNanoseconds,
+		calculated.NewExpressionPins(),
 	}, ocr3types.ReportingPluginInfo{
 		Name: "LLO",
 		Limits: ocr3types.ReportingPluginLimits{
@@ -233,6 +235,12 @@ type Plugin struct {
 	// From offchain config
 	ProtocolVersion                     uint32
 	DefaultMinReportIntervalNanoseconds uint64
+
+	// ExpressionPins keeps the expressions this instance evaluates in the
+	// shared analysis cache, so expressions analyzed for admission and peer
+	// validation cannot evict their compiled programs. May be nil, in which
+	// case nothing is pinned.
+	ExpressionPins *calculated.ExpressionPins
 }
 
 // Query creates a Query that is sent from the leader to all follower nodes
@@ -405,5 +413,6 @@ func (p *Plugin) ObservationQuorum(ctx context.Context, outctx ocr3types.Outcome
 }
 
 func (p *Plugin) Close() error {
+	p.ExpressionPins.Release()
 	return nil
 }

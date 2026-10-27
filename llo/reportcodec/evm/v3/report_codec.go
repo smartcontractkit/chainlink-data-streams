@@ -9,6 +9,8 @@ import (
 	ocrtypes "github.com/smartcontractkit/libocr/offchainreporting2plus/types"
 
 	"github.com/smartcontractkit/chainlink-common/pkg/logger"
+
+	protocol "github.com/smartcontractkit/chainlink-data-streams/llo/protocol"
 )
 
 type ReportFields struct {
@@ -53,6 +55,26 @@ func (r *ReportCodec) BuildReport(rf ReportFields) (ocrtypes.Report, error) {
 		merr = errors.Join(merr, errors.New("nativeFee may not be nil"))
 	} else if rf.NativeFee.Cmp(zero) < 0 {
 		merr = errors.Join(merr, fmt.Errorf("nativeFee may not be negative (got: %s)", rf.NativeFee))
+	}
+	if merr != nil {
+		return nil, merr
+	}
+	// abi.Pack does not range check integers and would wrap an out of range
+	// value into a different one.
+	for _, f := range []struct {
+		name string
+		v    *big.Int
+		t    string
+	}{
+		{"nativeFee", rf.NativeFee, "uint192"},
+		{"linkFee", rf.LinkFee, "uint192"},
+		{"benchmarkPrice", rf.BenchmarkPrice, "int192"},
+		{"bid", rf.Bid, "int192"},
+		{"ask", rf.Ask, "int192"},
+	} {
+		if err := protocol.CheckSolidityInt(f.v, f.t); err != nil {
+			merr = errors.Join(merr, fmt.Errorf("%s: %w", f.name, err))
+		}
 	}
 	if merr != nil {
 		return nil, merr
