@@ -165,6 +165,13 @@ func (t *transmitter) Transmit(
 		t.lggr.Debugw("Transmit report", "digest", digest, "seqNr", seqNr, "report", report, "sigs", sigs)
 	}
 
+	if report.Info.LifeCycleStage != protocol.LifeCycleStageProduction {
+		// Specimen reports must never be transmitted; this is a hard guard even
+		// if the codec was configured to encode them.
+		t.lggr.Debugw("Skipping transmit of non-production report", "digest", digest, "seqNr", seqNr, "lifeCycleStage", report.Info.LifeCycleStage)
+		return nil
+	}
+
 	if report.Info.ReportFormat == llotypes.ReportFormatRetirement {
 		// Retirement reports don't get transmitted; rather, they are stored in
 		// the RetirementReportCache
