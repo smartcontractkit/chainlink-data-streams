@@ -83,7 +83,7 @@ func Test_Restart_ColdKVRebuilds(t *testing.T) {
 
 	// Values arriving before the channel is re-voted are tolerated and produce
 	// nothing: there is no channel requiring the stream, so nothing is stored.
-	_, err := after.StateTransition(ctx, 1, ocrtypes.AttributedQuery{}, valueRound(t, 10_000, 1), cold, testBlobs)
+	_, err := after.StateTransition(ctx, 1, ocrtypes.AttributedQuery{}, emptyRound(), cold, testBlobs)
 	require.NoError(t, err)
 	require.Nil(t, readHistory(t, cold, 100, llotypes.AggregatorMedian))
 	require.False(t, reportedFlag(t, cold, 1))

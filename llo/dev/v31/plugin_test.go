@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"math"
 	"strconv"
 	"sync"
@@ -143,6 +144,11 @@ func attachPump(t *testing.T, p *Plugin, ds DataSource, bbf ocr3_1types.BlobBroa
 
 func ao(observer int, obsBytes []byte) ocrtypes.AttributedObservation {
 	return ocrtypes.AttributedObservation{Observer: commontypes.OracleID(observer), Observation: obsBytes}
+}
+
+// emptyRound is a quorum of empty observations, the only kind round 1 accepts.
+func emptyRound() []ocrtypes.AttributedObservation {
+	return []ocrtypes.AttributedObservation{ao(0, nil), ao(1, nil), ao(2, nil), ao(3, nil)}
 }
 
 // testSupportedReportFormats is the codec coverage a fixture oracle advertises
@@ -1225,13 +1231,20 @@ func Test_StateTransition_PropagatesBlobFetchFailure(t *testing.T) {
 	require.Contains(t, err.Error(), "fetch blob")
 }
 
-// Test_StateTransition_RequiresQuorumAfterDecode checks that observations
-// dropped on decode cannot shrink the sample below 2f+1, where f byzantine
-// timestamps could control the median.
-func Test_StateTransition_RequiresQuorumAfterDecode(t *testing.T) {
+// Test_StateTransition_FailsOnInvalidObservation checks that an observation
+// failing the checks ValidateObservation runs fails the round instead of being
+// dropped, so a sample can never shrink below the quorum it was accepted on
+// and a divergent validation cannot fork the state.
+func Test_StateTransition_FailsOnInvalidObservation(t *testing.T) {
 	ctx := tests.Context(t)
 	p := testPlugin(t)
 	kv := newMemKV()
+
+	t.Run("non-empty observation in round 1", func(t *testing.T) {
+		aos := []ocrtypes.AttributedObservation{ao(0, nil), ao(1, nil), ao(2, []byte{0x7f})}
+		_, err := p.StateTransition(ctx, 1, ocrtypes.AttributedQuery{}, aos, kv, testBlobs)
+		require.ErrorContains(t, err, "invariant violation: non-empty observation from oracle 2 in round 1")
+	})
 
 	// Bootstrap.
 	_, err := p.StateTransition(ctx, 1, ocrtypes.AttributedQuery{}, []ocrtypes.AttributedObservation{ao(0, nil), ao(1, nil), ao(2, nil)}, kv, testBlobs)
@@ -1240,21 +1253,68 @@ func Test_StateTransition_RequiresQuorumAfterDecode(t *testing.T) {
 	valid := func(i int) ocrtypes.AttributedObservation {
 		return ao(i, mustEncodeObs(t, Observation{UnixTimestampNanoseconds: 1000}))
 	}
-	invalid := func(i int) ocrtypes.AttributedObservation {
-		return ao(i, []byte{0x7f})
-	}
 
-	t.Run("2f+1 decoded observations proceed", func(t *testing.T) {
-		aos := []ocrtypes.AttributedObservation{valid(0), valid(1), valid(2), invalid(3)}
+	t.Run("malformed framing", func(t *testing.T) {
+		aos := []ocrtypes.AttributedObservation{valid(0), valid(1), valid(2), ao(3, []byte{0x7f})}
+		_, err := p.StateTransition(ctx, 2, ocrtypes.AttributedQuery{}, aos, kv, testBlobs)
+		require.ErrorContains(t, err, "invariant violation: observation from oracle 3 accepted by the leader fails validation on this oracle")
+		require.ErrorContains(t, err, "observation decode error")
+	})
+
+	t.Run("predecessor field without a predecessor", func(t *testing.T) {
+		stray := ao(3, mustEncodeObs(t, Observation{UnixTimestampNanoseconds: 1000, AttestedPredecessorRetirement: []byte{1}}))
+		aos := []ocrtypes.AttributedObservation{valid(0), valid(1), valid(2), stray}
+		_, err := p.StateTransition(ctx, 2, ocrtypes.AttributedQuery{}, aos, kv, testBlobs)
+		require.ErrorContains(t, err, "AttestedPredecessorRetirement is not empty even though this instance has no predecessor")
+	})
+
+	t.Run("valid observations proceed", func(t *testing.T) {
+		aos := []ocrtypes.AttributedObservation{valid(0), valid(1), valid(2)}
 		_, err := p.StateTransition(ctx, 2, ocrtypes.AttributedQuery{}, aos, kv, testBlobs)
 		require.NoError(t, err)
 	})
+}
 
-	t.Run("fewer than 2f+1 decoded observations fail the round", func(t *testing.T) {
-		aos := []ocrtypes.AttributedObservation{valid(0), valid(1), invalid(2), invalid(3)}
-		_, err := p.StateTransition(ctx, 3, ocrtypes.AttributedQuery{}, aos, kv, testBlobs)
-		require.ErrorContains(t, err, "expected at least 2f+1 decoded observations, got 2 (f: 1)")
-	})
+// Test_ObservationQuorum_Byzantine checks the quorum is the Byzantine quorum:
+// 2f+1 at n = 3f+1, more above it, never more than n-f, and that
+// StateTransition holds the same invariant.
+func Test_ObservationQuorum_Byzantine(t *testing.T) {
+	ctx := tests.Context(t)
+	aosOf := func(n int) []ocrtypes.AttributedObservation {
+		aos := make([]ocrtypes.AttributedObservation, 0, n)
+		for i := range n {
+			aos = append(aos, ao(i, nil))
+		}
+		return aos
+	}
+
+	cases := []struct{ n, f, quorum int }{
+		{n: 4, f: 1, quorum: 3},
+		{n: 5, f: 1, quorum: 4},
+		{n: 7, f: 1, quorum: 5},
+		{n: 7, f: 2, quorum: 5},
+		{n: 10, f: 3, quorum: 7},
+	}
+	for _, tc := range cases {
+		t.Run(fmt.Sprintf("n=%d f=%d", tc.n, tc.f), func(t *testing.T) {
+			p := testPlugin(t)
+			p.N, p.F = tc.n, tc.f
+			require.GreaterOrEqual(t, tc.quorum, 2*tc.f+1)
+			require.LessOrEqual(t, tc.quorum, tc.n-tc.f)
+
+			below, err := p.ObservationQuorum(ctx, 2, ocrtypes.AttributedQuery{}, aosOf(tc.quorum-1), nil, nil)
+			require.NoError(t, err)
+			require.False(t, below)
+			reached, err := p.ObservationQuorum(ctx, 2, ocrtypes.AttributedQuery{}, aosOf(tc.quorum), nil, nil)
+			require.NoError(t, err)
+			require.True(t, reached)
+
+			_, err = p.StateTransition(ctx, 1, ocrtypes.AttributedQuery{}, aosOf(tc.quorum-1), newMemKV(), testBlobs)
+			require.ErrorContains(t, err, "do not reach the observation quorum")
+			_, err = p.StateTransition(ctx, 1, ocrtypes.AttributedQuery{}, aosOf(tc.quorum), newMemKV(), testBlobs)
+			require.NoError(t, err)
+		})
+	}
 }
 
 // equalStreamValue compares two stream values by their binary encoding.

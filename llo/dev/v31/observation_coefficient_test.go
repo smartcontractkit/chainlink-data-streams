@@ -51,7 +51,7 @@ func Test_decodeObservation_CoefficientBound(t *testing.T) {
 // that matters: an oracle sending an unbounded value costs its own observation
 // and nothing else. The round completes and the remaining observations still
 // aggregate, which is why this bound is safe to enforce on the consensus path.
-func Test_StateTransition_DropsObservationOverCoefficientBound(t *testing.T) {
+func Test_StateTransition_RejectsObservationOverCoefficientBound(t *testing.T) {
 	ctx := tests.Context(t)
 	p := testPlugin(t)
 	kv := newMemKV()
@@ -86,9 +86,16 @@ func Test_StateTransition_DropsObservationOverCoefficientBound(t *testing.T) {
 		ao(3, obsWith(overSized)),
 	}
 
-	precBytes, err := p.StateTransition(ctx, 4, ocrtypes.AttributedQuery{}, aos, kv, testBlobs)
-	require.NoError(t, err, "one unbounded observation must not fail the round")
+	// ValidateObservation rejects the unbounded observation, so a leader that
+	// proposes it anyway runs a different validation from this oracle.
+	require.Error(t, p.ValidateObservation(ctx, 4, ocrtypes.AttributedQuery{}, ao(3, obsWith(overSized)), kv, testBlobs))
+	_, err = p.StateTransition(ctx, 4, ocrtypes.AttributedQuery{}, aos, kv, testBlobs)
+	require.ErrorContains(t, err, "invariant violation")
+	require.ErrorContains(t, err, "decimal coefficient out of range")
 
+	// Without it the honest observations aggregate.
+	precBytes, err := p.StateTransition(ctx, 4, ocrtypes.AttributedQuery{}, aos[:3], kv, testBlobs)
+	require.NoError(t, err)
 	prec, err := decodePrecursor(precBytes)
 	require.NoError(t, err)
 	aggregated, ok := prec.StreamAggregates[1][llotypes.AggregatorMedian]

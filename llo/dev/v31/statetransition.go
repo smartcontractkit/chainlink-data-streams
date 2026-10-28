@@ -48,12 +48,19 @@ import (
 // KeyValueState and to the deferred-definitions rule above (v30 applies
 // definition changes within the same round).
 func (p *Plugin) StateTransition(ctx context.Context, seqNr uint64, _ ocrtypes.AttributedQuery, aos []ocrtypes.AttributedObservation, kvRW ocr3_1types.KeyValueStateReadWriter, bf ocr3_1types.BlobFetcher) (ocr3_1types.ReportsPlusPrecursor, error) {
-	if len(aos) < 2*p.F+1 {
-		return nil, fmt.Errorf("invariant violation: expected at least 2f+1 attributed observations, got %d (f: %d)", len(aos), p.F)
+	if !p.hasObservationQuorum(aos) {
+		return nil, fmt.Errorf("invariant violation: %d attributed observations do not reach the observation quorum (n: %d, f: %d)", len(aos), p.N, p.F)
 	}
 
 	// Initial round: establish the lifecycle stage and initial states,
 	if seqNr <= 1 {
+		// libocr only passes observations this oracle's ValidateObservation
+		// accepted, and round 1 accepts only empty ones.
+		for _, ao := range aos {
+			if len(ao.Observation) != 0 {
+				return nil, fmt.Errorf("invariant violation: non-empty observation from oracle %v in round %d", ao.Observer, seqNr)
+			}
+		}
 		stage := protocol.LifeCycleStageProduction
 		if p.PredecessorConfigDigest != nil {
 			stage = protocol.LifeCycleStageStaging
@@ -75,12 +82,9 @@ func (p *Plugin) StateTransition(ctx context.Context, seqNr uint64, _ ocrtypes.A
 		return nil, fmt.Errorf("failed to load KV state: %w", err)
 	}
 
-	tally, err := p.decodeObservations(ctx, aos, bf, p.BlobPayloads.round(seqNr), p.collectAttributedObservations(seqNr))
+	tally, err := p.decodeObservations(ctx, seqNr, aos, bf, p.collectAttributedObservations(seqNr))
 	if err != nil {
 		return nil, err
-	}
-	if len(tally.timestampsNanoseconds) < 2*p.F+1 {
-		return nil, fmt.Errorf("invariant violation: expected at least 2f+1 decoded observations, got %d (f: %d)", len(tally.timestampsNanoseconds), p.F)
 	}
 
 	// Verifying an attested predecessor retirement report needs the
@@ -300,7 +304,13 @@ func (t observationTally) hasChannelVotes() bool {
 	return len(t.removeChannelVotesByID) > 0 || len(t.updateChannelVotesByHash) > 0
 }
 
-func (p *Plugin) decodeObservations(ctx context.Context, aos []ocrtypes.AttributedObservation, bf ocr3_1types.BlobFetcher, memo *roundBlobPayloads, collect bool) (observationTally, error) {
+// decodeObservations fetches every blob, decodes and validates each
+// observation, then tallies votes and values. Every observation must pass the
+// checks ValidateObservation ran on it: a decode failure here means the leader
+// proposed an observation this build rejects, so the round fails rather than
+// aggregating over a sample smaller than the quorum it was accepted on. A
+// blob fetch failure is node-local and fails the round for this oracle only.
+func (p *Plugin) decodeObservations(ctx context.Context, seqNr uint64, aos []ocrtypes.AttributedObservation, bf ocr3_1types.BlobFetcher, collect bool) (observationTally, error) {
 	tally := observationTally{
 		predConfigsByHash:              make(map[[32]byte]predecessorConfig),
 		predConfigVotesByHash:          make(map[[32]byte]int),
@@ -322,7 +332,7 @@ func (p *Plugin) decodeObservations(ctx context.Context, aos []ocrtypes.Attribut
 	for i, ao := range aos {
 		go func() {
 			defer wg.Done()
-			decoded[i], decodeErrs[i] = decodeObservation(ctx, ao.Observation, bf, memo)
+			decoded[i], decodeErrs[i] = p.fetchBlobsDecodeAndValidateObservation(ctx, seqNr, ao, bf)
 		}()
 	}
 	wg.Wait()
@@ -342,14 +352,13 @@ func (p *Plugin) decodeObservations(ctx context.Context, aos []ocrtypes.Attribut
 				// commit and a new epoch starts it over.
 				return observationTally{}, fmt.Errorf("failed to fetch blob for observation from oracle %v: %w", ao.Observer, derr)
 			}
-			// Unreachable while libocr runs ValidateObservation, which decodes
-			// the same bytes, before StateTransition. Drop rather than fail, and
-			// let the quorum check in StateTransition catch a shrunk sample.
-			p.Logger.Warnw("ignoring invalid observation", "oracleID", ao.Observer, "error", derr)
-			if collect {
-				tally.attributed = append(tally.attributed, attributedObservation{observer: ao.Observer, decodeErr: derr})
-			}
-			continue
+			// Unreachable while every oracle runs the same ValidateObservation,
+			// which ran these checks on the same bytes before StateTransition.
+			// Reachable under version skew, where the leader accepted what this
+			// build rejects. Dropping would fork: oracles on the leader's build
+			// keep the observation. Failing stalls this oracle only, and the
+			// round is retried under a new leader if more than f fail.
+			return observationTally{}, fmt.Errorf("invariant violation: observation from oracle %v accepted by the leader fails validation on this oracle: %w", ao.Observer, derr)
 		}
 		if collect {
 			tally.attributed = append(tally.attributed, attributedObservation{observer: ao.Observer, obs: observation})

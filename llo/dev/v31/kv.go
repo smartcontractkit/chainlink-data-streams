@@ -232,9 +232,9 @@ func readCodecSupport(r ocr3_1types.KeyValueStateReader) (map[commontypes.Oracle
 // codec for.
 //
 // Support is remembered per oracle rather than counted per round because the
-// observation quorum is 2f+1. A count taken from one round can never exceed
-// 2f+1, so the supporter threshold reportability would demand that every observation
-// in a minimal quorum advertise the format.
+// observation quorum can be as small as 2f+1. A count taken from one such round
+// can never exceed 2f+1, so the supporter threshold reportability would demand
+// that every observation in a minimal quorum advertise the format.
 func writeCodecSupport(w ocr3_1types.KeyValueStateReadWriter, support map[commontypes.OracleID]map[llotypes.ReportFormat]struct{}) error {
 	pb := &protocol.LLOCodecSupportProto{
 		Oracles: make([]*protocol.LLOOracleCodecSupportProto, 0, len(support)),

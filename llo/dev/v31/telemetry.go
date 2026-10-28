@@ -145,12 +145,11 @@ const maxAttributedObservationTelemetryBytes = 1 << 20
 const attributedObservationTelemetryQueueSize = 8
 
 // attributedObservation is one entry of the round attributed observations, as
-// decoded by StateTransition. decodeErr is set when the observation was dropped
-// as invalid.
+// decoded by StateTransition. Every entry decoded: an observation that fails
+// to decode fails the round, which emits no telemetry.
 type attributedObservation struct {
-	observer  commontypes.OracleID
-	obs       Observation
-	decodeErr error
+	observer commontypes.OracleID
+	obs      Observation
 }
 
 type attributedObservationRound struct {
@@ -299,10 +298,6 @@ func (t *attributedObservationTelemeter) makeTelemetry(seqNr, agreedTs uint64, a
 	}
 
 	first := header()
-	if ao.decodeErr != nil {
-		first.DecodeError = proto.String(ao.decodeErr.Error())
-		return []*protocol.LLOAttributedObservationTelemetry{first}
-	}
 	if len(ao.obs.RemoveChannelIDs) > 0 {
 		first.RemoveChannelIds = make([]uint32, 0, len(ao.obs.RemoveChannelIDs))
 		for id := range ao.obs.RemoveChannelIDs {

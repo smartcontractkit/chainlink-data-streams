@@ -877,13 +877,15 @@ func Test_StateTransition_PredecessorConfigNeedsQuorum(t *testing.T) {
 // set of its own and attest a handover that never happened.
 func Test_StateTransition_PredecessorConfigAgreementIsPerRound(t *testing.T) {
 	ctx := tests.Context(t)
-	p, kv := stagedPlugin(t, &mockPredecessorRetirementReportCache{report: protocol.RetirementReport{}})
+	p, kv := stagedPlugin(t, &mockPredecessorRetirementReportCache{verifyErr: errors.New("Verify failed; not enough valid signatures")})
 
-	// Round 2 reaches quorum on the real signer set but carries no retirement
-	// report, so the instance stays in staging and the agreement is discarded.
+	// Round 2 reaches quorum on the real signer set but its retirement report
+	// fails verification, so the instance stays in staging and the agreement is
+	// discarded. A signer set is only valid alongside a report, so the vote
+	// cannot be cast on its own.
 	votesOnly := make([]ocrtypes.AttributedObservation, 0, 4)
-	for i := 0; i < 4; i++ {
-		votesOnly = append(votesOnly, ao(i, mustEncodeObs(t, Observation{UnixTimestampNanoseconds: 1000, PredecessorSigners: testPredecessorSigners})))
+	for i := range 4 {
+		votesOnly = append(votesOnly, ao(i, mustEncodeObs(t, Observation{UnixTimestampNanoseconds: 1000, AttestedPredecessorRetirement: []byte("attested"), PredecessorSigners: testPredecessorSigners})))
 	}
 	_, err := p.StateTransition(ctx, 2, ocrtypes.AttributedQuery{}, votesOnly, kv, testBlobs)
 	require.NoError(t, err)

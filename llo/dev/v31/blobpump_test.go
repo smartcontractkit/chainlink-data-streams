@@ -106,7 +106,8 @@ func Test_blobPump_DropsUnrequestedStreams(t *testing.T) {
 	p.SetInput(pumpInputFor(3))
 	snap, reason := p.Take(t.Context(), 3)
 	require.NotNil(t, snap, "reason: %s", reason)
-	require.Equal(t, 1, snap.streamCount)
+	require.Equal(t, 1, snap.requestedStreams)
+	require.Equal(t, 1, snap.observedStreams)
 }
 
 func Test_dropUnobservable(t *testing.T) {

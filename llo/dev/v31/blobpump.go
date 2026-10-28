@@ -159,8 +159,10 @@ type blobSnapshot struct {
 	// fetch the blob at or beyond this sequence number. Always greater than
 	// usableBefore by at least BlobFetchMarginRounds.
 	expiresAt uint64
-	// streamCount is the number of streams the cycle observed (for logging).
-	streamCount int
+	// requestedStreams and observedStreams are how many streams the cycle was
+	// asked for and how many the blob carries a value for (for logging).
+	requestedStreams int
+	observedStreams  int
 }
 
 // blobPump gathers stream observations off the OCR critical path and broadcasts
@@ -471,7 +473,7 @@ func (p *blobPump) cycle() {
 	p.park(snap)
 
 	if p.verboseLogging {
-		p.lggr.Debugw("Blob pump parked snapshot", "seqNr", in.seqNr, "usableBefore", snap.usableBefore, "expiresAt", snap.expiresAt, "streams", snap.streamCount, "handleBytes", len(snap.handleBytes))
+		p.lggr.Debugw("Blob pump parked snapshot", "seqNr", in.seqNr, "usableBefore", snap.usableBefore, "expiresAt", snap.expiresAt, "requestedStreams", snap.requestedStreams, "observedStreams", snap.observedStreams, "handleBytes", len(snap.handleBytes))
 	}
 }
 
@@ -501,6 +503,12 @@ func (p *blobPump) observe(in pumpInput) (*blobSnapshot, error) {
 		sv = requested
 	}
 	dropUnobservable(sv, p.lggr, in.seqNr)
+	observed := 0
+	for _, v := range sv {
+		if v != nil {
+			observed++
+		}
+	}
 
 	payload, err := marshalStreamValues(sv)
 	if err != nil {
@@ -526,7 +534,9 @@ func (p *blobPump) observe(in pumpInput) (*blobSnapshot, error) {
 		forSeqNr:     in.seqNr,
 		usableBefore: usableBefore,
 		expiresAt:    expiresAt,
-		streamCount:  len(sv),
+
+		requestedStreams: len(in.streams),
+		observedStreams:  observed,
 	}, nil
 }
 

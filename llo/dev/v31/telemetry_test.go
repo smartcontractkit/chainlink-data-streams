@@ -1,7 +1,6 @@
 package llo
 
 import (
-	"errors"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -178,7 +177,7 @@ func Test_AttributedObservationTelemetry_StateTransition(t *testing.T) {
 		require.Equal(t, out.ObservationTimestampNanoseconds, m.AgreedObservationTimestampNanoseconds)
 	})
 
-	t.Run("invalid observation carries only the decode error", func(t *testing.T) {
+	t.Run("invalid observation fails the round and emits nothing", func(t *testing.T) {
 		p.OracleID = 1 // emitter for seqNr 5
 		aos := []ocrtypes.AttributedObservation{
 			ao(0, mustEncodeObs(t, obsAt(0, 3000))),
@@ -187,20 +186,8 @@ func Test_AttributedObservationTelemetry_StateTransition(t *testing.T) {
 			ao(3, []byte{0x7f}),
 		}
 		_, err := p.StateTransition(ctx, 5, ocrtypes.AttributedQuery{}, aos, kv, testBlobs)
-		require.NoError(t, err)
-		r := requireAORound(t, tel, true)
-		require.Len(t, r.aos, 4)
-
-		bad := r.aos[3]
-		require.Equal(t, commontypes.OracleID(3), bad.observer)
-		msgs := tel.makeTelemetry(r.seqNr, r.agreedObservationTimestampNanos, bad)
-		require.Len(t, msgs, 1)
-		require.NotNil(t, msgs[0].DecodeError)
-		require.Contains(t, *msgs[0].DecodeError, "unknown observation wire version")
-		require.Empty(t, msgs[0].StreamValues)
-		require.Empty(t, msgs[0].RemoveChannelIds)
-		require.Empty(t, msgs[0].UpdateChannelDefinitions)
-		require.Zero(t, msgs[0].OracleObservationTimestampNanoseconds)
+		require.ErrorContains(t, err, "unknown observation wire version")
+		requireAORound(t, tel, false)
 	})
 
 	t.Run("aborted round emits nothing", func(t *testing.T) {
@@ -454,13 +441,6 @@ func Test_AttributedObservationTelemetry_Split(t *testing.T) {
 		require.Len(t, msgs, 501, "votes part plus one part per value")
 		require.Empty(t, msgs[0].StreamValues)
 		requireParts(t, msgs)
-	})
-
-	t.Run("decode error", func(t *testing.T) {
-		msgs := tel.makeTelemetry(9, 5678, attributedObservation{observer: 4, decodeErr: errors.New("boom")})
-		require.Len(t, msgs, 1)
-		require.Equal(t, "boom", msgs[0].GetDecodeError())
-		require.Empty(t, msgs[0].StreamValues)
 	})
 }
 

@@ -81,7 +81,7 @@ func Test_Reports_StateTransition_Concurrent_OptsIsolation(t *testing.T) {
 		p.ReportCodecs = map[llotypes.ReportFormat]protocol.ReportCodec{llotypes.ReportFormatJSON: optsEchoCodec{}}
 		kv := newMemKV()
 
-		_, err := p.StateTransition(ctx, 1, ocrtypes.AttributedQuery{}, obsRound(1_000, nil), kv, testBlobs)
+		_, err := p.StateTransition(ctx, 1, ocrtypes.AttributedQuery{}, emptyRound(), kv, testBlobs)
 		require.NoError(t, err)
 		_, err = p.StateTransition(ctx, 2, ocrtypes.AttributedQuery{}, obsRound(2_000, llotypes.ChannelDefinitions{1: withOpts(1)}), kv, testBlobs)
 		require.NoError(t, err)
@@ -178,7 +178,7 @@ func Test_Reports_RebuildsEvictedGeneration(t *testing.T) {
 	p.ReportCodecs = map[llotypes.ReportFormat]protocol.ReportCodec{llotypes.ReportFormatJSON: optsEchoCodec{}}
 	kv := newMemKV()
 
-	_, err := p.StateTransition(ctx, 1, ocrtypes.AttributedQuery{}, obsRound(1_000, nil), kv, testBlobs)
+	_, err := p.StateTransition(ctx, 1, ocrtypes.AttributedQuery{}, emptyRound(), kv, testBlobs)
 	require.NoError(t, err)
 	// Round 2 agrees the channel; it takes effect in round 3, which seeds its
 	// watermark, and round 4 is the first that reports it. No round after 2
