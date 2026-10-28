@@ -103,6 +103,11 @@ type Plugin struct {
 	// aggregation tolerates. It sets the contribution floor, see
 	// minContributions.
 	AggregationFaultTolerance int
+
+	// MinRoundInterval is the configured DeltaRound, from the shared OCR config.
+	// It floors the round interval the state transition measures from agreed
+	// timestamps. See roundIntervalEstimate.
+	MinRoundInterval time.Duration
 }
 
 // minContributions is the contribution floor: the fewest contributions a stream
@@ -544,6 +549,12 @@ func (p *Plugin) fetchBlobsDecodeAndValidateObservation(ctx context.Context, seq
 		return Observation{}, errors.New("PredecessorSigners is not empty even though this observation carries no AttestedPredecessorRetirement")
 	}
 
+	// A cycle cannot have started in a round that has not happened yet. The
+	// lower bound is not checked: an old cycle is a stale contribution, which
+	// is the state transition's call, not an invalid observation.
+	if observation.CycleStartSeqNr > seqNr {
+		return Observation{}, fmt.Errorf("stream values gathered for a future round: cycle start seqNr %d > %d", observation.CycleStartSeqNr, seqNr)
+	}
 	if len(observation.StreamValues) > protocol.MaxObservationStreamValuesLength {
 		return Observation{}, fmt.Errorf("StreamValues is too long: %v vs %v", len(observation.StreamValues), protocol.MaxObservationStreamValuesLength)
 	}

@@ -205,6 +205,20 @@ message LLOHotStateProto {
     repeated LLOChannelIDAndValidAfterNanosecondsProto validAfterNanoseconds = 2;
     repeated uint32 reportableChannelIDs = 3;
     repeated LLOStreamAggregate streamAggregates = 4;
+    // Agreed observation timestamps of the most recent rounds, oldest first,
+    // the last one being the round that wrote this record. Bounded to the
+    // window LLO v31 needs to judge the age of blob-carried stream values
+    // against replicated time; see llo/dev/v31 agreedTimestampWindow.
+    repeated uint64 recentAgreedTimestampsNanoseconds = 5;
+}
+
+// LLOBlobPayloadProto is the stream values blob a v31 observation references.
+// cycleStartSeqNr is the sequence number the blob pump saw when the cycle that
+// gathered these values started. The state transition measures the values' age
+// from it against replicated data only, so the blob carries no clock reading.
+message LLOBlobPayloadProto {
+    uint64 cycleStartSeqNr = 1;
+    map<uint32, LLOStreamValue> streamValues = 2;
 }
 
 // LLOPrecursorProto is the v31 ReportsPlusPrecursor: everything Reports needs,

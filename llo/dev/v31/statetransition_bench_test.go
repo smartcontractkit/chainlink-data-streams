@@ -121,7 +121,7 @@ func benchObservationHandles(b *testing.B, c stateTransitionBenchCase, blobs *ll
 		for s := range c.streams + 2 {
 			values[llotypes.StreamID(s+1)] = protocol.ToDecimal(decimal.New(int64(1_000_000_000+s*1_000+o), -8)) //nolint:gosec // G115 bounded by the case
 		}
-		payload, err := marshalStreamValues(values)
+		payload, err := marshalStreamValues(values, 1)
 		require.NoError(b, err)
 		handle, err := blobs.BroadcastBlob(context.Background(), payload, ocr3_1types.BlobExpirationHintSequenceNumber{SeqNr: 0})
 		require.NoError(b, err)

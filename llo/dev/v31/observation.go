@@ -3,6 +3,7 @@ package llo
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"sort"
 
@@ -39,6 +40,11 @@ type Observation struct {
 	// Signer order is significant: a signature names its signer by index.
 	PredecessorSigners [][]byte
 	PredecessorF       uint8
+	// CycleStartSeqNr is the sequence number the sender's blob pump saw when
+	// the cycle that gathered StreamValues started, read from the blob. Zero
+	// when the observation carries no stream values. The state transition
+	// measures the values' age from it; see selectFreshContributions.
+	CycleStartSeqNr uint64
 }
 
 // observationWireVersion is the leading byte of the v31 observation framing.
@@ -228,9 +234,12 @@ func decodeObservation(ctx context.Context, raw ocrtypes.Observation, bf ocr3_1t
 			if err != nil {
 				return Observation{}, err
 			}
-			chunk := &protocol.LLOObservationProto{}
+			chunk := &protocol.LLOBlobPayloadProto{}
 			if err := proto.Unmarshal(raw, chunk); err != nil {
 				return Observation{}, fmt.Errorf("unmarshal blob payload: %w", err)
+			}
+			if chunk.CycleStartSeqNr == 0 {
+				return Observation{}, errors.New("blob payload carries no cycle start seqNr")
 			}
 			values := make(protocol.StreamValues, len(chunk.StreamValues))
 			for id, pbSv := range chunk.StreamValues {
@@ -243,11 +252,19 @@ func decodeObservation(ctx context.Context, raw ocrtypes.Observation, bf ocr3_1t
 			// Only a payload that decoded cleanly is memoized. A fetch failure is
 			// node-local and transient, and a decode failure is deterministic and
 			// recomputed for free, so neither is worth remembering.
-			entry = blobPayloadEntry{values: values, size: len(raw)}
+			entry = blobPayloadEntry{values: values, size: len(raw), cycleStartSeqNr: chunk.CycleStartSeqNr}
 			memo.put(h.key, entry)
 		}
 
 		budget -= entry.size
+		// One observation is one cycle's values, so every blob it names must
+		// come from the same cycle. Deterministic: every oracle reads the same
+		// payloads.
+		if obs.CycleStartSeqNr == 0 {
+			obs.CycleStartSeqNr = entry.cycleStartSeqNr
+		} else if obs.CycleStartSeqNr != entry.cycleStartSeqNr {
+			return Observation{}, fmt.Errorf("observation references blobs from different cycles: seqNr %d and %d", obs.CycleStartSeqNr, entry.cycleStartSeqNr)
+		}
 		if obs.StreamValues == nil {
 			obs.StreamValues = make(protocol.StreamValues, len(entry.values))
 		}

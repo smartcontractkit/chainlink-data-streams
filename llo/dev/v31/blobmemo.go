@@ -64,6 +64,8 @@ type blobPayloadCache struct {
 type blobPayloadEntry struct {
 	values protocol.StreamValues
 	size   int
+	// cycleStartSeqNr is the blob's own, see LLOBlobPayloadProto.
+	cycleStartSeqNr uint64
 }
 
 func newBlobPayloadCache() *blobPayloadCache {

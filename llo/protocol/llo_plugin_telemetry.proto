@@ -23,6 +23,12 @@ message LLOOutcomeTelemetry {
   // 2*aggregationFaultTolerance+1. Zero in LLO v30, which derives the floor
   // from the consensus F instead.
   uint32 min_contributions = 12;
+  // Stream value freshness, LLO v31 only: streams whose aggregation left out
+  // stale contributions, streams that fell back to every contribution because
+  // the fresh ones missed min_contributions, and contributions judged stale.
+  uint32 streams_filtered = 13;
+  uint32 streams_fallen_back = 14;
+  uint32 contributions_stale = 15;
 }
 
 message LLOAggregatorStreamValue {

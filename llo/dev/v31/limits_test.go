@@ -118,8 +118,14 @@ func TestLimits_HotStateWorstCaseFitsPerKeyLimit(t *testing.T) {
 		reportable[cid] = true
 	}
 
+	// A full window of maximal agreed timestamps.
+	window := make([]uint64, agreedTimestampWindow)
+	for i := range window {
+		window[i] = maxTimestamp
+	}
+
 	kv := newMemKV()
-	require.NoError(t, writeHotState(kv, maxTimestamp, validAfter, reportable, carry, logger.Test(t)))
+	require.NoError(t, writeHotState(kv, maxTimestamp, validAfter, reportable, carry, window, logger.Test(t)))
 
 	record, err := kv.Read(keyHotState)
 	require.NoError(t, err)
@@ -145,7 +151,7 @@ func TestLimits_HotStateTruncatesAboveCap(t *testing.T) {
 	}
 
 	kv := newMemKV()
-	require.NoError(t, writeHotState(kv, 1, nil, nil, carry, logger.Test(t)))
+	require.NoError(t, writeHotState(kv, 1, nil, nil, carry, nil, logger.Test(t)))
 
 	state := &kvState{
 		channelDefinitions:    llotypes.ChannelDefinitions{},

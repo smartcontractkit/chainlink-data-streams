@@ -119,8 +119,8 @@ func ResolveBlobRounds(maxSnapshotRounds, blobLifetimeRounds uint64) (uint64, ui
 	if blobLifetimeRounds > MaxBlobLifetimeRounds {
 		return 0, 0, fmt.Errorf("BlobLifetimeRounds (%d) exceeds MaxBlobLifetimeRounds (%d)", blobLifetimeRounds, MaxBlobLifetimeRounds)
 	}
-	// A snapshot is last referenced at forSeqNr+maxSnapshotRounds-1 and its blob
-	// expires at forSeqNr+blobLifetimeRounds, so this is the fetch margin.
+	// A snapshot is last referenced at cycleStartSeqNr+maxSnapshotRounds-1 and its blob
+	// expires at cycleStartSeqNr+blobLifetimeRounds, so this is the fetch margin.
 	// Subtract from the already bounded lifetime rather than adding to
 	// maxSnapshotRounds, whose sum would wrap and pass the check, leaving the
 	// pump to overflow usableBefore and call every snapshot stale.
@@ -150,8 +150,8 @@ func (in pumpInput) observable() bool {
 type blobSnapshot struct {
 	handleBytes []byte
 	observedAt  time.Time
-	// forSeqNr is the sequence number known when the cycle started.
-	forSeqNr uint64
+	// cycleStartSeqNr is the sequence number known when the cycle started.
+	cycleStartSeqNr uint64
 	// usableBefore is the local freshness gate: this node must not reference the
 	// snapshot at or beyond this sequence number. Purely local, not on the wire.
 	usableBefore uint64
@@ -319,7 +319,7 @@ func (p *blobPump) Take(ctx context.Context, seqNr uint64) (*blobSnapshot, strin
 		return nil, "no snapshot parked"
 	case seqNr >= snap.usableBefore:
 		p.miss()
-		return nil, fmt.Sprintf("snapshot too stale (forSeqNr=%d usableBefore=%d expiresAt=%d)", snap.forSeqNr, snap.usableBefore, snap.expiresAt)
+		return nil, fmt.Sprintf("snapshot too stale (cycleStartSeqNr=%d usableBefore=%d expiresAt=%d)", snap.cycleStartSeqNr, snap.usableBefore, snap.expiresAt)
 	case ageLimit > 0 && now.Sub(snap.observedAt) > ageLimit:
 		p.miss()
 		return nil, fmt.Sprintf("snapshot too old (age=%s max=%s)", now.Sub(snap.observedAt), ageLimit)
@@ -510,7 +510,7 @@ func (p *blobPump) observe(in pumpInput) (*blobSnapshot, error) {
 		}
 	}
 
-	payload, err := marshalStreamValues(sv)
+	payload, err := marshalStreamValues(sv, in.seqNr)
 	if err != nil {
 		return nil, err
 	}
@@ -529,11 +529,11 @@ func (p *blobPump) observe(in pumpInput) (*blobSnapshot, error) {
 	}
 
 	return &blobSnapshot{
-		handleBytes:  handleBytes,
-		observedAt:   observedAt,
-		forSeqNr:     in.seqNr,
-		usableBefore: usableBefore,
-		expiresAt:    expiresAt,
+		handleBytes:     handleBytes,
+		observedAt:      observedAt,
+		cycleStartSeqNr: in.seqNr,
+		usableBefore:    usableBefore,
+		expiresAt:       expiresAt,
 
 		requestedStreams: len(in.streams),
 		observedStreams:  observed,
@@ -544,20 +544,20 @@ func (p *blobPump) observe(in pumpInput) (*blobSnapshot, error) {
 // broadcast within the cycle's own timeout, and returns the handle together
 // with the expiration hint it was broadcast under.
 //
-// forSeqNr is the round the values were gathered for. The expiration hint is
+// cycleStartSeqNr is the round the values were gathered for. The expiration hint is
 // recomputed per attempt from the latest round published by Observation, so a
 // retry that lands rounds later does not hand peers a blob that expires as of
 // a sequence number already behind them. The hint only moves forward, and it
 // bounds fetchability, not staleness: how stale the values themselves may be is
 // still decided locally by usableBefore.
-func (p *blobPump) broadcast(ctx context.Context, payload []byte, forSeqNr uint64) (ocr3_1types.BlobHandle, uint64, error) {
+func (p *blobPump) broadcast(ctx context.Context, payload []byte, cycleStartSeqNr uint64) (ocr3_1types.BlobHandle, uint64, error) {
 	var lastErr error
 	for attempt := 1; attempt <= BlobBroadcastAttempts; attempt++ {
-		expiresAt := max(forSeqNr, p.latestSeqNr()) + p.blobLifetimeRounds
+		expiresAt := max(cycleStartSeqNr, p.latestSeqNr()) + p.blobLifetimeRounds
 		handle, err := p.bbf.BroadcastBlob(ctx, payload, ocr3_1types.BlobExpirationHintSequenceNumber{SeqNr: expiresAt})
 		if err == nil {
 			if attempt > 1 {
-				p.lggr.Infow("Blob broadcast succeeded after retry", "attempt", attempt, "forSeqNr", forSeqNr, "expiresAt", expiresAt)
+				p.lggr.Infow("Blob broadcast succeeded after retry", "attempt", attempt, "cycleStartSeqNr", cycleStartSeqNr, "expiresAt", expiresAt)
 			}
 			return handle, expiresAt, nil
 		}
@@ -566,7 +566,7 @@ func (p *blobPump) broadcast(ctx context.Context, payload []byte, forSeqNr uint6
 			break
 		}
 		backoff := BlobBroadcastRetryBackoff << (attempt - 1)
-		p.lggr.Warnw("Blob broadcast failed; retrying within this cycle", "attempt", attempt, "attempts", BlobBroadcastAttempts, "backoff", backoff, "forSeqNr", forSeqNr, "err", err)
+		p.lggr.Warnw("Blob broadcast failed; retrying within this cycle", "attempt", attempt, "attempts", BlobBroadcastAttempts, "backoff", backoff, "cycleStartSeqNr", cycleStartSeqNr, "err", err)
 		select {
 		case <-ctx.Done():
 			return ocr3_1types.BlobHandle{}, 0, fmt.Errorf("BroadcastBlob error: %w (last attempt: %w)", ctx.Err(), lastErr)
@@ -605,11 +605,11 @@ func dropUnobservable(sv protocol.StreamValues, lggr logger.Logger, seqNr uint64
 	}
 }
 
-// marshalStreamValues serializes stream values into the stream-values-only
-// proto that is carried by a blob, framed by encodeBlobPayload (which
-// compresses it when that shrinks the payload). Returns nil when nothing was
-// observed.
-func marshalStreamValues(sv protocol.StreamValues) ([]byte, error) {
+// marshalStreamValues serializes stream values and the seqNr the cycle that
+// gathered them started in into the blob payload proto, framed by
+// encodeBlobPayload (which compresses it when that shrinks the payload).
+// Returns nil when nothing was observed.
+func marshalStreamValues(sv protocol.StreamValues, cycleStartSeqNr uint64) ([]byte, error) {
 	pb, err := streamValuesToProto(sv)
 	if err != nil {
 		return nil, err
@@ -618,7 +618,7 @@ func marshalStreamValues(sv protocol.StreamValues) ([]byte, error) {
 		return nil, nil
 	}
 
-	raw, err := deterministicMarshal.Marshal(&protocol.LLOObservationProto{StreamValues: pb})
+	raw, err := deterministicMarshal.Marshal(&protocol.LLOBlobPayloadProto{CycleStartSeqNr: cycleStartSeqNr, StreamValues: pb})
 	if err != nil {
 		return nil, fmt.Errorf("marshal stream values: %w", err)
 	}

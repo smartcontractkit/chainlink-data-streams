@@ -69,13 +69,13 @@ func Test_blobPump_TakeKicksNextCycle(t *testing.T) {
 	p.SetInput(pumpInputFor(3))
 	snap, reason = p.Take(t.Context(), 3)
 	require.NotNil(t, snap, "reason: %s", reason)
-	require.Equal(t, uint64(2), snap.forSeqNr)
+	require.Equal(t, uint64(2), snap.cycleStartSeqNr)
 	require.Equal(t, uint64(2+DefaultMaxSnapshotRounds), snap.usableBefore)
 	require.Equal(t, uint64(2+DefaultBlobLifetimeRounds), snap.expiresAt)
 	require.NotEmpty(t, snap.handleBytes)
 	require.Equal(t, uint64(1), p.Misses())
 
-	// The blob was hinted to expire at forSeqNr + lifetime. Assert on the first
+	// The blob was hinted to expire at cycleStartSeqNr + lifetime. Assert on the first
 	// broadcast: later cycles re-broadcast an identical payload, which is
 	// content-addressed to the same handle, so only the ordered hint log
 	// distinguishes them.
@@ -123,11 +123,11 @@ func Test_dropUnobservable(t *testing.T) {
 	assert.Nil(t, sv[3])
 
 	// What is left decodes on the receiving side.
-	payload, err := marshalStreamValues(sv)
+	payload, err := marshalStreamValues(sv, 1)
 	require.NoError(t, err)
 	raw, err := decodeBlobPayload(payload, maxDecompressedBlobPayloadBytes)
 	require.NoError(t, err)
-	chunk := &protocol.LLOObservationProto{}
+	chunk := &protocol.LLOBlobPayloadProto{}
 	require.NoError(t, proto.Unmarshal(raw, chunk))
 	require.Len(t, chunk.StreamValues, 1)
 	_, err = streamValueFromProtoAllowNil(chunk.StreamValues[1])
@@ -163,7 +163,7 @@ func Test_blobPump_RejectsStaleSnapshots(t *testing.T) {
 	// is still fetchable by peers.
 	t.Run("too stale by sequence number", func(t *testing.T) {
 		p := testPump(t, mockDS(), newFakeBroadcaster(), time.Minute)
-		p.park(&blobSnapshot{handleBytes: []byte{1}, observedAt: time.Now(), forSeqNr: 2, usableBefore: 4, expiresAt: 6})
+		p.park(&blobSnapshot{handleBytes: []byte{1}, observedAt: time.Now(), cycleStartSeqNr: 2, usableBefore: 4, expiresAt: 6})
 
 		snap, reason := p.Take(t.Context(), 4)
 		require.Nil(t, snap)
@@ -173,7 +173,7 @@ func Test_blobPump_RejectsStaleSnapshots(t *testing.T) {
 
 	t.Run("expired by wall clock", func(t *testing.T) {
 		p := testPump(t, mockDS(), newFakeBroadcaster(), time.Nanosecond)
-		p.park(&blobSnapshot{handleBytes: []byte{1}, observedAt: time.Now().Add(-time.Hour), forSeqNr: 2, usableBefore: 100, expiresAt: 100})
+		p.park(&blobSnapshot{handleBytes: []byte{1}, observedAt: time.Now().Add(-time.Hour), cycleStartSeqNr: 2, usableBefore: 100, expiresAt: 100})
 
 		snap, reason := p.Take(t.Context(), 3)
 		require.Nil(t, snap)
@@ -182,7 +182,7 @@ func Test_blobPump_RejectsStaleSnapshots(t *testing.T) {
 
 	t.Run("age check disabled", func(t *testing.T) {
 		p := testPump(t, mockDS(), newFakeBroadcaster(), -1)
-		p.park(&blobSnapshot{handleBytes: []byte{1}, observedAt: time.Now().Add(-time.Hour), forSeqNr: 2, usableBefore: 100, expiresAt: 100})
+		p.park(&blobSnapshot{handleBytes: []byte{1}, observedAt: time.Now().Add(-time.Hour), cycleStartSeqNr: 2, usableBefore: 100, expiresAt: 100})
 
 		snap, _ := p.Take(t.Context(), 3)
 		require.NotNil(t, snap, "with the age check disabled only maxSnapshotRounds bounds staleness")
@@ -193,7 +193,7 @@ func Test_blobPump_RejectsStaleSnapshots(t *testing.T) {
 	// cadence would silently stop the node contributing stream values.
 	t.Run("derived age check is inert until a round period is measured", func(t *testing.T) {
 		p := testPump(t, mockDS(), newFakeBroadcaster(), 0)
-		p.park(&blobSnapshot{handleBytes: []byte{1}, observedAt: time.Now().Add(-time.Hour), forSeqNr: 2, usableBefore: 100, expiresAt: 100})
+		p.park(&blobSnapshot{handleBytes: []byte{1}, observedAt: time.Now().Add(-time.Hour), cycleStartSeqNr: 2, usableBefore: 100, expiresAt: 100})
 
 		snap, reason := p.Take(t.Context(), 3)
 		require.NotNil(t, snap, "reason: %s", reason)
@@ -204,7 +204,7 @@ func Test_blobPump_RejectsStaleSnapshots(t *testing.T) {
 		p.mu.Lock()
 		p.roundPeriod = time.Millisecond
 		p.mu.Unlock()
-		p.park(&blobSnapshot{handleBytes: []byte{1}, observedAt: time.Now().Add(-time.Hour), forSeqNr: 2, usableBefore: 100, expiresAt: 100})
+		p.park(&blobSnapshot{handleBytes: []byte{1}, observedAt: time.Now().Add(-time.Hour), cycleStartSeqNr: 2, usableBefore: 100, expiresAt: 100})
 
 		snap, reason := p.Take(t.Context(), 3)
 		require.Nil(t, snap)
@@ -678,7 +678,7 @@ func Test_blobPump_RetriesFailedBroadcast(t *testing.T) {
 
 	snap, reason := p.Take(t.Context(), 3)
 	require.NotNil(t, snap, reason)
-	require.EqualValues(t, 2, snap.forSeqNr, "the retry does not change the round the values were gathered for")
+	require.EqualValues(t, 2, snap.cycleStartSeqNr, "the retry does not change the round the values were gathered for")
 }
 
 // Test_blobPump_BroadcastRetryRefreshesExpiry asserts a retry that lands after

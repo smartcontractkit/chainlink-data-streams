@@ -20,7 +20,7 @@ import (
 // referencing the resulting handle.
 func blobObservation(t *testing.T, bc *llotest.BlobBroadcastFetcher, sv protocol.StreamValues) ocrtypes.Observation {
 	t.Helper()
-	payload, err := marshalStreamValues(sv)
+	payload, err := marshalStreamValues(sv, 1)
 	require.NoError(t, err)
 	handle, err := bc.BroadcastBlob(tests.Context(t), payload, ocr3_1types.BlobExpirationHintSequenceNumber{SeqNr: 100})
 	require.NoError(t, err)
@@ -124,7 +124,7 @@ func Test_BlobPayloadCache_BudgetChargedOnHit(t *testing.T) {
 	ctx := tests.Context(t)
 	bc := newFakeBroadcaster()
 	sv := testStreamValues(20)
-	payload, err := marshalStreamValues(sv)
+	payload, err := marshalStreamValues(sv, 1)
 	require.NoError(t, err)
 	handle, err := bc.BroadcastBlob(ctx, payload, ocr3_1types.BlobExpirationHintSequenceNumber{SeqNr: 100})
 	require.NoError(t, err)

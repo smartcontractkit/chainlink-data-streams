@@ -1034,11 +1034,11 @@ func Test_MarshalStreamValues_IsDeterministic(t *testing.T) {
 		sv[id] = protocol.ToDecimal(decimal.NewFromInt(int64(id)))
 	}
 
-	want, err := marshalStreamValues(sv)
+	want, err := marshalStreamValues(sv, 1)
 	require.NoError(t, err)
 	require.NotEmpty(t, want)
 	for range 64 {
-		got, err := marshalStreamValues(sv)
+		got, err := marshalStreamValues(sv, 1)
 		require.NoError(t, err)
 		require.Equal(t, want, got, "the same stream values must marshal to the same payload")
 	}

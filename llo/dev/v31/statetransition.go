@@ -71,7 +71,7 @@ func (p *Plugin) StateTransition(ctx context.Context, seqNr uint64, _ ocrtypes.A
 		if err := writeChannelState(kvRW, seqNr, nil); err != nil {
 			return nil, err
 		}
-		if err := writeHotState(kvRW, 0, nil, nil, nil, p.Logger); err != nil {
+		if err := writeHotState(kvRW, 0, nil, nil, nil, nil, p.Logger); err != nil {
 			return nil, err
 		}
 		return encodePrecursor(precursor{LifeCycleStage: stage})
@@ -112,6 +112,9 @@ func (p *Plugin) StateTransition(ctx context.Context, seqNr uint64, _ ocrtypes.A
 		StreamAggregates:                protocol.StreamAggregates{},
 	}
 	p.warnIfAheadOfLocalClock(out.ObservationTimestampNanoseconds, seqNr)
+	// The window ends with this round, so a contribution gathered this round
+	// resolves to this round's agreed timestamp.
+	agreedTimestamps := appendAgreedTimestamp(prev.recentAgreedTimestamps, out.ObservationTimestampNanoseconds)
 
 	// Lifecycle stage & promotion.
 	promotedValidAfter := map[llotypes.ChannelID]uint64(nil)
@@ -227,8 +230,20 @@ func (p *Plugin) StateTransition(ctx context.Context, seqNr uint64, _ ocrtypes.A
 	// the r/agg record). carryForward accumulates the values to persist for the
 	// next round. Runs over the effective set, which is what was observed. The
 	// agreed value of every pair history requires is recorded as it is computed.
+	//
+	// Stale contributions are left out first, per stream, from replicated data
+	// only; see freshness.go.
+	streamValues, freshness := selectFreshContributions(tally.streamObservations, seqNr, out.ObservationTimestampNanoseconds,
+		agreedTimestamps, roundIntervalEstimate(agreedTimestamps, p.MinRoundInterval), p.minContributions())
+	if freshness.any() && p.Config.VerboseLogging {
+		p.Logger.Debugw("Rejected stale stream values", "seqNr", seqNr,
+			"streamsFiltered", freshness.streamsFiltered, "streamsFallenBack", freshness.streamsFallenBack,
+			"contributionsStale", freshness.contributionsStale, "staleByRounds", freshness.staleByRounds,
+			"staleByTime", freshness.staleByTime, "staleBeforeWindow", freshness.staleBeforeWindow,
+			"maxStreamValueAge", freshness.maxStreamValueAge, "roundInterval", freshness.roundInterval)
+	}
 	carryForward := map[llotypes.StreamID]map[llotypes.Aggregator]*protocol.TimestampedStreamValue{}
-	if err := p.aggregate(prev.carryForward, carryForward, effective, tally.streamObservations, out.StreamAggregates,
+	if err := p.aggregate(prev.carryForward, carryForward, effective, streamValues, out.StreamAggregates,
 		history, requirements, out.ObservationTimestampNanoseconds); err != nil {
 		return nil, err
 	}
@@ -254,7 +269,7 @@ func (p *Plugin) StateTransition(ctx context.Context, seqNr uint64, _ ocrtypes.A
 	unreportable.log(p.Logger, "StateTransition", seqNr)
 
 	// Flush KV mutations.
-	if err := p.flushKV(kvRW, seqNr, prev, out, pending, codecSupport, carryForward, history); err != nil {
+	if err := p.flushKV(kvRW, seqNr, prev, out, pending, codecSupport, carryForward, agreedTimestamps, history); err != nil {
 		return nil, err
 	}
 
@@ -265,7 +280,8 @@ func (p *Plugin) StateTransition(ctx context.Context, seqNr uint64, _ ocrtypes.A
 	// written. Node-local observation only; nothing reads these back.
 	p.captureHistoryTelemetry(history, requirements)
 	p.captureInsufficientHistory(effective, prev.opts, history)
-	p.captureOutcomeTelemetry(out, seqNr)
+	freshness.record(p.DonID)
+	p.captureOutcomeTelemetry(out, seqNr, freshness)
 	p.captureAttributedObservationTelemetry(out, seqNr, tally.attributed)
 
 	// After telemetry, which reports every aggregate.
@@ -292,7 +308,9 @@ type observationTally struct {
 	// this round, deduped by decodeObservation. It is merged into the persisted
 	// per-oracle record rather than counted here: see writeCodecSupport.
 	supportedFormatsByOracle map[commontypes.OracleID]map[llotypes.ReportFormat]struct{}
-	streamObservations       map[llotypes.StreamID][]protocol.StreamValue
+	// streamObservations keeps each oracle's contribution apart, so freshness
+	// can be judged per contribution before the values are aggregated.
+	streamObservations map[llotypes.StreamID][]streamContribution
 	// attributed is every observation as decoded, in aos order. Collected only
 	// for attributed observation telemetry.
 	attributed []attributedObservation
@@ -318,7 +336,7 @@ func (p *Plugin) decodeObservations(ctx context.Context, seqNr uint64, aos []ocr
 		updateChannelDefinitionsByHash: make(map[[32]byte]protocol.ChannelDefinitionWithID),
 		updateChannelVotesByHash:       make(map[[32]byte]int),
 		supportedFormatsByOracle:       make(map[commontypes.OracleID]map[llotypes.ReportFormat]struct{}),
-		streamObservations:             make(map[llotypes.StreamID][]protocol.StreamValue),
+		streamObservations:             make(map[llotypes.StreamID][]streamContribution),
 	}
 
 	// Decode concurrently: each observation may reference blobs that are not yet
@@ -398,7 +416,7 @@ func (p *Plugin) decodeObservations(ctx context.Context, seqNr uint64, aos []ocr
 			if sv == nil {
 				continue
 			}
-			tally.streamObservations[id] = append(tally.streamObservations[id], sv)
+			tally.streamObservations[id] = append(tally.streamObservations[id], streamContribution{value: sv, cycleStartSeqNr: observation.CycleStartSeqNr})
 		}
 	}
 	return tally, nil
@@ -758,6 +776,7 @@ func (p *Plugin) flushKV(
 	pending llotypes.ChannelDefinitions,
 	codecSupport map[commontypes.OracleID]map[llotypes.ReportFormat]struct{},
 	carryForward map[llotypes.StreamID]map[llotypes.Aggregator]*protocol.TimestampedStreamValue,
+	recentAgreedTimestamps []uint64,
 	history *historyStore,
 ) error {
 	if out.LifeCycleStage != prev.lifeCycleStage {
@@ -802,7 +821,7 @@ func (p *Plugin) flushKV(
 		}
 	}
 
-	return writeHotState(kvRW, out.ObservationTimestampNanoseconds, out.ValidAfterNanoseconds, reportable, carryForward, p.Logger)
+	return writeHotState(kvRW, out.ObservationTimestampNanoseconds, out.ValidAfterNanoseconds, reportable, carryForward, recentAgreedTimestamps, p.Logger)
 }
 
 // channelDefinitionsChanged reports whether the channel set or any individual

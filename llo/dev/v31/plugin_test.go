@@ -191,7 +191,14 @@ func mustEncodeObs(t *testing.T, obs Observation) []byte {
 		require.NoError(t, err)
 		return b
 	}
-	payload, err := marshalStreamValues(obs.StreamValues)
+	// A cycle start of 1 is valid for every round and stale after
+	// MaxStreamValueAgeRounds, where the fallback aggregates every
+	// contribution anyway. Tests of the freshness rule set it explicitly.
+	cycleStartSeqNr := obs.CycleStartSeqNr
+	if cycleStartSeqNr == 0 {
+		cycleStartSeqNr = 1
+	}
+	payload, err := marshalStreamValues(obs.StreamValues, cycleStartSeqNr)
 	require.NoError(t, err)
 	handle, err := testBlobs.BroadcastBlob(tests.Context(t), payload, ocr3_1types.BlobExpirationHintSequenceNumber{SeqNr: 0})
 	require.NoError(t, err)
@@ -253,7 +260,7 @@ func Test_Observation_BlobRoundTrip(t *testing.T) {
 	for i := 0; i < 500; i++ {
 		sv[llotypes.StreamID(i)] = protocol.ToDecimal(decimal.NewFromInt(int64(i)))
 	}
-	payload, err := marshalStreamValues(sv)
+	payload, err := marshalStreamValues(sv, 1)
 	require.NoError(t, err)
 
 	bc := newFakeBroadcaster()
@@ -2463,7 +2470,7 @@ func Test_StateTransition_BackfillValidAfterRequiresPreviousReport(t *testing.T)
 			require.NoError(t, writeHotState(kv, tenSec,
 				map[llotypes.ChannelID]uint64{targetCID: tenSec, backfillCID: 0},
 				map[llotypes.ChannelID]bool{targetCID: false, backfillCID: false},
-				nil, logger.Test(t)))
+				nil, nil, logger.Test(t)))
 
 			// The verdict round.
 			_, err := p.StateTransition(ctx, 2, ocrtypes.AttributedQuery{}, round(t, tenSec+1, tc.shape), kv, testBlobs)

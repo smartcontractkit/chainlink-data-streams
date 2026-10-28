@@ -55,7 +55,7 @@ func FuzzDecodeObservation(f *testing.F) {
 		f.Fatal(err)
 	}
 
-	payload, err := marshalStreamValues(protocol.StreamValues{100: protocol.ToDecimal(decimal.NewFromInt(123))})
+	payload, err := marshalStreamValues(protocol.StreamValues{100: protocol.ToDecimal(decimal.NewFromInt(123))}, 1)
 	if err != nil {
 		f.Fatal(err)
 	}

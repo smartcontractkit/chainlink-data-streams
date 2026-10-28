@@ -180,6 +180,10 @@ func (f *PluginFactory) NewReportingPlugin(ctx context.Context, cfg ocr3types.Re
 		ProtocolVersion:                     offchainConfig.ProtocolVersion,
 		DefaultMinReportIntervalNanoseconds: offchainConfig.DefaultMinReportIntervalNanoseconds,
 		AggregationFaultTolerance:           aggregationFaultTolerance,
+		// libocr fills EstimatedRoundInterval from the shared config's
+		// DeltaRound, a lower bound on the round interval, so it is the same
+		// on every oracle.
+		MinRoundInterval: cfg.EstimatedRoundInterval,
 	}
 
 	// Definitions and the opts decoded from them are cached together, as one
