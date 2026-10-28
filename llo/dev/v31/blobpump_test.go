@@ -3,7 +3,6 @@ package llo
 import (
 	"context"
 	"errors"
-	"math"
 	"math/big"
 	"sync"
 	"sync/atomic"
@@ -26,7 +25,7 @@ import (
 	ocrtypes "github.com/smartcontractkit/libocr/offchainreporting2plus/types"
 )
 
-func testPump(t *testing.T, ds DataSource, bbf ocr3_1types.BlobBroadcastFetcher, maxAge time.Duration) *blobPump {
+func testPump(t *testing.T, ds DataSource, bbf ocr3_1types.BlobBroadcastFetcher) *blobPump {
 	t.Helper()
 	p := newBlobPump(logger.Test(t), blobPumpParams{
 		bbf:                bbf,
@@ -34,8 +33,6 @@ func testPump(t *testing.T, ds DataSource, bbf ocr3_1types.BlobBroadcastFetcher,
 		configDigest:       ocrtypes.ConfigDigest{1},
 		verboseLogging:     true,
 		observationTimeout: tests.WaitTimeout(t),
-		maxSnapshotAge:     maxAge,
-		maxSnapshotRounds:  DefaultMaxSnapshotRounds,
 		blobLifetimeRounds: DefaultBlobLifetimeRounds,
 	})
 	p.Start()
@@ -57,7 +54,7 @@ func mockDS() *mockDataSource {
 func Test_blobPump_TakeKicksNextCycle(t *testing.T) {
 	ds := mockDS()
 	bc := newFakeBroadcaster()
-	p := testPump(t, ds, bc, time.Minute)
+	p := testPump(t, ds, bc)
 
 	p.SetInput(pumpInputFor(2))
 	snap, reason := p.Take(t.Context(), 2)
@@ -70,9 +67,8 @@ func Test_blobPump_TakeKicksNextCycle(t *testing.T) {
 	snap, reason = p.Take(t.Context(), 3)
 	require.NotNil(t, snap, "reason: %s", reason)
 	require.Equal(t, uint64(2), snap.cycleStartSeqNr)
-	require.Equal(t, uint64(2+DefaultMaxSnapshotRounds), snap.usableBefore)
-	require.Equal(t, uint64(2+DefaultBlobLifetimeRounds), snap.expiresAt)
-	require.NotEmpty(t, snap.handleBytes)
+	require.Equal(t, uint64(2+DefaultBlobLifetimeRounds), snap.blobExpirationHintSeqNr)
+	require.NotEmpty(t, snap.blobHandleBytes)
 	require.Equal(t, uint64(1), p.Misses())
 
 	// The blob was hinted to expire at cycleStartSeqNr + lifetime. Assert on the first
@@ -81,11 +77,11 @@ func Test_blobPump_TakeKicksNextCycle(t *testing.T) {
 	// distinguishes them.
 	hints := bc.Hints()
 	require.NotEmpty(t, hints)
-	require.Equal(t, ocr3_1types.BlobExpirationHintSequenceNumber{SeqNr: snap.expiresAt}, hints[0])
+	require.Equal(t, ocr3_1types.BlobExpirationHintSequenceNumber{SeqNr: snap.blobExpirationHintSeqNr}, hints[0])
 
 	// The snapshot's handle fetches back the payload the pump broadcast.
 	var handle ocr3_1types.BlobHandle
-	require.NoError(t, handle.UnmarshalBinary(snap.handleBytes))
+	require.NoError(t, handle.UnmarshalBinary(snap.blobHandleBytes))
 	payload, err := bc.FetchBlob(tests.Context(t), handle)
 	require.NoError(t, err)
 	require.NotEmpty(t, payload)
@@ -97,7 +93,7 @@ func Test_blobPump_TakeKicksNextCycle(t *testing.T) {
 func Test_blobPump_DropsUnrequestedStreams(t *testing.T) {
 	ds := mockDS()
 	ds.vals[999] = protocol.ToDecimal(decimal.NewFromInt(9))
-	p := testPump(t, ds, newFakeBroadcaster(), time.Minute)
+	p := testPump(t, ds, newFakeBroadcaster())
 
 	p.SetInput(pumpInputFor(2))
 	p.Take(t.Context(), 2)
@@ -137,7 +133,7 @@ func Test_dropUnobservable(t *testing.T) {
 // Test_blobPump_TakeIsSingleUse guards against two rounds referencing the same
 // blob handle.
 func Test_blobPump_TakeIsSingleUse(t *testing.T) {
-	p := testPump(t, mockDS(), newFakeBroadcaster(), time.Minute)
+	p := testPump(t, mockDS(), newFakeBroadcaster())
 	p.SetInput(pumpInputFor(2))
 	require.Eventually(t, func() bool {
 		_, _ = p.Take(t.Context(), 2)
@@ -157,58 +153,47 @@ func Test_blobPump_TakeIsSingleUse(t *testing.T) {
 	require.NotEmpty(t, reason)
 }
 
-func Test_blobPump_RejectsStaleSnapshots(t *testing.T) {
-	// The local freshness gate is usableBefore, which falls well short of the
-	// blob's own expiry: the snapshot stops being referenceable while the blob
-	// is still fetchable by peers.
-	t.Run("too stale by sequence number", func(t *testing.T) {
-		p := testPump(t, mockDS(), newFakeBroadcaster(), time.Minute)
-		p.park(&blobSnapshot{handleBytes: []byte{1}, observedAt: time.Now(), cycleStartSeqNr: 2, usableBefore: 4, expiresAt: 6})
+func Test_blobPump_OffersSnapshotWhileFetchable(t *testing.T) {
+	// The only local gate: the blob must stay fetchable for
+	// BlobFetchMarginRounds past the round that references it. Freshness is
+	// the state transition's call.
+	park := func(p *blobPump, hint uint64) {
+		p.park(&blobSnapshot{blobHandleBytes: []byte{1}, cycleStartSeqNr: 2, blobExpirationHintSeqNr: hint})
+	}
 
-		snap, reason := p.Take(t.Context(), 4)
+	t.Run("offered up to the margin", func(t *testing.T) {
+		p := testPump(t, mockDS(), newFakeBroadcaster())
+		for seqNr := uint64(3); seqNr+BlobFetchMarginRounds <= 2+DefaultBlobLifetimeRounds; seqNr++ {
+			park(p, 2+DefaultBlobLifetimeRounds)
+			snap, reason := p.Take(t.Context(), seqNr)
+			require.NotNil(t, snap, "seqNr %d: %s", seqNr, reason)
+		}
+		require.Zero(t, p.Misses())
+	})
+
+	t.Run("withheld inside the margin", func(t *testing.T) {
+		p := testPump(t, mockDS(), newFakeBroadcaster())
+		park(p, 2+DefaultBlobLifetimeRounds)
+		snap, reason := p.Take(t.Context(), 2+DefaultBlobLifetimeRounds-BlobFetchMarginRounds+1)
 		require.Nil(t, snap)
-		require.Contains(t, reason, "too stale")
+		require.Contains(t, reason, "expires too soon")
 		require.Equal(t, uint64(1), p.Misses())
 	})
 
-	t.Run("expired by wall clock", func(t *testing.T) {
-		p := testPump(t, mockDS(), newFakeBroadcaster(), time.Nanosecond)
-		p.park(&blobSnapshot{handleBytes: []byte{1}, observedAt: time.Now().Add(-time.Hour), cycleStartSeqNr: 2, usableBefore: 100, expiresAt: 100})
-
-		snap, reason := p.Take(t.Context(), 3)
+	t.Run("withheld past expiry", func(t *testing.T) {
+		p := testPump(t, mockDS(), newFakeBroadcaster())
+		park(p, 6)
+		snap, reason := p.Take(t.Context(), 7)
 		require.Nil(t, snap)
-		require.Contains(t, reason, "too old")
+		require.Contains(t, reason, "expires too soon")
 	})
 
-	t.Run("age check disabled", func(t *testing.T) {
-		p := testPump(t, mockDS(), newFakeBroadcaster(), -1)
-		p.park(&blobSnapshot{handleBytes: []byte{1}, observedAt: time.Now().Add(-time.Hour), cycleStartSeqNr: 2, usableBefore: 100, expiresAt: 100})
-
-		snap, _ := p.Take(t.Context(), 3)
-		require.NotNil(t, snap, "with the age check disabled only maxSnapshotRounds bounds staleness")
-	})
-
-	// With no explicit age the bound is derived from the measured round period,
-	// so a pump that has seen no rounds yet must not reject on age: guessing a
-	// cadence would silently stop the node contributing stream values.
-	t.Run("derived age check is inert until a round period is measured", func(t *testing.T) {
-		p := testPump(t, mockDS(), newFakeBroadcaster(), 0)
-		p.park(&blobSnapshot{handleBytes: []byte{1}, observedAt: time.Now().Add(-time.Hour), cycleStartSeqNr: 2, usableBefore: 100, expiresAt: 100})
-
-		snap, reason := p.Take(t.Context(), 3)
-		require.NotNil(t, snap, "reason: %s", reason)
-	})
-
-	t.Run("derived age check rejects once the round period is known", func(t *testing.T) {
-		p := testPump(t, mockDS(), newFakeBroadcaster(), 0)
-		p.mu.Lock()
-		p.roundPeriod = time.Millisecond
-		p.mu.Unlock()
-		p.park(&blobSnapshot{handleBytes: []byte{1}, observedAt: time.Now().Add(-time.Hour), cycleStartSeqNr: 2, usableBefore: 100, expiresAt: 100})
-
-		snap, reason := p.Take(t.Context(), 3)
-		require.Nil(t, snap)
-		require.Contains(t, reason, "too old")
+	t.Run("the default lifetime covers the reuse horizon", func(t *testing.T) {
+		// A snapshot gathered during round N is first offered at N+1 and must
+		// still be offered at N+SnapshotReuseRounds.
+		snap := &blobSnapshot{cycleStartSeqNr: 2, blobExpirationHintSeqNr: 2 + DefaultBlobLifetimeRounds}
+		require.True(t, snap.isFetchableAtSeqNr(2+SnapshotReuseRounds))
+		require.False(t, snap.isFetchableAtSeqNr(2+SnapshotReuseRounds+1))
 	})
 }
 
@@ -219,7 +204,7 @@ func Test_blobPump_ParksNothingOnFailure(t *testing.T) {
 	t.Run("data source error", func(t *testing.T) {
 		ds := mockDS()
 		ds.err = errors.New("bridge down")
-		p := testPump(t, ds, newFakeBroadcaster(), time.Minute)
+		p := testPump(t, ds, newFakeBroadcaster())
 		p.SetInput(pumpInputFor(2))
 		_, _ = p.Take(t.Context(), 2)
 
@@ -235,7 +220,7 @@ func Test_blobPump_ParksNothingOnFailure(t *testing.T) {
 			bc.SetBroadcastError(errors.New("broadcast unavailable"))
 			return bc
 		}()
-		p := testPump(t, mockDS(), bc, time.Minute)
+		p := testPump(t, mockDS(), bc)
 		p.SetInput(pumpInputFor(2))
 		_, _ = p.Take(t.Context(), 2)
 
@@ -257,7 +242,7 @@ func Test_blobPump_SkipsIdleInput(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			ds := mockDS()
 			bc := newFakeBroadcaster()
-			p := testPump(t, ds, bc, time.Minute)
+			p := testPump(t, ds, bc)
 			p.SetInput(in)
 			for i := 0; i < 3; i++ {
 				_, _ = p.Take(t.Context(), 2)
@@ -274,7 +259,7 @@ func Test_blobPump_SkipsIdleInput(t *testing.T) {
 func Test_blobPump_SingleFlight(t *testing.T) {
 	release := make(chan struct{})
 	ds := &blockingDataSource{release: release}
-	p := testPump(t, ds, newFakeBroadcaster(), time.Minute)
+	p := testPump(t, ds, newFakeBroadcaster())
 	p.SetInput(pumpInputFor(2))
 
 	for i := 0; i < 10; i++ {
@@ -317,7 +302,7 @@ func (g *gatedDataSource) Observe(ctx context.Context, sv protocol.StreamValues,
 // the wait.
 func Test_blobPump_TakeWaitsForInFlightCycle(t *testing.T) {
 	ds := &gatedDataSource{release: make(chan struct{}), entered: make(chan struct{})}
-	p := testPump(t, ds, newFakeBroadcaster(), time.Minute)
+	p := testPump(t, ds, newFakeBroadcaster())
 	p.inFlightWait = tests.WaitTimeout(t)
 
 	// The first Take only kicks the cycle: nothing is in flight yet, so there is
@@ -351,7 +336,7 @@ func Test_blobPump_TakeWaitFallsThroughOnTimeout(t *testing.T) {
 	ds := &gatedDataSource{release: make(chan struct{}), entered: make(chan struct{})}
 	defer close(ds.release)
 
-	p := testPump(t, ds, newFakeBroadcaster(), time.Minute)
+	p := testPump(t, ds, newFakeBroadcaster())
 	p.inFlightWait = 50 * time.Millisecond
 
 	p.SetInput(pumpInputFor(2))
@@ -375,44 +360,6 @@ func Test_blobPump_TakeWaitFallsThroughOnTimeout(t *testing.T) {
 // estimate to gaps that really are one round wide: rounds that observe no
 // streams skip Take, and folding the wider gap they leave would inflate the
 // derived age bound.
-func Test_blobPump_RoundPeriodOnlyMeasuresConsecutiveRounds(t *testing.T) {
-	p := testPump(t, mockDS(), newFakeBroadcaster(), time.Minute)
-
-	base := time.Now()
-	p.recordRoundLocked(base, 2)
-	require.Zero(t, p.roundPeriod, "first round has nothing to measure against")
-
-	// Round 5 skips rounds 3 and 4, so its gap spans three round periods.
-	p.recordRoundLocked(base.Add(300*time.Millisecond), 5)
-	require.Zero(t, p.roundPeriod, "gap across skipped rounds was folded in")
-
-	p.recordRoundLocked(base.Add(400*time.Millisecond), 6)
-	require.Equal(t, 100*time.Millisecond, p.roundPeriod)
-
-	// A repeated sequence number is not a new round either.
-	p.recordRoundLocked(base.Add(900*time.Millisecond), 6)
-	require.Equal(t, 100*time.Millisecond, p.roundPeriod)
-}
-
-// Test_blobPump_RoundPeriodIsCapped covers a stalled round: the gap is wall
-// clock, so without the cap one stall would inflate the derived age bound for
-// several rounds after it.
-func Test_blobPump_RoundPeriodIsCapped(t *testing.T) {
-	p := testPump(t, mockDS(), newFakeBroadcaster(), time.Minute)
-	p.maxRoundPeriod = 400 * time.Millisecond
-
-	base := time.Now()
-	p.recordRoundLocked(base, 2)
-	p.recordRoundLocked(base.Add(time.Hour), 3)
-	require.Equal(t, p.maxRoundPeriod, p.roundPeriod, "a stalled round was folded in uncapped")
-
-	// Uncapped, the estimate stays free to follow a slow DON.
-	cap := p.maxRoundPeriod
-	p.maxRoundPeriod = 0
-	p.recordRoundLocked(base.Add(2*time.Hour), 4)
-	require.Greater(t, p.roundPeriod, cap)
-}
-
 // Test_blobPump_ExpectedMissesAreNotCounted covers the rounds that lose their
 // stream values by design: a pump with no transport wired, and a round whose
 // input gives a cycle nothing to do. Neither is a miss, so the counters stay
@@ -420,7 +367,7 @@ func Test_blobPump_RoundPeriodIsCapped(t *testing.T) {
 // producing and is not.
 func Test_blobPump_ExpectedMissesAreNotCounted(t *testing.T) {
 	t.Run("disabled pump", func(t *testing.T) {
-		p := testPump(t, nil, nil, time.Minute)
+		p := testPump(t, nil, nil)
 
 		for i := 0; i < 2*MissStreakLogThreshold; i++ {
 			snap, reason := p.Take(t.Context(), 2)
@@ -432,7 +379,7 @@ func Test_blobPump_ExpectedMissesAreNotCounted(t *testing.T) {
 	})
 
 	t.Run("nothing to observe", func(t *testing.T) {
-		p := testPump(t, mockDS(), newFakeBroadcaster(), time.Minute)
+		p := testPump(t, mockDS(), newFakeBroadcaster())
 		p.SetInput(pumpInput{streams: nil, seqNr: 2, lifeCycleStage: protocol.LifeCycleStageProduction})
 
 		snap, reason := p.Take(t.Context(), 2)
@@ -443,7 +390,7 @@ func Test_blobPump_ExpectedMissesAreNotCounted(t *testing.T) {
 	})
 
 	t.Run("retired", func(t *testing.T) {
-		p := testPump(t, mockDS(), newFakeBroadcaster(), time.Minute)
+		p := testPump(t, mockDS(), newFakeBroadcaster())
 		p.SetInput(pumpInput{streams: []llotypes.StreamID{100}, seqNr: 2, lifeCycleStage: protocol.LifeCycleStageRetired})
 
 		snap, reason := p.Take(t.Context(), 2)
@@ -461,7 +408,7 @@ func Test_blobPump_TakeWaitHonoursContext(t *testing.T) {
 	ds := &gatedDataSource{release: make(chan struct{}), entered: make(chan struct{})}
 	defer close(ds.release)
 
-	p := testPump(t, ds, newFakeBroadcaster(), time.Minute)
+	p := testPump(t, ds, newFakeBroadcaster())
 	p.inFlightWait = tests.WaitTimeout(t)
 
 	p.SetInput(pumpInputFor(2))
@@ -489,7 +436,7 @@ func Test_blobPump_TakeWaitHonoursContext(t *testing.T) {
 // cycle rather than to an absent snapshot.
 func Test_blobPump_TakeWaitReportsCycleAfterItEnds(t *testing.T) {
 	ds := &gatedDataSource{release: make(chan struct{}), entered: make(chan struct{}), err: errors.New("boom")}
-	p := testPump(t, ds, newFakeBroadcaster(), time.Minute)
+	p := testPump(t, ds, newFakeBroadcaster())
 	p.inFlightWait = 500 * time.Millisecond
 
 	p.SetInput(pumpInputFor(2))
@@ -538,7 +485,7 @@ func Test_observableStreams(t *testing.T) {
 func Test_blobPump_DisabledIsInert(t *testing.T) {
 	t.Run("nil broadcaster", func(t *testing.T) {
 		ds := mockDS()
-		p := testPump(t, ds, nil, time.Minute)
+		p := testPump(t, ds, nil)
 		p.SetInput(pumpInputFor(2))
 		for i := 0; i < 3; i++ {
 			snap, reason := p.Take(t.Context(), 2)
@@ -551,7 +498,7 @@ func Test_blobPump_DisabledIsInert(t *testing.T) {
 
 	t.Run("nil data source", func(t *testing.T) {
 		bc := newFakeBroadcaster()
-		p := testPump(t, nil, bc, time.Minute)
+		p := testPump(t, nil, bc)
 		p.SetInput(pumpInputFor(2))
 		snap, reason := p.Take(t.Context(), 2)
 		require.Nil(t, snap)
@@ -572,7 +519,7 @@ func (p *panicDataSource) Observe(ctx context.Context, sv protocol.StreamValues,
 // nothing and later cycles still run.
 func Test_blobPump_SurvivesDataSourcePanic(t *testing.T) {
 	ds := &panicDataSource{}
-	p := testPump(t, ds, newFakeBroadcaster(), time.Minute)
+	p := testPump(t, ds, newFakeBroadcaster())
 
 	p.SetInput(pumpInputFor(2))
 	_, _ = p.Take(t.Context(), 2)
@@ -615,7 +562,6 @@ func Test_blobPump_CloseDoesNotHangOnStuckDataSource(t *testing.T) {
 		bbf:                newFakeBroadcaster(),
 		ds:                 ds,
 		observationTimeout: time.Minute,
-		maxSnapshotRounds:  DefaultMaxSnapshotRounds,
 		blobLifetimeRounds: DefaultBlobLifetimeRounds,
 	})
 	require.Equal(t, closeTimeoutSlackMultiplier*time.Minute, p.closeTimeout, "closeTimeout must derive from the observation timeout")
@@ -669,7 +615,7 @@ func Test_blobPump_RetriesFailedBroadcast(t *testing.T) {
 	bc := &flakyBroadcaster{BlobBroadcastFetcher: newFakeBroadcaster()}
 	bc.failures.Store(1)
 
-	p := testPump(t, ds, bc, time.Minute)
+	p := testPump(t, ds, bc)
 	p.SetInput(pumpInputFor(2))
 	_, _ = p.Take(t.Context(), 2)
 
@@ -697,7 +643,7 @@ func Test_blobPump_BroadcastRetryRefreshesExpiry(t *testing.T) {
 			p.SetInput(pumpInputFor(5))
 		}
 	}
-	p = testPump(t, ds, bc, time.Minute)
+	p = testPump(t, ds, bc)
 	p.SetInput(pumpInputFor(2))
 	_, _ = p.Take(t.Context(), 2)
 
@@ -706,11 +652,11 @@ func Test_blobPump_BroadcastRetryRefreshesExpiry(t *testing.T) {
 	require.Len(t, hints, 1)
 	require.Equal(t, ocr3_1types.BlobExpirationHintSequenceNumber{SeqNr: 5 + DefaultBlobLifetimeRounds}, hints[0])
 
-	// Fetchability moved forward; local freshness did not.
+	// Fetchability moved forward; the cycle the values belong to did not.
 	snap, reason := p.Take(t.Context(), 3)
 	require.NotNil(t, snap, reason)
-	require.EqualValues(t, 2+DefaultMaxSnapshotRounds, snap.usableBefore)
-	require.EqualValues(t, 5+DefaultBlobLifetimeRounds, snap.expiresAt)
+	require.EqualValues(t, 2, snap.cycleStartSeqNr)
+	require.EqualValues(t, 5+DefaultBlobLifetimeRounds, snap.blobExpirationHintSeqNr)
 }
 
 // Test_blobPump_BroadcastRetriesAreBounded asserts a transport that stays down
@@ -720,7 +666,7 @@ func Test_blobPump_BroadcastRetriesAreBounded(t *testing.T) {
 	bc := &flakyBroadcaster{BlobBroadcastFetcher: newFakeBroadcaster()}
 	bc.failures.Store(1 << 30)
 
-	p := testPump(t, ds, bc, time.Minute)
+	p := testPump(t, ds, bc)
 	p.SetInput(pumpInputFor(2))
 	_, _ = p.Take(t.Context(), 2)
 
@@ -730,47 +676,32 @@ func Test_blobPump_BroadcastRetriesAreBounded(t *testing.T) {
 	require.Nil(t, snap)
 }
 
-func Test_ResolveBlobRounds(t *testing.T) {
-	t.Run("applies the defaults", func(t *testing.T) {
-		snap, life, err := ResolveBlobRounds(0, 0)
+func Test_ResolveBlobLifetimeRounds(t *testing.T) {
+	t.Run("applies the default", func(t *testing.T) {
+		life, err := ResolveBlobLifetimeRounds(0)
 		require.NoError(t, err)
-		assert.Equal(t, uint64(DefaultMaxSnapshotRounds), snap)
 		assert.Equal(t, uint64(DefaultBlobLifetimeRounds), life)
 	})
 
-	t.Run("rejects a snapshot window below the minimum", func(t *testing.T) {
-		_, _, err := ResolveBlobRounds(1, 0)
-		require.ErrorContains(t, err, "below MinMaxSnapshotRounds")
+	t.Run("rejects a lifetime below the minimum", func(t *testing.T) {
+		_, err := ResolveBlobLifetimeRounds(MinBlobLifetimeRounds - 1)
+		require.ErrorContains(t, err, "below MinBlobLifetimeRounds")
 	})
 
 	t.Run("rejects a lifetime past the maximum", func(t *testing.T) {
-		_, _, err := ResolveBlobRounds(0, MaxBlobLifetimeRounds+1)
+		_, err := ResolveBlobLifetimeRounds(MaxBlobLifetimeRounds + 1)
 		require.ErrorContains(t, err, "exceeds MaxBlobLifetimeRounds")
 	})
 
-	t.Run("rejects too little fetch margin", func(t *testing.T) {
-		_, _, err := ResolveBlobRounds(8, 8)
-		require.ErrorContains(t, err, "rounds of fetch margin")
+	t.Run("accepts the bounds", func(t *testing.T) {
+		for _, v := range []uint64{MinBlobLifetimeRounds, MaxBlobLifetimeRounds} {
+			life, err := ResolveBlobLifetimeRounds(v)
+			require.NoError(t, err)
+			assert.Equal(t, v, life)
+		}
 	})
 
-	t.Run("rejects a lifetime shorter than the margin", func(t *testing.T) {
-		_, _, err := ResolveBlobRounds(MinMaxSnapshotRounds, 1)
-		require.ErrorContains(t, err, "rounds of fetch margin")
-	})
-
-	t.Run("rejects a snapshot window that would wrap the margin sum", func(t *testing.T) {
-		// maxSnapshotRounds+BlobFetchMarginRounds wraps to a small number, so
-		// comparing the sum would accept this and overflow usableBefore.
-		_, _, err := ResolveBlobRounds(math.MaxUint64, 0)
-		require.ErrorContains(t, err, "rounds of fetch margin")
-		_, _, err = ResolveBlobRounds(math.MaxUint64-BlobFetchMarginRounds+1, 0)
-		require.ErrorContains(t, err, "rounds of fetch margin")
-	})
-
-	t.Run("accepts the margin boundary", func(t *testing.T) {
-		snap, life, err := ResolveBlobRounds(MaxBlobLifetimeRounds+1-BlobFetchMarginRounds, MaxBlobLifetimeRounds)
-		require.NoError(t, err)
-		assert.Equal(t, uint64(MaxBlobLifetimeRounds+1-BlobFetchMarginRounds), snap)
-		assert.Equal(t, uint64(MaxBlobLifetimeRounds), life)
+	t.Run("the default leaves room for reuse", func(t *testing.T) {
+		require.GreaterOrEqual(t, DefaultBlobLifetimeRounds-BlobFetchMarginRounds, SnapshotReuseRounds)
 	})
 }

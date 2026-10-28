@@ -45,16 +45,11 @@ type PluginFactoryParams struct {
 	AttributedObservationTelemetryCh chan<- *protocol.LLOAttributedObservationTelemetry
 	// DonID is optional and used only for telemetry and logging.
 	DonID uint32
-	// MaxSnapshotRounds overrides DefaultMaxSnapshotRounds if non-zero. Bounds
-	// how stale this node's own stream values may be when it references them,
-	// and nothing else; it does not affect what peers can fetch. Must be at
-	// least MinMaxSnapshotRounds, since a snapshot gathered for one sequence
-	// number is consumed by a later one, and must leave BlobFetchMarginRounds
-	// below BlobLifetimeRounds.
-	MaxSnapshotRounds uint64
 	// BlobLifetimeRounds overrides DefaultBlobLifetimeRounds if non-zero. Bounds
-	// how long peers can still fetch a broadcast blob, and nothing else; it does
-	// not bound staleness, MaxSnapshotRounds does.
+	// how long peers can still fetch a broadcast blob, and so for how many
+	// rounds past BlobFetchMarginRounds a snapshot can be offered. It does not
+	// bound staleness, the state transition does. Must be within
+	// [MinBlobLifetimeRounds, MaxBlobLifetimeRounds].
 	BlobLifetimeRounds uint64
 	// MaxDurationBlobObservation overrides the pump's per-cycle observation
 	// budget (default: DefaultBlobObservationDurationMultiplier *
@@ -65,17 +60,6 @@ type PluginFactoryParams struct {
 	// a cycle already in flight to park, so a larger factor waits less. Must
 	// be >0.
 	BlobInFlightWaitFactor uint64
-	// MaxBlobSnapshotAge pins the wall-clock age at which a parked snapshot is
-	// discarded. Left at zero the pump derives it from the round period it
-	// measures, which is the only safe default: any bound derived from
-	// MaxDurationObservation is unrelated to the round cadence and can reject
-	// every snapshot. A negative value disables the check, leaving
-	// MaxSnapshotRounds as the only staleness bound.
-	MaxBlobSnapshotAge time.Duration
-	// MaxRoundPeriod overrides DefaultMaxRoundPeriod if non-zero. Bounds the
-	// round period the pump measures, so a stalled round cannot inflate the
-	// derived snapshot age bound. Must be set above the DON real round cadence.
-	MaxRoundPeriod time.Duration
 }
 
 func NewPluginFactory(p PluginFactoryParams) *PluginFactory {
@@ -102,7 +86,7 @@ func (f *PluginFactory) NewReportingPlugin(ctx context.Context, cfg ocr3types.Re
 	// Initialize the memory ballast
 	protocol.InitMemoryBallast()
 
-	maxSnapshotRounds, blobLifetimeRounds, err := ResolveBlobRounds(f.MaxSnapshotRounds, f.BlobLifetimeRounds)
+	blobLifetimeRounds, err := ResolveBlobLifetimeRounds(f.BlobLifetimeRounds)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -148,11 +132,6 @@ func (f *PluginFactory) NewReportingPlugin(ctx context.Context, cfg ocr3types.Re
 	blobInFlightWaitFactor := f.BlobInFlightWaitFactor
 	if blobInFlightWaitFactor == 0 {
 		blobInFlightWaitFactor = defaultBlobInFlightWaitFactor
-	}
-
-	maxRoundPeriod := f.MaxRoundPeriod
-	if maxRoundPeriod <= 0 {
-		maxRoundPeriod = DefaultMaxRoundPeriod
 	}
 
 	blobObservationTimeout := f.MaxDurationBlobObservation
@@ -201,9 +180,6 @@ func (f *PluginFactory) NewReportingPlugin(ctx context.Context, cfg ocr3types.Re
 		verboseLogging:     f.Config.VerboseLogging,
 		observationTimeout: blobObservationTimeout,
 		inFlightWait:       cfg.MaxDurationObservation / time.Duration(blobInFlightWaitFactor),
-		maxSnapshotAge:     f.MaxBlobSnapshotAge,
-		maxSnapshotRounds:  maxSnapshotRounds,
-		maxRoundPeriod:     maxRoundPeriod,
 		blobLifetimeRounds: blobLifetimeRounds,
 	})
 	p.pump.Start()
