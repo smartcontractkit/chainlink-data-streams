@@ -130,27 +130,67 @@ func Test_dropUnobservable(t *testing.T) {
 	require.NoError(t, err)
 }
 
-// Test_blobPump_TakeIsSingleUse guards against two rounds referencing the same
-// blob handle.
-func Test_blobPump_TakeIsSingleUse(t *testing.T) {
-	p := testPump(t, mockDS(), newFakeBroadcaster())
+// Test_blobPump_ReusesSnapshotUntilNewerParks covers reuse: the parked
+// snapshot serves every round until a newer one replaces it, taken or not. The
+// data source never returns, so only the snapshots parked by hand are offered.
+func Test_blobPump_ReusesSnapshotUntilNewerParks(t *testing.T) {
+	ds := &gatedDataSource{release: make(chan struct{}), entered: make(chan struct{})}
+	defer close(ds.release)
+	p := testPump(t, ds, newFakeBroadcaster())
 	p.SetInput(pumpInputFor(2))
-	require.Eventually(t, func() bool {
-		_, _ = p.Take(t.Context(), 2)
-		return p.Cycles() >= 1
-	}, tests.WaitTimeout(t), 10*time.Millisecond)
 
-	require.Eventually(t, func() bool {
-		snap, _ := p.Take(t.Context(), 2)
-		return snap != nil
-	}, tests.WaitTimeout(t), 10*time.Millisecond)
+	first := &blobSnapshot{blobHandleBytes: []byte{1}, cycleStartSeqNr: 2, blobExpirationHintSeqNr: 2 + DefaultBlobLifetimeRounds}
+	p.park(first)
+	for seqNr := uint64(3); seqNr <= 2+SnapshotReuseRounds; seqNr++ {
+		snap, reason := p.Take(t.Context(), seqNr)
+		require.Same(t, first, snap, "seqNr %d: %s", seqNr, reason)
+	}
+	require.Equal(t, uint64(SnapshotReuseRounds-1), p.Reuses())
+	require.Zero(t, p.Misses())
 
-	// The pump may have parked a fresh snapshot by now, so assert on the parked
-	// slot directly rather than on a second Take.
-	p.takeReady(t.Context(), 0)
-	snap, reason := p.Take(t.Context(), 2)
+	// Past the fetch margin the old snapshot is withheld, not replaced.
+	snap, reason := p.Take(t.Context(), 3+SnapshotReuseRounds)
 	require.Nil(t, snap)
-	require.NotEmpty(t, reason)
+	require.Contains(t, reason, "expires too soon")
+	require.Equal(t, uint64(1), p.Misses())
+
+	// A newer snapshot replaces the previous one whether or not it was taken.
+	second := &blobSnapshot{blobHandleBytes: []byte{2}, cycleStartSeqNr: 6, blobExpirationHintSeqNr: 6 + DefaultBlobLifetimeRounds}
+	p.park(second)
+	third := &blobSnapshot{blobHandleBytes: []byte{3}, cycleStartSeqNr: 7, blobExpirationHintSeqNr: 7 + DefaultBlobLifetimeRounds}
+	p.park(third)
+	snap, reason = p.Take(t.Context(), 8)
+	require.Same(t, third, snap, reason)
+	require.Equal(t, uint64(SnapshotReuseRounds-1), p.Reuses(), "first take of a new snapshot is not a reuse")
+}
+
+// Test_blobPump_TakeWaitsForNewerWhenReferenced asserts a round that already
+// has the parked snapshot on the wire waits for the in-flight cycle, so a
+// newer snapshot is preferred to a reuse whenever one lands in time.
+func Test_blobPump_TakeWaitsForNewerWhenReferenced(t *testing.T) {
+	ds := &gatedDataSource{release: make(chan struct{}), entered: make(chan struct{})}
+	p := testPump(t, ds, newFakeBroadcaster())
+	p.inFlightWait = tests.WaitTimeout(t)
+	p.SetInput(pumpInputFor(2))
+
+	old := &blobSnapshot{blobHandleBytes: []byte{1}, cycleStartSeqNr: 2, blobExpirationHintSeqNr: 2 + DefaultBlobLifetimeRounds}
+	p.park(old)
+	snap, _ := p.Take(t.Context(), 3)
+	require.Same(t, old, snap)
+	select {
+	case <-ds.entered:
+	case <-time.After(tests.WaitTimeout(t)):
+		t.Fatal("DataSource.Observe was never called")
+	}
+
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		close(ds.release)
+	}()
+	snap, reason := p.Take(t.Context(), 4)
+	require.NotNil(t, snap, reason)
+	require.NotSame(t, old, snap, "Take reused the old snapshot instead of waiting for the cycle")
+	require.Zero(t, p.Reuses())
 }
 
 func Test_blobPump_OffersSnapshotWhileFetchable(t *testing.T) {
@@ -186,6 +226,20 @@ func Test_blobPump_OffersSnapshotWhileFetchable(t *testing.T) {
 		snap, reason := p.Take(t.Context(), 7)
 		require.Nil(t, snap)
 		require.Contains(t, reason, "expires too soon")
+	})
+
+	t.Run("withheld past the round age bound even while fetchable", func(t *testing.T) {
+		// A long lifetime, or a broadcast retry that landed rounds late, keeps
+		// the blob fetchable past the age bound the state transition applies.
+		p := testPump(t, mockDS(), newFakeBroadcaster())
+		park(p, 2+MaxBlobLifetimeRounds)
+		snap, reason := p.Take(t.Context(), 2+MaxStreamValueAgeRounds)
+		require.NotNil(t, snap, reason)
+		park(p, 2+MaxBlobLifetimeRounds)
+		snap, reason = p.Take(t.Context(), 2+MaxStreamValueAgeRounds+1)
+		require.Nil(t, snap)
+		require.Contains(t, reason, "past the stream value age bound")
+		require.Equal(t, uint64(1), p.Misses())
 	})
 
 	t.Run("the default lifetime covers the reuse horizon", func(t *testing.T) {

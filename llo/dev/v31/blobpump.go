@@ -141,6 +141,12 @@ type blobSnapshot struct {
 // bounded by sequence number, so refreshing while no rounds are running would
 // only pile up blobs.
 //
+// The latest parked snapshot is kept until a newer one parks, and may be
+// referenced by several rounds: a cycle that runs longer than a round costs
+// nothing as long as the previous values are still fetchable, instead of a
+// round with no stream values. A newly parked snapshot always replaces the
+// previous one, taken or not.
+//
 // The pump does not judge whether a snapshot's values are still fresh. That
 // decision is the state transition's, taken from replicated data so every
 // oracle keeps the same values (see freshness.go). Take checks one thing only:
@@ -158,13 +164,18 @@ type blobPump struct {
 	inFlight   atomic.Bool
 	misses     atomic.Uint64
 	cycles     atomic.Uint64
+	reuses     atomic.Uint64
 	missStreak atomic.Uint64
-
-	// ready holds the latest parked snapshot.
-	ready chan *blobSnapshot
 
 	mu    sync.Mutex
 	input pumpInput
+	// latest is the newest parked snapshot, nil until the first cycle parks.
+	// referenced records whether a round has already taken it.
+	latest     *blobSnapshot
+	referenced bool
+	// cycleEnded is closed when the in-flight cycle ends, parked or not, and
+	// replaced for the next one. Take waits on it.
+	cycleEnded chan struct{}
 }
 
 // blobPumpParams is the pump's configuration, resolved by the factory.
@@ -186,7 +197,7 @@ func newBlobPump(lggr logger.Logger, params blobPumpParams) *blobPump {
 		blobPumpParams: params,
 		lggr:           logger.Sugared(lggr).Named("BlobPump"),
 		trigger:        make(chan struct{}, 1),
-		ready:          make(chan *blobSnapshot, 1),
+		cycleEnded:     make(chan struct{}),
 		ctx:            ctx,
 		cancel:         cancel,
 		closeTimeout:   max(params.observationTimeout*closeTimeoutSlackMultiplier, minCloseTimeout),
@@ -242,27 +253,26 @@ func (p *blobPump) SetInput(in pumpInput) {
 	p.mu.Unlock()
 }
 
-// Take returns the parked snapshot if peers can still fetch its blob at seqNr,
-// and always kicks the next cycle: kicking on a discard as well as on a hit is
-// what stops a single unusable snapshot from stalling the pump forever. The
-// second return value is the reason a snapshot was not returned, for logging.
+// Take returns the latest parked snapshot if peers can still fetch its blob at
+// seqNr, and always kicks the next cycle: kicking on a discard as well as on a
+// hit is what stops a single unusable snapshot from stalling the pump forever.
+// The second return value is the reason a snapshot was not returned, for
+// logging.
 //
-// A round that finds nothing parked while a cycle is running waits up to
-// inFlightWait for the cycle to park, or until ctx is done.
+// A snapshot stays offered until a newer one parks, so a round may take what
+// an earlier round already took. A round that finds nothing new while a cycle
+// is running waits up to inFlightWait for the cycle to end, or until ctx is
+// done, and then falls back to what is parked.
 func (p *blobPump) Take(ctx context.Context, seqNr uint64) (*blobSnapshot, string) {
 	if !p.enabled() {
 		return nil, "blob pump disabled"
 	}
 
-	p.mu.Lock()
-	in := p.input
-	p.mu.Unlock()
-
 	defer p.kick()
-	snap, waited := p.takeReady(ctx, p.inFlightWait)
+	snap, reused, waited := p.take(ctx, seqNr, p.inFlightWait)
 
 	switch {
-	case snap == nil && !in.observable():
+	case snap == nil && !p.observable():
 		return nil, "nothing to observe this round"
 	case snap == nil:
 		p.miss()
@@ -273,51 +283,102 @@ func (p *blobPump) Take(ctx context.Context, seqNr uint64) (*blobSnapshot, strin
 	case !snap.isFetchableAtSeqNr(seqNr):
 		p.miss()
 		return nil, fmt.Sprintf("snapshot blob expires too soon for peers to fetch (cycleStartSeqNr=%d blobExpirationHintSeqNr=%d seqNr=%d margin=%d)", snap.cycleStartSeqNr, snap.blobExpirationHintSeqNr, seqNr, BlobFetchMarginRounds)
+	case !snap.isWithinRoundAgeAtSeqNr(seqNr):
+		p.miss()
+		return nil, fmt.Sprintf("snapshot is past the stream value age bound (cycleStartSeqNr=%d seqNr=%d maxAgeRounds=%d)", snap.cycleStartSeqNr, seqNr, MaxStreamValueAgeRounds)
 	default:
 		p.missStreak.Store(0)
+		if reused {
+			p.reuses.Add(1)
+		}
 		return snap, ""
 	}
+}
+
+// observable reports whether the published input can produce a snapshot.
+func (p *blobPump) observable() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.input.observable()
+}
+
+// take returns the latest usable snapshot and marks it referenced, reporting
+// whether an earlier round had already referenced it. When nothing new is
+// parked and a cycle is in flight it first waits up to timeout for that cycle
+// to end, early if ctx is done or the pump shuts down. A snapshot no round can
+// reference any more counts as nothing new, so the wait also covers the
+// handover from an expiring snapshot to the one in flight.
+func (p *blobPump) take(ctx context.Context, seqNr uint64, timeout time.Duration) (snap *blobSnapshot, reused, waited bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	nothingNew := p.latest == nil || p.referenced || !p.latest.isUsableAtSeqNr(seqNr)
+	if timeout > 0 && nothingNew && p.inFlight.Load() {
+		waited = true
+		ended := p.cycleEnded
+		p.mu.Unlock()
+		waitCtx, cancel := context.WithTimeout(ctx, timeout)
+		select {
+		case <-ended:
+		case <-waitCtx.Done():
+		case <-p.ctx.Done():
+		}
+		cancel()
+		p.mu.Lock()
+	}
+
+	if p.latest == nil {
+		return nil, false, waited
+	}
+	reused = p.referenced
+	p.referenced = true
+	return p.latest, reused, waited
 }
 
 // isFetchableAtSeqNr reports whether a round at seqNr may reference the
 // snapshot: its blob must stay fetchable for BlobFetchMarginRounds more
 // rounds. libocr expires a blob once the committed seqNr reaches the hint, so
-// a round at seqNr can fetch a blob while seqNr <= hint; the margin covers
+// a round at seqNr can fetch a blob while seqNr <= hint. The margin covers
 // peers that fetch late.
 func (s *blobSnapshot) isFetchableAtSeqNr(seqNr uint64) bool {
 	return seqNr <= s.blobExpirationHintSeqNr && s.blobExpirationHintSeqNr-seqNr >= BlobFetchMarginRounds
 }
 
-// takeReady detaches the parked snapshot, waiting up to timeout for an
-// in-flight cycle to park one. The wait ends early when ctx is done or the
-// pump shuts down.
-func (p *blobPump) takeReady(ctx context.Context, timeout time.Duration) (*blobSnapshot, bool) {
-	waited := false
-	if timeout > 0 && p.inFlight.Load() {
-		waited = true
-		waitCtx, cancel := context.WithTimeout(ctx, timeout)
-		defer cancel()
-		select {
-		case snap := <-p.ready:
-			return snap, waited
-		case <-waitCtx.Done():
-		case <-p.ctx.Done():
-		}
-	}
-
-	select {
-	case snap := <-p.ready:
-		return snap, waited
-	default:
-		return nil, waited
-	}
+// isWithinRoundAgeAtSeqNr reports whether a round at seqNr would still pass the
+// state transition's round age bound for the snapshot.
+func (s *blobSnapshot) isWithinRoundAgeAtSeqNr(seqNr uint64) bool {
+	return seqNr >= s.cycleStartSeqNr && seqNr-s.cycleStartSeqNr <= MaxStreamValueAgeRounds
 }
 
-// park makes a snapshot available to take, replacing if we have a snap
-// that no round has taken. The newest snapshot has a higher priority.
+// isUsableAtSeqNr reports whether a round at seqNr may reference the snapshot.
+func (s *blobSnapshot) isUsableAtSeqNr(seqNr uint64) bool {
+	return s.isFetchableAtSeqNr(seqNr) && s.isWithinRoundAgeAtSeqNr(seqNr)
+}
+
+// park makes a snapshot the one Take offers. The newest snapshot always wins,
+// whether or not a round took the previous one.
 func (p *blobPump) park(snap *blobSnapshot) {
-	p.takeReady(context.Background(), 0)
-	p.ready <- snap
+	p.mu.Lock()
+	p.latest = snap
+	p.referenced = false
+	p.mu.Unlock()
+}
+
+// beginCycle marks a cycle in flight; endCycle clears it and releases every
+// Take waiting on it. Both run under mu so a Take never captures the channel of
+// a cycle that has already ended.
+func (p *blobPump) beginCycle() {
+	p.mu.Lock()
+	p.inFlight.Store(true)
+	p.mu.Unlock()
+}
+
+func (p *blobPump) endCycle() {
+	p.mu.Lock()
+	p.inFlight.Store(false)
+	close(p.cycleEnded)
+	p.cycleEnded = make(chan struct{})
+	p.mu.Unlock()
 }
 
 // miss records a round that found no usable snapshot when one was expected.
@@ -336,6 +397,10 @@ func (p *blobPump) Misses() uint64 { return p.misses.Load() }
 
 // Cycles reports how many snapshots the pump has successfully parked.
 func (p *blobPump) Cycles() uint64 { return p.cycles.Load() }
+
+// Reuses reports how many rounds took a snapshot an earlier round had already
+// taken.
+func (p *blobPump) Reuses() uint64 { return p.reuses.Load() }
 
 func (p *blobPump) kick() {
 	select {
@@ -369,8 +434,9 @@ func (p *blobPump) safeCycle() {
 	p.cycle()
 }
 
-// cycle runs one observation and parks the result. A failed cycle parks nothing:
-// the round that finds no snapshot emits an observation without stream values.
+// cycle runs one observation and parks the result. A failed cycle parks
+// nothing: the previous snapshot stays offered while fetchable, and a round
+// that finds none emits an observation without stream values.
 func (p *blobPump) cycle() {
 	p.mu.Lock()
 	in := p.input
@@ -380,8 +446,8 @@ func (p *blobPump) cycle() {
 		return
 	}
 
-	p.inFlight.Store(true)
-	defer p.inFlight.Store(false)
+	p.beginCycle()
+	defer p.endCycle()
 
 	snap, err := p.observeStreamValuesAndBroadcastBlob(in)
 	if err != nil {

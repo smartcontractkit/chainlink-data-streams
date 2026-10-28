@@ -94,22 +94,26 @@
 // discards a snapshot, so the pump rate tracks the round rate without knowing
 // deltaRound, and cycles are serial so only one Observe is ever in flight.
 //
-// A snapshot is therefore gathered one round before it is used. The pump
-// applies one bound to it, fetchability. BlobLifetimeRounds is the expiration
-// hint given to the blob transport (cycleStartSeqNr + BlobLifetimeRounds),
-// after which peers can no longer fetch the blob, and Take offers a snapshot
-// only while its blob stays fetchable for BlobFetchMarginRounds more rounds,
-// so slow or lagging peers can still fetch it. A broadcast that the transport
-// refuses is retried inside the cycle (BlobBroadcastAttempts), which is what
-// keeps the round trip off the OCR critical path; a retry recomputes the hint
-// from the round current at that attempt, so the blob stays fetchable for the
-// round that will reference it. A round that finds nothing usable — cold
-// start, a failed cycle, or a blob about to expire — emits an observation with
-// no stream values. That is not a halt: quorum counts observations, not values.
-// The cost lands in aggregation, which needs >F values per stream, so streams
-// miss the round only if more than F nodes miss together. The pump counts
-// misses and cycles (Misses / Cycles) so correlated misses show up as more
-// than an unexplained report gap.
+// A snapshot is therefore gathered one round before it is used, and stays
+// offered until a newer one parks: a cycle that runs longer than a round, or
+// fails, costs no round its stream values while the previous snapshot is still
+// fetchable. The pump applies one bound to it, fetchability. BlobLifetimeRounds
+// is the expiration hint given to the blob transport (cycleStartSeqNr +
+// BlobLifetimeRounds), after which peers can no longer fetch the blob, and
+// Take offers a snapshot only while its blob stays fetchable for
+// BlobFetchMarginRounds more rounds, so slow or lagging peers can still fetch
+// it. With the default lifetime that lets one snapshot serve
+// SnapshotReuseRounds rounds. A broadcast that the transport refuses is
+// retried inside the cycle (BlobBroadcastAttempts), which is what keeps the
+// round trip off the OCR critical path; a retry recomputes the hint from the
+// round current at that attempt, so the blob stays fetchable for the round
+// that will reference it. A round that finds nothing usable, on cold start or
+// once the blob is about to expire, emits an observation with no stream
+// values. That is not a halt: quorum counts observations, not values. The cost
+// lands in aggregation, which needs >F values per stream, so streams miss the
+// round only if more than F nodes miss together. The pump counts misses,
+// cycles and reuses (Misses / Cycles / Reuses) so correlated misses show up
+// as more than an unexplained report gap.
 //
 // The pump does not judge whether its values are still fresh. A decision taken
 // on one node, from its own clock, is invisible to its peers and withholds the

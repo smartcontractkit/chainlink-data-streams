@@ -219,7 +219,7 @@ func (p *Plugin) Observation(ctx context.Context, seqNr uint64, _ ocrtypes.Attri
 		if snap, reason = p.pump.Take(ctx, seqNr); snap != nil {
 			handles = append(handles, snap.blobHandleBytes)
 		} else {
-			p.Logger.Debugw("No usable stream-value snapshot for this round", "stage", "Observation", "seqNr", seqNr, "reason", reason, "misses", p.pump.Misses(), "cycles", p.pump.Cycles())
+			p.Logger.Debugw("No usable stream-value snapshot for this round", "stage", "Observation", "seqNr", seqNr, "reason", reason, "misses", p.pump.Misses(), "cycles", p.pump.Cycles(), "reuses", p.pump.Reuses())
 		}
 	}
 

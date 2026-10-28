@@ -53,8 +53,9 @@ import (
 const (
 	// SnapshotReuseRounds is how many consecutive rounds may reference one
 	// blob pump snapshot: gathered during round N, referenced at N+1 through
-	// N+SnapshotReuseRounds. The pump does not reuse snapshots yet; the
-	// constant sizes the freshness bounds for when it does.
+	// N+SnapshotReuseRounds. The pump enforces it indirectly, through the blob
+	// fetch margin (see DefaultBlobLifetimeRounds); the constant sizes the
+	// freshness bounds to match.
 	SnapshotReuseRounds = 4
 	// MaxStreamValueAgeRounds bounds, in rounds and in round intervals, how old
 	// a contribution's values may be at the round that aggregates them. A
