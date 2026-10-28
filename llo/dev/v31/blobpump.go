@@ -4,9 +4,13 @@ import (
 	"context"
 	"fmt"
 	"runtime/debug"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
 
 	"github.com/smartcontractkit/chainlink-common/pkg/logger"
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
@@ -166,6 +170,7 @@ type blobPump struct {
 	cycles     atomic.Uint64
 	reuses     atomic.Uint64
 	missStreak atomic.Uint64
+	metrics    blobPumpMetrics
 
 	mu    sync.Mutex
 	input pumpInput
@@ -183,6 +188,7 @@ type blobPumpParams struct {
 	bbf                ocr3_1types.BlobBroadcastFetcher
 	ds                 DataSource
 	configDigest       ocrtypes.ConfigDigest
+	donID              uint32
 	verboseLogging     bool
 	observationTimeout time.Duration
 	// blobLifetimeRounds is the fetchability bound. See DefaultBlobLifetimeRounds.
@@ -200,6 +206,7 @@ func newBlobPump(lggr logger.Logger, params blobPumpParams) *blobPump {
 		cycleEnded:     make(chan struct{}),
 		ctx:            ctx,
 		cancel:         cancel,
+		metrics:        newBlobPumpMetrics(params.donID),
 		closeTimeout:   max(params.observationTimeout*closeTimeoutSlackMultiplier, minCloseTimeout),
 	}
 }
@@ -290,6 +297,7 @@ func (p *blobPump) Take(ctx context.Context, seqNr uint64) (*blobSnapshot, strin
 		p.missStreak.Store(0)
 		if reused {
 			p.reuses.Add(1)
+			p.metrics.reuses.Inc()
 		}
 		return snap, ""
 	}
@@ -386,6 +394,7 @@ func (p *blobPump) endCycle() {
 // and log when above MissStreakLogThreshold.
 func (p *blobPump) miss() {
 	p.misses.Add(1)
+	p.metrics.misses.Inc()
 	if streak := p.missStreak.Add(1); streak >= MissStreakLogThreshold && streak%MissStreakLogThreshold == 0 {
 		p.lggr.Errorw("Blob pump has found no usable snapshot for consecutive rounds; this node is contributing no stream values",
 			"missStreak", streak, "misses", p.misses.Load(), "cycles", p.cycles.Load(), "blobLifetimeRounds", p.blobLifetimeRounds)
@@ -401,6 +410,43 @@ func (p *blobPump) Cycles() uint64 { return p.cycles.Load() }
 // Reuses reports how many rounds took a snapshot an earlier round had already
 // taken.
 func (p *blobPump) Reuses() uint64 { return p.reuses.Load() }
+
+// Blob pump metrics. Node-local: they describe this node's contribution, not
+// consensus. Misses climbing on one node is that node failing to contribute;
+// reuses climbing on every node is the data source lagging the round rate.
+var (
+	blobPumpCyclesMetric = promauto.NewCounterVec(prometheus.CounterOpts{
+		Namespace: "llo",
+		Subsystem: "blob_pump",
+		Name:      "cycles_total",
+		Help:      "Blob pump cycles that parked a snapshot.",
+	}, []string{"donID"})
+	blobPumpMissesMetric = promauto.NewCounterVec(prometheus.CounterOpts{
+		Namespace: "llo",
+		Subsystem: "blob_pump",
+		Name:      "misses_total",
+		Help:      "Rounds that found no usable snapshot and observed no stream values.",
+	}, []string{"donID"})
+	blobPumpReusesMetric = promauto.NewCounterVec(prometheus.CounterOpts{
+		Namespace: "llo",
+		Subsystem: "blob_pump",
+		Name:      "reuses_total",
+		Help:      "Rounds that referenced a snapshot an earlier round had already referenced.",
+	}, []string{"donID"})
+)
+
+type blobPumpMetrics struct {
+	cycles, misses, reuses prometheus.Counter
+}
+
+func newBlobPumpMetrics(donID uint32) blobPumpMetrics {
+	don := strconv.FormatUint(uint64(donID), 10)
+	return blobPumpMetrics{
+		cycles: blobPumpCyclesMetric.WithLabelValues(don),
+		misses: blobPumpMissesMetric.WithLabelValues(don),
+		reuses: blobPumpReusesMetric.WithLabelValues(don),
+	}
+}
 
 func (p *blobPump) kick() {
 	select {
@@ -456,6 +502,7 @@ func (p *blobPump) cycle() {
 	}
 
 	p.cycles.Add(1)
+	p.metrics.cycles.Inc()
 	p.park(snap)
 
 	if p.verboseLogging {

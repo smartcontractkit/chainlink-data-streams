@@ -112,8 +112,9 @@
 // values. That is not a halt: quorum counts observations, not values. The cost
 // lands in aggregation, which needs >F values per stream, so streams miss the
 // round only if more than F nodes miss together. The pump counts misses,
-// cycles and reuses (Misses / Cycles / Reuses) so correlated misses show up
-// as more than an unexplained report gap.
+// cycles and reuses (Misses / Cycles / Reuses, exported as the
+// llo_blob_pump_* counters) so correlated misses show up as more than an
+// unexplained report gap.
 //
 // The pump does not judge whether its values are still fresh. A decision taken
 // on one node, from its own clock, is invisible to its peers and withholds the
