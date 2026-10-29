@@ -412,13 +412,13 @@ func Test_Handover_V30ToV31(t *testing.T) {
 	stagingTS := ts
 	stagingTS += handoverTickNanos
 	newInst.round(Observation{
-		UnixTimestampNanoseconds: stagingTS,
-		UpdateChannelDefinitions: llotypes.ChannelDefinitions{handoverChannelID: handoverChannel()},
-		StreamValues:             handoverStreamValues(),
+		ObservationTimestampNanoseconds: stagingTS,
+		UpdateChannelDefinitions:        llotypes.ChannelDefinitions{handoverChannelID: handoverChannel()},
+		StreamValues:                    handoverStreamValues(),
 	})
 	for range 2 {
 		stagingTS += handoverTickNanos
-		newInst.round(Observation{UnixTimestampNanoseconds: stagingTS, StreamValues: handoverStreamValues()})
+		newInst.round(Observation{ObservationTimestampNanoseconds: stagingTS, StreamValues: handoverStreamValues()})
 	}
 	for _, r := range newInst.reports {
 		require.True(t, r.specimen, "staging instance must only emit specimen reports")
@@ -451,11 +451,11 @@ func Test_Handover_V30ToV31(t *testing.T) {
 
 	stagingTS += handoverTickNanos
 	newInst.round(Observation{
-		UnixTimestampNanoseconds:      stagingTS,
-		AttestedPredecessorRetirement: attestedBytes,
-		PredecessorSigners:            handoverPredecessorSigners,
-		PredecessorF:                  1,
-		StreamValues:                  handoverStreamValues(),
+		ObservationTimestampNanoseconds: stagingTS,
+		AttestedPredecessorRetirement:   attestedBytes,
+		PredecessorSigners:              handoverPredecessorSigners,
+		PredecessorF:                    1,
+		StreamValues:                    handoverStreamValues(),
 	})
 	require.Equal(t, protocol.LifeCycleStageProduction, newInst.lifeCycleStage())
 
@@ -466,7 +466,7 @@ func Test_Handover_V30ToV31(t *testing.T) {
 	// predecessor's last observation timestamp.
 	for range 3 {
 		stagingTS += handoverTickNanos
-		newInst.round(Observation{UnixTimestampNanoseconds: stagingTS, StreamValues: handoverStreamValues()})
+		newInst.round(Observation{ObservationTimestampNanoseconds: stagingTS, StreamValues: handoverStreamValues()})
 	}
 
 	all := append(append([]emittedReport{}, old.reports...), newInst.reports...)
@@ -489,13 +489,13 @@ func Test_Handover_V31ToV30(t *testing.T) {
 
 	ts += handoverTickNanos
 	old.round(Observation{
-		UnixTimestampNanoseconds: ts,
-		UpdateChannelDefinitions: llotypes.ChannelDefinitions{handoverChannelID: handoverChannel()},
-		StreamValues:             handoverStreamValues(),
+		ObservationTimestampNanoseconds: ts,
+		UpdateChannelDefinitions:        llotypes.ChannelDefinitions{handoverChannelID: handoverChannel()},
+		StreamValues:                    handoverStreamValues(),
 	})
 	for range 3 {
 		ts += handoverTickNanos
-		old.round(Observation{UnixTimestampNanoseconds: ts, StreamValues: handoverStreamValues()})
+		old.round(Observation{ObservationTimestampNanoseconds: ts, StreamValues: handoverStreamValues()})
 	}
 	require.NotEmpty(t, old.reports, "v3.1 must be emitting reports before the handover")
 	for _, r := range old.reports {
@@ -526,7 +526,7 @@ func Test_Handover_V31ToV30(t *testing.T) {
 	// --- retire v3.1 ---
 	old.p.ShouldRetireCache = &mockShouldRetireCache{retire: true}
 	ts += handoverTickNanos
-	old.round(Observation{UnixTimestampNanoseconds: ts, ShouldRetire: true, StreamValues: handoverStreamValues()})
+	old.round(Observation{ObservationTimestampNanoseconds: ts, ShouldRetire: true, StreamValues: handoverStreamValues()})
 	require.Equal(t, protocol.LifeCycleStageRetired, old.lifeCycleStage())
 	require.NotEmpty(t, old.retirementRR, "retired v3.1 instance must emit a retirement report")
 
@@ -622,8 +622,8 @@ func Test_Handover_V30ToV31_RejectsBadSignatures(t *testing.T) {
 			newInst.round(Observation{})
 			require.Equal(t, protocol.LifeCycleStageStaging, newInst.lifeCycleStage())
 
-			bad := Observation{UnixTimestampNanoseconds: handoverTickNanos, AttestedPredecessorRetirement: tc.attested, PredecessorSigners: handoverPredecessorSigners, PredecessorF: 1}
-			clean := Observation{UnixTimestampNanoseconds: handoverTickNanos}
+			bad := Observation{ObservationTimestampNanoseconds: handoverTickNanos, AttestedPredecessorRetirement: tc.attested, PredecessorSigners: handoverPredecessorSigners, PredecessorF: 1}
+			clean := Observation{ObservationTimestampNanoseconds: handoverTickNanos}
 			require.NoError(t, newInst.tryRound(bad, bad, clean, clean))
 
 			require.Equal(t, protocol.LifeCycleStageStaging, newInst.lifeCycleStage(),
@@ -657,11 +657,11 @@ func Test_Handover_BadRetirementDoesNotStallRound(t *testing.T) {
 	// The round completes and the rest of the observation still counts: the
 	// channel vote carried alongside the unverifiable report takes effect.
 	bad := Observation{
-		UnixTimestampNanoseconds:      handoverTickNanos,
-		AttestedPredecessorRetirement: attest(t, raw),
-		PredecessorSigners:            handoverPredecessorSigners,
-		PredecessorF:                  1,
-		UpdateChannelDefinitions:      llotypes.ChannelDefinitions{handoverChannelID: handoverChannel()},
+		ObservationTimestampNanoseconds: handoverTickNanos,
+		AttestedPredecessorRetirement:   attest(t, raw),
+		PredecessorSigners:              handoverPredecessorSigners,
+		PredecessorF:                    1,
+		UpdateChannelDefinitions:        llotypes.ChannelDefinitions{handoverChannelID: handoverChannel()},
 	}
 	require.NoError(t, newInst.tryRound(bad, bad, bad, bad))
 	require.Equal(t, protocol.LifeCycleStageStaging, newInst.lifeCycleStage())
@@ -671,10 +671,10 @@ func Test_Handover_BadRetirementDoesNotStallRound(t *testing.T) {
 	// Once the report verifies, the very next round promotes.
 	newInst.p.PredecessorRetirementReportCache = newPredecessorCache(t, attest(t, raw), true)
 	newInst.round(Observation{
-		UnixTimestampNanoseconds:      2 * handoverTickNanos,
-		AttestedPredecessorRetirement: attest(t, raw),
-		PredecessorSigners:            handoverPredecessorSigners,
-		PredecessorF:                  1,
+		ObservationTimestampNanoseconds: 2 * handoverTickNanos,
+		AttestedPredecessorRetirement:   attest(t, raw),
+		PredecessorSigners:              handoverPredecessorSigners,
+		PredecessorF:                    1,
 	})
 	require.Equal(t, protocol.LifeCycleStageProduction, newInst.lifeCycleStage())
 	require.Equal(t, uint64(500), newInst.validAfter()[handoverChannelID])
@@ -697,7 +697,7 @@ func Test_Handover_RejectsIncompatibleProtocolVersion(t *testing.T) {
 	newInst.round(Observation{})
 	require.Equal(t, protocol.LifeCycleStageStaging, newInst.lifeCycleStage())
 
-	obs := Observation{UnixTimestampNanoseconds: handoverTickNanos, AttestedPredecessorRetirement: attest(t, raw), PredecessorSigners: handoverPredecessorSigners, PredecessorF: 1}
+	obs := Observation{ObservationTimestampNanoseconds: handoverTickNanos, AttestedPredecessorRetirement: attest(t, raw), PredecessorSigners: handoverPredecessorSigners, PredecessorF: 1}
 	require.NoError(t, newInst.tryRound(obs, obs, obs, obs))
 	require.Equal(t, protocol.LifeCycleStageStaging, newInst.lifeCycleStage(),
 		"instance must stay in staging on a retirement report from an unsupported protocol version")
@@ -771,32 +771,32 @@ func Test_Handover_RetirementReportFrozenAfterRetirement(t *testing.T) {
 		old := newV31Instance(t, ocrtypes.ConfigDigest{0x31}, nil, nil)
 		old.round(Observation{}) // bootstrap -> production
 		ts := handoverTickNanos * 10
-		old.round(Observation{UnixTimestampNanoseconds: ts, UpdateChannelDefinitions: handoverBackfillDefs(), StreamValues: handoverStreamValues()})
+		old.round(Observation{ObservationTimestampNanoseconds: ts, UpdateChannelDefinitions: handoverBackfillDefs(), StreamValues: handoverStreamValues()})
 		for range 2 {
 			ts += handoverTickNanos
-			old.round(Observation{UnixTimestampNanoseconds: ts, StreamValues: handoverStreamValues()})
+			old.round(Observation{ObservationTimestampNanoseconds: ts, StreamValues: handoverStreamValues()})
 		}
 		// Agreed in the round before retiring, so it takes effect on the
 		// retiring round itself.
 		ts += handoverTickNanos
 		old.round(Observation{
-			UnixTimestampNanoseconds: ts,
-			UpdateChannelDefinitions: llotypes.ChannelDefinitions{pendingChannelID: handoverChannel()},
-			StreamValues:             handoverStreamValues(),
+			ObservationTimestampNanoseconds: ts,
+			UpdateChannelDefinitions:        llotypes.ChannelDefinitions{pendingChannelID: handoverChannel()},
+			StreamValues:                    handoverStreamValues(),
 		})
 		ts += handoverTickNanos
-		old.round(Observation{UnixTimestampNanoseconds: ts, ShouldRetire: true, StreamValues: handoverStreamValues()})
+		old.round(Observation{ObservationTimestampNanoseconds: ts, ShouldRetire: true, StreamValues: handoverStreamValues()})
 		require.Equal(t, protocol.LifeCycleStageRetired, old.lifeCycleStage())
 
 		requireFrozen(t, old.retirementRR, func() []byte {
 			ts += handoverTickNanos
 			old.retirementRR = nil
 			old.round(Observation{
-				UnixTimestampNanoseconds: ts,
-				ShouldRetire:             true,
-				UpdateChannelDefinitions: retiredUpdate,
-				RemoveChannelIDs:         retiredRemove,
-				StreamValues:             handoverStreamValues(),
+				ObservationTimestampNanoseconds: ts,
+				ShouldRetire:                    true,
+				UpdateChannelDefinitions:        retiredUpdate,
+				RemoveChannelIDs:                retiredRemove,
+				StreamValues:                    handoverStreamValues(),
 			})
 			return old.retirementRR
 		})
@@ -819,7 +819,7 @@ func Test_Handover_DivergentRetirementsRefusePromotion(t *testing.T) {
 		return raw
 	}
 	withRetirement := func(attested []byte) Observation {
-		return Observation{UnixTimestampNanoseconds: handoverTickNanos, AttestedPredecessorRetirement: attested, PredecessorSigners: handoverPredecessorSigners, PredecessorF: 1}
+		return Observation{ObservationTimestampNanoseconds: handoverTickNanos, AttestedPredecessorRetirement: attested, PredecessorSigners: handoverPredecessorSigners, PredecessorF: 1}
 	}
 
 	t.Run("different watermarks", func(t *testing.T) {
@@ -889,15 +889,15 @@ func Test_Handover_StagingSkipsBackfill(t *testing.T) {
 		inst.round(Observation{}) // bootstrap
 		ts := handoverTickNanos * 10
 		inst.round(Observation{
-			UnixTimestampNanoseconds: ts,
-			UpdateChannelDefinitions: handoverBackfillDefs(),
-			StreamValues:             handoverStreamValues(),
+			ObservationTimestampNanoseconds: ts,
+			UpdateChannelDefinitions:        handoverBackfillDefs(),
+			StreamValues:                    handoverStreamValues(),
 		})
 		// Definitions are deferred one round, so give it several rounds in
 		// effect: enough for the backfill to emit all three observations.
 		for range 5 {
 			ts += handoverTickNanos
-			inst.round(Observation{UnixTimestampNanoseconds: ts, StreamValues: handoverStreamValues()})
+			inst.round(Observation{ObservationTimestampNanoseconds: ts, StreamValues: handoverStreamValues()})
 		}
 		return inst
 	}
@@ -971,13 +971,13 @@ func Test_Handover_PromotionResumesBackfillAtPredecessorWatermark(t *testing.T) 
 	stagingTS := ts
 	stagingTS += handoverTickNanos
 	newInst.round(Observation{
-		UnixTimestampNanoseconds: stagingTS,
-		UpdateChannelDefinitions: handoverBackfillDefs(),
-		StreamValues:             handoverStreamValues(),
+		ObservationTimestampNanoseconds: stagingTS,
+		UpdateChannelDefinitions:        handoverBackfillDefs(),
+		StreamValues:                    handoverStreamValues(),
 	})
 	for range 3 {
 		stagingTS += handoverTickNanos
-		newInst.round(Observation{UnixTimestampNanoseconds: stagingTS, StreamValues: handoverStreamValues()})
+		newInst.round(Observation{ObservationTimestampNanoseconds: stagingTS, StreamValues: handoverStreamValues()})
 	}
 	require.Equal(t, uint64(0), newInst.validAfter()[handoverBackfillChannelID],
 		"the staging instance must not have advanced the backfill watermark")
@@ -989,11 +989,11 @@ func Test_Handover_PromotionResumesBackfillAtPredecessorWatermark(t *testing.T) 
 
 	stagingTS += handoverTickNanos
 	newInst.round(Observation{
-		UnixTimestampNanoseconds:      stagingTS,
-		AttestedPredecessorRetirement: attestedBytes,
-		PredecessorSigners:            handoverPredecessorSigners,
-		PredecessorF:                  1,
-		StreamValues:                  handoverStreamValues(),
+		ObservationTimestampNanoseconds: stagingTS,
+		AttestedPredecessorRetirement:   attestedBytes,
+		PredecessorSigners:              handoverPredecessorSigners,
+		PredecessorF:                    1,
+		StreamValues:                    handoverStreamValues(),
 	})
 
 	require.Equal(t, protocol.LifeCycleStageProduction, newInst.lifeCycleStage())
@@ -1036,12 +1036,12 @@ func Test_Handover_BackfillAbsentFromRetirementReportStartsAtZero(t *testing.T) 
 	newInst.round(Observation{})
 	stagingTS := ts + handoverTickNanos
 	newInst.round(Observation{
-		UnixTimestampNanoseconds: stagingTS,
-		UpdateChannelDefinitions: handoverBackfillDefs(),
-		StreamValues:             handoverStreamValues(),
+		ObservationTimestampNanoseconds: stagingTS,
+		UpdateChannelDefinitions:        handoverBackfillDefs(),
+		StreamValues:                    handoverStreamValues(),
 	})
 	stagingTS += handoverTickNanos
-	newInst.round(Observation{UnixTimestampNanoseconds: stagingTS, StreamValues: handoverStreamValues()})
+	newInst.round(Observation{ObservationTimestampNanoseconds: stagingTS, StreamValues: handoverStreamValues()})
 
 	promoted := newPredecessorCache(t, attest(t, old.retirementRR), true)
 	newInst.p.PredecessorRetirementReportCache = promoted
@@ -1050,11 +1050,11 @@ func Test_Handover_BackfillAbsentFromRetirementReportStartsAtZero(t *testing.T) 
 
 	stagingTS += handoverTickNanos
 	newInst.round(Observation{
-		UnixTimestampNanoseconds:      stagingTS,
-		AttestedPredecessorRetirement: attestedBytes,
-		PredecessorSigners:            handoverPredecessorSigners,
-		PredecessorF:                  1,
-		StreamValues:                  handoverStreamValues(),
+		ObservationTimestampNanoseconds: stagingTS,
+		AttestedPredecessorRetirement:   attestedBytes,
+		PredecessorSigners:              handoverPredecessorSigners,
+		PredecessorF:                    1,
+		StreamValues:                    handoverStreamValues(),
 	})
 
 	require.Equal(t, protocol.LifeCycleStageProduction, newInst.lifeCycleStage())

@@ -106,7 +106,7 @@ func encodeBlobPayload(raw []byte) ([]byte, error) {
 // the decompressed size is bounded by maxOut: cheaply up front via the zstd
 // frame header when it declares a content size, and during decompression via
 // the capacity of the destination buffer in case it does not. maxOut is a
-// caller-supplied budget (see decodeObservation) and is clamped to
+// caller-supplied budget (see fetchBlobsAndDecodeObservation) and is clamped to
 // maxDecompressedBlobPayloadBytes.
 func decodeBlobPayload(payload []byte, maxOut int) ([]byte, error) {
 	if len(payload) == 0 {

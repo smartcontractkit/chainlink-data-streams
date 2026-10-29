@@ -15,14 +15,14 @@ import (
 	ocrtypes "github.com/smartcontractkit/libocr/offchainreporting2plus/types"
 )
 
-// Test_decodeObservation_CoefficientBound covers the blob-carried path, which is
+// Test_fetchBlobsAndDecodeObservation_CoefficientBound covers the blob-carried path, which is
 // how v31 observations carry stream values at all: a value over the coefficient
 // bound must be rejected there, not merely in the protocol-level decoder.
 //
 // The rejection is a plain error rather than a blobFetchError, which is what
-// makes it deterministic across oracles and therefore safe for
-// decodeObservations to drop this observation alone instead of failing the round.
-func Test_decodeObservation_CoefficientBound(t *testing.T) {
+// makes it deterministic across oracles, so every oracle fails the round on it
+// the same way in fetchBlobsDecodeValidateAndTallyObservations.
+func Test_fetchBlobsAndDecodeObservation_CoefficientBound(t *testing.T) {
 	ctx := tests.Context(t)
 
 	overSized := decimal.NewFromBigInt(new(big.Int).Lsh(big.NewInt(1), protocol.MaxDecimalCoefficientBits), -2)
@@ -30,16 +30,16 @@ func Test_decodeObservation_CoefficientBound(t *testing.T) {
 
 	encode := func(t *testing.T, d decimal.Decimal) []byte {
 		return mustEncodeObs(t, Observation{
-			UnixTimestampNanoseconds: 1,
-			StreamValues:             protocol.StreamValues{1: protocol.ToDecimal(d)},
+			ObservationTimestampNanoseconds: 1,
+			StreamValues:                    protocol.StreamValues{1: protocol.ToDecimal(d)},
 		})
 	}
 
-	obs, err := decodeObservation(ctx, encode(t, atLimit), testBlobs, nil)
+	obs, err := fetchBlobsAndDecodeObservation(ctx, encode(t, atLimit), testBlobs, nil)
 	require.NoError(t, err)
 	require.Len(t, obs.StreamValues, 1)
 
-	_, err = decodeObservation(ctx, encode(t, overSized), testBlobs, nil)
+	_, err = fetchBlobsAndDecodeObservation(ctx, encode(t, overSized), testBlobs, nil)
 	require.ErrorIs(t, err, protocol.ErrDecimalCoefficientOutOfRange)
 
 	var bfErr *blobFetchError
@@ -51,7 +51,7 @@ func Test_decodeObservation_CoefficientBound(t *testing.T) {
 // that matters: an oracle sending an unbounded value costs its own observation
 // and nothing else. The round completes and the remaining observations still
 // aggregate, which is why this bound is safe to enforce on the consensus path.
-func Test_StateTransition_DropsObservationOverCoefficientBound(t *testing.T) {
+func Test_StateTransition_RejectsObservationOverCoefficientBound(t *testing.T) {
 	ctx := tests.Context(t)
 	p := testPlugin(t)
 	kv := newMemKV()
@@ -74,8 +74,8 @@ func Test_StateTransition_DropsObservationOverCoefficientBound(t *testing.T) {
 
 	obsWith := func(d decimal.Decimal) []byte {
 		return mustEncodeObs(t, Observation{
-			UnixTimestampNanoseconds: 3_000,
-			StreamValues:             protocol.StreamValues{1: protocol.ToDecimal(d)},
+			ObservationTimestampNanoseconds: 3_000,
+			StreamValues:                    protocol.StreamValues{1: protocol.ToDecimal(d)},
 		})
 	}
 	// Three honest observations and one unbounded, which is f=1 for this plugin.
@@ -86,9 +86,16 @@ func Test_StateTransition_DropsObservationOverCoefficientBound(t *testing.T) {
 		ao(3, obsWith(overSized)),
 	}
 
-	precBytes, err := p.StateTransition(ctx, 4, ocrtypes.AttributedQuery{}, aos, kv, testBlobs)
-	require.NoError(t, err, "one unbounded observation must not fail the round")
+	// ValidateObservation rejects the unbounded observation, so a leader that
+	// proposes it anyway runs a different validation from this oracle.
+	require.Error(t, p.ValidateObservation(ctx, 4, ocrtypes.AttributedQuery{}, ao(3, obsWith(overSized)), kv, testBlobs))
+	_, err = p.StateTransition(ctx, 4, ocrtypes.AttributedQuery{}, aos, kv, testBlobs)
+	require.ErrorContains(t, err, "invariant violation")
+	require.ErrorContains(t, err, "decimal coefficient out of range")
 
+	// Without it the honest observations aggregate.
+	precBytes, err := p.StateTransition(ctx, 4, ocrtypes.AttributedQuery{}, aos[:3], kv, testBlobs)
+	require.NoError(t, err)
 	prec, err := decodePrecursor(precBytes)
 	require.NoError(t, err)
 	aggregated, ok := prec.StreamAggregates[1][llotypes.AggregatorMedian]

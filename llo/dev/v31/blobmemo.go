@@ -46,7 +46,7 @@ const maxMemoizedPayloads = ocrtypes.MaxOracles * maxObservationBlobHandles
 // while StateTransition still runs, each round call discards the other's
 // entries and the superseded handle misses on every get and drops every put.
 // That degrades to running without the memo and bound in the observation
-// decompression budget in decodeObservation, not the memo.
+// decompression budget in fetchBlobsAndDecodeObservation, not the memo.
 type blobPayloadCache struct {
 	mu    sync.Mutex
 	seqNr uint64
@@ -64,6 +64,8 @@ type blobPayloadCache struct {
 type blobPayloadEntry struct {
 	values protocol.StreamValues
 	size   int
+	// cycleStartSeqNr is the blob's own, see LLOBlobPayloadProto.
+	cycleStartSeqNr uint64
 }
 
 func newBlobPayloadCache() *blobPayloadCache {

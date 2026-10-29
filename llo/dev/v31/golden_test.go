@@ -135,6 +135,7 @@ func Test_Golden_KVRecords(t *testing.T) {
 			}}},
 			100: {llotypes.AggregatorMedian: {ObservedAtNanoseconds: 1, StreamValue: protocol.ToDecimal(decimal.NewFromInt(123))}},
 		},
+		nil,
 		logger.Test(t),
 	))
 	// Out-of-order oracles and formats, so the sorting the writer does is part

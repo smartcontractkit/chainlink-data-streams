@@ -130,6 +130,10 @@ type kvState struct {
 	// (newer-wins monotonicity). Regular aggregates are recomputed fresh every
 	// round and are never persisted.
 	carryForward map[llotypes.StreamID]map[llotypes.Aggregator]*protocol.TimestampedStreamValue
+	// recentAgreedTimestamps holds the agreed observation timestamps of the
+	// rounds up to and including the one that wrote the record, oldest first.
+	// See appendAgreedTimestamp.
+	recentAgreedTimestamps []uint64
 }
 
 // loadKVState reconstructs the full state from the replicated store, including
@@ -232,9 +236,9 @@ func readCodecSupport(r ocr3_1types.KeyValueStateReader) (map[commontypes.Oracle
 // codec for.
 //
 // Support is remembered per oracle rather than counted per round because the
-// observation quorum is 2f+1. A count taken from one round can never exceed
-// 2f+1, so the supporter threshold reportability would demand that every observation
-// in a minimal quorum advertise the format.
+// observation quorum can be as small as 2f+1. A count taken from one such round
+// can never exceed 2f+1, so the supporter threshold reportability would demand
+// that every observation in a minimal quorum advertise the format.
 func writeCodecSupport(w ocr3_1types.KeyValueStateReadWriter, support map[commontypes.OracleID]map[llotypes.ReportFormat]struct{}) error {
 	pb := &protocol.LLOCodecSupportProto{
 		Oracles: make([]*protocol.LLOOracleCodecSupportProto, 0, len(support)),
@@ -305,6 +309,7 @@ func readHotState(r ocr3_1types.KeyValueStateReader, s *kvState, lggr logger.Log
 		return fmt.Errorf("unmarshal hot state: %w", err)
 	}
 	s.observationTimestampNs = pb.ObservationTimestampNanoseconds
+	s.recentAgreedTimestamps = pb.RecentAgreedTimestampsNanoseconds
 	for _, va := range pb.ValidAfterNanoseconds {
 		s.validAfterNanoseconds[va.ChannelID] = va.ValidAfterNanoseconds
 	}
@@ -369,18 +374,20 @@ func writeChannelState(w ocr3_1types.KeyValueStateReadWriter, seqNr uint64, defs
 }
 
 // writeHotState persists the per-round state: observation timestamp, validAfter
-// watermarks, reportability decisions, and carry-forward timestamped
-// aggregates. It is written every round.
+// watermarks, reportability decisions, carry-forward timestamped aggregates
+// and the recent agreed timestamps window. It is written every round.
 func writeHotState(
 	w ocr3_1types.KeyValueStateReadWriter,
 	observationTimestampNs uint64,
 	validAfterNanoseconds map[llotypes.ChannelID]uint64,
 	reportable map[llotypes.ChannelID]bool,
 	carryForward map[llotypes.StreamID]map[llotypes.Aggregator]*protocol.TimestampedStreamValue,
+	recentAgreedTimestamps []uint64,
 	lggr logger.Logger,
 ) error {
 	pb := &protocol.LLOHotStateProto{
-		ObservationTimestampNanoseconds: observationTimestampNs,
+		ObservationTimestampNanoseconds:   observationTimestampNs,
+		RecentAgreedTimestampsNanoseconds: recentAgreedTimestamps,
 	}
 
 	pb.ValidAfterNanoseconds = make([]*protocol.LLOChannelIDAndValidAfterNanosecondsProto, 0, len(validAfterNanoseconds))

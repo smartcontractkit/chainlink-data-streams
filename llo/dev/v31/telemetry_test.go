@@ -1,7 +1,6 @@
 package llo
 
 import (
-	"errors"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -102,9 +101,9 @@ func Test_AttributedObservationTelemetry_StateTransition(t *testing.T) {
 	channelDef := llotypes.ChannelDefinition{ReportFormat: llotypes.ReportFormatJSON, Streams: []llotypes.Stream{{StreamID: 100, Aggregator: llotypes.AggregatorMedian}}}
 	obsAt := func(observer int, ts uint64) Observation {
 		return Observation{
-			UnixTimestampNanoseconds: ts,
-			RemoveChannelIDs:         map[llotypes.ChannelID]struct{}{9: {}},
-			UpdateChannelDefinitions: llotypes.ChannelDefinitions{1: channelDef},
+			ObservationTimestampNanoseconds: ts,
+			RemoveChannelIDs:                map[llotypes.ChannelID]struct{}{9: {}},
+			UpdateChannelDefinitions:        llotypes.ChannelDefinitions{1: channelDef},
 			StreamValues: protocol.StreamValues{
 				100: protocol.ToDecimal(decimal.NewFromInt(int64(40 + observer))),
 				101: protocol.ToDecimal(decimal.NewFromInt(int64(50 + observer))),
@@ -178,7 +177,7 @@ func Test_AttributedObservationTelemetry_StateTransition(t *testing.T) {
 		require.Equal(t, out.ObservationTimestampNanoseconds, m.AgreedObservationTimestampNanoseconds)
 	})
 
-	t.Run("invalid observation carries only the decode error", func(t *testing.T) {
+	t.Run("invalid observation fails the round and emits nothing", func(t *testing.T) {
 		p.OracleID = 1 // emitter for seqNr 5
 		aos := []ocrtypes.AttributedObservation{
 			ao(0, mustEncodeObs(t, obsAt(0, 3000))),
@@ -187,20 +186,8 @@ func Test_AttributedObservationTelemetry_StateTransition(t *testing.T) {
 			ao(3, []byte{0x7f}),
 		}
 		_, err := p.StateTransition(ctx, 5, ocrtypes.AttributedQuery{}, aos, kv, testBlobs)
-		require.NoError(t, err)
-		r := requireAORound(t, tel, true)
-		require.Len(t, r.aos, 4)
-
-		bad := r.aos[3]
-		require.Equal(t, commontypes.OracleID(3), bad.observer)
-		msgs := tel.makeTelemetry(r.seqNr, r.agreedObservationTimestampNanos, bad)
-		require.Len(t, msgs, 1)
-		require.NotNil(t, msgs[0].DecodeError)
-		require.Contains(t, *msgs[0].DecodeError, "unknown observation wire version")
-		require.Empty(t, msgs[0].StreamValues)
-		require.Empty(t, msgs[0].RemoveChannelIds)
-		require.Empty(t, msgs[0].UpdateChannelDefinitions)
-		require.Zero(t, msgs[0].OracleObservationTimestampNanoseconds)
+		require.ErrorContains(t, err, "unknown observation wire version")
+		requireAORound(t, tel, false)
 	})
 
 	t.Run("aborted round emits nothing", func(t *testing.T) {
@@ -261,16 +248,16 @@ func testPluginTelemetryLifecycle(t *testing.T, stagingTelemetry bool) {
 	ts += handoverTickNanos
 	emitterRound(old)
 	old.round(Observation{
-		UnixTimestampNanoseconds: ts,
-		UpdateChannelDefinitions: llotypes.ChannelDefinitions{handoverChannelID: handoverChannel()},
-		StreamValues:             handoverStreamValues(),
+		ObservationTimestampNanoseconds: ts,
+		UpdateChannelDefinitions:        llotypes.ChannelDefinitions{handoverChannelID: handoverChannel()},
+		StreamValues:                    handoverStreamValues(),
 	})
 	requireRoundTelemetry(t, oldTel, oldOT, protocol.LifeCycleStageProduction)
 
 	for range 2 {
 		ts += handoverTickNanos
 		emitterRound(old)
-		old.round(Observation{UnixTimestampNanoseconds: ts, StreamValues: handoverStreamValues()})
+		old.round(Observation{ObservationTimestampNanoseconds: ts, StreamValues: handoverStreamValues()})
 		requireRoundTelemetry(t, oldTel, oldOT, protocol.LifeCycleStageProduction)
 	}
 
@@ -295,28 +282,28 @@ func testPluginTelemetryLifecycle(t *testing.T, stagingTelemetry bool) {
 	stagingTS += handoverTickNanos
 	emitterRound(newInst)
 	newInst.round(Observation{
-		UnixTimestampNanoseconds: stagingTS,
-		UpdateChannelDefinitions: llotypes.ChannelDefinitions{handoverChannelID: handoverChannel()},
-		StreamValues:             handoverStreamValues(),
+		ObservationTimestampNanoseconds: stagingTS,
+		UpdateChannelDefinitions:        llotypes.ChannelDefinitions{handoverChannelID: handoverChannel()},
+		StreamValues:                    handoverStreamValues(),
 	})
 	requireRoundTelemetry(t, newTel, newOT, stagingStage)
 
 	stagingTS += handoverTickNanos
 	emitterRound(newInst)
-	newInst.round(Observation{UnixTimestampNanoseconds: stagingTS, StreamValues: handoverStreamValues()})
+	newInst.round(Observation{ObservationTimestampNanoseconds: stagingTS, StreamValues: handoverStreamValues()})
 	requireRoundTelemetry(t, newTel, newOT, stagingStage)
 
 	// Retirement round: the outcome is retired, so nothing is emitted.
 	old.p.ShouldRetireCache = &mockShouldRetireCache{retire: true}
 	ts += handoverTickNanos
 	emitterRound(old)
-	old.round(Observation{UnixTimestampNanoseconds: ts, ShouldRetire: true, StreamValues: handoverStreamValues()})
+	old.round(Observation{ObservationTimestampNanoseconds: ts, ShouldRetire: true, StreamValues: handoverStreamValues()})
 	require.Equal(t, protocol.LifeCycleStageRetired, old.lifeCycleStage())
 	requireRoundTelemetry(t, oldTel, oldOT, "")
 
 	ts += handoverTickNanos
 	emitterRound(old)
-	old.round(Observation{UnixTimestampNanoseconds: ts, StreamValues: handoverStreamValues()})
+	old.round(Observation{ObservationTimestampNanoseconds: ts, StreamValues: handoverStreamValues()})
 	requireRoundTelemetry(t, oldTel, oldOT, "")
 
 	// Promotion round: the outcome is production, so it emits.
@@ -328,18 +315,18 @@ func testPluginTelemetryLifecycle(t *testing.T, stagingTelemetry bool) {
 	stagingTS += handoverTickNanos
 	emitterRound(newInst)
 	newInst.round(Observation{
-		UnixTimestampNanoseconds:      stagingTS,
-		AttestedPredecessorRetirement: attestedBytes,
-		PredecessorSigners:            handoverPredecessorSigners,
-		PredecessorF:                  1,
-		StreamValues:                  handoverStreamValues(),
+		ObservationTimestampNanoseconds: stagingTS,
+		AttestedPredecessorRetirement:   attestedBytes,
+		PredecessorSigners:              handoverPredecessorSigners,
+		PredecessorF:                    1,
+		StreamValues:                    handoverStreamValues(),
 	})
 	require.Equal(t, protocol.LifeCycleStageProduction, newInst.lifeCycleStage())
 	requireRoundTelemetry(t, newTel, newOT, protocol.LifeCycleStageProduction)
 
 	stagingTS += handoverTickNanos
 	emitterRound(newInst)
-	newInst.round(Observation{UnixTimestampNanoseconds: stagingTS, StreamValues: handoverStreamValues()})
+	newInst.round(Observation{ObservationTimestampNanoseconds: stagingTS, StreamValues: handoverStreamValues()})
 	requireRoundTelemetry(t, newTel, newOT, protocol.LifeCycleStageProduction)
 }
 
@@ -362,9 +349,9 @@ func Test_AttributedObservationTelemetry_Deterministic(t *testing.T) {
 			var b []byte
 			if seqNr > 1 {
 				b = mustEncodeObs(t, Observation{
-					UnixTimestampNanoseconds: seqNr * 1000,
-					UpdateChannelDefinitions: llotypes.ChannelDefinitions{1: channelDef},
-					StreamValues:             protocol.StreamValues{100: protocol.ToDecimal(decimal.NewFromInt(int64(i)))},
+					ObservationTimestampNanoseconds: seqNr * 1000,
+					UpdateChannelDefinitions:        llotypes.ChannelDefinitions{1: channelDef},
+					StreamValues:                    protocol.StreamValues{100: protocol.ToDecimal(decimal.NewFromInt(int64(i)))},
 				})
 			}
 			aos = append(aos, ao(i, b))
@@ -382,10 +369,10 @@ func Test_AttributedObservationTelemetry_Split(t *testing.T) {
 	tel := newAttributedObservationTelemeter(logger.Test(t), nil, ocrtypes.ConfigDigest{1}, 7, 3)
 
 	obs := Observation{
-		UnixTimestampNanoseconds: 1234,
-		RemoveChannelIDs:         map[llotypes.ChannelID]struct{}{5: {}, 2: {}},
-		UpdateChannelDefinitions: llotypes.ChannelDefinitions{1: {ReportFormat: llotypes.ReportFormatJSON, Streams: []llotypes.Stream{{StreamID: 1, Aggregator: llotypes.AggregatorMedian}}}},
-		StreamValues:             protocol.StreamValues{},
+		ObservationTimestampNanoseconds: 1234,
+		RemoveChannelIDs:                map[llotypes.ChannelID]struct{}{5: {}, 2: {}},
+		UpdateChannelDefinitions:        llotypes.ChannelDefinitions{1: {ReportFormat: llotypes.ReportFormatJSON, Streams: []llotypes.Stream{{StreamID: 1, Aggregator: llotypes.AggregatorMedian}}}},
+		StreamValues:                    protocol.StreamValues{},
 	}
 	for id := llotypes.StreamID(1); id <= 500; id++ {
 		obs.StreamValues[id] = protocol.ToDecimal(decimal.NewFromInt(int64(id) * 1_000_003))
@@ -455,13 +442,6 @@ func Test_AttributedObservationTelemetry_Split(t *testing.T) {
 		require.Empty(t, msgs[0].StreamValues)
 		requireParts(t, msgs)
 	})
-
-	t.Run("decode error", func(t *testing.T) {
-		msgs := tel.makeTelemetry(9, 5678, attributedObservation{observer: 4, decodeErr: errors.New("boom")})
-		require.Len(t, msgs, 1)
-		require.Equal(t, "boom", msgs[0].GetDecodeError())
-		require.Empty(t, msgs[0].StreamValues)
-	})
 }
 
 func Test_AttributedObservationTelemetry_NonBlocking(t *testing.T) {
@@ -513,9 +493,9 @@ func Test_AttributedObservationTelemetry_Concurrent(t *testing.T) {
 			var b []byte
 			if seqNr > 1 {
 				b = mustEncodeObs(t, Observation{
-					UnixTimestampNanoseconds: seqNr * 1000,
-					UpdateChannelDefinitions: llotypes.ChannelDefinitions{1: channelDef},
-					StreamValues:             protocol.StreamValues{100: protocol.ToDecimal(decimal.NewFromInt(int64(i)))},
+					ObservationTimestampNanoseconds: seqNr * 1000,
+					UpdateChannelDefinitions:        llotypes.ChannelDefinitions{1: channelDef},
+					StreamValues:                    protocol.StreamValues{100: protocol.ToDecimal(decimal.NewFromInt(int64(i)))},
 				})
 			}
 			aos = append(aos, ao(i, b))
@@ -552,7 +532,7 @@ func Test_OutcomeTelemetry_Emitters(t *testing.T) {
 
 		aos := make([]ocrtypes.AttributedObservation, 0, 4)
 		for i := 0; i < 4; i++ {
-			aos = append(aos, ao(i, mustEncodeObs(t, Observation{UnixTimestampNanoseconds: seqNr * 1000})))
+			aos = append(aos, ao(i, mustEncodeObs(t, Observation{ObservationTimestampNanoseconds: seqNr * 1000})))
 		}
 		_, err := p.StateTransition(ctx, seqNr, ocrtypes.AttributedQuery{}, aos, kv, testBlobs)
 		require.NoError(t, err)
@@ -589,13 +569,13 @@ func Test_ReportTelemetry_Lifecycle(t *testing.T) {
 		require.Equal(t, stage, v.lifeCycleStage())
 		ts += handoverTickNanos
 		round(Observation{
-			UnixTimestampNanoseconds: ts,
-			UpdateChannelDefinitions: llotypes.ChannelDefinitions{handoverChannelID: handoverChannel()},
-			StreamValues:             handoverStreamValues(),
+			ObservationTimestampNanoseconds: ts,
+			UpdateChannelDefinitions:        llotypes.ChannelDefinitions{handoverChannelID: handoverChannel()},
+			StreamValues:                    handoverStreamValues(),
 		})
 		for range 3 {
 			ts += handoverTickNanos
-			round(Observation{UnixTimestampNanoseconds: ts, StreamValues: handoverStreamValues()})
+			round(Observation{ObservationTimestampNanoseconds: ts, StreamValues: handoverStreamValues()})
 		}
 		require.NotEmpty(t, v.reports, "the channel must be reporting")
 		return v, rtCh

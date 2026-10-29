@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"math"
 	"strconv"
 	"sync"
@@ -132,8 +133,6 @@ func attachPump(t *testing.T, p *Plugin, ds DataSource, bbf ocr3_1types.BlobBroa
 		configDigest:       p.ConfigDigest,
 		verboseLogging:     true,
 		observationTimeout: tests.WaitTimeout(t),
-		maxSnapshotAge:     time.Minute,
-		maxSnapshotRounds:  DefaultMaxSnapshotRounds,
 		blobLifetimeRounds: DefaultBlobLifetimeRounds,
 	})
 	p.pump.Start()
@@ -143,6 +142,11 @@ func attachPump(t *testing.T, p *Plugin, ds DataSource, bbf ocr3_1types.BlobBroa
 
 func ao(observer int, obsBytes []byte) ocrtypes.AttributedObservation {
 	return ocrtypes.AttributedObservation{Observer: commontypes.OracleID(observer), Observation: obsBytes}
+}
+
+// emptyRound is a quorum of empty observations, the only kind round 1 accepts.
+func emptyRound() []ocrtypes.AttributedObservation {
+	return []ocrtypes.AttributedObservation{ao(0, nil), ao(1, nil), ao(2, nil), ao(3, nil)}
 }
 
 // testSupportedReportFormats is the codec coverage a fixture oracle advertises
@@ -185,7 +189,14 @@ func mustEncodeObs(t *testing.T, obs Observation) []byte {
 		require.NoError(t, err)
 		return b
 	}
-	payload, err := marshalStreamValues(obs.StreamValues)
+	// A cycle start of 1 is valid for every round and stale after
+	// MaxStreamValueAgeRounds, where the fallback aggregates every
+	// contribution anyway. Tests of the freshness rule set it explicitly.
+	cycleStartSeqNr := obs.CycleStartSeqNr
+	if cycleStartSeqNr == 0 {
+		cycleStartSeqNr = 1
+	}
+	payload, err := marshalStreamValues(obs.StreamValues, cycleStartSeqNr)
 	require.NoError(t, err)
 	handle, err := testBlobs.BroadcastBlob(tests.Context(t), payload, ocr3_1types.BlobExpirationHintSequenceNumber{SeqNr: 0})
 	require.NoError(t, err)
@@ -201,9 +212,9 @@ func mustEncodeObs(t *testing.T, obs Observation) []byte {
 func Test_Observation_WireRoundTrip(t *testing.T) {
 	ctx := tests.Context(t)
 	obs := Observation{
-		ShouldRetire:             true,
-		UnixTimestampNanoseconds: 123456789,
-		RemoveChannelIDs:         map[llotypes.ChannelID]struct{}{7: {}},
+		ShouldRetire:                    true,
+		ObservationTimestampNanoseconds: 123456789,
+		RemoveChannelIDs:                map[llotypes.ChannelID]struct{}{7: {}},
 		UpdateChannelDefinitions: llotypes.ChannelDefinitions{
 			1: {ReportFormat: llotypes.ReportFormatJSON, Streams: []llotypes.Stream{{StreamID: 100, Aggregator: llotypes.AggregatorMedian}}},
 		},
@@ -211,11 +222,11 @@ func Test_Observation_WireRoundTrip(t *testing.T) {
 	enc, err := encodeObservation(obs, nil)
 	require.NoError(t, err)
 
-	got, err := decodeObservation(ctx, enc, nil, nil)
+	got, err := fetchBlobsAndDecodeObservation(ctx, enc, nil, nil)
 	require.NoError(t, err)
 
 	assert.Equal(t, obs.ShouldRetire, got.ShouldRetire)
-	assert.Equal(t, obs.UnixTimestampNanoseconds, got.UnixTimestampNanoseconds)
+	assert.Equal(t, obs.ObservationTimestampNanoseconds, got.ObservationTimestampNanoseconds)
 	assert.Equal(t, obs.RemoveChannelIDs, got.RemoveChannelIDs)
 	require.Contains(t, got.UpdateChannelDefinitions, llotypes.ChannelID(1))
 	require.Empty(t, got.StreamValues)
@@ -227,13 +238,13 @@ func Test_Observation_WireRoundTrip(t *testing.T) {
 func Test_Observation_StreamValuesNeverInline(t *testing.T) {
 	ctx := tests.Context(t)
 	obs := Observation{
-		UnixTimestampNanoseconds: 1,
-		StreamValues:             protocol.StreamValues{100: protocol.ToDecimal(decimal.NewFromInt(42))},
+		ObservationTimestampNanoseconds: 1,
+		StreamValues:                    protocol.StreamValues{100: protocol.ToDecimal(decimal.NewFromInt(42))},
 	}
 	enc, err := encodeObservation(obs, nil)
 	require.NoError(t, err)
 
-	got, err := decodeObservation(ctx, enc, nil, nil)
+	got, err := fetchBlobsAndDecodeObservation(ctx, enc, nil, nil)
 	require.NoError(t, err)
 	require.Empty(t, got.StreamValues, "stream values must travel in a blob, never inline")
 }
@@ -247,7 +258,7 @@ func Test_Observation_BlobRoundTrip(t *testing.T) {
 	for i := 0; i < 500; i++ {
 		sv[llotypes.StreamID(i)] = protocol.ToDecimal(decimal.NewFromInt(int64(i)))
 	}
-	payload, err := marshalStreamValues(sv)
+	payload, err := marshalStreamValues(sv, 1)
 	require.NoError(t, err)
 
 	bc := newFakeBroadcaster()
@@ -256,17 +267,17 @@ func Test_Observation_BlobRoundTrip(t *testing.T) {
 	handleBytes, err := handle.MarshalBinary()
 	require.NoError(t, err)
 
-	enc, err := encodeObservation(Observation{UnixTimestampNanoseconds: 1}, [][]byte{handleBytes})
+	enc, err := encodeObservation(Observation{ObservationTimestampNanoseconds: 1}, [][]byte{handleBytes})
 	require.NoError(t, err)
 
-	got, err := decodeObservation(ctx, enc, bc, nil)
+	got, err := fetchBlobsAndDecodeObservation(ctx, enc, bc, nil)
 	require.NoError(t, err)
 	require.Len(t, got.StreamValues, len(sv))
 	require.True(t, equalStreamValue(sv[100], got.StreamValues[100]))
 
 	// Without a fetcher the reference is unusable, and that must be classified
 	// as a node-local blob-fetch failure rather than a malformed observation.
-	_, err = decodeObservation(ctx, enc, nil, nil)
+	_, err = fetchBlobsAndDecodeObservation(ctx, enc, nil, nil)
 	var bfErr *blobFetchError
 	require.ErrorAs(t, err, &bfErr)
 }
@@ -309,8 +320,8 @@ func Test_FullRound_AddChannelThenReport(t *testing.T) {
 
 	// Round 2 (seqNr=2): four oracles vote to add channel 1.
 	addObs := Observation{
-		UnixTimestampNanoseconds: 1_000,
-		UpdateChannelDefinitions: llotypes.ChannelDefinitions{1: channelDef},
+		ObservationTimestampNanoseconds: 1_000,
+		UpdateChannelDefinitions:        llotypes.ChannelDefinitions{1: channelDef},
 	}
 	addAOs := []ocrtypes.AttributedObservation{}
 	for i := 0; i < 4; i++ {
@@ -328,8 +339,8 @@ func Test_FullRound_AddChannelThenReport(t *testing.T) {
 
 	valObs := func(ts uint64) []ocrtypes.AttributedObservation {
 		obs := Observation{
-			UnixTimestampNanoseconds: ts,
-			StreamValues:             protocol.StreamValues{100: protocol.ToDecimal(decimal.NewFromInt(42))},
+			ObservationTimestampNanoseconds: ts,
+			StreamValues:                    protocol.StreamValues{100: protocol.ToDecimal(decimal.NewFromInt(42))},
 		}
 		aos := []ocrtypes.AttributedObservation{}
 		for i := 0; i < 4; i++ {
@@ -371,8 +382,8 @@ func Test_StateTransition_ContributionFloor(t *testing.T) {
 	addAOs := []ocrtypes.AttributedObservation{}
 	for i := 0; i < 4; i++ {
 		addAOs = append(addAOs, ao(i, mustEncodeObs(t, Observation{
-			UnixTimestampNanoseconds: 1_000,
-			UpdateChannelDefinitions: llotypes.ChannelDefinitions{1: channelDef},
+			ObservationTimestampNanoseconds: 1_000,
+			UpdateChannelDefinitions:        llotypes.ChannelDefinitions{1: channelDef},
 		})))
 	}
 	_, err = p.StateTransition(ctx, 2, ocrtypes.AttributedQuery{}, addAOs, kv, testBlobs)
@@ -384,7 +395,7 @@ func Test_StateTransition_ContributionFloor(t *testing.T) {
 	valObs := func(ts uint64, contributors int) []ocrtypes.AttributedObservation {
 		aos := []ocrtypes.AttributedObservation{}
 		for i := 0; i < 4; i++ {
-			obs := Observation{UnixTimestampNanoseconds: ts}
+			obs := Observation{ObservationTimestampNanoseconds: ts}
 			if i < contributors {
 				obs.StreamValues = protocol.StreamValues{100: protocol.ToDecimal(decimal.NewFromInt(42))}
 			}
@@ -463,9 +474,9 @@ func Test_StateTransition_Determinism_ShuffledObservations(t *testing.T) {
 	}
 	obs := func(observer int, ts uint64, val int64) ocrtypes.AttributedObservation {
 		return ao(observer, mustEncodeObs(t, Observation{
-			UnixTimestampNanoseconds: ts,
-			UpdateChannelDefinitions: llotypes.ChannelDefinitions{1: channelDef},
-			StreamValues:             protocol.StreamValues{100: protocol.ToDecimal(decimal.NewFromInt(val))},
+			ObservationTimestampNanoseconds: ts,
+			UpdateChannelDefinitions:        llotypes.ChannelDefinitions{1: channelDef},
+			StreamValues:                    protocol.StreamValues{100: protocol.ToDecimal(decimal.NewFromInt(val))},
 		}))
 	}
 
@@ -491,14 +502,14 @@ func Test_StateTransition_Determinism_ShuffledObservations(t *testing.T) {
 	require.Equal(t, kvA.m, kvB.m, "KV write-set must be identical regardless of observation order")
 }
 
-func Test_decodeObservation_RejectsHugeHandleCount(t *testing.T) {
+func Test_fetchBlobsAndDecodeObservation_RejectsHugeHandleCount(t *testing.T) {
 	ctx := tests.Context(t)
 	// version byte + a uvarint encoding a huge handle count.
 	buf := []byte{observationWireVersion}
 	var tmp [binary.MaxVarintLen64]byte
 	n := binary.PutUvarint(tmp[:], ^uint64(0)) // max uint64
 	buf = append(buf, tmp[:n]...)
-	_, err := decodeObservation(ctx, buf, nil, nil)
+	_, err := fetchBlobsAndDecodeObservation(ctx, buf, nil, nil)
 	require.Error(t, err, "must reject an oversized handle count instead of allocating")
 	require.Contains(t, err.Error(), "too many blobs")
 }
@@ -993,7 +1004,7 @@ func Test_Telemetry(t *testing.T) {
 
 	channelDef := llotypes.ChannelDefinition{ReportFormat: llotypes.ReportFormatJSON, Streams: []llotypes.Stream{{StreamID: 100, Aggregator: llotypes.AggregatorMedian}}}
 	obs := func(ts uint64, withVal bool) []ocrtypes.AttributedObservation {
-		o := Observation{UnixTimestampNanoseconds: ts, UpdateChannelDefinitions: llotypes.ChannelDefinitions{1: channelDef}}
+		o := Observation{ObservationTimestampNanoseconds: ts, UpdateChannelDefinitions: llotypes.ChannelDefinitions{1: channelDef}}
 		if withVal {
 			o.StreamValues = protocol.StreamValues{100: protocol.ToDecimal(decimal.NewFromInt(42))}
 		}
@@ -1142,7 +1153,7 @@ func Test_HistoryBackfill(t *testing.T) {
 
 // validBlobHandleBytes returns the wire encoding of a syntactically valid handle
 // for a blob nobody broadcast. It lets a test build an observation that
-// *references* a blob (so decodeObservation reaches the fetch path) while the
+// *references* a blob (so fetchBlobsAndDecodeObservation reaches the fetch path) while the
 // fetch is guaranteed to fail.
 func validBlobHandleBytes() []byte {
 	handle, err := llotest.NewBlobHandle([]byte("never broadcast"))
@@ -1156,11 +1167,11 @@ func validBlobHandleBytes() []byte {
 	return b
 }
 
-// Test_decodeObservation_BlobFetchErrorIsClassified verifies that a failure to
+// Test_fetchBlobsAndDecodeObservation_BlobFetchErrorIsClassified verifies that a failure to
 // fetch a referenced blob surfaces as a *blobFetchError, so StateTransition can
 // propagate it (uniform retry) instead of silently dropping the observation on
 // only some oracles (Finding 2).
-func Test_decodeObservation_BlobFetchErrorIsClassified(t *testing.T) {
+func Test_fetchBlobsAndDecodeObservation_BlobFetchErrorIsClassified(t *testing.T) {
 	ctx := tests.Context(t)
 	mainBytes, err := proto.Marshal(&protocol.LLOObservationProto{UnixTimestampNanoseconds: 42})
 	require.NoError(t, err)
@@ -1169,32 +1180,32 @@ func Test_decodeObservation_BlobFetchErrorIsClassified(t *testing.T) {
 	var bfErr *blobFetchError
 
 	// A failing fetcher -> node-local error, must be a *blobFetchError.
-	_, err = decodeObservation(ctx, frame, &errBroadcaster{}, nil)
+	_, err = fetchBlobsAndDecodeObservation(ctx, frame, &errBroadcaster{}, nil)
 	require.Error(t, err)
 	require.True(t, errors.As(err, &bfErr), "fetch failure must be a blobFetchError so StateTransition propagates it")
 
 	// A nil fetcher (blob referenced but unfetchable) -> also a *blobFetchError.
-	_, err = decodeObservation(ctx, frame, nil, nil)
+	_, err = fetchBlobsAndDecodeObservation(ctx, frame, nil, nil)
 	require.Error(t, err)
 	require.True(t, errors.As(err, &bfErr))
 }
 
-// Test_decodeObservation_MalformedIsNotBlobFetchError verifies that
+// Test_fetchBlobsAndDecodeObservation_MalformedIsNotBlobFetchError verifies that
 // deterministic decode failures (same bytes on every oracle) are NOT classified
 // as blobFetchError, so StateTransition still drops just that observation rather
 // than aborting the whole round (Finding 2, the other side of the boundary).
-func Test_decodeObservation_MalformedIsNotBlobFetchError(t *testing.T) {
+func Test_fetchBlobsAndDecodeObservation_MalformedIsNotBlobFetchError(t *testing.T) {
 	ctx := tests.Context(t)
 	var bfErr *blobFetchError
 
 	// Unknown wire version.
-	_, err := decodeObservation(ctx, []byte{0x02, 0x00}, &errBroadcaster{}, nil)
+	_, err := fetchBlobsAndDecodeObservation(ctx, []byte{0x02, 0x00}, &errBroadcaster{}, nil)
 	require.Error(t, err)
 	require.False(t, errors.As(err, &bfErr), "malformed framing must stay droppable, not a blobFetchError")
 
 	// Well-framed but garbage handle bytes: UnmarshalBinary fails deterministically.
 	frame := frameObservation([][]byte{{0xFF}}, nil)
-	_, err = decodeObservation(ctx, frame, &errBroadcaster{}, nil)
+	_, err = fetchBlobsAndDecodeObservation(ctx, frame, &errBroadcaster{}, nil)
 	require.Error(t, err)
 	require.False(t, errors.As(err, &bfErr))
 }
@@ -1225,36 +1236,90 @@ func Test_StateTransition_PropagatesBlobFetchFailure(t *testing.T) {
 	require.Contains(t, err.Error(), "fetch blob")
 }
 
-// Test_StateTransition_RequiresQuorumAfterDecode checks that observations
-// dropped on decode cannot shrink the sample below 2f+1, where f byzantine
-// timestamps could control the median.
-func Test_StateTransition_RequiresQuorumAfterDecode(t *testing.T) {
+// Test_StateTransition_FailsOnInvalidObservation checks that an observation
+// failing the checks ValidateObservation runs fails the round instead of being
+// dropped, so a sample can never shrink below the quorum it was accepted on
+// and a divergent validation cannot fork the state.
+func Test_StateTransition_FailsOnInvalidObservation(t *testing.T) {
 	ctx := tests.Context(t)
 	p := testPlugin(t)
 	kv := newMemKV()
+
+	t.Run("non-empty observation in round 1", func(t *testing.T) {
+		aos := []ocrtypes.AttributedObservation{ao(0, nil), ao(1, nil), ao(2, []byte{0x7f})}
+		_, err := p.StateTransition(ctx, 1, ocrtypes.AttributedQuery{}, aos, kv, testBlobs)
+		require.ErrorContains(t, err, "invariant violation: non-empty observation from oracle 2 in round 1")
+	})
 
 	// Bootstrap.
 	_, err := p.StateTransition(ctx, 1, ocrtypes.AttributedQuery{}, []ocrtypes.AttributedObservation{ao(0, nil), ao(1, nil), ao(2, nil)}, kv, testBlobs)
 	require.NoError(t, err)
 
 	valid := func(i int) ocrtypes.AttributedObservation {
-		return ao(i, mustEncodeObs(t, Observation{UnixTimestampNanoseconds: 1000}))
-	}
-	invalid := func(i int) ocrtypes.AttributedObservation {
-		return ao(i, []byte{0x7f})
+		return ao(i, mustEncodeObs(t, Observation{ObservationTimestampNanoseconds: 1000}))
 	}
 
-	t.Run("2f+1 decoded observations proceed", func(t *testing.T) {
-		aos := []ocrtypes.AttributedObservation{valid(0), valid(1), valid(2), invalid(3)}
+	t.Run("malformed framing", func(t *testing.T) {
+		aos := []ocrtypes.AttributedObservation{valid(0), valid(1), valid(2), ao(3, []byte{0x7f})}
+		_, err := p.StateTransition(ctx, 2, ocrtypes.AttributedQuery{}, aos, kv, testBlobs)
+		require.ErrorContains(t, err, "invariant violation: observation from oracle 3 accepted by the leader fails validation on this oracle")
+		require.ErrorContains(t, err, "observation decode error")
+	})
+
+	t.Run("predecessor field without a predecessor", func(t *testing.T) {
+		stray := ao(3, mustEncodeObs(t, Observation{ObservationTimestampNanoseconds: 1000, AttestedPredecessorRetirement: []byte{1}}))
+		aos := []ocrtypes.AttributedObservation{valid(0), valid(1), valid(2), stray}
+		_, err := p.StateTransition(ctx, 2, ocrtypes.AttributedQuery{}, aos, kv, testBlobs)
+		require.ErrorContains(t, err, "AttestedPredecessorRetirement is not empty even though this instance has no predecessor")
+	})
+
+	t.Run("valid observations proceed", func(t *testing.T) {
+		aos := []ocrtypes.AttributedObservation{valid(0), valid(1), valid(2)}
 		_, err := p.StateTransition(ctx, 2, ocrtypes.AttributedQuery{}, aos, kv, testBlobs)
 		require.NoError(t, err)
 	})
+}
 
-	t.Run("fewer than 2f+1 decoded observations fail the round", func(t *testing.T) {
-		aos := []ocrtypes.AttributedObservation{valid(0), valid(1), invalid(2), invalid(3)}
-		_, err := p.StateTransition(ctx, 3, ocrtypes.AttributedQuery{}, aos, kv, testBlobs)
-		require.ErrorContains(t, err, "expected at least 2f+1 decoded observations, got 2 (f: 1)")
-	})
+// Test_ObservationQuorum_Byzantine checks the quorum is the Byzantine quorum:
+// 2f+1 at n = 3f+1, more above it, never more than n-f, and that
+// StateTransition holds the same invariant.
+func Test_ObservationQuorum_Byzantine(t *testing.T) {
+	ctx := tests.Context(t)
+	aosOf := func(n int) []ocrtypes.AttributedObservation {
+		aos := make([]ocrtypes.AttributedObservation, 0, n)
+		for i := range n {
+			aos = append(aos, ao(i, nil))
+		}
+		return aos
+	}
+
+	cases := []struct{ n, f, quorum int }{
+		{n: 4, f: 1, quorum: 3},
+		{n: 5, f: 1, quorum: 4},
+		{n: 7, f: 1, quorum: 5},
+		{n: 7, f: 2, quorum: 5},
+		{n: 10, f: 3, quorum: 7},
+	}
+	for _, tc := range cases {
+		t.Run(fmt.Sprintf("n=%d f=%d", tc.n, tc.f), func(t *testing.T) {
+			p := testPlugin(t)
+			p.N, p.F = tc.n, tc.f
+			require.GreaterOrEqual(t, tc.quorum, 2*tc.f+1)
+			require.LessOrEqual(t, tc.quorum, tc.n-tc.f)
+
+			below, err := p.ObservationQuorum(ctx, 2, ocrtypes.AttributedQuery{}, aosOf(tc.quorum-1), nil, nil)
+			require.NoError(t, err)
+			require.False(t, below)
+			reached, err := p.ObservationQuorum(ctx, 2, ocrtypes.AttributedQuery{}, aosOf(tc.quorum), nil, nil)
+			require.NoError(t, err)
+			require.True(t, reached)
+
+			_, err = p.StateTransition(ctx, 1, ocrtypes.AttributedQuery{}, aosOf(tc.quorum-1), newMemKV(), testBlobs)
+			require.ErrorContains(t, err, "do not reach the observation quorum")
+			_, err = p.StateTransition(ctx, 1, ocrtypes.AttributedQuery{}, aosOf(tc.quorum), newMemKV(), testBlobs)
+			require.NoError(t, err)
+		})
+	}
 }
 
 // equalStreamValue compares two stream values by their binary encoding.
@@ -1353,7 +1418,7 @@ func Test_Observation_RejectsInlineStreamValues(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	_, err = decodeObservation(ctx, frameObservation(nil, mainBytes), nil, nil)
+	_, err = fetchBlobsAndDecodeObservation(ctx, frameObservation(nil, mainBytes), nil, nil)
 	require.ErrorContains(t, err, "inline stream values")
 
 	// Deterministic across oracles, so it must not be a blob-fetch failure.
@@ -1572,7 +1637,7 @@ func Test_Observation_SupportedReportFormats_RoundTrip(t *testing.T) {
 	// The set is sorted on the wire and collapses back to a set on decode, so
 	// one oracle can only ever contribute one vote per format to the tally.
 	obs := Observation{
-		UnixTimestampNanoseconds: 1,
+		ObservationTimestampNanoseconds: 1,
 		SupportedReportFormats: formatSet(
 			llotypes.ReportFormatJSON,
 			llotypes.ReportFormatEVMPremiumLegacy,
@@ -1580,7 +1645,7 @@ func Test_Observation_SupportedReportFormats_RoundTrip(t *testing.T) {
 	}
 	b, err := encodeObservation(obs, nil)
 	require.NoError(t, err)
-	got, err := decodeObservation(ctx, b, nil, nil)
+	got, err := fetchBlobsAndDecodeObservation(ctx, b, nil, nil)
 	require.NoError(t, err)
 	require.Equal(t, formatSet(llotypes.ReportFormatEVMPremiumLegacy, llotypes.ReportFormatJSON), got.SupportedReportFormats)
 	require.Equal(t, []uint32{uint32(llotypes.ReportFormatEVMPremiumLegacy), uint32(llotypes.ReportFormatJSON)}, sortedFormatsToWire(got.SupportedReportFormats))
@@ -1591,15 +1656,15 @@ func Test_Observation_SupportedReportFormats_RoundTrip(t *testing.T) {
 		SupportedReportFormats:   []uint32{uint32(llotypes.ReportFormatJSON), uint32(llotypes.ReportFormatJSON)},
 	})
 	require.NoError(t, err)
-	got, err = decodeObservation(ctx, frameObservation(nil, dup), nil, nil)
+	got, err = fetchBlobsAndDecodeObservation(ctx, frameObservation(nil, dup), nil, nil)
 	require.NoError(t, err)
 	require.Equal(t, formatSet(llotypes.ReportFormatJSON), got.SupportedReportFormats)
 
 	// An oracle advertising nothing decodes as advertising nothing, rather than
 	// as an empty-but-present list.
-	b, err = encodeObservation(Observation{UnixTimestampNanoseconds: 1}, nil)
+	b, err = encodeObservation(Observation{ObservationTimestampNanoseconds: 1}, nil)
 	require.NoError(t, err)
-	got, err = decodeObservation(ctx, b, nil, nil)
+	got, err = fetchBlobsAndDecodeObservation(ctx, b, nil, nil)
 	require.NoError(t, err)
 	require.Nil(t, got.SupportedReportFormats)
 
@@ -1610,7 +1675,7 @@ func Test_Observation_SupportedReportFormats_RoundTrip(t *testing.T) {
 	}
 	raw, err := proto.Marshal(&protocol.LLOObservationProto{UnixTimestampNanoseconds: 1, SupportedReportFormats: tooMany})
 	require.NoError(t, err)
-	_, err = decodeObservation(ctx, frameObservation(nil, raw), nil, nil)
+	_, err = fetchBlobsAndDecodeObservation(ctx, frameObservation(nil, raw), nil, nil)
 	require.ErrorContains(t, err, "advertises too many report formats")
 }
 
@@ -1640,7 +1705,7 @@ func Test_DecodeObservation_ChannelVoteBounds(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			raw, err := proto.Marshal(tc.main)
 			require.NoError(t, err)
-			_, err = decodeObservation(ctx, frameObservation([][]byte{validBlobHandleBytes()}, raw), &errBroadcaster{}, nil)
+			_, err = fetchBlobsAndDecodeObservation(ctx, frameObservation([][]byte{validBlobHandleBytes()}, raw), &errBroadcaster{}, nil)
 			require.ErrorContains(t, err, tc.err)
 		})
 	}
@@ -1654,7 +1719,7 @@ func Test_DecodeObservation_AttestedPredecessorRetirementBound(t *testing.T) {
 		AttestedPredecessorRetirement: make([]byte, protocol.MaxAttestedRetirementReportBytes),
 	})
 	require.NoError(t, err)
-	got, err := decodeObservation(ctx, frameObservation(nil, atLimit), nil, nil)
+	got, err := fetchBlobsAndDecodeObservation(ctx, frameObservation(nil, atLimit), nil, nil)
 	require.NoError(t, err)
 	require.Len(t, got.AttestedPredecessorRetirement, protocol.MaxAttestedRetirementReportBytes)
 
@@ -1665,7 +1730,7 @@ func Test_DecodeObservation_AttestedPredecessorRetirementBound(t *testing.T) {
 		AttestedPredecessorRetirement: make([]byte, protocol.MaxAttestedRetirementReportBytes+1),
 	})
 	require.NoError(t, err)
-	_, err = decodeObservation(ctx, frameObservation(nil, overLimit), nil, nil)
+	_, err = fetchBlobsAndDecodeObservation(ctx, frameObservation(nil, overLimit), nil, nil)
 	require.ErrorContains(t, err, "attested predecessor retirement of")
 }
 
@@ -1739,8 +1804,8 @@ func Test_StateTransition_TalliesReportFormatSupport(t *testing.T) {
 
 	// Two oracles advertise JSON, one advertises nothing: the tally is a count
 	// of advertisements, and an oracle that advertises nothing is not counted.
-	obsJSON := mustEncodeObs(t, Observation{UnixTimestampNanoseconds: 1, SupportedReportFormats: formatSet(llotypes.ReportFormatJSON)})
-	obsNone := mustEncodeObs(t, Observation{UnixTimestampNanoseconds: 1, SupportedReportFormats: formatSet()})
+	obsJSON := mustEncodeObs(t, Observation{ObservationTimestampNanoseconds: 1, SupportedReportFormats: formatSet(llotypes.ReportFormatJSON)})
+	obsNone := mustEncodeObs(t, Observation{ObservationTimestampNanoseconds: 1, SupportedReportFormats: formatSet()})
 	_, err = p.StateTransition(ctx, 2, ocrtypes.AttributedQuery{}, []ocrtypes.AttributedObservation{ao(0, obsJSON), ao(1, obsJSON), ao(2, obsNone)}, kv, testBlobs)
 	require.NoError(t, err)
 	require.Equal(t, 2, supportAfter(t, p, kv)[llotypes.ReportFormatJSON])
@@ -1755,7 +1820,7 @@ func Test_StateTransition_ObservationTimestampDoesNotRegress(t *testing.T) {
 	require.NoError(t, err)
 
 	obsAt := func(ts uint64) []byte {
-		return mustEncodeObs(t, Observation{UnixTimestampNanoseconds: ts})
+		return mustEncodeObs(t, Observation{ObservationTimestampNanoseconds: ts})
 	}
 	agreedAt := func(seqNr uint64, aos ...ocrtypes.AttributedObservation) uint64 {
 		precBytes, err := p.StateTransition(ctx, seqNr, ocrtypes.AttributedQuery{}, aos, kv, testBlobs)
@@ -1824,9 +1889,9 @@ func Test_Observation_StampsTheRoundNotTheSnapshot(t *testing.T) {
 		before := uint64(time.Now().UnixNano()) //nolint:gosec // G115 test clock is positive
 		obsBytes, err := p.Observation(ctx, round, ocrtypes.AttributedQuery{}, kv, nil)
 		require.NoError(t, err)
-		obs, err := decodeObservation(ctx, obsBytes, bc, nil)
+		obs, err := fetchBlobsAndDecodeObservation(ctx, obsBytes, bc, nil)
 		require.NoError(t, err)
-		require.GreaterOrEqual(t, obs.UnixTimestampNanoseconds, before)
+		require.GreaterOrEqual(t, obs.ObservationTimestampNanoseconds, before)
 		require.Eventually(t, func() bool { return p.pump.Cycles() >= 1 }, tests.WaitTimeout(t), 10*time.Millisecond)
 	}
 }
@@ -1851,10 +1916,10 @@ func Test_StateTransition_CodecSupportAccumulatesAcrossRounds(t *testing.T) {
 
 	values := protocol.StreamValues{1: protocol.ToDecimal(decimal.NewFromInt(1))}
 	obsJSON := func(ts uint64) []byte {
-		return mustEncodeObs(t, Observation{UnixTimestampNanoseconds: ts, StreamValues: values, SupportedReportFormats: formatSet(llotypes.ReportFormatJSON)})
+		return mustEncodeObs(t, Observation{ObservationTimestampNanoseconds: ts, StreamValues: values, SupportedReportFormats: formatSet(llotypes.ReportFormatJSON)})
 	}
 	obsNone := func(ts uint64) []byte {
-		return mustEncodeObs(t, Observation{UnixTimestampNanoseconds: ts, StreamValues: values, SupportedReportFormats: formatSet()})
+		return mustEncodeObs(t, Observation{ObservationTimestampNanoseconds: ts, StreamValues: values, SupportedReportFormats: formatSet()})
 	}
 
 	// All N oracles advertise JSON.
@@ -1895,7 +1960,7 @@ func Test_StateTransition_PrunesUnusedReportFormatSupport(t *testing.T) {
 		for i := 1; i < protocol.MaxObservationSupportedReportFormatsLength; i++ {
 			formats[llotypes.ReportFormat(1_000_000+oracle*1_000+i)] = struct{}{}
 		}
-		return mustEncodeObs(t, Observation{UnixTimestampNanoseconds: 1, SupportedReportFormats: formats})
+		return mustEncodeObs(t, Observation{ObservationTimestampNanoseconds: 1, SupportedReportFormats: formats})
 	}
 	_, err = p.StateTransition(ctx, 2, ocrtypes.AttributedQuery{}, []ocrtypes.AttributedObservation{ao(0, padded(0)), ao(1, padded(1)), ao(2, padded(2))}, kv, testBlobs)
 	require.NoError(t, err)
@@ -1971,8 +2036,8 @@ func Test_Observation_UnverifiableCommittedChannelIsNotFatal(t *testing.T) {
 	_, err := p.StateTransition(ctx, 1, ocrtypes.AttributedQuery{}, []ocrtypes.AttributedObservation{ao(0, nil), ao(1, nil), ao(2, nil)}, kv, testBlobs)
 	require.NoError(t, err)
 	addObs := Observation{
-		UnixTimestampNanoseconds: 1_000,
-		UpdateChannelDefinitions: llotypes.ChannelDefinitions{1: healthy, 2: rejected},
+		ObservationTimestampNanoseconds: 1_000,
+		UpdateChannelDefinitions:        llotypes.ChannelDefinitions{1: healthy, 2: rejected},
 	}
 	addAOs := []ocrtypes.AttributedObservation{}
 	for i := 0; i < 4; i++ {
@@ -1997,7 +2062,7 @@ func Test_Observation_UnverifiableCommittedChannelIsNotFatal(t *testing.T) {
 
 	obsBytes, err := p.Observation(ctx, 3, ocrtypes.AttributedQuery{}, kv, nil)
 	require.NoError(t, err, "a committed definition this build rejects must not halt the node")
-	obs, err := decodeObservation(ctx, obsBytes, testBlobs, nil)
+	obs, err := fetchBlobsAndDecodeObservation(ctx, obsBytes, testBlobs, nil)
 	require.NoError(t, err)
 
 	// The tombstone vote is the recovery path, and it is only cast because the
@@ -2033,8 +2098,8 @@ func Test_FullRound_RecoverFromUnverifiableChannel(t *testing.T) {
 	_, err := p.StateTransition(ctx, 1, ocrtypes.AttributedQuery{}, []ocrtypes.AttributedObservation{ao(0, nil), ao(1, nil), ao(2, nil)}, kv, testBlobs)
 	require.NoError(t, err)
 	addObs := Observation{
-		UnixTimestampNanoseconds: 1_000,
-		UpdateChannelDefinitions: llotypes.ChannelDefinitions{1: healthy, 2: rejected},
+		ObservationTimestampNanoseconds: 1_000,
+		UpdateChannelDefinitions:        llotypes.ChannelDefinitions{1: healthy, 2: rejected},
 	}
 	addAOs := []ocrtypes.AttributedObservation{}
 	for i := 0; i < 4; i++ {
@@ -2054,9 +2119,9 @@ func Test_FullRound_RecoverFromUnverifiableChannel(t *testing.T) {
 	tombstoned := rejected
 	tombstoned.Tombstone = true
 	tombstoneObs := Observation{
-		UnixTimestampNanoseconds: 2_000,
-		UpdateChannelDefinitions: llotypes.ChannelDefinitions{2: tombstoned},
-		StreamValues:             protocol.StreamValues{100: protocol.ToDecimal(decimal.NewFromInt(42))},
+		ObservationTimestampNanoseconds: 2_000,
+		UpdateChannelDefinitions:        llotypes.ChannelDefinitions{2: tombstoned},
+		StreamValues:                    protocol.StreamValues{100: protocol.ToDecimal(decimal.NewFromInt(42))},
 	}
 	tombstoneAOs := []ocrtypes.AttributedObservation{}
 	for i := 0; i < 4; i++ {
@@ -2070,9 +2135,9 @@ func Test_FullRound_RecoverFromUnverifiableChannel(t *testing.T) {
 	require.True(t, kvChannelDefs(t, kv)[2].Tombstone)
 
 	removeObs := Observation{
-		UnixTimestampNanoseconds: 3_000,
-		RemoveChannelIDs:         map[llotypes.ChannelID]struct{}{2: {}},
-		StreamValues:             protocol.StreamValues{100: protocol.ToDecimal(decimal.NewFromInt(42))},
+		ObservationTimestampNanoseconds: 3_000,
+		RemoveChannelIDs:                map[llotypes.ChannelID]struct{}{2: {}},
+		StreamValues:                    protocol.StreamValues{100: protocol.ToDecimal(decimal.NewFromInt(42))},
 	}
 	removeAOs := []ocrtypes.AttributedObservation{}
 	for i := 0; i < 4; i++ {
@@ -2207,7 +2272,7 @@ func Test_Observation_RetirementCacheErrorsAreNotFatal(t *testing.T) {
 
 	obsBytes, err := p.Observation(ctx, 2, ocrtypes.AttributedQuery{}, kv, nil)
 	require.NoError(t, err, "a failing retirement cache must not halt the node")
-	obs, err := decodeObservation(ctx, obsBytes, testBlobs, nil)
+	obs, err := fetchBlobsAndDecodeObservation(ctx, obsBytes, testBlobs, nil)
 	require.NoError(t, err)
 
 	require.Empty(t, obs.AttestedPredecessorRetirement)
@@ -2321,7 +2386,7 @@ func Test_StateTransition_BackfillValidAfterRequiresPreviousReport(t *testing.T)
 		t.Helper()
 		aos := make([]ocrtypes.AttributedObservation, 0, 4)
 		for i := 0; i < 4; i++ {
-			obs := Observation{UnixTimestampNanoseconds: ts}
+			obs := Observation{ObservationTimestampNanoseconds: ts}
 			if shape != nil {
 				shape(&obs)
 			}
@@ -2403,7 +2468,7 @@ func Test_StateTransition_BackfillValidAfterRequiresPreviousReport(t *testing.T)
 			require.NoError(t, writeHotState(kv, tenSec,
 				map[llotypes.ChannelID]uint64{targetCID: tenSec, backfillCID: 0},
 				map[llotypes.ChannelID]bool{targetCID: false, backfillCID: false},
-				nil, logger.Test(t)))
+				nil, nil, logger.Test(t)))
 
 			// The verdict round.
 			_, err := p.StateTransition(ctx, 2, ocrtypes.AttributedQuery{}, round(t, tenSec+1, tc.shape), kv, testBlobs)

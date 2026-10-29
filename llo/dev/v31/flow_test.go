@@ -188,9 +188,9 @@ func (m *mockPredecessorRetirementReportCache) VerifyAttestedRetirementReport(_ 
 // signer set so the DON can agree on it and verify the report against it.
 func promotionObs(tsNanoseconds uint64) Observation {
 	return Observation{
-		UnixTimestampNanoseconds:      tsNanoseconds,
-		AttestedPredecessorRetirement: []byte("attested"),
-		PredecessorSigners:            testPredecessorSigners,
+		ObservationTimestampNanoseconds: tsNanoseconds,
+		AttestedPredecessorRetirement:   []byte("attested"),
+		PredecessorSigners:              testPredecessorSigners,
 	}
 }
 
@@ -200,7 +200,7 @@ func jsonChannel() llotypes.ChannelDefinition {
 
 // addChannelRound feeds 4 identical observations voting to add the given channel.
 func addChannelRound(t *testing.T, ts uint64, cid llotypes.ChannelID, cd llotypes.ChannelDefinition) []ocrtypes.AttributedObservation {
-	obs := Observation{UnixTimestampNanoseconds: ts, UpdateChannelDefinitions: llotypes.ChannelDefinitions{cid: cd}}
+	obs := Observation{ObservationTimestampNanoseconds: ts, UpdateChannelDefinitions: llotypes.ChannelDefinitions{cid: cd}}
 	aos := make([]ocrtypes.AttributedObservation, 0, 4)
 	for i := 0; i < 4; i++ {
 		aos = append(aos, ao(i, mustEncodeObs(t, obs)))
@@ -355,30 +355,6 @@ func Test_Factory_NewReportingPlugin_maxDurationObservation(t *testing.T) {
 	})
 }
 
-func Test_Factory_MaxRoundPeriod(t *testing.T) {
-	ctx := tests.Context(t)
-	base := ocr3types.ReportingPluginConfig{N: 4, F: 1, ConfigDigest: ocrtypes.ConfigDigest{9}, OffchainConfig: mustEncodeOffchainConfig(t, 1), MaxDurationObservation: time.Second}
-
-	newPump := func(t *testing.T, params PluginFactoryParams, cfg ocr3types.ReportingPluginConfig) *blobPump {
-		t.Helper()
-		params.OnchainConfigCodec = mockOnchainConfigCodec{}
-		params.Logger = logger.Test(t)
-		p, _, err := NewPluginFactory(params).NewReportingPlugin(ctx, cfg, nil)
-		require.NoError(t, err)
-		t.Cleanup(func() { require.NoError(t, p.Close()) })
-		return p.(*Plugin).pump
-	}
-
-	t.Run("defaulted", func(t *testing.T) {
-		require.Equal(t, DefaultMaxRoundPeriod, newPump(t, PluginFactoryParams{}, base).maxRoundPeriod)
-	})
-
-	t.Run("override wins", func(t *testing.T) {
-		pump := newPump(t, PluginFactoryParams{MaxRoundPeriod: time.Second}, base)
-		require.Equal(t, time.Second, pump.maxRoundPeriod)
-	})
-}
-
 func Test_Factory_NewReportingPlugin(t *testing.T) {
 	ctx := tests.Context(t)
 	f := NewPluginFactory(PluginFactoryParams{
@@ -400,9 +376,7 @@ func Test_Factory_NewReportingPlugin(t *testing.T) {
 	require.Equal(t, 3, pl.minContributions())
 	require.NotNil(t, pl.ChannelCache)
 	require.NotNil(t, pl.pump)
-	require.Equal(t, uint64(DefaultMaxSnapshotRounds), pl.pump.maxSnapshotRounds)
 	require.Equal(t, uint64(DefaultBlobLifetimeRounds), pl.pump.blobLifetimeRounds)
-	require.Equal(t, DefaultMaxRoundPeriod, pl.pump.maxRoundPeriod)
 	require.NoError(t, pl.Close())
 }
 
@@ -441,7 +415,7 @@ func Test_Observation_And_Validate_Flow(t *testing.T) {
 	first, err := p.Observation(ctx, 3, ocrtypes.AttributedQuery{}, kv, nil)
 	require.NoError(t, err)
 	require.NotEmpty(t, first)
-	decodedFirst, err := decodeObservation(ctx, first, bc, nil)
+	decodedFirst, err := fetchBlobsAndDecodeObservation(ctx, first, bc, nil)
 	require.NoError(t, err)
 	require.Empty(t, decodedFirst.StreamValues)
 
@@ -452,7 +426,7 @@ func Test_Observation_And_Validate_Flow(t *testing.T) {
 	obsBytes, err := p.Observation(ctx, 4, ocrtypes.AttributedQuery{}, kv, nil)
 	require.NoError(t, err)
 	require.NotEmpty(t, obsBytes)
-	decoded, err := decodeObservation(ctx, obsBytes, bc, nil)
+	decoded, err := fetchBlobsAndDecodeObservation(ctx, obsBytes, bc, nil)
 	require.NoError(t, err)
 	require.Contains(t, decoded.StreamValues, llotypes.StreamID(100))
 
@@ -479,7 +453,7 @@ func Test_StateTransition_ChannelRemoval(t *testing.T) {
 	require.Contains(t, kvChannelDefs(t, kv), llotypes.ChannelID(1))
 
 	// Round 3: four oracles vote to remove channel 1.
-	removeObs := Observation{UnixTimestampNanoseconds: 2000, RemoveChannelIDs: map[llotypes.ChannelID]struct{}{1: {}}}
+	removeObs := Observation{ObservationTimestampNanoseconds: 2000, RemoveChannelIDs: map[llotypes.ChannelID]struct{}{1: {}}}
 	removeAOs := make([]ocrtypes.AttributedObservation, 0, 4)
 	for i := 0; i < 4; i++ {
 		removeAOs = append(removeAOs, ao(i, mustEncodeObs(t, removeObs)))
@@ -494,7 +468,7 @@ func Test_StateTransition_ChannelRemoval(t *testing.T) {
 	require.Contains(t, kvHotState(t, kv).validAfterNanoseconds, llotypes.ChannelID(1))
 
 	// Round 4: the removal takes effect and the channel's state is dropped.
-	nextObs := Observation{UnixTimestampNanoseconds: 3000}
+	nextObs := Observation{ObservationTimestampNanoseconds: 3000}
 	nextAOs := make([]ocrtypes.AttributedObservation, 0, 4)
 	for i := 0; i < 4; i++ {
 		nextAOs = append(nextAOs, ao(i, mustEncodeObs(t, nextObs)))
@@ -601,7 +575,7 @@ func Test_StateTransition_Promotion_StagingOnlyChannelTreatedAsNew(t *testing.T)
 	require.NotContains(t, kvHotState(t, kv).validAfterNanoseconds, llotypes.ChannelID(2))
 
 	// Round 3 (ts=2000): channel 2 is now in effect and gets its first watermark.
-	seedObs := Observation{UnixTimestampNanoseconds: 2000}
+	seedObs := Observation{ObservationTimestampNanoseconds: 2000}
 	seedAOs := make([]ocrtypes.AttributedObservation, 0, 4)
 	for i := 0; i < 4; i++ {
 		seedAOs = append(seedAOs, ao(i, mustEncodeObs(t, seedObs)))
@@ -633,7 +607,7 @@ func Test_ValidateObservation_Errors(t *testing.T) {
 	kv := newMemKV()
 
 	// AttestedPredecessorRetirement present but no predecessor -> error.
-	o1 := Observation{UnixTimestampNanoseconds: 1, AttestedPredecessorRetirement: []byte("x")}
+	o1 := Observation{ObservationTimestampNanoseconds: 1, AttestedPredecessorRetirement: []byte("x")}
 	require.Error(t, p.ValidateObservation(ctx, 2, ocrtypes.AttributedQuery{}, ao(0, mustEncodeObs(t, o1)), kv, nil))
 
 	// Too many channel-definition updates -> error.
@@ -641,11 +615,11 @@ func Test_ValidateObservation_Errors(t *testing.T) {
 	for i := uint32(1); i <= 6; i++ {
 		defs[llotypes.ChannelID(i)] = jsonChannel()
 	}
-	o2 := Observation{UnixTimestampNanoseconds: 1, UpdateChannelDefinitions: defs}
+	o2 := Observation{ObservationTimestampNanoseconds: 1, UpdateChannelDefinitions: defs}
 	require.Error(t, p.ValidateObservation(ctx, 2, ocrtypes.AttributedQuery{}, ao(0, mustEncodeObs(t, o2)), kv, nil))
 
 	// A TimestampedStreamValue whose nested value is not a Decimal -> error.
-	o3 := Observation{UnixTimestampNanoseconds: 1, StreamValues: protocol.StreamValues{
+	o3 := Observation{ObservationTimestampNanoseconds: 1, StreamValues: protocol.StreamValues{
 		1: &protocol.TimestampedStreamValue{StreamValue: &protocol.TimestampedStreamValue{StreamValue: protocol.ToDecimal(decimal.NewFromInt(1))}},
 	}}
 	require.Error(t, p.ValidateObservation(ctx, 2, ocrtypes.AttributedQuery{}, ao(0, mustEncodeObs(t, o3)), kv, nil))
@@ -663,7 +637,7 @@ func Test_StateTransition_Retirement(t *testing.T) {
 	require.NoError(t, err)
 
 	// Round 3: four oracles vote to retire.
-	retireObs := Observation{UnixTimestampNanoseconds: 2000, ShouldRetire: true}
+	retireObs := Observation{ObservationTimestampNanoseconds: 2000, ShouldRetire: true}
 	retireAOs := make([]ocrtypes.AttributedObservation, 0, 4)
 	for i := 0; i < 4; i++ {
 		retireAOs = append(retireAOs, ao(i, mustEncodeObs(t, retireObs)))
@@ -691,7 +665,7 @@ func Test_StateTransition_RetirementThreshold(t *testing.T) {
 	retireRound := func(t *testing.T, votes int) []ocrtypes.AttributedObservation {
 		aos := make([]ocrtypes.AttributedObservation, 0, 3)
 		for i := 0; i < 3; i++ {
-			obs := Observation{UnixTimestampNanoseconds: 2000, ShouldRetire: i < votes}
+			obs := Observation{ObservationTimestampNanoseconds: 2000, ShouldRetire: i < votes}
 			aos = append(aos, ao(i, mustEncodeObs(t, obs)))
 		}
 		return aos
@@ -759,16 +733,16 @@ func Test_ValidateObservation_RemoveAddSwapAtBudget(t *testing.T) {
 	// it replaces, so the resulting set is back on the budget, not over it.
 	replacement := llotypes.ChannelDefinitions{3: streamRangeChannel(llotypes.StreamID(2*half)+1, half)}
 	swap := Observation{
-		UnixTimestampNanoseconds: 1_000,
-		RemoveChannelIDs:         map[llotypes.ChannelID]struct{}{2: {}},
-		UpdateChannelDefinitions: replacement,
+		ObservationTimestampNanoseconds: 1_000,
+		RemoveChannelIDs:                map[llotypes.ChannelID]struct{}{2: {}},
+		UpdateChannelDefinitions:        replacement,
 	}
 	require.NoError(t, p.ValidateObservation(ctx, 2, ocrtypes.AttributedQuery{}, ao(0, mustEncodeObs(t, swap)), kv, testBlobs))
 
 	// The same update without the removal vote does exceed the budget, which is
 	// what makes the assertion above about the removals and not about slack in
 	// the limit.
-	addOnly := Observation{UnixTimestampNanoseconds: 1_000, UpdateChannelDefinitions: replacement}
+	addOnly := Observation{ObservationTimestampNanoseconds: 1_000, UpdateChannelDefinitions: replacement}
 	require.Error(t, p.ValidateObservation(ctx, 2, ocrtypes.AttributedQuery{}, ao(0, mustEncodeObs(t, addOnly)), kv, testBlobs))
 }
 
@@ -877,13 +851,15 @@ func Test_StateTransition_PredecessorConfigNeedsQuorum(t *testing.T) {
 // set of its own and attest a handover that never happened.
 func Test_StateTransition_PredecessorConfigAgreementIsPerRound(t *testing.T) {
 	ctx := tests.Context(t)
-	p, kv := stagedPlugin(t, &mockPredecessorRetirementReportCache{report: protocol.RetirementReport{}})
+	p, kv := stagedPlugin(t, &mockPredecessorRetirementReportCache{verifyErr: errors.New("Verify failed; not enough valid signatures")})
 
-	// Round 2 reaches quorum on the real signer set but carries no retirement
-	// report, so the instance stays in staging and the agreement is discarded.
+	// Round 2 reaches quorum on the real signer set but its retirement report
+	// fails verification, so the instance stays in staging and the agreement is
+	// discarded. A signer set is only valid alongside a report, so the vote
+	// cannot be cast on its own.
 	votesOnly := make([]ocrtypes.AttributedObservation, 0, 4)
-	for i := 0; i < 4; i++ {
-		votesOnly = append(votesOnly, ao(i, mustEncodeObs(t, Observation{UnixTimestampNanoseconds: 1000, PredecessorSigners: testPredecessorSigners})))
+	for i := range 4 {
+		votesOnly = append(votesOnly, ao(i, mustEncodeObs(t, Observation{ObservationTimestampNanoseconds: 1000, AttestedPredecessorRetirement: []byte("attested"), PredecessorSigners: testPredecessorSigners})))
 	}
 	_, err := p.StateTransition(ctx, 2, ocrtypes.AttributedQuery{}, votesOnly, kv, testBlobs)
 	require.NoError(t, err)
@@ -895,7 +871,7 @@ func Test_StateTransition_PredecessorConfigAgreementIsPerRound(t *testing.T) {
 	attacker := [][]byte{{0xFF}, {0xFE}}
 	forged := make([]ocrtypes.AttributedObservation, 0, 4)
 	for i := 0; i < 4; i++ {
-		obs := Observation{UnixTimestampNanoseconds: 2000}
+		obs := Observation{ObservationTimestampNanoseconds: 2000}
 		if i == 0 {
 			obs.AttestedPredecessorRetirement = []byte("attested")
 			obs.PredecessorSigners = attacker
@@ -949,7 +925,7 @@ func Test_Observation_PredecessorConfigVote(t *testing.T) {
 		t.Helper()
 		obsBytes, err := p.Observation(ctx, 2, ocrtypes.AttributedQuery{}, kv, nil)
 		require.NoError(t, err)
-		obs, err := decodeObservation(ctx, obsBytes, testBlobs, nil)
+		obs, err := fetchBlobsAndDecodeObservation(ctx, obsBytes, testBlobs, nil)
 		require.NoError(t, err)
 		return obs
 	}
@@ -1003,11 +979,11 @@ func Test_Observation_PredecessorConfigVote(t *testing.T) {
 // Nothing compares observation bytes today and this keeps a future path that does from being silently wrong.
 func Test_EncodeObservation_IsDeterministic(t *testing.T) {
 	obs := Observation{
-		UnixTimestampNanoseconds:      1234,
-		AttestedPredecessorRetirement: []byte("attested"),
-		PredecessorSigners:            testPredecessorSigners,
-		PredecessorF:                  1,
-		RemoveChannelIDs:              map[llotypes.ChannelID]struct{}{7: {}, 1: {}, 4: {}, 2: {}, 9: {}},
+		ObservationTimestampNanoseconds: 1234,
+		AttestedPredecessorRetirement:   []byte("attested"),
+		PredecessorSigners:              testPredecessorSigners,
+		PredecessorF:                    1,
+		RemoveChannelIDs:                map[llotypes.ChannelID]struct{}{7: {}, 1: {}, 4: {}, 2: {}, 9: {}},
 		UpdateChannelDefinitions: llotypes.ChannelDefinitions{
 			5: jsonChannel(), 3: jsonChannel(), 8: jsonChannel(), 1: jsonChannel(),
 		},
@@ -1032,11 +1008,11 @@ func Test_MarshalStreamValues_IsDeterministic(t *testing.T) {
 		sv[id] = protocol.ToDecimal(decimal.NewFromInt(int64(id)))
 	}
 
-	want, err := marshalStreamValues(sv)
+	want, err := marshalStreamValues(sv, 1)
 	require.NoError(t, err)
 	require.NotEmpty(t, want)
 	for range 64 {
-		got, err := marshalStreamValues(sv)
+		got, err := marshalStreamValues(sv, 1)
 		require.NoError(t, err)
 		require.Equal(t, want, got, "the same stream values must marshal to the same payload")
 	}
@@ -1067,7 +1043,7 @@ func Test_Observation_RemovesOnlyTombstones(t *testing.T) {
 		require.NoError(t, err)
 		agree := make([]ocrtypes.AttributedObservation, 0, 4)
 		for i := 0; i < 4; i++ {
-			agree = append(agree, ao(i, mustEncodeObs(t, Observation{UnixTimestampNanoseconds: 1000, UpdateChannelDefinitions: defs})))
+			agree = append(agree, ao(i, mustEncodeObs(t, Observation{ObservationTimestampNanoseconds: 1000, UpdateChannelDefinitions: defs})))
 		}
 		_, err = p.StateTransition(ctx, 2, ocrtypes.AttributedQuery{}, agree, kv, testBlobs)
 		require.NoError(t, err)
@@ -1076,7 +1052,7 @@ func Test_Observation_RemovesOnlyTombstones(t *testing.T) {
 		cdc.defs = desired
 		obsBytes, err := p.Observation(ctx, 3, ocrtypes.AttributedQuery{}, kv, nil)
 		require.NoError(t, err)
-		obs, err := decodeObservation(ctx, obsBytes, testBlobs, nil)
+		obs, err := fetchBlobsAndDecodeObservation(ctx, obsBytes, testBlobs, nil)
 		require.NoError(t, err)
 		return obs.RemoveChannelIDs
 	}
@@ -1261,7 +1237,7 @@ func Test_ValidateObservation_DoesNotEvictChannelAnalysisCache(t *testing.T) {
 		for i := 0; i < updates; i++ {
 			cd := jsonChannel()
 			cd.Streams[0].StreamID = llotypes.StreamID(200 + i) //nolint:gosec // small test constant
-			obs := Observation{UnixTimestampNanoseconds: 1_000, UpdateChannelDefinitions: llotypes.ChannelDefinitions{1: cd}}
+			obs := Observation{ObservationTimestampNanoseconds: 1_000, UpdateChannelDefinitions: llotypes.ChannelDefinitions{1: cd}}
 			require.NoError(t, p.ValidateObservation(ctx, 2, ocrtypes.AttributedQuery{}, ao(i%4, mustEncodeObs(t, obs)), kv, testBlobs))
 		}
 	}

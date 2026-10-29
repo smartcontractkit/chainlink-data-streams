@@ -55,13 +55,13 @@ func Test_BlobPayload_MarshalStreamValuesRoundTrip(t *testing.T) {
 	for i := uint32(0); i < 500; i++ {
 		sv[i] = protocol.ToDecimal(decimal.NewFromInt(int64(i)))
 	}
-	payload, err := marshalStreamValues(sv)
+	payload, err := marshalStreamValues(sv, 1)
 	require.NoError(t, err)
 	require.Equal(t, blobCodecZstd, payload[0])
 
 	raw, err := decodeBlobPayload(payload, maxDecompressedBlobPayloadBytes)
 	require.NoError(t, err)
-	chunk := &protocol.LLOObservationProto{}
+	chunk := &protocol.LLOBlobPayloadProto{}
 	require.NoError(t, proto.Unmarshal(raw, chunk))
 	assert.Len(t, chunk.StreamValues, 500)
 }

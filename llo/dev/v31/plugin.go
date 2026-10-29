@@ -53,6 +53,8 @@ type Plugin struct {
 	// keys the facts derived from them by definition alone.
 	ReportCodecs map[llotypes.ReportFormat]protocol.ReportCodec
 	DonID        uint32
+	// freshnessMetrics is set by the factory. Nil records nothing.
+	freshnessMetrics *freshnessMetrics
 	// ChannelCache memoizes the channel definitions record, together with the
 	// opts decoded from it, across rounds so it is re-read only when its
 	// sequence number changes. May be nil, in which case a fresh generation is
@@ -103,6 +105,11 @@ type Plugin struct {
 	// aggregation tolerates. It sets the contribution floor, see
 	// minContributions.
 	AggregationFaultTolerance int
+
+	// MinRoundInterval is the configured DeltaRound, from the shared OCR config.
+	// It floors the round interval the state transition measures from agreed
+	// timestamps. See roundIntervalEstimate.
+	MinRoundInterval time.Duration
 }
 
 // minContributions is the contribution floor: the fewest contributions a stream
@@ -212,9 +219,9 @@ func (p *Plugin) Observation(ctx context.Context, seqNr uint64, _ ocrtypes.Attri
 
 		var reason string
 		if snap, reason = p.pump.Take(ctx, seqNr); snap != nil {
-			handles = append(handles, snap.handleBytes)
+			handles = append(handles, snap.blobHandleBytes)
 		} else {
-			p.Logger.Debugw("No usable stream-value snapshot for this round", "stage", "Observation", "seqNr", seqNr, "reason", reason, "misses", p.pump.Misses(), "cycles", p.pump.Cycles())
+			p.Logger.Debugw("No usable stream-value snapshot for this round", "stage", "Observation", "seqNr", seqNr, "reason", reason, "misses", p.pump.Misses(), "cycles", p.pump.Cycles(), "reuses", p.pump.Reuses())
 		}
 	}
 
@@ -222,7 +229,7 @@ func (p *Plugin) Observation(ctx context.Context, seqNr uint64, _ ocrtypes.Attri
 	if obsTSNanos < 0 {
 		return nil, fmt.Errorf("negative observation timestamps are not supported, got: %d", obsTSNanos)
 	}
-	obs.UnixTimestampNanoseconds = uint64(obsTSNanos)
+	obs.ObservationTimestampNanoseconds = uint64(obsTSNanos)
 
 	// Advertised every round, including when retired: a statement about this
 	// binary, not about the round or about what this node wants admitted.
@@ -468,21 +475,9 @@ func (p *Plugin) ValidateObservation(ctx context.Context, seqNr uint64, _ ocrtyp
 		return nil
 	}
 
-	observation, err := decodeObservation(ctx, ao.Observation, bf, p.BlobPayloads.round(seqNr))
+	observation, err := p.fetchBlobsDecodeAndValidateObservation(ctx, seqNr, ao, bf)
 	if err != nil {
-		return fmt.Errorf("observation decode error: %w", err)
-	}
-
-	if p.PredecessorConfigDigest == nil && len(observation.AttestedPredecessorRetirement) != 0 {
-		return errors.New("AttestedPredecessorRetirement is not empty even though this instance has no predecessor")
-	}
-	if p.PredecessorConfigDigest == nil && len(observation.PredecessorSigners) != 0 {
-		return errors.New("PredecessorSigners is not empty even though this instance has no predecessor")
-	}
-	// The signer set is only ever needed to verify a report carried alongside
-	// it, so a set without one is dead weight on the wire.
-	if len(observation.PredecessorSigners) != 0 && len(observation.AttestedPredecessorRetirement) == 0 {
-		return errors.New("PredecessorSigners is not empty even though this observation carries no AttestedPredecessorRetirement")
+		return err
 	}
 
 	// Only the baseline checks run here. A definition is installed on more than
@@ -527,23 +522,67 @@ func (p *Plugin) ValidateObservation(ctx context.Context, seqNr uint64, _ ocrtyp
 		return fmt.Errorf("UpdateChannelDefinitions is invalid: %w", err)
 	}
 
+	return nil
+}
+
+// fetchBlobsDecodeAndValidateObservation runs every observation check that
+// needs no KV state: framing, blob fetch and decode, size limits, value types
+// and the predecessor fields. ValidateObservation and StateTransition both
+// call it, so the two cannot drift apart. The channel definition checks read
+// KV state and stay in ValidateObservation.
+//
+// A blob fetch failure is returned wrapped in blobFetchError, so the caller
+// can tell a node-local failure from a malformed observation.
+func (p *Plugin) fetchBlobsDecodeAndValidateObservation(ctx context.Context, seqNr uint64, ao ocrtypes.AttributedObservation, bf ocr3_1types.BlobFetcher) (Observation, error) {
+	observation, err := fetchBlobsAndDecodeObservation(ctx, ao.Observation, bf, p.BlobPayloads.round(seqNr))
+	if err != nil {
+		return Observation{}, fmt.Errorf("observation decode error: %w", err)
+	}
+
+	if p.PredecessorConfigDigest == nil && len(observation.AttestedPredecessorRetirement) != 0 {
+		return Observation{}, errors.New("AttestedPredecessorRetirement is not empty even though this instance has no predecessor")
+	}
+	if p.PredecessorConfigDigest == nil && len(observation.PredecessorSigners) != 0 {
+		return Observation{}, errors.New("PredecessorSigners is not empty even though this instance has no predecessor")
+	}
+	// The signer set is only ever needed to verify a report carried alongside
+	// it, so a set without one is dead weight on the wire.
+	if len(observation.PredecessorSigners) != 0 && len(observation.AttestedPredecessorRetirement) == 0 {
+		return Observation{}, errors.New("PredecessorSigners is not empty even though this observation carries no AttestedPredecessorRetirement")
+	}
+
+	// A cycle cannot have started in a round that has not happened yet. The
+	// lower bound is not checked: an old cycle is a stale contribution, which
+	// is the state transition's call, not an invalid observation.
+	if observation.CycleStartSeqNr > seqNr {
+		return Observation{}, fmt.Errorf("stream values gathered for a future round: cycle start seqNr %d > %d", observation.CycleStartSeqNr, seqNr)
+	}
 	if len(observation.StreamValues) > protocol.MaxObservationStreamValuesLength {
-		return fmt.Errorf("StreamValues is too long: %v vs %v", len(observation.StreamValues), protocol.MaxObservationStreamValuesLength)
+		return Observation{}, fmt.Errorf("StreamValues is too long: %v vs %v", len(observation.StreamValues), protocol.MaxObservationStreamValuesLength)
 	}
 	for _, streamValue := range observation.StreamValues {
 		if v, ok := streamValue.(*protocol.TimestampedStreamValue); ok {
 			if v.StreamValue.Type() != protocol.LLOStreamValue_Decimal {
-				return fmt.Errorf("nested stream value on TimestampedStreamValue must be a Decimal, got: %v", v.StreamValue.Type())
+				return Observation{}, fmt.Errorf("nested stream value on TimestampedStreamValue must be a Decimal, got: %v", v.StreamValue.Type())
 			}
 		}
 	}
 
-	return nil
+	return observation, nil
 }
 
-// ObservationQuorum uses the standard 2f+1 quorum.
+// ObservationQuorum uses the Byzantine quorum: at least 2f+1 observations,
+// equal to it when n = 3f+1, and never more than n-f, so the honest oracles
+// alone always reach it. For n > 3f+1 a round waits for more observations than
+// 2f+1, so each stream gets more contributions.
 func (p *Plugin) ObservationQuorum(ctx context.Context, seqNr uint64, _ ocrtypes.AttributedQuery, aos []ocrtypes.AttributedObservation, _ ocr3_1types.KeyValueStateReader, _ ocr3_1types.BlobFetcher) (bool, error) {
-	return quorumhelper.ObservationCountReachesObservationQuorum(quorumhelper.QuorumTwoFPlusOne, p.N, p.F, aos), nil
+	return p.hasObservationQuorum(aos), nil
+}
+
+// hasObservationQuorum is the one quorum rule, shared by ObservationQuorum and
+// the StateTransition invariant.
+func (p *Plugin) hasObservationQuorum(aos []ocrtypes.AttributedObservation) bool {
+	return quorumhelper.ObservationCountReachesObservationQuorum(quorumhelper.QuorumByzQuorum, p.N, p.F, aos)
 }
 
 // Committed is a no-op: LLO has no on-commit side effects, and Committed is not

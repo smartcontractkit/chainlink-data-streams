@@ -30,7 +30,7 @@ func Test_ChannelCache_ReadsDefsOnlyWhenSeqNrChanges(t *testing.T) {
 	require.NoError(t, err)
 
 	// Round 3 still re-reads once, because round 2 changed the definitions.
-	noopObs := Observation{UnixTimestampNanoseconds: 2_000}
+	noopObs := Observation{ObservationTimestampNanoseconds: 2_000}
 	aos := make([]ocrtypes.AttributedObservation, 0, 4)
 	for i := 0; i < 4; i++ {
 		aos = append(aos, ao(i, mustEncodeObs(t, noopObs)))
@@ -61,7 +61,7 @@ func Test_ChannelCache_StaleSeqNrForcesReload(t *testing.T) {
 	kv := newMemKV()
 	defs := llotypes.ChannelDefinitions{1: jsonChannel()}
 	require.NoError(t, writeChannelState(kv, 5, defs))
-	require.NoError(t, writeHotState(kv, 0, nil, nil, nil, logger.Test(t)))
+	require.NoError(t, writeHotState(kv, 0, nil, nil, nil, nil, logger.Test(t)))
 
 	cache := protocol.NewChannelCache()
 	s, err := loadKVState(kv, cache, logger.Test(t))
@@ -97,7 +97,7 @@ func Test_HotState_DropsOrphanedCarryForward(t *testing.T) {
 
 	// Round 3: the channel is now in effect; observe a timestamped value so it
 	// gets carried forward.
-	obs := Observation{UnixTimestampNanoseconds: 2_000, StreamValues: protocol.StreamValues{100: tsv}}
+	obs := Observation{ObservationTimestampNanoseconds: 2_000, StreamValues: protocol.StreamValues{100: tsv}}
 	aos := make([]ocrtypes.AttributedObservation, 0, 4)
 	for i := 0; i < 4; i++ {
 		aos = append(aos, ao(i, mustEncodeObs(t, obs)))
@@ -108,7 +108,7 @@ func Test_HotState_DropsOrphanedCarryForward(t *testing.T) {
 
 	// Round 4: vote to remove the only channel referencing the pair. The removal
 	// is deferred, so the channel is still in effect and the value is retained.
-	removeObs := Observation{UnixTimestampNanoseconds: 3_000, RemoveChannelIDs: map[llotypes.ChannelID]struct{}{1: {}}}
+	removeObs := Observation{ObservationTimestampNanoseconds: 3_000, RemoveChannelIDs: map[llotypes.ChannelID]struct{}{1: {}}}
 	removeAOs := make([]ocrtypes.AttributedObservation, 0, 4)
 	for i := 0; i < 4; i++ {
 		removeAOs = append(removeAOs, ao(i, mustEncodeObs(t, removeObs)))
@@ -119,7 +119,7 @@ func Test_HotState_DropsOrphanedCarryForward(t *testing.T) {
 
 	// Round 5: the removal takes effect and the carry-forward value is reclaimed
 	// by not being written into the new hot record.
-	nextObs := Observation{UnixTimestampNanoseconds: 4_000}
+	nextObs := Observation{ObservationTimestampNanoseconds: 4_000}
 	nextAOs := make([]ocrtypes.AttributedObservation, 0, 4)
 	for i := 0; i < 4; i++ {
 		nextAOs = append(nextAOs, ao(i, mustEncodeObs(t, nextObs)))
@@ -148,7 +148,7 @@ func Test_KVRecords_DeterministicAndRoundTrip(t *testing.T) {
 	for i := 0; i < 8; i++ {
 		kv := newMemKV()
 		require.NoError(t, writeChannelState(kv, 9, defs))
-		require.NoError(t, writeHotState(kv, 1_234, validAfter, reportable, carry, logger.Test(t)))
+		require.NoError(t, writeHotState(kv, 1_234, validAfter, reportable, carry, nil, logger.Test(t)))
 		if i == 0 {
 			channelBytes, hotBytes = kv.m[string(keyChannelState)], kv.m[string(keyHotState)]
 			continue
@@ -159,7 +159,7 @@ func Test_KVRecords_DeterministicAndRoundTrip(t *testing.T) {
 
 	kv := newMemKV()
 	require.NoError(t, writeChannelState(kv, 9, defs))
-	require.NoError(t, writeHotState(kv, 1_234, validAfter, reportable, carry, logger.Test(t)))
+	require.NoError(t, writeHotState(kv, 1_234, validAfter, reportable, carry, nil, logger.Test(t)))
 	require.Equal(t, uint64(9), binary.BigEndian.Uint64(kv.m[string(keyChannelSeqNr)]))
 
 	s, err := loadKVState(kv, nil, logger.Test(t))
@@ -226,7 +226,7 @@ func Test_DeferredDefinitions_TakeEffectNextRound(t *testing.T) {
 	}
 
 	round := func(seqNr, ts uint64, defs llotypes.ChannelDefinitions) precursor {
-		o := Observation{UnixTimestampNanoseconds: ts, StreamValues: protocol.StreamValues{100: protocol.ToDecimal(decimal.NewFromInt(1))}}
+		o := Observation{ObservationTimestampNanoseconds: ts, StreamValues: protocol.StreamValues{100: protocol.ToDecimal(decimal.NewFromInt(1))}}
 		if defs != nil {
 			o.UpdateChannelDefinitions = defs
 		}
@@ -294,7 +294,7 @@ func Test_ChannelGeneration_BindsOptsToDefinitions(t *testing.T) {
 		return o.V
 	}
 	round := func(seqNr, ts uint64, defs llotypes.ChannelDefinitions) {
-		o := Observation{UnixTimestampNanoseconds: ts}
+		o := Observation{ObservationTimestampNanoseconds: ts}
 		if defs != nil {
 			o.UpdateChannelDefinitions = defs
 		}

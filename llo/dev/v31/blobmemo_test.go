@@ -20,13 +20,13 @@ import (
 // referencing the resulting handle.
 func blobObservation(t *testing.T, bc *llotest.BlobBroadcastFetcher, sv protocol.StreamValues) ocrtypes.Observation {
 	t.Helper()
-	payload, err := marshalStreamValues(sv)
+	payload, err := marshalStreamValues(sv, 1)
 	require.NoError(t, err)
 	handle, err := bc.BroadcastBlob(tests.Context(t), payload, ocr3_1types.BlobExpirationHintSequenceNumber{SeqNr: 100})
 	require.NoError(t, err)
 	handleBytes, err := handle.MarshalBinary()
 	require.NoError(t, err)
-	enc, err := encodeObservation(Observation{UnixTimestampNanoseconds: 1}, [][]byte{handleBytes})
+	enc, err := encodeObservation(Observation{ObservationTimestampNanoseconds: 1}, [][]byte{handleBytes})
 	require.NoError(t, err)
 	return enc
 }
@@ -49,11 +49,11 @@ func Test_BlobPayloadCache_SkipsSecondFetch(t *testing.T) {
 
 	cache := newBlobPayloadCache()
 
-	first, err := decodeObservation(ctx, enc, bc, cache.round(7))
+	first, err := fetchBlobsAndDecodeObservation(ctx, enc, bc, cache.round(7))
 	require.NoError(t, err)
 	require.Equal(t, 1, bc.Fetches())
 
-	second, err := decodeObservation(ctx, enc, bc, cache.round(7))
+	second, err := fetchBlobsAndDecodeObservation(ctx, enc, bc, cache.round(7))
 	require.NoError(t, err)
 	require.Equal(t, 1, bc.Fetches(), "the second decode of the round must be served from the memo")
 
@@ -65,7 +65,7 @@ func Test_BlobPayloadCache_SkipsSecondFetch(t *testing.T) {
 	}
 
 	// Without a memo the fetch happens again, which is what the memo replaces.
-	_, err = decodeObservation(ctx, enc, bc, nil)
+	_, err = fetchBlobsAndDecodeObservation(ctx, enc, bc, nil)
 	require.NoError(t, err)
 	require.Equal(t, 2, bc.Fetches())
 }
@@ -79,11 +79,11 @@ func Test_BlobPayloadCache_ScopedToSeqNr(t *testing.T) {
 	enc := blobObservation(t, bc, testStreamValues(10))
 
 	cache := newBlobPayloadCache()
-	_, err := decodeObservation(ctx, enc, bc, cache.round(7))
+	_, err := fetchBlobsAndDecodeObservation(ctx, enc, bc, cache.round(7))
 	require.NoError(t, err)
 	require.Equal(t, 1, bc.Fetches())
 
-	_, err = decodeObservation(ctx, enc, bc, cache.round(8))
+	_, err = fetchBlobsAndDecodeObservation(ctx, enc, bc, cache.round(8))
 	require.NoError(t, err)
 	require.Equal(t, 2, bc.Fetches(), "a later round must not be served the previous round's payload")
 
@@ -108,11 +108,11 @@ func Test_BlobPayloadCache_FailuresNotMemoized(t *testing.T) {
 
 	// No fetcher: a reference that could not be resolved must not be cached as
 	// an absence, so a later decode in the same round still fetches.
-	_, err := decodeObservation(ctx, enc, nil, cache.round(7))
+	_, err := fetchBlobsAndDecodeObservation(ctx, enc, nil, cache.round(7))
 	var bfErr *blobFetchError
 	require.ErrorAs(t, err, &bfErr)
 
-	_, err = decodeObservation(ctx, enc, bc, cache.round(7))
+	_, err = fetchBlobsAndDecodeObservation(ctx, enc, bc, cache.round(7))
 	require.NoError(t, err)
 	require.Equal(t, 1, bc.Fetches())
 }
@@ -124,7 +124,7 @@ func Test_BlobPayloadCache_BudgetChargedOnHit(t *testing.T) {
 	ctx := tests.Context(t)
 	bc := newFakeBroadcaster()
 	sv := testStreamValues(20)
-	payload, err := marshalStreamValues(sv)
+	payload, err := marshalStreamValues(sv, 1)
 	require.NoError(t, err)
 	handle, err := bc.BroadcastBlob(ctx, payload, ocr3_1types.BlobExpirationHintSequenceNumber{SeqNr: 100})
 	require.NoError(t, err)
@@ -132,12 +132,12 @@ func Test_BlobPayloadCache_BudgetChargedOnHit(t *testing.T) {
 	require.NoError(t, err)
 
 	// The same handle four times, so the budget is charged four times.
-	enc, err := encodeObservation(Observation{UnixTimestampNanoseconds: 1}, [][]byte{handleBytes, handleBytes, handleBytes, handleBytes})
+	enc, err := encodeObservation(Observation{ObservationTimestampNanoseconds: 1}, [][]byte{handleBytes, handleBytes, handleBytes, handleBytes})
 	require.NoError(t, err)
 
-	withMemo, memoErr := decodeObservation(ctx, enc, bc, newBlobPayloadCache().round(7))
+	withMemo, memoErr := fetchBlobsAndDecodeObservation(ctx, enc, bc, newBlobPayloadCache().round(7))
 	require.Equal(t, 1, bc.Fetches(), "repeats within one observation are memo hits")
-	withoutMemo, plainErr := decodeObservation(ctx, enc, bc, nil)
+	withoutMemo, plainErr := fetchBlobsAndDecodeObservation(ctx, enc, bc, nil)
 
 	// Whatever the budget verdict is, it must be the same with and without the
 	// memo; the payloads here are small, so both are expected to succeed.

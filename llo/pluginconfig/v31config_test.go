@@ -28,12 +28,9 @@ func Test_V31Config_Unmarshal(t *testing.T) {
 			pluginVersion = "v31"
 			[v31]
 			verboseLogging = true
-			maxSnapshotRounds = 2
 			blobLifetimeRounds = 8
 			maxDurationBlobObservation = "1s"
 			blobInFlightWaitFactor = 4
-			maxBlobSnapshotAge = "-1s"
-			maxRoundPeriod = "3s"
 			captureOutcomeTelemetry = true
 			captureReportTelemetry = true
 			captureAttributedObservationTelemetry = true
@@ -44,12 +41,9 @@ func Test_V31Config_Unmarshal(t *testing.T) {
 
 		assert.True(t, pc.IsV31())
 		assert.True(t, pc.V31.VerboseLogging)
-		assert.Equal(t, uint64(2), pc.V31.MaxSnapshotRounds)
 		assert.Equal(t, uint64(8), pc.V31.BlobLifetimeRounds)
 		assert.Equal(t, time.Second, pc.V31.MaxDurationBlobObservation.Duration())
 		assert.Equal(t, uint64(4), pc.V31.BlobInFlightWaitFactor)
-		assert.Equal(t, -time.Second, pc.V31.MaxBlobSnapshotAge.Duration())
-		assert.Equal(t, 3*time.Second, pc.V31.MaxRoundPeriod.Duration())
 		assert.True(t, pc.V31.CaptureOutcomeTelemetry)
 		assert.True(t, pc.V31.CaptureReportTelemetry)
 		assert.True(t, pc.V31.CaptureAttributedObservationTelemetry)
@@ -59,13 +53,14 @@ func Test_V31Config_Unmarshal(t *testing.T) {
 
 	t.Run("from json, duration as string or nanoseconds", func(t *testing.T) {
 		var pc PluginConfig
-		require.NoError(t, pc.Unmarshal([]byte(`{"v31":{"maxRoundPeriod":"2s","maxDurationBlobObservation":1500000000}}`)))
-		assert.Equal(t, 2*time.Second, pc.V31.MaxRoundPeriod.Duration())
+		require.NoError(t, pc.Unmarshal([]byte(`{"v31":{"maxDurationBlobObservation":"2s"}}`)))
+		assert.Equal(t, 2*time.Second, pc.V31.MaxDurationBlobObservation.Duration())
+		require.NoError(t, pc.Unmarshal([]byte(`{"v31":{"maxDurationBlobObservation":1500000000}}`)))
 		assert.Equal(t, 1500*time.Millisecond, pc.V31.MaxDurationBlobObservation.Duration())
 	})
 
 	t.Run("round trips through json", func(t *testing.T) {
-		in := V31Config{MaxRoundPeriod: Duration(2 * time.Second), MaxBlobSnapshotAge: Duration(-time.Second)}
+		in := V31Config{MaxDurationBlobObservation: Duration(2 * time.Second), BlobLifetimeRounds: 8}
 		b, err := json.Marshal(in)
 		require.NoError(t, err)
 		var out V31Config
@@ -75,7 +70,7 @@ func Test_V31Config_Unmarshal(t *testing.T) {
 
 	t.Run("rejects an invalid duration", func(t *testing.T) {
 		var pc PluginConfig
-		require.Error(t, pc.Unmarshal([]byte(`{"v31":{"maxRoundPeriod":"banana"}}`)))
+		require.Error(t, pc.Unmarshal([]byte(`{"v31":{"maxDurationBlobObservation":"banana"}}`)))
 	})
 }
 
@@ -94,23 +89,20 @@ func Test_V31Config_Validate(t *testing.T) {
 		assert.Contains(t, err.Error(), "exceeds MaxBlobLifetimeRounds")
 	})
 
-	t.Run("rejects too little fetch margin", func(t *testing.T) {
+	t.Run("rejects a lifetime below the minimum", func(t *testing.T) {
 		pc := v31Base()
-		pc.V31.MaxSnapshotRounds = 8
-		pc.V31.BlobLifetimeRounds = 8
+		pc.V31.BlobLifetimeRounds = 1
 		err := pc.Validate()
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "rounds of fetch margin")
+		assert.Contains(t, err.Error(), "below MinBlobLifetimeRounds")
 	})
 
-	t.Run("rejects negative durations that are not the snapshot age", func(t *testing.T) {
+	t.Run("rejects a negative duration", func(t *testing.T) {
 		pc := v31Base()
 		pc.V31.MaxDurationBlobObservation = Duration(-time.Second)
-		pc.V31.MaxRoundPeriod = Duration(-time.Second)
 		err := pc.Validate()
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "MaxDurationBlobObservation must not be negative")
-		assert.Contains(t, err.Error(), "MaxRoundPeriod must not be negative")
 	})
 
 	t.Run("rejects the block on OCR3.0", func(t *testing.T) {

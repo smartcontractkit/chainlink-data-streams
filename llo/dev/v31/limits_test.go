@@ -118,8 +118,14 @@ func TestLimits_HotStateWorstCaseFitsPerKeyLimit(t *testing.T) {
 		reportable[cid] = true
 	}
 
+	// A full window of maximal agreed timestamps.
+	window := make([]uint64, agreedTimestampWindow)
+	for i := range window {
+		window[i] = maxTimestamp
+	}
+
 	kv := newMemKV()
-	require.NoError(t, writeHotState(kv, maxTimestamp, validAfter, reportable, carry, logger.Test(t)))
+	require.NoError(t, writeHotState(kv, maxTimestamp, validAfter, reportable, carry, window, logger.Test(t)))
 
 	record, err := kv.Read(keyHotState)
 	require.NoError(t, err)
@@ -145,7 +151,7 @@ func TestLimits_HotStateTruncatesAboveCap(t *testing.T) {
 	}
 
 	kv := newMemKV()
-	require.NoError(t, writeHotState(kv, 1, nil, nil, carry, logger.Test(t)))
+	require.NoError(t, writeHotState(kv, 1, nil, nil, carry, nil, logger.Test(t)))
 
 	state := &kvState{
 		channelDefinitions:    llotypes.ChannelDefinitions{},
@@ -454,14 +460,14 @@ func TestLimits_ObservationWorstCaseFitsDeclared(t *testing.T) {
 	}
 
 	obs := Observation{
-		AttestedPredecessorRetirement: attestedBytes,
-		ShouldRetire:                  true,
-		UnixTimestampNanoseconds:      math.MaxUint64,
-		RemoveChannelIDs:              removals,
-		UpdateChannelDefinitions:      updates,
-		SupportedReportFormats:        formats,
-		PredecessorSigners:            signers,
-		PredecessorF:                  math.MaxUint8,
+		AttestedPredecessorRetirement:   attestedBytes,
+		ShouldRetire:                    true,
+		ObservationTimestampNanoseconds: math.MaxUint64,
+		RemoveChannelIDs:                removals,
+		UpdateChannelDefinitions:        updates,
+		SupportedReportFormats:          formats,
+		PredecessorSigners:              signers,
+		PredecessorF:                    math.MaxUint8,
 	}
 	// The encoder references one blob. A handle carries at most one
 	// availability signature per oracle, well under 4 KiB.
