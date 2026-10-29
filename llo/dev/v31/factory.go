@@ -140,6 +140,7 @@ func (f *PluginFactory) NewReportingPlugin(ctx context.Context, cfg ocr3types.Re
 	}
 
 	p := &Plugin{
+		freshnessMetrics:                    newFreshnessMetrics(f.DonID),
 		Config:                              f.Config,
 		PredecessorConfigDigest:             onchainConfig.PredecessorConfigDigest,
 		ConfigDigest:                        cfg.ConfigDigest,

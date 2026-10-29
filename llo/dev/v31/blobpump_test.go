@@ -706,7 +706,7 @@ func Test_blobPump_BroadcastRetryRefreshesExpiry(t *testing.T) {
 	require.Len(t, hints, 1)
 	require.Equal(t, ocr3_1types.BlobExpirationHintSequenceNumber{SeqNr: 5 + DefaultBlobLifetimeRounds}, hints[0])
 
-	// Fetchability moved forward; the cycle the values belong to did not.
+	// Fetchability moved forward. The cycle the values belong to did not.
 	snap, reason := p.Take(t.Context(), 3)
 	require.NotNil(t, snap, reason)
 	require.EqualValues(t, 2, snap.cycleStartSeqNr)

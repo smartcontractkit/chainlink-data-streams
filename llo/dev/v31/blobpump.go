@@ -166,9 +166,6 @@ type blobPump struct {
 	closeTimeout time.Duration
 
 	inFlight   atomic.Bool
-	misses     atomic.Uint64
-	cycles     atomic.Uint64
-	reuses     atomic.Uint64
 	missStreak atomic.Uint64
 	metrics    blobPumpMetrics
 
@@ -296,7 +293,6 @@ func (p *blobPump) Take(ctx context.Context, seqNr uint64) (*blobSnapshot, strin
 	default:
 		p.missStreak.Store(0)
 		if reused {
-			p.reuses.Add(1)
 			p.metrics.reuses.Inc()
 		}
 		return snap, ""
@@ -372,7 +368,7 @@ func (p *blobPump) park(snap *blobSnapshot) {
 	p.mu.Unlock()
 }
 
-// beginCycle marks a cycle in flight; endCycle clears it and releases every
+// beginCycle marks a cycle in flight. endCycle clears it and releases every
 // Take waiting on it. Both run under mu so a Take never captures the channel of
 // a cycle that has already ended.
 func (p *blobPump) beginCycle() {
@@ -393,27 +389,26 @@ func (p *blobPump) endCycle() {
 // Sustained misses means this node is not contributing at all. Record misses
 // and log when above MissStreakLogThreshold.
 func (p *blobPump) miss() {
-	p.misses.Add(1)
 	p.metrics.misses.Inc()
 	if streak := p.missStreak.Add(1); streak >= MissStreakLogThreshold && streak%MissStreakLogThreshold == 0 {
 		p.lggr.Errorw("Blob pump has found no usable snapshot for consecutive rounds; this node is contributing no stream values",
-			"missStreak", streak, "misses", p.misses.Load(), "cycles", p.cycles.Load(), "blobLifetimeRounds", p.blobLifetimeRounds)
+			"missStreak", streak, "misses", p.Misses(), "cycles", p.Cycles(), "blobLifetimeRounds", p.blobLifetimeRounds)
 	}
 }
 
 // Misses reports how many rounds found no usable snapshot.
-func (p *blobPump) Misses() uint64 { return p.misses.Load() }
+func (p *blobPump) Misses() uint64 { return p.metrics.misses.Load() }
 
 // Cycles reports how many snapshots the pump has successfully parked.
-func (p *blobPump) Cycles() uint64 { return p.cycles.Load() }
+func (p *blobPump) Cycles() uint64 { return p.metrics.cycles.Load() }
 
 // Reuses reports how many rounds took a snapshot an earlier round had already
 // taken.
-func (p *blobPump) Reuses() uint64 { return p.reuses.Load() }
+func (p *blobPump) Reuses() uint64 { return p.metrics.reuses.Load() }
 
 // Blob pump metrics. Node-local: they describe this node's contribution, not
-// consensus. Misses climbing on one node is that node failing to contribute;
-// reuses climbing on every node is the data source lagging the round rate.
+// consensus. Misses climbing on one node is that node failing to contribute.
+// Reuses climbing on every node is the data source lagging the round rate.
 var (
 	blobPumpCyclesMetric = promauto.NewCounterVec(prometheus.CounterOpts{
 		Namespace: "llo",
@@ -435,16 +430,31 @@ var (
 	}, []string{"donID"})
 )
 
+// pumpCounter is one pump counter kept readable in process: the prometheus
+// child is per DON and shared across pump instances, so the pump's own count
+// for logs and tests lives in the atomic. One Inc moves both.
+type pumpCounter struct {
+	n    atomic.Uint64
+	prom prometheus.Counter
+}
+
+func (c *pumpCounter) Inc() {
+	c.n.Add(1)
+	c.prom.Inc()
+}
+
+func (c *pumpCounter) Load() uint64 { return c.n.Load() }
+
 type blobPumpMetrics struct {
-	cycles, misses, reuses prometheus.Counter
+	cycles, misses, reuses pumpCounter
 }
 
 func newBlobPumpMetrics(donID uint32) blobPumpMetrics {
 	don := strconv.FormatUint(uint64(donID), 10)
 	return blobPumpMetrics{
-		cycles: blobPumpCyclesMetric.WithLabelValues(don),
-		misses: blobPumpMissesMetric.WithLabelValues(don),
-		reuses: blobPumpReusesMetric.WithLabelValues(don),
+		cycles: pumpCounter{prom: blobPumpCyclesMetric.WithLabelValues(don)},
+		misses: pumpCounter{prom: blobPumpMissesMetric.WithLabelValues(don)},
+		reuses: pumpCounter{prom: blobPumpReusesMetric.WithLabelValues(don)},
 	}
 }
 
@@ -501,7 +511,6 @@ func (p *blobPump) cycle() {
 		return
 	}
 
-	p.cycles.Add(1)
 	p.metrics.cycles.Inc()
 	p.park(snap)
 

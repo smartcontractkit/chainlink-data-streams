@@ -54,7 +54,7 @@ const (
 	// SnapshotReuseRounds is how many consecutive rounds may reference one
 	// blob pump snapshot: gathered during round N, referenced at N+1 through
 	// N+SnapshotReuseRounds. The pump enforces it indirectly, through the blob
-	// fetch margin (see DefaultBlobLifetimeRounds); the constant sizes the
+	// fetch margin (see DefaultBlobLifetimeRounds). The constant sizes the
 	// freshness bounds to match.
 	SnapshotReuseRounds = 4
 	// MaxStreamValueAgeRounds bounds, in rounds and in round intervals, how old
@@ -229,19 +229,41 @@ var (
 	}, []string{"donID"})
 )
 
-func (s freshnessStats) record(donID uint32) {
+// freshnessMetrics holds the label children for one DON, resolved once at
+// plugin construction so the state transition does no label lookup per round.
+type freshnessMetrics struct {
+	staleByRounds, staleByTime, staleBeforeWindow, fallbackStreams prometheus.Counter
+	roundInterval                                                  prometheus.Gauge
+}
+
+func newFreshnessMetrics(donID uint32) *freshnessMetrics {
 	don := strconv.FormatUint(uint64(donID), 10)
+	return &freshnessMetrics{
+		staleByRounds:     freshnessStaleContributionsMetric.WithLabelValues(don, "rounds"),
+		staleByTime:       freshnessStaleContributionsMetric.WithLabelValues(don, "time"),
+		staleBeforeWindow: freshnessStaleContributionsMetric.WithLabelValues(don, "window"),
+		fallbackStreams:   freshnessFallbackStreamsMetric.WithLabelValues(don),
+		roundInterval:     freshnessRoundIntervalMetric.WithLabelValues(don),
+	}
+}
+
+// record exports one round's stats. A nil receiver records nothing, for
+// plugins built without the factory.
+func (m *freshnessMetrics) record(s freshnessStats) {
+	if m == nil {
+		return
+	}
 	if s.staleByRounds > 0 {
-		freshnessStaleContributionsMetric.WithLabelValues(don, "rounds").Add(float64(s.staleByRounds))
+		m.staleByRounds.Add(float64(s.staleByRounds))
 	}
 	if s.staleByTime > 0 {
-		freshnessStaleContributionsMetric.WithLabelValues(don, "time").Add(float64(s.staleByTime))
+		m.staleByTime.Add(float64(s.staleByTime))
 	}
 	if s.staleBeforeWindow > 0 {
-		freshnessStaleContributionsMetric.WithLabelValues(don, "window").Add(float64(s.staleBeforeWindow))
+		m.staleBeforeWindow.Add(float64(s.staleBeforeWindow))
 	}
 	if s.streamsFallenBack > 0 {
-		freshnessFallbackStreamsMetric.WithLabelValues(don).Add(float64(s.streamsFallenBack))
+		m.fallbackStreams.Add(float64(s.streamsFallenBack))
 	}
-	freshnessRoundIntervalMetric.WithLabelValues(don).Set(s.roundInterval.Seconds())
+	m.roundInterval.Set(s.roundInterval.Seconds())
 }

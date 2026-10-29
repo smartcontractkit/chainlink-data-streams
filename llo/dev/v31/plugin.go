@@ -53,6 +53,8 @@ type Plugin struct {
 	// keys the facts derived from them by definition alone.
 	ReportCodecs map[llotypes.ReportFormat]protocol.ReportCodec
 	DonID        uint32
+	// freshnessMetrics is set by the factory. Nil records nothing.
+	freshnessMetrics *freshnessMetrics
 	// ChannelCache memoizes the channel definitions record, together with the
 	// opts decoded from it, across rounds so it is re-read only when its
 	// sequence number changes. May be nil, in which case a fresh generation is

@@ -302,7 +302,7 @@ func Test_StateTransition_Freshness(t *testing.T) {
 
 	// Round 4: three fresh contributions and one from a cycle that started
 	// before the window. Without the rule the median of {10, 12, 14, 1000} is
-	// 14; with it, the median of the fresh three is 12.
+	// 14. With it, the median of the fresh three is 12.
 	prec, err := p.StateTransition(ctx, 4, ocrtypes.AttributedQuery{}, []ocrtypes.AttributedObservation{
 		obs(0, 4*sec, 10, 4), obs(1, 4*sec, 12, 3), obs(2, 4*sec, 14, 4), obs(3, 4*sec, 1000, 1),
 	}, kv, testBlobs)

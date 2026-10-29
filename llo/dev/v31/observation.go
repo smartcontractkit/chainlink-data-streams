@@ -43,7 +43,7 @@ type Observation struct {
 	// CycleStartSeqNr is the sequence number the sender's blob pump saw when
 	// the cycle that gathered StreamValues started, read from the blob. Zero
 	// when the observation carries no stream values. The state transition
-	// measures the values' age from it; see selectFreshContributions.
+	// measures the values' age from it. See selectFreshContributions.
 	CycleStartSeqNr uint64
 }
 

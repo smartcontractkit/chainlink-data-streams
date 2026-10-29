@@ -232,7 +232,7 @@ func (p *Plugin) StateTransition(ctx context.Context, seqNr uint64, _ ocrtypes.A
 	// agreed value of every pair history requires is recorded as it is computed.
 	//
 	// Stale contributions are left out first, per stream, from replicated data
-	// only; see freshness.go.
+	// only. See freshness.go.
 	streamValues, freshness := selectFreshContributions(tally.streamObservations, seqNr, out.ObservationTimestampNanoseconds,
 		agreedTimestamps, roundIntervalEstimate(agreedTimestamps, p.MinRoundInterval), p.minContributions())
 	if freshness.any() && p.Config.VerboseLogging {
@@ -280,7 +280,7 @@ func (p *Plugin) StateTransition(ctx context.Context, seqNr uint64, _ ocrtypes.A
 	// written. Node-local observation only; nothing reads these back.
 	p.captureHistoryTelemetry(history, requirements)
 	p.captureInsufficientHistory(effective, prev.opts, history)
-	freshness.record(p.DonID)
+	p.freshnessMetrics.record(freshness)
 	p.captureOutcomeTelemetry(out, seqNr, freshness)
 	p.captureAttributedObservationTelemetry(out, seqNr, tally.attributed)
 
