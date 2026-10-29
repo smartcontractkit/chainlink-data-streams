@@ -460,14 +460,14 @@ func TestLimits_ObservationWorstCaseFitsDeclared(t *testing.T) {
 	}
 
 	obs := Observation{
-		AttestedPredecessorRetirement: attestedBytes,
-		ShouldRetire:                  true,
-		UnixTimestampNanoseconds:      math.MaxUint64,
-		RemoveChannelIDs:              removals,
-		UpdateChannelDefinitions:      updates,
-		SupportedReportFormats:        formats,
-		PredecessorSigners:            signers,
-		PredecessorF:                  math.MaxUint8,
+		AttestedPredecessorRetirement:   attestedBytes,
+		ShouldRetire:                    true,
+		ObservationTimestampNanoseconds: math.MaxUint64,
+		RemoveChannelIDs:                removals,
+		UpdateChannelDefinitions:        updates,
+		SupportedReportFormats:          formats,
+		PredecessorSigners:              signers,
+		PredecessorF:                    math.MaxUint8,
 	}
 	// The encoder references one blob. A handle carries at most one
 	// availability signature per oracle, well under 4 KiB.

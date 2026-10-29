@@ -295,7 +295,7 @@ func (t *attributedObservationTelemeter) makeTelemetry(seqNr, agreedTs uint64, a
 			DonId:                                 t.donID,
 			Observer:                              uint32(ao.observer),
 			Emitter:                               uint32(t.emitter),
-			OracleObservationTimestampNanoseconds: ao.obs.UnixTimestampNanoseconds,
+			OracleObservationTimestampNanoseconds: ao.obs.ObservationTimestampNanoseconds,
 			AgreedObservationTimestampNanoseconds: agreedTs,
 		}
 	}

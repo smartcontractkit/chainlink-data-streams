@@ -23,7 +23,7 @@ import (
 // enforces.
 
 // payloadFetcher returns the same payload for every handle, so a fuzzer can
-// drive the blob path of decodeObservation with arbitrary bytes.
+// drive the blob path of fetchBlobsAndDecodeObservation with arbitrary bytes.
 type payloadFetcher struct{ payload []byte }
 
 func (f payloadFetcher) FetchBlob(context.Context, ocr3_1types.BlobHandle) ([]byte, error) {
@@ -37,12 +37,12 @@ var _ ocr3_1types.BlobFetcher = payloadFetcher{}
 // byzantine peer picks these bytes, and every other oracle decodes them.
 func FuzzDecodeObservation(f *testing.F) {
 	obs := Observation{
-		AttestedPredecessorRetirement: []byte("retirement"),
-		ShouldRetire:                  true,
-		UnixTimestampNanoseconds:      1_700_000_000_000_000_000,
-		RemoveChannelIDs:              map[llotypes.ChannelID]struct{}{7: {}},
-		UpdateChannelDefinitions:      llotypes.ChannelDefinitions{1: jsonChannel()},
-		SupportedReportFormats:        formatSet(llotypes.ReportFormatJSON, llotypes.ReportFormatEVMPremiumLegacy),
+		AttestedPredecessorRetirement:   []byte("retirement"),
+		ShouldRetire:                    true,
+		ObservationTimestampNanoseconds: 1_700_000_000_000_000_000,
+		RemoveChannelIDs:                map[llotypes.ChannelID]struct{}{7: {}},
+		UpdateChannelDefinitions:        llotypes.ChannelDefinitions{1: jsonChannel()},
+		SupportedReportFormats:          formatSet(llotypes.ReportFormatJSON, llotypes.ReportFormatEVMPremiumLegacy),
 	}
 	encoded, err := encodeObservation(obs, nil)
 	if err != nil {
@@ -68,7 +68,7 @@ func FuzzDecodeObservation(f *testing.F) {
 	f.Add([]byte("not an observation"), []byte("not a payload"))
 
 	f.Fuzz(func(t *testing.T, raw, payload []byte) {
-		decoded, err := decodeObservation(context.Background(), ocrtypes.Observation(raw), payloadFetcher{payload: payload}, nil)
+		decoded, err := fetchBlobsAndDecodeObservation(context.Background(), ocrtypes.Observation(raw), payloadFetcher{payload: payload}, nil)
 		if err != nil {
 			return
 		}

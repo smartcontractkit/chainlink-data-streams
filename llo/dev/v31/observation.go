@@ -20,12 +20,12 @@ import (
 // Observation, but is disseminated using the v31 wire framing (which supports
 // offloading the bulk stream-value payload to a blob).
 type Observation struct {
-	AttestedPredecessorRetirement []byte
-	ShouldRetire                  bool
-	UnixTimestampNanoseconds      uint64
-	RemoveChannelIDs              map[llotypes.ChannelID]struct{}
-	UpdateChannelDefinitions      llotypes.ChannelDefinitions
-	StreamValues                  protocol.StreamValues
+	AttestedPredecessorRetirement   []byte
+	ShouldRetire                    bool
+	ObservationTimestampNanoseconds uint64
+	RemoveChannelIDs                map[llotypes.ChannelID]struct{}
+	UpdateChannelDefinitions        llotypes.ChannelDefinitions
+	StreamValues                    protocol.StreamValues
 	// SupportedReportFormats are the report formats this oracle has a report
 	// codec for. Encoding is node-local state that the state transition cannot
 	// read without forking; advertising it here turns it into a replicated fact
@@ -81,7 +81,7 @@ func encodeObservation(obs Observation, handles [][]byte) (ocrtypes.Observation,
 	main := &protocol.LLOObservationProto{
 		AttestedPredecessorRetirement: obs.AttestedPredecessorRetirement,
 		ShouldRetire:                  obs.ShouldRetire,
-		UnixTimestampNanoseconds:      obs.UnixTimestampNanoseconds,
+		UnixTimestampNanoseconds:      obs.ObservationTimestampNanoseconds,
 		PredecessorSigners:            obs.PredecessorSigners,
 		PredecessorF:                  uint32(obs.PredecessorF),
 	}
@@ -146,14 +146,14 @@ type blobFetchError struct{ err error }
 func (e *blobFetchError) Error() string { return e.err.Error() }
 func (e *blobFetchError) Unwrap() error { return e.err }
 
-// decodeObservation reverses encodeObservation, fetching any referenced blobs.
+// fetchBlobsAndDecodeObservation reverses encodeObservation, fetching any referenced blobs.
 // Observations carrying inline stream values are rejected: v31 disseminates
 // values exclusively via blobs.
 //
 // memo, when non-nil, memoizes decoded blob payloads for the round so the same
 // handle is fetched and decompressed once instead of once per plugin phase. It
 // changes cost only: an observation decodes identically on a hit and on a miss.
-func decodeObservation(ctx context.Context, raw ocrtypes.Observation, bf ocr3_1types.BlobFetcher, memo *roundBlobPayloads) (Observation, error) {
+func fetchBlobsAndDecodeObservation(ctx context.Context, raw ocrtypes.Observation, bf ocr3_1types.BlobFetcher, memo *roundBlobPayloads) (Observation, error) {
 	if len(raw) == 0 {
 		return Observation{}, nil
 	}
@@ -277,7 +277,7 @@ func decodeObservation(ctx context.Context, raw ocrtypes.Observation, bf ocr3_1t
 }
 
 func observationFromProto(main *protocol.LLOObservationProto) (Observation, error) {
-	// Bound the channel votes before copying them, and before decodeObservation
+	// Bound the channel votes before copying them, and before fetchBlobsAndDecodeObservation
 	// fetches any blob, so an oversized observation costs no fetch.
 	if len(main.RemoveChannelIDs) > protocol.MaxObservationRemoveChannelIDsLength {
 		return Observation{}, fmt.Errorf("observation removes too many channels: %d (max %d)", len(main.RemoveChannelIDs), protocol.MaxObservationRemoveChannelIDsLength)
@@ -286,9 +286,9 @@ func observationFromProto(main *protocol.LLOObservationProto) (Observation, erro
 		return Observation{}, fmt.Errorf("observation updates too many channels: %d (max %d)", len(main.UpdateChannelDefinitions), protocol.MaxObservationUpdateChannelDefinitionsLength)
 	}
 	obs := Observation{
-		AttestedPredecessorRetirement: main.AttestedPredecessorRetirement,
-		ShouldRetire:                  main.ShouldRetire,
-		UnixTimestampNanoseconds:      main.UnixTimestampNanoseconds,
+		AttestedPredecessorRetirement:   main.AttestedPredecessorRetirement,
+		ShouldRetire:                    main.ShouldRetire,
+		ObservationTimestampNanoseconds: main.UnixTimestampNanoseconds,
 	}
 	if len(main.RemoveChannelIDs) > 0 {
 		obs.RemoveChannelIDs = make(map[llotypes.ChannelID]struct{}, len(main.RemoveChannelIDs))

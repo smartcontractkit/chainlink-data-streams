@@ -82,7 +82,7 @@ func (p *Plugin) StateTransition(ctx context.Context, seqNr uint64, _ ocrtypes.A
 		return nil, fmt.Errorf("failed to load KV state: %w", err)
 	}
 
-	tally, err := p.decodeObservations(ctx, seqNr, aos, bf, p.collectAttributedObservations(seqNr))
+	tally, err := p.fetchBlobsDecodeValidateAndTallyObservations(ctx, seqNr, aos, bf, p.collectAttributedObservations(seqNr))
 	if err != nil {
 		return nil, err
 	}
@@ -305,7 +305,7 @@ type observationTally struct {
 	updateChannelDefinitionsByHash map[[32]byte]protocol.ChannelDefinitionWithID
 	updateChannelVotesByHash       map[[32]byte]int
 	// supportedFormatsByOracle[oracleID] is the formats that oracle advertised
-	// this round, deduped by decodeObservation. It is merged into the persisted
+	// this round, deduped by fetchBlobsAndDecodeObservation. It is merged into the persisted
 	// per-oracle record rather than counted here: see writeCodecSupport.
 	supportedFormatsByOracle map[commontypes.OracleID]map[llotypes.ReportFormat]struct{}
 	// streamObservations keeps each oracle's contribution apart, so freshness
@@ -322,13 +322,13 @@ func (t observationTally) hasChannelVotes() bool {
 	return len(t.removeChannelVotesByID) > 0 || len(t.updateChannelVotesByHash) > 0
 }
 
-// decodeObservations fetches every blob, decodes and validates each
+// fetchBlobsDecodeValidateAndTallyObservations fetches every blob, decodes and validates each
 // observation, then tallies votes and values. Every observation must pass the
 // checks ValidateObservation ran on it: a decode failure here means the leader
 // proposed an observation this build rejects, so the round fails rather than
 // aggregating over a sample smaller than the quorum it was accepted on. A
 // blob fetch failure is node-local and fails the round for this oracle only.
-func (p *Plugin) decodeObservations(ctx context.Context, seqNr uint64, aos []ocrtypes.AttributedObservation, bf ocr3_1types.BlobFetcher, collect bool) (observationTally, error) {
+func (p *Plugin) fetchBlobsDecodeValidateAndTallyObservations(ctx context.Context, seqNr uint64, aos []ocrtypes.AttributedObservation, bf ocr3_1types.BlobFetcher, collect bool) (observationTally, error) {
 	tally := observationTally{
 		predConfigsByHash:              make(map[[32]byte]predecessorConfig),
 		predConfigVotesByHash:          make(map[[32]byte]int),
@@ -397,7 +397,7 @@ func (p *Plugin) decodeObservations(ctx context.Context, seqNr uint64, aos []ocr
 		if observation.ShouldRetire {
 			tally.shouldRetireVotes++
 		}
-		tally.timestampsNanoseconds = append(tally.timestampsNanoseconds, observation.UnixTimestampNanoseconds)
+		tally.timestampsNanoseconds = append(tally.timestampsNanoseconds, observation.ObservationTimestampNanoseconds)
 
 		// Recording the whole advertised set (including an empty one)
 		// makes this round's advertisement replace that oracle's last, so an

@@ -61,9 +61,9 @@ func Test_Reports_StateTransition_Concurrent_OptsIsolation(t *testing.T) {
 	// so the channel is reportable once it is in effect.
 	obsRound := func(ts uint64, defs llotypes.ChannelDefinitions) []ocrtypes.AttributedObservation {
 		obs := Observation{
-			UnixTimestampNanoseconds: ts,
-			UpdateChannelDefinitions: defs,
-			StreamValues:             protocol.StreamValues{100: protocol.ToDecimal(decimal.NewFromInt(5))},
+			ObservationTimestampNanoseconds: ts,
+			UpdateChannelDefinitions:        defs,
+			StreamValues:                    protocol.StreamValues{100: protocol.ToDecimal(decimal.NewFromInt(5))},
 		}
 		aos := make([]ocrtypes.AttributedObservation, 0, 4)
 		for i := 0; i < 4; i++ {
@@ -163,9 +163,9 @@ func Test_Reports_RebuildsEvictedGeneration(t *testing.T) {
 	}
 	obsRound := func(ts uint64, defs llotypes.ChannelDefinitions) []ocrtypes.AttributedObservation {
 		obs := Observation{
-			UnixTimestampNanoseconds: ts,
-			UpdateChannelDefinitions: defs,
-			StreamValues:             protocol.StreamValues{100: protocol.ToDecimal(decimal.NewFromInt(5))},
+			ObservationTimestampNanoseconds: ts,
+			UpdateChannelDefinitions:        defs,
+			StreamValues:                    protocol.StreamValues{100: protocol.ToDecimal(decimal.NewFromInt(5))},
 		}
 		aos := make([]ocrtypes.AttributedObservation, 0, 4)
 		for i := 0; i < 4; i++ {

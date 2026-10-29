@@ -145,8 +145,8 @@ func BenchmarkStateTransition(b *testing.B) {
 				aos := make([]ocrtypes.AttributedObservation, c.n)
 				for o := range c.n {
 					obs, err := encodeObservation(Observation{
-						UnixTimestampNanoseconds: ts,
-						SupportedReportFormats:   formatSet(llotypes.ReportFormatEVMABIEncodeUnpacked),
+						ObservationTimestampNanoseconds: ts,
+						SupportedReportFormats:          formatSet(llotypes.ReportFormatEVMABIEncodeUnpacked),
 					}, [][]byte{handles[o]})
 					require.NoError(b, err)
 					aos[o] = ao(o, obs)

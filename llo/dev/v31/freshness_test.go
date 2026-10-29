@@ -202,10 +202,10 @@ func Test_selectFreshContributions(t *testing.T) {
 	})
 }
 
-// Test_decodeObservation_CycleStartSeqNr covers the deterministic blob checks:
+// Test_fetchBlobsAndDecodeObservation_CycleStartSeqNr covers the deterministic blob checks:
 // a payload without a cycle start, handles from different cycles, and a cycle
 // start ahead of the round.
-func Test_decodeObservation_CycleStartSeqNr(t *testing.T) {
+func Test_fetchBlobsAndDecodeObservation_CycleStartSeqNr(t *testing.T) {
 	ctx := t.Context()
 	bc := newFakeBroadcaster()
 	sv := protocol.StreamValues{100: protocol.ToDecimal(decimal.NewFromInt(1))}
@@ -220,43 +220,43 @@ func Test_decodeObservation_CycleStartSeqNr(t *testing.T) {
 	}
 
 	t.Run("round trip", func(t *testing.T) {
-		enc, err := encodeObservation(Observation{UnixTimestampNanoseconds: 1}, [][]byte{handleFor(7)})
+		enc, err := encodeObservation(Observation{ObservationTimestampNanoseconds: 1}, [][]byte{handleFor(7)})
 		require.NoError(t, err)
 		memo := newBlobPayloadCache().round(9)
-		decoded, err := decodeObservation(ctx, enc, bc, memo)
+		decoded, err := fetchBlobsAndDecodeObservation(ctx, enc, bc, memo)
 		require.NoError(t, err)
 		require.EqualValues(t, 7, decoded.CycleStartSeqNr)
 		// A memo hit carries the same cycle start.
-		decoded, err = decodeObservation(ctx, enc, bc, memo)
+		decoded, err = fetchBlobsAndDecodeObservation(ctx, enc, bc, memo)
 		require.NoError(t, err)
 		require.EqualValues(t, 7, decoded.CycleStartSeqNr)
 	})
 
 	t.Run("no stream values no cycle start", func(t *testing.T) {
-		enc, err := encodeObservation(Observation{UnixTimestampNanoseconds: 1}, nil)
+		enc, err := encodeObservation(Observation{ObservationTimestampNanoseconds: 1}, nil)
 		require.NoError(t, err)
-		decoded, err := decodeObservation(ctx, enc, bc, nil)
+		decoded, err := fetchBlobsAndDecodeObservation(ctx, enc, bc, nil)
 		require.NoError(t, err)
 		require.Zero(t, decoded.CycleStartSeqNr)
 	})
 
 	t.Run("zero cycle start is malformed", func(t *testing.T) {
-		enc, err := encodeObservation(Observation{UnixTimestampNanoseconds: 1}, [][]byte{handleFor(0)})
+		enc, err := encodeObservation(Observation{ObservationTimestampNanoseconds: 1}, [][]byte{handleFor(0)})
 		require.NoError(t, err)
-		_, err = decodeObservation(ctx, enc, bc, nil)
+		_, err = fetchBlobsAndDecodeObservation(ctx, enc, bc, nil)
 		require.ErrorContains(t, err, "carries no cycle start seqNr")
 	})
 
 	t.Run("handles from different cycles", func(t *testing.T) {
-		enc, err := encodeObservation(Observation{UnixTimestampNanoseconds: 1}, [][]byte{handleFor(7), handleFor(8)})
+		enc, err := encodeObservation(Observation{ObservationTimestampNanoseconds: 1}, [][]byte{handleFor(7), handleFor(8)})
 		require.NoError(t, err)
-		_, err = decodeObservation(ctx, enc, bc, nil)
+		_, err = fetchBlobsAndDecodeObservation(ctx, enc, bc, nil)
 		require.ErrorContains(t, err, "blobs from different cycles")
 	})
 
 	t.Run("cycle start ahead of the round", func(t *testing.T) {
 		p := testPlugin(t)
-		enc, err := encodeObservation(Observation{UnixTimestampNanoseconds: 1, SupportedReportFormats: testSupportedReportFormats}, [][]byte{handleFor(7)})
+		enc, err := encodeObservation(Observation{ObservationTimestampNanoseconds: 1, SupportedReportFormats: testSupportedReportFormats}, [][]byte{handleFor(7)})
 		require.NoError(t, err)
 		_, err = p.fetchBlobsDecodeAndValidateObservation(ctx, 6, ao(0, enc), bc)
 		require.ErrorContains(t, err, "gathered for a future round")
@@ -286,9 +286,9 @@ func Test_StateTransition_Freshness(t *testing.T) {
 	}
 	obs := func(i int, ts uint64, value int64, cycleStart uint64) ocrtypes.AttributedObservation {
 		return ao(i, mustEncodeObs(t, Observation{
-			UnixTimestampNanoseconds: ts,
-			StreamValues:             protocol.StreamValues{100: protocol.ToDecimal(decimal.NewFromInt(value))},
-			CycleStartSeqNr:          cycleStart,
+			ObservationTimestampNanoseconds: ts,
+			StreamValues:                    protocol.StreamValues{100: protocol.ToDecimal(decimal.NewFromInt(value))},
+			CycleStartSeqNr:                 cycleStart,
 		}))
 	}
 

@@ -227,7 +227,7 @@ func (p *Plugin) Observation(ctx context.Context, seqNr uint64, _ ocrtypes.Attri
 	if obsTSNanos < 0 {
 		return nil, fmt.Errorf("negative observation timestamps are not supported, got: %d", obsTSNanos)
 	}
-	obs.UnixTimestampNanoseconds = uint64(obsTSNanos)
+	obs.ObservationTimestampNanoseconds = uint64(obsTSNanos)
 
 	// Advertised every round, including when retired: a statement about this
 	// binary, not about the round or about what this node wants admitted.
@@ -532,7 +532,7 @@ func (p *Plugin) ValidateObservation(ctx context.Context, seqNr uint64, _ ocrtyp
 // A blob fetch failure is returned wrapped in blobFetchError, so the caller
 // can tell a node-local failure from a malformed observation.
 func (p *Plugin) fetchBlobsDecodeAndValidateObservation(ctx context.Context, seqNr uint64, ao ocrtypes.AttributedObservation, bf ocr3_1types.BlobFetcher) (Observation, error) {
-	observation, err := decodeObservation(ctx, ao.Observation, bf, p.BlobPayloads.round(seqNr))
+	observation, err := fetchBlobsAndDecodeObservation(ctx, ao.Observation, bf, p.BlobPayloads.round(seqNr))
 	if err != nil {
 		return Observation{}, fmt.Errorf("observation decode error: %w", err)
 	}
