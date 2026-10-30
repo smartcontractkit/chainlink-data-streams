@@ -36,6 +36,11 @@ import (
 //	               sorted (the history index)
 //	hv          -> 1 byte: history layout version
 //
+// The proto records (c/defs, c/codecs, r/agg, hh/, hc/) are framed like blobs
+// and the precursor: a codec byte followed by the proto, zstd-compressed
+// whenever that shrinks it (see payloadcodec.go). The remaining keys hold a few
+// fixed-width bytes that compression cannot shrink, so they stay raw.
+//
 // c/seqnr lets readers cache the decoded c/defs in memory across rounds and
 // re-read it only when the stored sequence number differs from the cached one
 // (see protocol.ChannelCache).
@@ -83,6 +88,28 @@ func beU32(v uint32) []byte {
 	b := make([]byte, 4)
 	binary.BigEndian.PutUint32(b, v)
 	return b
+}
+
+// writeKVRecord frames a marshaled proto record and writes it under key.
+func writeKVRecord(w ocr3_1types.KeyValueStateReadWriter, key, raw []byte, what string) error {
+	b, err := encodeKVRecord(raw, what)
+	if err != nil {
+		return err
+	}
+	return w.Write(key, b)
+}
+
+// readKVRecord reads and unframes the proto record under key. It returns nil
+// when the key is absent.
+func readKVRecord(r ocr3_1types.KeyValueStateReader, key []byte, what string) ([]byte, error) {
+	b, err := r.Read(key)
+	if err != nil {
+		return nil, fmt.Errorf("read %s: %w", what, err)
+	}
+	if len(b) == 0 {
+		return nil, nil
+	}
+	return decodeKVRecord(b, what)
 }
 
 func historyHeaderKey(streamID llotypes.StreamID, agg llotypes.Aggregator) []byte {
@@ -205,11 +232,11 @@ func loadColdKVState(r ocr3_1types.KeyValueStateReader, cache *protocol.ChannelC
 // readCodecSupport reads and decodes the c/codecs record.
 func readCodecSupport(r ocr3_1types.KeyValueStateReader) (map[commontypes.OracleID]map[llotypes.ReportFormat]struct{}, error) {
 	support := map[commontypes.OracleID]map[llotypes.ReportFormat]struct{}{}
-	b, err := r.Read(keyCodecSupport)
+	b, err := readKVRecord(r, keyCodecSupport, "codec support")
 	if err != nil {
-		return nil, fmt.Errorf("read codec support: %w", err)
+		return nil, err
 	}
-	if len(b) == 0 {
+	if b == nil {
 		return support, nil
 	}
 	pb := &protocol.LLOCodecSupportProto{}
@@ -259,7 +286,7 @@ func writeCodecSupport(w ocr3_1types.KeyValueStateReadWriter, support map[common
 	if err != nil {
 		return fmt.Errorf("marshal codec support: %w", err)
 	}
-	return w.Write(keyCodecSupport, b)
+	return writeKVRecord(w, keyCodecSupport, b, "codec support")
 }
 
 // readChannelState reads and decodes the c/defs record.
@@ -271,12 +298,12 @@ func writeCodecSupport(w ocr3_1types.KeyValueStateReadWriter, support map[common
 // decode can allocate. A peer cannot inject records, and every oracle reads
 // the same bytes.
 func readChannelState(r ocr3_1types.KeyValueStateReader) (llotypes.ChannelDefinitions, error) {
-	b, err := r.Read(keyChannelState)
+	b, err := readKVRecord(r, keyChannelState, "channel state")
 	if err != nil {
-		return nil, fmt.Errorf("read channel state: %w", err)
+		return nil, err
 	}
 	defs := llotypes.ChannelDefinitions{}
-	if len(b) == 0 {
+	if b == nil {
 		return defs, nil
 	}
 	pb := &protocol.LLOChannelStateProto{}
@@ -297,11 +324,11 @@ func readChannelState(r ocr3_1types.KeyValueStateReader) (llotypes.ChannelDefini
 // aggregates to MaxPersistedAggregates, channels are capped by verification,
 // and the record is bounded in bytes.
 func readHotState(r ocr3_1types.KeyValueStateReader, s *kvState, lggr logger.Logger) error {
-	b, err := r.Read(keyHotState)
+	b, err := readKVRecord(r, keyHotState, "hot state")
 	if err != nil {
-		return fmt.Errorf("read hot state: %w", err)
+		return err
 	}
-	if len(b) == 0 {
+	if b == nil {
 		return nil
 	}
 	pb := &protocol.LLOHotStateProto{}
@@ -367,7 +394,7 @@ func writeChannelState(w ocr3_1types.KeyValueStateReadWriter, seqNr uint64, defs
 	if err != nil {
 		return fmt.Errorf("marshal channel state: %w", err)
 	}
-	if err := w.Write(keyChannelState, b); err != nil {
+	if err := writeKVRecord(w, keyChannelState, b, "channel state"); err != nil {
 		return err
 	}
 	return w.Write(keyChannelSeqNr, beU64(seqNr))
@@ -447,7 +474,7 @@ func writeHotState(
 	if err != nil {
 		return fmt.Errorf("marshal hot state: %w", err)
 	}
-	return w.Write(keyHotState, b)
+	return writeKVRecord(w, keyHotState, b, "hot state")
 }
 
 // histKey identifies one history window. The aggregator is part of the identity
@@ -472,7 +499,11 @@ func readHistoryHeader(r ocr3_1types.KeyValueStateReader, sid llotypes.StreamID,
 	if len(b) == 0 {
 		return nil, nil
 	}
-	header, err := protocol.UnmarshalStreamHistoryHeader(b)
+	raw, err := decodeKVRecord(b, "history header")
+	if err != nil {
+		return nil, fmt.Errorf("read history header for stream %d aggregator %d: %w: %w", sid, agg, protocol.ErrCorruptStreamHistory, err)
+	}
+	header, err := protocol.UnmarshalStreamHistoryHeader(raw)
 	if err != nil {
 		return nil, fmt.Errorf("read history header for stream %d aggregator %d: %w", sid, agg, err)
 	}
@@ -480,11 +511,14 @@ func readHistoryHeader(r ocr3_1types.KeyValueStateReader, sid llotypes.StreamID,
 }
 
 // writeHistoryHeader persists a history header deterministically, returning the
-// number of bytes written for telemetry.
+// number of framed bytes written for telemetry.
 func writeHistoryHeader(w ocr3_1types.KeyValueStateReadWriter, sid llotypes.StreamID, agg llotypes.Aggregator, header *protocol.StreamHistoryHeader) (int, error) {
 	b, err := header.MarshalBinary()
 	if err != nil {
 		return 0, fmt.Errorf("marshal history header for stream %d aggregator %d: %w", sid, agg, err)
+	}
+	if b, err = encodeKVRecord(b, "history header"); err != nil {
+		return 0, err
 	}
 	return len(b), w.Write(historyHeaderKey(sid, agg), b)
 }
@@ -509,7 +543,11 @@ func readHistoryChunk(r ocr3_1types.KeyValueStateReader, sid llotypes.StreamID, 
 	if len(b) == 0 {
 		return nil, nil
 	}
-	chunk, err := protocol.UnmarshalStreamHistoryChunk(b)
+	raw, err := decodeKVRecord(b, "history chunk")
+	if err != nil {
+		return nil, fmt.Errorf("read history chunk for stream %d aggregator %d slot %d: %w: %w", sid, agg, slot, protocol.ErrCorruptStreamHistory, err)
+	}
+	chunk, err := protocol.UnmarshalStreamHistoryChunk(raw)
 	if err != nil {
 		return nil, fmt.Errorf("read history chunk for stream %d aggregator %d slot %d: %w", sid, agg, slot, err)
 	}
@@ -517,11 +555,14 @@ func readHistoryChunk(r ocr3_1types.KeyValueStateReader, sid llotypes.StreamID, 
 }
 
 // writeHistoryChunk persists one ring slot deterministically, returning the
-// number of bytes written for telemetry.
+// number of framed bytes written for telemetry.
 func writeHistoryChunk(w ocr3_1types.KeyValueStateReadWriter, sid llotypes.StreamID, agg llotypes.Aggregator, chunk *protocol.StreamHistoryChunk) (int, error) {
 	b, err := chunk.MarshalBinary()
 	if err != nil {
 		return 0, fmt.Errorf("marshal history chunk for stream %d aggregator %d slot %d: %w", sid, agg, chunk.Slot(), err)
+	}
+	if b, err = encodeKVRecord(b, "history chunk"); err != nil {
+		return 0, err
 	}
 	return len(b), w.Write(historyChunkKey(sid, agg, chunk.Slot()), b)
 }

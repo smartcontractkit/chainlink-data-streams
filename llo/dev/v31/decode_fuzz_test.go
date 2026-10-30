@@ -162,7 +162,7 @@ func FuzzLoadKVState(f *testing.F) {
 	f.Add([]byte("production"), seeded.m[string(keyChannelState)], beU64(9), []byte(nil))
 	f.Add([]byte{}, []byte{}, []byte{}, []byte{})
 	f.Add([]byte("staging"), []byte("not a proto"), []byte{0x01}, []byte{0x01, 0x02})
-	f.Add([]byte(nil), []byte{0x0a, 0x02, 0x08, 0x01}, beU64(1), append(beU32(100), beU32(1)...))
+	f.Add([]byte(nil), []byte{payloadCodecRaw, 0x0a, 0x02, 0x08, 0x01}, beU64(1), []byte{payloadCodecZstd, 0x01, 0x02})
 
 	f.Fuzz(func(t *testing.T, lifecycle, channelState, seqNr, hotState []byte) {
 		kv := newMemKV()
@@ -204,6 +204,7 @@ func FuzzLoadKVState(f *testing.F) {
 func FuzzDecodeHistoryRecords(f *testing.F) {
 	f.Add(append(beU32(100), beU32(1)...), []byte(nil), []byte(nil))
 	f.Add([]byte{0x01}, []byte("not a proto"), []byte("not a proto"))
+	f.Add([]byte{}, []byte{payloadCodecRaw, 0x08, 0x01}, []byte{payloadCodecZstd, 0x28, 0xb5, 0x2f, 0xfd})
 	f.Add([]byte{}, []byte{}, []byte{})
 
 	f.Fuzz(func(t *testing.T, index, header, chunk []byte) {

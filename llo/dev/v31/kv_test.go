@@ -2,6 +2,7 @@ package llo
 
 import (
 	"encoding/binary"
+	"errors"
 	"testing"
 
 	"github.com/shopspring/decimal"
@@ -189,6 +190,8 @@ func Test_HotState_DiscardsNonTimestampedCarryForward(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
+	b, err = encodeKVRecord(b, "hot state")
+	require.NoError(t, err)
 	kv := newMemKV()
 	require.NoError(t, kv.Write(keyHotState, b))
 
@@ -209,6 +212,38 @@ func Test_HotState_DiscardsNonTimestampedCarryForward(t *testing.T) {
 // definition change is persisted immediately but is not in effect until the
 // following round, so the round that agreed it still aggregates, reports and
 // caches opts against the definitions Observation actually read.
+// Test_KVRecords_BadFrame covers a framed record that does not decode. The
+// round state records fail the load, as an undecodable proto does. History is
+// corruption, which the store discards and re-warms.
+func Test_KVRecords_BadFrame(t *testing.T) {
+	bad := []byte{payloadCodecZstd, 0x01, 0x02, 0x03}
+
+	for name, key := range map[string][]byte{
+		"channel state": keyChannelState,
+		"codec support": keyCodecSupport,
+		"hot state":     keyHotState,
+	} {
+		t.Run(name, func(t *testing.T) {
+			kv := newMemKV()
+			require.NoError(t, kv.Write(key, bad))
+			_, err := loadKVState(kv, nil, logger.Test(t))
+			require.ErrorContains(t, err, name)
+		})
+	}
+
+	t.Run("history", func(t *testing.T) {
+		const sid, agg = llotypes.StreamID(1), llotypes.AggregatorMedian
+		kv := newMemKV()
+		require.NoError(t, kv.Write(historyHeaderKey(sid, agg), bad))
+		require.NoError(t, kv.Write(historyChunkKey(sid, agg, 0), bad))
+
+		_, err := readHistoryHeader(kv, sid, agg)
+		require.True(t, errors.Is(err, protocol.ErrCorruptStreamHistory), "got %v", err)
+		_, err = readHistoryChunk(kv, sid, agg, 0)
+		require.True(t, errors.Is(err, protocol.ErrCorruptStreamHistory), "got %v", err)
+	})
+}
+
 func Test_DeferredDefinitions_TakeEffectNextRound(t *testing.T) {
 	ctx := tests.Context(t)
 	p := testPlugin(t)

@@ -11,8 +11,8 @@ import (
 	protocol "github.com/smartcontractkit/chainlink-data-streams/llo/protocol"
 )
 
-// Payload codec identifiers. The first byte of a framed payload (a blob or the
-// precursor) names the codec used for the remaining bytes, so a reader never
+// Payload codec identifiers. The first byte of a framed payload (a blob, the
+// precursor or a KV record) names the codec used for the remaining bytes, so a reader never
 // has to guess and the writer stays free to fall back to raw when compression
 // does not pay off.
 const (
@@ -42,6 +42,12 @@ const MaxBlobPayloadBytes = ocr3_1types.MaxMaxBlobPayloadBytes
 // and never what makes a precursor fit.
 const maxDecompressedPrecursorBytes = ocr3_1types.MaxMaxReportsPlusPrecursorBytes
 
+// maxKVRecordBytes bounds a framed KV record both raw and framed. libocr
+// rejects a value over MaxMaxKeyValueValueBytes, and the limits tests keep the
+// raw worst case of every framed record under it, so compression is headroom
+// here too.
+const maxKVRecordBytes = ocr3_1types.MaxMaxKeyValueValueBytes
+
 // zstd Encoder/Decoder are safe for concurrent use via EncodeAll/DecodeAll and
 // are expensive to build, so a single pair is shared process-wide. Built lazily
 // so a construction failure surfaces at the call site rather than in init.
@@ -58,11 +64,11 @@ type payloadCompressor struct {
 
 func getPayloadCompressor() (payloadCompressor, error) {
 	payloadZstdOnce.Do(func() {
-		// The precursor is digested and signed, so every oracle must produce
-		// the same bytes. zstd output is stable for one library version and
+		// The precursor is digested and signed, and KV records feed the state
+		// root, so every oracle must produce the same bytes. zstd output is stable for one library version and
 		// one set of options. Pin the options that shape the output instead of
-		// relying on defaults; Test_Golden_Precursor catches a library bump that
-		// changes the bitstream.
+		// relying on defaults; Test_Golden_Precursor and Test_Golden_KVRecords
+		// catch a library bump that changes the bitstream.
 		encoder, err := zstd.NewWriter(nil,
 			zstd.WithEncoderLevel(zstd.SpeedDefault),
 			zstd.WithEncoderCRC(true),
@@ -77,7 +83,7 @@ func getPayloadCompressor() (payloadCompressor, error) {
 		// its destination, which decodeFramedPayload sizes to the call's budget.
 		decoder, err := zstd.NewReader(nil,
 			zstd.WithDecoderConcurrency(0),
-			zstd.WithDecoderMaxMemory(max(maxDecompressedBlobPayloadBytes, maxDecompressedPrecursorBytes)),
+			zstd.WithDecoderMaxMemory(max(maxDecompressedBlobPayloadBytes, maxDecompressedPrecursorBytes, maxKVRecordBytes)),
 			zstd.WithDecodeAllCapLimit(true),
 		)
 		if err != nil {
@@ -185,4 +191,16 @@ func encodeBlobPayload(raw []byte) ([]byte, error) {
 // maxDecompressedBlobPayloadBytes.
 func decodeBlobPayload(payload []byte, maxOut int) ([]byte, error) {
 	return decodeFramedPayload(payload, min(maxOut, maxDecompressedBlobPayloadBytes), "blob payload")
+}
+
+// encodeKVRecord frames a marshaled KV record for writing. libocr builds the
+// state root from these bytes, so they must match on every oracle, as for the
+// precursor.
+func encodeKVRecord(raw []byte, what string) ([]byte, error) {
+	return encodeFramedPayload(raw, maxKVRecordBytes, maxKVRecordBytes, what)
+}
+
+// decodeKVRecord reverses encodeKVRecord.
+func decodeKVRecord(b []byte, what string) ([]byte, error) {
+	return decodeFramedPayload(b, maxKVRecordBytes, what)
 }

@@ -253,6 +253,45 @@ func Test_Golden_KVHistoryRecords(t *testing.T) {
 	require.Len(t, chunk.Records(), 3)
 }
 
+// Test_Golden_KVHistoryChunkCompressed freezes a full ring slot of realistic
+// prices. Unlike the smaller golden records it compresses, so it is what
+// catches a zstd bump that changes the bitstream of KV records.
+func Test_Golden_KVHistoryChunkCompressed(t *testing.T) {
+	const (
+		sid = llotypes.StreamID(100)
+		agg = llotypes.AggregatorMedian
+	)
+
+	kv := newMemKV()
+	var set protocol.RingWriteSet
+	for i := range protocol.MaxHistoryChunkRecords {
+		w := readHistory(t, kv, sid, agg)
+		if w == nil {
+			w = protocol.NewRingWindow(nil)
+		}
+		_, err := w.SetRequiredCount(protocol.MaxHistoryChunkRecords)
+		require.NoError(t, err)
+		price := decimal.RequireFromString("3412.57").Add(decimal.New(int64(i%7), -2))
+		appended, err := w.Append(1_700_000_000_000_000_000+uint64(i)*1_000_000_000, protocol.ToDecimal(price))
+		require.NoError(t, err)
+		require.True(t, appended)
+
+		set = w.WriteSet()
+		_, err = writeHistoryHeader(kv, sid, agg, set.Header)
+		require.NoError(t, err)
+		_, err = writeHistoryChunk(kv, sid, agg, set.Chunk)
+		require.NoError(t, err)
+	}
+
+	b := kv.m[string(historyChunkKey(sid, agg, set.Chunk.Slot()))]
+	require.Equal(t, payloadCodecZstd, b[0], "a full chunk must compress, or this golden freezes nothing")
+	goldenBytes(t, "kv_history_chunk_full.bin", b)
+
+	chunk, err := readHistoryChunk(kv, sid, agg, set.Chunk.Slot())
+	require.NoError(t, err)
+	require.Len(t, chunk.Records(), protocol.MaxHistoryChunkRecords)
+}
+
 // Test_Golden_KVKeys freezes the key layout. Keys are part of the replicated
 // schema too: renaming one silently orphans the stored value on every node.
 func Test_Golden_KVKeys(t *testing.T) {

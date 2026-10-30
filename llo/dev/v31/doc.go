@@ -46,6 +46,14 @@
 // proto maps — or fixed-width big-endian integers) because the store is
 // replicated across oracles and any divergence halts the protocol.
 //
+// The proto records (c/defs, c/codecs, r/agg and the history header and chunks)
+// are then framed like blobs and the precursor, zstd-compressed whenever that
+// shrinks them. libocr builds the state root from the framed bytes, so the
+// same rule as for the precursor applies: Test_Golden_KVRecords and
+// Test_Golden_KVHistoryChunkCompressed freeze them, and a dependency bump that
+// changes them must roll out to the whole DON at once. Admission bounds the raw
+// records under the per-key limit, so compression is headroom only.
+//
 // # Deferred channel definitions
 //
 // Channel definition changes agreed in a round take effect in the NEXT round.
