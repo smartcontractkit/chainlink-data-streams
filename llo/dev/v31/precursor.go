@@ -34,7 +34,23 @@ type precursor struct {
 	ReportableChannelIDs []llotypes.ChannelID
 }
 
+// encodePrecursor marshals and frames the precursor. libocr digests these
+// bytes, so the framing must be deterministic, which encodeFramedPayload is.
 func encodePrecursor(p precursor) (ocr3_1types.ReportsPlusPrecursor, error) {
+	raw, err := marshalPrecursor(p)
+	if err != nil {
+		return nil, err
+	}
+	return framePrecursor(raw)
+}
+
+func framePrecursor(raw []byte) (ocr3_1types.ReportsPlusPrecursor, error) {
+	return encodeFramedPayload(raw, maxDecompressedPrecursorBytes, ocr3_1types.MaxMaxReportsPlusPrecursorBytes, "precursor")
+}
+
+// marshalPrecursor serializes the precursor deterministically as
+// LLOPrecursorProto, before framing.
+func marshalPrecursor(p precursor) ([]byte, error) {
 	pb := &protocol.LLOPrecursorProto{
 		LifeCycleStage:                  string(p.LifeCycleStage),
 		ObservationTimestampNanoseconds: p.ObservationTimestampNanoseconds,
@@ -113,8 +129,12 @@ func encodePrecursor(p precursor) (ocr3_1types.ReportsPlusPrecursor, error) {
 // opts caps are not applied here: they are admission-only, and rejecting a
 // committed definition would fail Reports on every oracle.
 func decodePrecursor(b ocr3_1types.ReportsPlusPrecursor) (precursor, error) {
+	raw, err := decodeFramedPayload(b, maxDecompressedPrecursorBytes, "precursor")
+	if err != nil {
+		return precursor{}, err
+	}
 	pb := &protocol.LLOPrecursorProto{}
-	if err := proto.Unmarshal(b, pb); err != nil {
+	if err := proto.Unmarshal(raw, pb); err != nil {
 		return precursor{}, fmt.Errorf("unmarshal precursor: %w", err)
 	}
 	p := precursor{

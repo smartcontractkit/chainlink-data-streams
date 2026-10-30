@@ -141,6 +141,7 @@ func (f *PluginFactory) NewReportingPlugin(ctx context.Context, cfg ocr3types.Re
 
 	p := &Plugin{
 		freshnessMetrics:                    newFreshnessMetrics(f.DonID),
+		precursorMetrics:                    newPrecursorMetrics(f.DonID),
 		Config:                              f.Config,
 		PredecessorConfigDigest:             onchainConfig.PredecessorConfigDigest,
 		ConfigDigest:                        cfg.ConfigDigest,
@@ -211,6 +212,8 @@ func (f *PluginFactory) NewReportingPlugin(ctx context.Context, cfg ocr3types.Re
 	//	                              decimal coefficient is bounded on
 	//	                              observation decode, and a calculated one
 	//	                              where it is written into the aggregates.
+	//	                              These bounds hold for the raw proto, so
+	//	                              zstd framing is headroom, not what fits it.
 	//	MaxKeyValueModifiedKeys*      the per-round write set is c/defs plus r/agg
 	//	                              plus the history windows, and history is
 	//	                              bounded by protocol.MaxHistoryPairs, which

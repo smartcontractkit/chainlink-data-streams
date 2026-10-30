@@ -11,12 +11,13 @@ require (
 	github.com/hashicorp/go-plugin v1.8.0
 	github.com/jmoiron/sqlx v1.4.0
 	github.com/jpillora/backoff v1.0.0
-	github.com/klauspost/compress v1.18.6
+	github.com/klauspost/compress v1.20.3
 	github.com/leanovate/gopter v0.2.11
 	github.com/lib/pq v1.12.3
 	github.com/pelletier/go-toml/v2 v2.3.1
 	github.com/pkg/errors v0.9.1
 	github.com/prometheus/client_golang v1.23.2
+	github.com/prometheus/client_model v0.6.2
 	github.com/shopspring/decimal v1.4.0
 	github.com/smartcontractkit/chainlink-common v0.11.2-0.20260918171610-2b348aaadc86
 	github.com/smartcontractkit/chainlink-common/keystore v1.1.0
@@ -132,7 +133,6 @@ require (
 	github.com/pion/logging v0.2.4 // indirect
 	github.com/pion/stun/v3 v3.1.5 // indirect
 	github.com/pion/transport/v4 v4.0.2 // indirect
-	github.com/prometheus/client_model v0.6.2 // indirect
 	github.com/prometheus/common v0.67.5 // indirect
 	github.com/prometheus/procfs v0.20.1 // indirect
 	github.com/rogpeppe/go-internal v1.14.1 // indirect
@@ -200,3 +200,10 @@ require (
 	gopkg.in/yaml.v2 v2.4.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
+
+// The v31 precursor is zstd compressed and libocr signs a digest of the framed
+// bytes, so every oracle must compress identically. zstd output is only
+// guaranteed stable within one klauspost/compress version. Bump requires
+// passing Test_Golden_Precursor or updating it with a controlled rollout
+// and LLOProtocolVersion gate switch.
+replace github.com/klauspost/compress => github.com/klauspost/compress v1.20.3

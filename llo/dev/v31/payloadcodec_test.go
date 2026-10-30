@@ -3,6 +3,7 @@ package llo
 import (
 	"bytes"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/klauspost/compress/zstd"
@@ -19,7 +20,7 @@ func Test_BlobPayload_RoundTrip(t *testing.T) {
 		raw := []byte(strings.Repeat("stream-values-are-repetitive", 200))
 		framed, err := encodeBlobPayload(raw)
 		require.NoError(t, err)
-		require.Equal(t, blobCodecZstd, framed[0])
+		require.Equal(t, payloadCodecZstd, framed[0])
 		assert.Less(t, len(framed), len(raw))
 
 		got, err := decodeBlobPayload(framed, maxDecompressedBlobPayloadBytes)
@@ -33,7 +34,7 @@ func Test_BlobPayload_RoundTrip(t *testing.T) {
 		raw := []byte{0x9f, 0x1c, 0x00, 0xd3, 0x7a}
 		framed, err := encodeBlobPayload(raw)
 		require.NoError(t, err)
-		require.Equal(t, blobCodecRaw, framed[0])
+		require.Equal(t, payloadCodecRaw, framed[0])
 		assert.Equal(t, len(raw)+1, len(framed))
 
 		got, err := decodeBlobPayload(framed, maxDecompressedBlobPayloadBytes)
@@ -57,7 +58,7 @@ func Test_BlobPayload_MarshalStreamValuesRoundTrip(t *testing.T) {
 	}
 	payload, err := marshalStreamValues(sv, 1)
 	require.NoError(t, err)
-	require.Equal(t, blobCodecZstd, payload[0])
+	require.Equal(t, payloadCodecZstd, payload[0])
 
 	raw, err := decodeBlobPayload(payload, maxDecompressedBlobPayloadBytes)
 	require.NoError(t, err)
@@ -78,14 +79,14 @@ func Test_decodeBlobPayload_Errors(t *testing.T) {
 	})
 
 	t.Run("corrupt zstd body", func(t *testing.T) {
-		_, err := decodeBlobPayload([]byte{blobCodecZstd, 0xde, 0xad, 0xbe, 0xef}, maxDecompressedBlobPayloadBytes)
+		_, err := decodeBlobPayload([]byte{payloadCodecZstd, 0xde, 0xad, 0xbe, 0xef}, maxDecompressedBlobPayloadBytes)
 		require.ErrorContains(t, err, "blob payload header")
 	})
 
 	t.Run("zstd bomb is rejected without allocating", func(t *testing.T) {
 		enc, err := zstd.NewWriter(nil)
 		require.NoError(t, err)
-		bomb := enc.EncodeAll(make([]byte, maxDecompressedBlobPayloadBytes+1), []byte{blobCodecZstd})
+		bomb := enc.EncodeAll(make([]byte, maxDecompressedBlobPayloadBytes+1), []byte{payloadCodecZstd})
 		require.Less(t, len(bomb), 1<<20, "bomb should be tiny on the wire")
 
 		_, err = decodeBlobPayload(bomb, maxDecompressedBlobPayloadBytes)
@@ -113,7 +114,7 @@ func Test_decodeBlobPayload_UndeclaredSize(t *testing.T) {
 	// A streaming encoder does not know the content size up front, so the frame
 	// omits it and the header check cannot reject the payload.
 	var buf bytes.Buffer
-	buf.WriteByte(blobCodecZstd)
+	buf.WriteByte(payloadCodecZstd)
 	enc, err := zstd.NewWriter(&buf)
 	require.NoError(t, err)
 	_, err = enc.Write(make([]byte, 1<<20))
@@ -136,7 +137,7 @@ func Test_decodeBlobPayload_UndeclaredSize(t *testing.T) {
 func Test_encodeBlobPayload_DeclaresContentSize(t *testing.T) {
 	framed, err := encodeBlobPayload(make([]byte, 4096))
 	require.NoError(t, err)
-	require.Equal(t, blobCodecZstd, framed[0])
+	require.Equal(t, payloadCodecZstd, framed[0])
 	var hdr zstd.Header
 	require.NoError(t, hdr.Decode(framed[1:]))
 	require.True(t, hdr.HasFCS)
@@ -146,4 +147,52 @@ func Test_encodeBlobPayload_DeclaresContentSize(t *testing.T) {
 func Test_encodeBlobPayload_RejectsOversized(t *testing.T) {
 	_, err := encodeBlobPayload(make([]byte, maxDecompressedBlobPayloadBytes+1))
 	require.ErrorContains(t, err, "blob payload too large")
+}
+
+func Test_encodePrecursor_DeterministicAcrossGoroutines(t *testing.T) {
+	// libocr digests the framed precursor, so every encode of the same value
+	// must produce the same bytes, including encodes that share the encoder.
+	want, err := encodePrecursor(goldenPrecursor())
+	require.NoError(t, err)
+	require.Equal(t, payloadCodecZstd, want[0])
+
+	var wg sync.WaitGroup
+	got := make([][]byte, 16)
+	for i := range got {
+		wg.Go(func() {
+			b, err := encodePrecursor(goldenPrecursor())
+			assert.NoError(t, err)
+			got[i] = b
+		})
+	}
+	wg.Wait()
+	for _, b := range got {
+		require.Equal(t, []byte(want), b)
+	}
+}
+
+func Test_decodePrecursor_Framing(t *testing.T) {
+	raw, err := marshalPrecursor(goldenPrecursor())
+	require.NoError(t, err)
+
+	t.Run("unframed proto is rejected", func(t *testing.T) {
+		_, err := decodePrecursor(raw)
+		require.ErrorContains(t, err, "unknown precursor codec")
+	})
+	t.Run("raw codec decodes", func(t *testing.T) {
+		got, err := decodePrecursor(append([]byte{payloadCodecRaw}, raw...))
+		require.NoError(t, err)
+		require.Equal(t, normalizePrecursor(goldenPrecursor()), got)
+	})
+	t.Run("declared size above the bound is rejected", func(t *testing.T) {
+		c, err := getPayloadCompressor()
+		require.NoError(t, err)
+		bomb := c.encoder.EncodeAll(make([]byte, maxDecompressedPrecursorBytes+1), []byte{payloadCodecZstd})
+		_, err = decodePrecursor(bomb)
+		require.ErrorContains(t, err, "declared decompressed precursor too large")
+	})
+	t.Run("raw above the bound is not encoded", func(t *testing.T) {
+		_, err := framePrecursor(make([]byte, maxDecompressedPrecursorBytes+1))
+		require.ErrorContains(t, err, "precursor too large")
+	})
 }

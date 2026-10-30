@@ -15,8 +15,8 @@ func FuzzDecodeBlobPayload(f *testing.F) {
 		f.Fatal(err)
 	}
 	f.Add(framed)
-	f.Add(append([]byte{blobCodecRaw}, raw...))
-	f.Add([]byte{blobCodecZstd})
+	f.Add(append([]byte{payloadCodecRaw}, raw...))
+	f.Add([]byte{payloadCodecZstd})
 	f.Add([]byte{})
 
 	f.Fuzz(func(t *testing.T, payload []byte) {

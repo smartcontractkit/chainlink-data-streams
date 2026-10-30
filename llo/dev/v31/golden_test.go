@@ -81,13 +81,18 @@ func Test_Golden_Precursor(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		p    precursor
+
+		codec byte
 	}{
-		{"precursor_empty.bin", precursor{}},
-		{"precursor_full.bin", goldenPrecursor()},
+		{"precursor_empty.bin", precursor{}, payloadCodecRaw},
+		// Also freezes the zstd bitstream: a compress library bump that changes
+		// it would split oracles on the precursor digest.
+		{"precursor_full.bin", goldenPrecursor(), payloadCodecZstd},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			b, err := encodePrecursor(tc.p)
 			require.NoError(t, err)
+			require.Equal(t, tc.codec, b[0])
 			goldenBytes(t, tc.name, b)
 
 			// The golden bytes must also decode back to the same projection, so

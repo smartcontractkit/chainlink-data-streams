@@ -74,7 +74,7 @@ func (p *Plugin) StateTransition(ctx context.Context, seqNr uint64, _ ocrtypes.A
 		if err := writeHotState(kvRW, 0, nil, nil, nil, nil, p.Logger); err != nil {
 			return nil, err
 		}
-		return encodePrecursor(precursor{LifeCycleStage: stage})
+		return p.encodePrecursor(precursor{LifeCycleStage: stage})
 	}
 
 	prev, err := loadKVState(kvRW, p.ChannelCache, p.Logger)
@@ -286,7 +286,21 @@ func (p *Plugin) StateTransition(ctx context.Context, seqNr uint64, _ ocrtypes.A
 
 	// After telemetry, which reports every aggregate.
 	out.StreamAggregates = out.reportedAggregates(prev.opts)
-	return encodePrecursor(out)
+	return p.encodePrecursor(out)
+}
+
+// encodePrecursor encodes the round's precursor and records its sizes.
+func (p *Plugin) encodePrecursor(out precursor) (ocr3_1types.ReportsPlusPrecursor, error) {
+	raw, err := marshalPrecursor(out)
+	if err != nil {
+		return nil, err
+	}
+	framed, err := framePrecursor(raw)
+	if err != nil {
+		return nil, err
+	}
+	p.precursorMetrics.record(len(raw), len(framed))
+	return framed, nil
 }
 
 // observationTally is what the round's observations add up to: the votes,

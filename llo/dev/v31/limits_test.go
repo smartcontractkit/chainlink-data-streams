@@ -514,7 +514,7 @@ func TestLimits_PrecursorWorstCaseFitsDeclared(t *testing.T) {
 	// Every channel reportable, under the largest IDs.
 	reportable := slices.Sorted(maps.Keys(defs))
 
-	encoded, err := encodePrecursor(precursor{
+	raw, err := marshalPrecursor(precursor{
 		LifeCycleStage:                  llotypes.LifeCycleStage(strings.Repeat("x", 32)),
 		ObservationTimestampNanoseconds: math.MaxUint64,
 		ChannelDefinitions:              defs,
@@ -524,8 +524,14 @@ func TestLimits_PrecursorWorstCaseFitsDeclared(t *testing.T) {
 		ReportableChannelIDs:            reportable,
 	})
 	require.NoError(t, err)
-	require.LessOrEqual(t, len(encoded), ocr3_1types.MaxMaxReportsPlusPrecursorBytes,
-		"worst-case precursor (%d bytes) exceeds the declared limit", len(encoded))
-	t.Logf("worst-case precursor: %d bytes of the %d limit",
-		len(encoded), ocr3_1types.MaxMaxReportsPlusPrecursorBytes)
+	// Admission must keep the raw precursor under the limit on its own:
+	// compression is headroom, not what makes it fit.
+	require.LessOrEqual(t, len(raw), maxDecompressedPrecursorBytes,
+		"worst-case raw precursor (%d bytes) exceeds the decompression bound", len(raw))
+	framed, err := framePrecursor(raw)
+	require.NoError(t, err)
+	require.LessOrEqual(t, len(framed), ocr3_1types.MaxMaxReportsPlusPrecursorBytes,
+		"worst-case framed precursor (%d bytes) exceeds the declared limit", len(framed))
+	t.Logf("worst-case precursor: %d bytes raw, %d framed (%.2fx), of the %d limit",
+		len(raw), len(framed), float64(len(raw))/float64(len(framed)), ocr3_1types.MaxMaxReportsPlusPrecursorBytes)
 }

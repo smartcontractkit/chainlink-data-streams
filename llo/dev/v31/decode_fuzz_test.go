@@ -108,8 +108,17 @@ func FuzzDecodePrecursor(f *testing.F) {
 	if err != nil {
 		f.Fatal(err)
 	}
+	c, err := getPayloadCompressor()
+	if err != nil {
+		f.Fatal(err)
+	}
+	// A zstd frame that declares more than the precursor bound.
+	bomb := c.encoder.EncodeAll(make([]byte, maxDecompressedPrecursorBytes+1), []byte{payloadCodecZstd})
 	f.Add([]byte(full))
 	f.Add([]byte(empty))
+	f.Add(bomb)
+	f.Add([]byte{payloadCodecRaw, 0x0a, 0x00})
+	f.Add([]byte{payloadCodecZstd, 0xde, 0xad, 0xbe, 0xef})
 	f.Add([]byte{0x0a, 0x00})
 	f.Add([]byte("not a precursor"))
 	f.Add([]byte{})

@@ -1771,7 +1771,9 @@ func Test_Precursor_ReportableChannelIDs_RoundTrip(t *testing.T) {
 		}
 		b, err := proto.Marshal(pb)
 		require.NoError(t, err)
-		return b
+		framed, err := framePrecursor(b)
+		require.NoError(t, err)
+		return framed
 	}
 	_, err = decodePrecursor(encodeRaw(4))
 	require.ErrorContains(t, err, "reportable channel 4 has no definition")
