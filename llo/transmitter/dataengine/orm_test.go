@@ -1,6 +1,7 @@
 package dataengine
 
 import (
+	"sync"
 	"testing"
 	"time"
 
@@ -144,4 +145,122 @@ func TestORM(t *testing.T) {
 		require.NoError(t, err)
 		require.Len(t, result, 5)
 	})
+}
+
+// TestORM_PruneSkipsRowsLockedByDelete checks that Prune does not wait for rows that a concurrent Delete has
+// locked. Delete removes rows by transmission_hash while Prune walks them by seq_nr, so without
+// FOR UPDATE SKIP LOCKED the two delete paths can hold locks on rows the other wants and deadlock (40P01).
+func TestORM_PruneSkipsRowsLockedByDelete(t *testing.T) {
+	ctx := t.Context()
+	sessions := testutils.NewIndependentSqlxSessions(t, 2)
+	lockDS, pruneDS := sessions[0], sessions[1]
+
+	const (
+		donID     = uint32(1234)
+		n         = 10
+		maxSize   = 5
+		batchSize = 100
+	)
+	transmissions := makeSampleTransmissions(n, sURL)
+	require.NoError(t, NewORM(lockDS, donID).Insert(ctx, transmissions))
+
+	// Hold a lock on the oldest row (pruned by the batch loop) and on the newest row (retained in the top
+	// maxSize during the final OFFSET truncate), exactly like an in-flight Delete would.
+	tx, err := lockDS.BeginTxx(ctx, nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = tx.Rollback() })
+	var locked [][]byte
+	require.NoError(t, tx.SelectContext(ctx, &locked,
+		`SELECT transmission_hash FROM llo_mercury_transmit_queue
+		WHERE don_id = $1 AND server_url = $2 AND seq_nr IN (0, $3)
+		FOR UPDATE`, donID, sURL, n-1))
+	require.Len(t, locked, 2)
+
+	// Prune must not block on the locked rows, and a locked retained row (seq_nr = n-1) must not shift the
+	// OFFSET window in the final truncate to over-delete seq_nr = 5. If Prune blocks, the session's lock_timeout
+	// fires and it returns 55P03, so the failure is reported as an error rather than a hang; the deadline is
+	// only a safety net.
+	done := make(chan struct{})
+	var (
+		deleted  int64
+		pruneErr error
+	)
+	go func() {
+		deleted, pruneErr = NewORM(pruneDS, donID).Prune(ctx, sURL, maxSize, batchSize)
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(60 * time.Second):
+		t.Fatal("Prune did not return; expected FOR UPDATE SKIP LOCKED to skip the locked row")
+	}
+	require.NoError(t, pruneErr, "Prune blocked on a row locked by Delete; expected FOR UPDATE SKIP LOCKED")
+	assert.Equal(t, int64(n-maxSize-1), deleted)
+
+	result, err := NewORM(pruneDS, donID).Get(ctx, sURL, 100, 0)
+	require.NoError(t, err)
+	require.Len(t, result, n-maxSize+1, "maxSize rows plus the one still locked")
+	var seqNrs []uint64
+	for _, tr := range result {
+		seqNrs = append(seqNrs, tr.SeqNr)
+	}
+	assert.ElementsMatch(t, []uint64{0, 5, 6, 7, 8, 9}, seqNrs, "only the locked row should be left below maxSize")
+}
+
+// TestORM_ConcurrentDeleteAndPrune hammers Delete and Prune at the same time and fails if either returns an
+// error. It is a broader regression net around the SQL in Prune; the deadlock itself is reproduced
+// deterministically in TestORM_PruneSkipsRowsLockedByDelete.
+func TestORM_ConcurrentDeleteAndPrune(t *testing.T) {
+	ctx := t.Context()
+	sessions := testutils.NewIndependentSqlxSessions(t, 2)
+	deleteORM := NewORM(sessions[0], 4321)
+	pruneORM := NewORM(sessions[1], 4321)
+
+	const (
+		n          = 1_000
+		iterations = 25
+		maxSize    = n / 2
+		pruneBatch = 32
+		deleteSize = 100
+	)
+
+	transmissions := makeSampleTransmissions(n, sURL)
+	require.NoError(t, deleteORM.Insert(ctx, transmissions))
+	hashes := make([][32]byte, n)
+	for i, tr := range transmissions {
+		hashes[i] = tr.Hash()
+	}
+
+	errs := make(chan error, 2*iterations)
+	for i := range iterations {
+		// Restore anything the previous round pruned so both paths keep contending over real rows.
+		require.NoError(t, deleteORM.Insert(ctx, transmissions))
+
+		// Rotate the Delete batch so it overlaps different parts of Prune's seq_nr ordering.
+		start := (i * 37) % n
+		batch := make([][32]byte, deleteSize)
+		for j := range batch {
+			batch[j] = hashes[(start+j)%n]
+		}
+
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			if err := deleteORM.Delete(ctx, batch); err != nil {
+				errs <- err
+			}
+		}()
+		go func() {
+			defer wg.Done()
+			if _, err := pruneORM.Prune(ctx, sURL, maxSize, pruneBatch); err != nil {
+				errs <- err
+			}
+		}()
+		wg.Wait()
+	}
+	close(errs)
+	for err := range errs {
+		require.NoError(t, err, "concurrent Delete/Prune must not deadlock")
+	}
 }

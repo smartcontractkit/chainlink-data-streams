@@ -202,7 +202,14 @@ func (o *orm) Prune(ctx context.Context, serverURL string, maxSize, batchSize in
 		return 0, fmt.Errorf("llo orm: failed to get oldest seq_nr: %w", err)
 	}
 	// Prune the requests with seq_nr older than this, in batches to avoid long
-	// locking or queries
+	// locking or queries.
+	//
+	// SKIP LOCKED is essential here: Delete removes rows by transmission_hash
+	// while Prune walks them by seq_nr, so the two can hold locks on rows the
+	// other wants and deadlock (40P01). Prune is best-effort, so skipping a row
+	// that is currently being deleted is fine; it is cleaned up by the next
+	// cycle. Delete must not skip because its caller has already removed those
+	// transmissions from the in-memory queue.
 	for {
 		var res sql.Result
 		res, err = o.ds.ExecContext(ctx, `
@@ -215,6 +222,7 @@ USING (
       AND seq_nr < $3
     ORDER BY seq_nr ASC
     LIMIT $4
+    FOR UPDATE SKIP LOCKED
 ) AS to_delete
 WHERE q.transmission_hash = to_delete.transmission_hash;
 		`, o.donID, serverURL, oldest, batchSize)
@@ -232,22 +240,30 @@ WHERE q.transmission_hash = to_delete.transmission_hash;
 		rowsDeleted += rowsAffected
 	}
 
-	// This query to trim off the final few rows to reach exactly maxSize with
+	// This query to trim off the final few rows to reach exactly maxSize
 	// should now be fast and efficient because of the batch deletes that
 	// already completed above.
+	//
+	// Select candidate rows in an unlocked OFFSET subquery first, then apply
+	// FOR UPDATE SKIP LOCKED only to those excess rows. Putting FOR UPDATE in
+	// the same SELECT as OFFSET would lock all maxSize retained rows before
+	// skipping them, and SKIP LOCKED on a locked retained row would shift the
+	// OFFSET window and over-delete a kept row.
 	res, err := o.ds.ExecContext(ctx, `
-WITH to_delete AS (
-    SELECT ctid
-    FROM (
-        SELECT ctid,
-               ROW_NUMBER() OVER (PARTITION BY don_id, server_url ORDER BY seq_nr DESC, inserted_at DESC) AS row_num
+DELETE FROM llo_mercury_transmit_queue AS q
+USING (
+    SELECT transmission_hash
+    FROM llo_mercury_transmit_queue
+    WHERE transmission_hash IN (
+        SELECT transmission_hash
         FROM llo_mercury_transmit_queue
-		WHERE don_id = $1 AND server_url = $2
-    ) sub
-    WHERE row_num > $3
-)
-DELETE FROM llo_mercury_transmit_queue
-WHERE ctid IN (SELECT ctid FROM to_delete);
+        WHERE don_id = $1 AND server_url = $2
+        ORDER BY seq_nr DESC, inserted_at DESC
+        OFFSET $3
+    )
+    FOR UPDATE SKIP LOCKED
+) AS to_delete
+WHERE q.transmission_hash = to_delete.transmission_hash;
 `, o.donID, serverURL, maxSize)
 
 	if err != nil {

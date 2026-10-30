@@ -44,8 +44,38 @@ const pristineDBName = "chainlink_test_pristine" // TODO update when splitting s
 // NewIndependentSqlxDB return a new independent test database, which does not use txdb and therefore supports txs etc.
 // Use this with caution, as it is much more costly than NewSqlxDB.
 func NewIndependentSqlxDB(t testing.TB) *sqlx.DB {
-	SkipShortDB(t)
+	return NewIndependentSqlxDBs(t, 1)[0]
+}
 
+// NewIndependentSqlxDBs returns n handles to a single fresh test database, which does not use txdb and therefore
+// supports real transactions and lock contention between connections. Use this with caution, as it is much more
+// costly than NewSqlxDB.
+func NewIndependentSqlxDBs(t testing.TB, n int) []*sqlx.DB {
+	return newIndependentSqlxDBs(t, n, pg.DBConfig{
+		IdleInTxSessionTimeout: time.Hour,
+		LockTimeout:            15 * time.Second,
+		MaxOpenConns:           100,
+		MaxIdleConns:           10,
+	})
+}
+
+// NewIndependentSqlxSessions returns n handles to a single fresh test database, each pinned to its own
+// connection (pool size 1). Unlike the handles from NewIndependentSqlxDBs, session state such as SET or an
+// open transaction does not leak between them, which makes it suitable for tests that hold locks on one
+// session while another session contends for them.
+//
+// lock_timeout is set so that a regression that makes a query wait on a lock fails the test instead of hanging it.
+func NewIndependentSqlxSessions(t testing.TB, n int) []*sqlx.DB {
+	return newIndependentSqlxDBs(t, n, pg.DBConfig{
+		IdleInTxSessionTimeout: time.Hour,
+		LockTimeout:            10 * time.Second,
+		MaxOpenConns:           1,
+		MaxIdleConns:           1,
+	})
+}
+
+func newIndependentSqlxDBs(t testing.TB, n int, cfg pg.DBConfig) []*sqlx.DB {
+	SkipShortDB(t)
 	ctx := tests.Context(t)
 
 	dbURL, err := url.Parse(sqltest.TestURL(t))
@@ -53,14 +83,13 @@ func NewIndependentSqlxDB(t testing.TB) *sqlx.DB {
 	dbName := "chainlink_test_" + strings.ReplaceAll(uuid.NewString(), "-", "")
 	newDBURL := sqltest.CreateOrReplace(t, *dbURL, dbName, pristineDBName)
 
-	db, err := pg.DBConfig{
-		IdleInTxSessionTimeout: time.Hour,
-		LockTimeout:            15 * time.Second,
-		MaxOpenConns:           100,
-		MaxIdleConns:           10,
-	}.New(ctx, newDBURL.String(), pg.DriverPostgres)
-	require.NoError(t, err)
-	t.Cleanup(func() { assert.NoError(t, db.Close()) })
+	dbs := make([]*sqlx.DB, n)
+	for i := range dbs {
+		db, err := cfg.New(ctx, newDBURL.String(), pg.DriverPostgres)
+		require.NoError(t, err)
+		t.Cleanup(func() { assert.NoError(t, db.Close()) })
+		dbs[i] = db
+	}
 
-	return db
+	return dbs
 }
