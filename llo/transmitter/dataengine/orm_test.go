@@ -164,18 +164,22 @@ func TestORM_PruneSkipsRowsLockedByDelete(t *testing.T) {
 	transmissions := makeSampleTransmissions(n, sURL)
 	require.NoError(t, NewORM(lockDS, donID).Insert(ctx, transmissions))
 
-	// Hold a lock on the oldest row, exactly like an in-flight Delete would.
+	// Hold a lock on the oldest row (pruned by the batch loop) and on the newest row (retained in the top
+	// maxSize during the final OFFSET truncate), exactly like an in-flight Delete would.
 	tx, err := lockDS.BeginTxx(ctx, nil)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = tx.Rollback() })
-	require.NoError(t, tx.GetContext(ctx, new([]byte),
+	var locked [][]byte
+	require.NoError(t, tx.SelectContext(ctx, &locked,
 		`SELECT transmission_hash FROM llo_mercury_transmit_queue
-		WHERE don_id = $1 AND server_url = $2 AND seq_nr = 0
-		FOR UPDATE`, donID, sURL))
+		WHERE don_id = $1 AND server_url = $2 AND seq_nr IN (0, $3)
+		FOR UPDATE`, donID, sURL, n-1))
+	require.Len(t, locked, 2)
 
-	// Prune must not block on the locked row. It deletes everything it can and leaves that row to the Delete
-	// that is already removing it. If it blocks, the session's lock_timeout fires and it returns 55P03, so the
-	// failure is reported as an error rather than a hang; the deadline is only a safety net.
+	// Prune must not block on the locked rows, and a locked retained row (seq_nr = n-1) must not shift the
+	// OFFSET window in the final truncate to over-delete seq_nr = 5. If Prune blocks, the session's lock_timeout
+	// fires and it returns 55P03, so the failure is reported as an error rather than a hang; the deadline is
+	// only a safety net.
 	done := make(chan struct{})
 	var (
 		deleted  int64

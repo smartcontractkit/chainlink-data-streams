@@ -240,23 +240,30 @@ WHERE q.transmission_hash = to_delete.transmission_hash;
 		rowsDeleted += rowsAffected
 	}
 
-	// This query to trim off the final few rows to reach exactly maxSize with
+	// This query to trim off the final few rows to reach exactly maxSize
 	// should now be fast and efficient because of the batch deletes that
 	// already completed above.
 	//
-	// The window function version of this query cannot take FOR UPDATE, so it
-	// is expressed as an OFFSET instead; the partition in the original query
-	// was constant because don_id and server_url are fixed here.
+	// Select candidate rows in an unlocked OFFSET subquery first, then apply
+	// FOR UPDATE SKIP LOCKED only to those excess rows. Putting FOR UPDATE in
+	// the same SELECT as OFFSET would lock all maxSize retained rows before
+	// skipping them, and SKIP LOCKED on a locked retained row would shift the
+	// OFFSET window and over-delete a kept row.
 	res, err := o.ds.ExecContext(ctx, `
-DELETE FROM llo_mercury_transmit_queue
-WHERE ctid IN (
-    SELECT ctid
+DELETE FROM llo_mercury_transmit_queue AS q
+USING (
+    SELECT transmission_hash
     FROM llo_mercury_transmit_queue
-    WHERE don_id = $1 AND server_url = $2
-    ORDER BY seq_nr DESC, inserted_at DESC
-    OFFSET $3
+    WHERE transmission_hash IN (
+        SELECT transmission_hash
+        FROM llo_mercury_transmit_queue
+        WHERE don_id = $1 AND server_url = $2
+        ORDER BY seq_nr DESC, inserted_at DESC
+        OFFSET $3
+    )
     FOR UPDATE SKIP LOCKED
-);
+) AS to_delete
+WHERE q.transmission_hash = to_delete.transmission_hash;
 `, o.donID, serverURL, maxSize)
 
 	if err != nil {
