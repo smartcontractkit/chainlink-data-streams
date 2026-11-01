@@ -156,6 +156,10 @@ linters-settings:
     require-explanation: true
 issues:
   max-same-issues: 0
+  # Trimmed copy of the klauspost/compress zstd encoder. Kept as upstream wrote
+  # it so it stays diffable against the release it came from.
+  exclude-dirs:
+    - llo/internal/zstdenc
   exclude-rules:
     - path: test
       text: "^G404:"

@@ -8,6 +8,7 @@ import (
 
 	"github.com/smartcontractkit/libocr/offchainreporting2plus/ocr3_1types"
 
+	zstdenc "github.com/smartcontractkit/chainlink-data-streams/llo/internal/zstdenc/zstd"
 	protocol "github.com/smartcontractkit/chainlink-data-streams/llo/protocol"
 )
 
@@ -58,25 +59,28 @@ var (
 )
 
 type payloadCompressor struct {
-	encoder *zstd.Encoder
+	encoder *zstdenc.Encoder
 	decoder *zstd.Decoder
 }
 
 func getPayloadCompressor() (payloadCompressor, error) {
 	payloadZstdOnce.Do(func() {
 		// The precursor is digested and signed, and KV records feed the state
-		// root, so every oracle must produce the same bytes. zstd output is stable for one library version and
-		// one set of options. Pin the options that shape the output instead of
-		// relying on defaults; Test_Golden_Precursor and Test_Golden_KVRecords
-		// catch a library bump that changes the bitstream.
-		encoder, err := zstd.NewWriter(nil,
-			zstd.WithEncoderLevel(zstd.SpeedDefault),
-			zstd.WithEncoderCRC(true),
-			zstd.WithZeroFrames(false),
+		// root, so every oracle must produce the same bytes. zstd output is
+		// stable only for one encoder version and one set of options, so encode
+		// with the frozen copy in llo/internal/zstdenc, which a dependency bump
+		// cannot move, and pin the options that shape the output.
+		// Test_Golden_Precursor and Test_Golden_KVRecords catch any change.
+		// Decoding stays on the upstream module: any conforming decoder reads
+		// these frames, and it keeps receiving fixes for untrusted input.
+		encoder, err := zstdenc.NewWriter(nil,
+			zstdenc.WithEncoderLevel(zstdenc.SpeedDefault),
+			zstdenc.WithEncoderCRC(true),
+			zstdenc.WithZeroFrames(false),
 			// Declare the content size in every frame. Without it zstd omits
 			// the size from frames under 256 bytes, and decodeFramedPayload
 			// rejects a frame that does not declare it.
-			zstd.WithSingleSegment(true),
+			zstdenc.WithSingleSegment(true),
 		)
 		if err != nil {
 			payloadZstdErr = fmt.Errorf("new zstd encoder: %w", err)

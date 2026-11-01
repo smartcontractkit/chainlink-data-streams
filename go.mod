@@ -3,6 +3,7 @@ module github.com/smartcontractkit/chainlink-data-streams
 go 1.27.1
 
 require (
+	github.com/cespare/xxhash/v2 v2.3.0
 	github.com/esote/minmaxheap v1.0.0
 	github.com/ethereum/go-ethereum v1.17.4
 	github.com/expr-lang/expr v1.17.8
@@ -46,7 +47,6 @@ require (
 	github.com/buger/jsonparser v1.2.0 // indirect
 	github.com/cenkalti/backoff v2.2.1+incompatible // indirect
 	github.com/cenkalti/backoff/v5 v5.0.3 // indirect
-	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/cloudevents/sdk-go/binding/format/protobuf/v2 v2.16.2 // indirect
 	github.com/cloudevents/sdk-go/v2 v2.16.2 // indirect
 	github.com/cockroachdb/errors v1.11.3 // indirect
@@ -200,10 +200,3 @@ require (
 	gopkg.in/yaml.v2 v2.4.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
-
-// The v31 precursor is zstd compressed and libocr signs a digest of the framed
-// bytes, so every oracle must compress identically. zstd output is only
-// guaranteed stable within one klauspost/compress version. Bump requires
-// passing Test_Golden_Precursor or updating it with a controlled rollout
-// and LLOProtocolVersion gate switch.
-replace github.com/klauspost/compress => github.com/klauspost/compress v1.20.3
