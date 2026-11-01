@@ -219,8 +219,8 @@ func Test_Reports_RebuildsEvictedGeneration(t *testing.T) {
 // seqNr, without inserting one: Load only calls build on a miss, and a build
 // that fails stores nothing.
 func cachedGeneration(c *protocol.ChannelCache, seqNr uint64) bool {
-	_, err := c.Load(seqNr, func() (llotypes.ChannelDefinitions, error) {
+	_, err := c.Load(seqNr, func() ([]byte, error) {
 		return nil, errors.New("not cached")
-	})
+	}, decodeChannelState)
 	return err == nil
 }

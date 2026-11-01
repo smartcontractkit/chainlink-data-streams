@@ -228,18 +228,23 @@ message LLOBlobPayloadProto {
 // from, so that consumers can tell whether their decoded-opts cache already
 // matches these definitions.
 //
+// channelState is that record as stored under c/defs, an encoded
+// LLOChannelStateProto. It is carried as bytes so a consumer whose cache holds
+// the generation for channelStateSeqNr skips decoding it, and one that does not
+// decodes it exactly as the KeyValueState read does.
+//
 // reportableChannelIDs is the reportability decision StateTransition made for
 // the round, so Reports emits exactly the channels whose watermark advances.
 // streamAggregates carries only the values those channels report.
 //
 // NOTE: must serialize deterministically, hence use of repeated tuple instead of
-// maps. channelDefinitions, validAfterNanoseconds and reportableChannelIDs MUST
-// be sorted ascending by channelID; streamAggregates MUST be sorted ascending by
-// (streamID, aggregator).
+// maps. validAfterNanoseconds and reportableChannelIDs MUST be sorted ascending
+// by channelID; streamAggregates MUST be sorted ascending by (streamID,
+// aggregator).
 message LLOPrecursorProto {
     string lifeCycleStage = 1;
     uint64 observationTimestampNanoseconds = 2;
-    repeated LLOChannelIDAndDefinitionProto channelDefinitions = 3;
+    bytes channelState = 3;
     repeated LLOChannelIDAndValidAfterNanosecondsProto validAfterNanoseconds = 4;
     repeated LLOStreamAggregate streamAggregates = 5;
     uint64 channelStateSeqNr = 6;

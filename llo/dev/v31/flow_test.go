@@ -1182,9 +1182,7 @@ func Test_IsReportable_MinReportIntervalDoesNotOverflow(t *testing.T) {
 		},
 	}
 	support := map[llotypes.ReportFormat]int{llotypes.ReportFormatJSON: 4}
-	gen, err := protocol.NewChannelCache().Load(1, func() (llotypes.ChannelDefinitions, error) {
-		return out.ChannelDefinitions, nil
-	})
+	gen, err := loadDefinitions(protocol.NewChannelCache(), 1, out.ChannelDefinitions)
 	require.NoError(t, err)
 	optsCache := gen.Opts()
 

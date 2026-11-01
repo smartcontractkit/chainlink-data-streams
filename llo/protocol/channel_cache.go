@@ -1,6 +1,7 @@
 package protocol
 
 import (
+	"bytes"
 	"slices"
 	"sync"
 
@@ -30,17 +31,19 @@ const channelGenerationsRetained = 4
 // record by a concurrently running round. That is what keeps report encoding
 // from using opts that are ahead of (or behind) the definitions being reported.
 type ChannelGeneration struct {
-	seqNr uint64
-	defs  llotypes.ChannelDefinitions
-	opts  *OptsCache
+	seqNr  uint64
+	record []byte
+	defs   llotypes.ChannelDefinitions
+	opts   *OptsCache
 }
 
-func newChannelGeneration(seqNr uint64, defs llotypes.ChannelDefinitions) *ChannelGeneration {
+func newChannelGeneration(seqNr uint64, record []byte, defs llotypes.ChannelDefinitions) *ChannelGeneration {
 	own := CloneChannelDefinitions(defs)
 	return &ChannelGeneration{
-		seqNr: seqNr,
-		defs:  own,
-		opts:  newSealedOptsCache(own),
+		seqNr:  seqNr,
+		record: bytes.Clone(record),
+		defs:   own,
+		opts:   newSealedOptsCache(own),
 	}
 }
 
@@ -48,6 +51,12 @@ func newChannelGeneration(seqNr uint64, defs llotypes.ChannelDefinitions) *Chann
 // from.
 func (g *ChannelGeneration) SeqNr() uint64 {
 	return g.seqNr
+}
+
+// Record returns the encoded channel-definitions record the definitions were
+// decoded from. Read-only by contract, like Definitions.
+func (g *ChannelGeneration) Record() []byte {
+	return g.record
 }
 
 // Definitions returns the snapshot's channel definitions. They are read-only by
@@ -84,31 +93,36 @@ func NewChannelCache() *ChannelCache {
 	}
 }
 
-// Load returns the generation for seqNr, calling build only on a miss. build
-// supplies the definitions of that record; they are deep-copied into the
-// generation, so build may return memory it does not own exclusively (a decoded
-// KV record, a precursor's definitions) without the generation aliasing it.
-func (c *ChannelCache) Load(seqNr uint64, build func() (llotypes.ChannelDefinitions, error)) (*ChannelGeneration, error) {
-	if c == nil {
-		defs, err := build()
-		if err != nil {
-			return nil, err
-		}
-		return newChannelGeneration(seqNr, defs), nil
-	}
-
+// Load returns the generation for seqNr, reading and decoding its record only
+// on a miss. read supplies the encoded record and decode turns it into
+// definitions. The generation keeps both, so Record is always the exact bytes
+// its definitions were decoded from. Both are copied into the generation, so
+// read may return memory it does not own exclusively (a KV read, a precursor)
+// without the generation aliasing it.
+func (c *ChannelCache) Load(seqNr uint64, read func() ([]byte, error), decode func([]byte) (llotypes.ChannelDefinitions, error)) (*ChannelGeneration, error) {
 	if gen, ok := c.get(seqNr); ok {
 		return gen, nil
 	}
 
-	defs, err := build()
+	record, err := read()
 	if err != nil {
 		return nil, err
 	}
-	return c.store(newChannelGeneration(seqNr, defs)), nil
+	defs, err := decode(record)
+	if err != nil {
+		return nil, err
+	}
+	gen := newChannelGeneration(seqNr, record, defs)
+	if c == nil {
+		return gen, nil
+	}
+	return c.store(gen), nil
 }
 
 func (c *ChannelCache) get(seqNr uint64) (*ChannelGeneration, bool) {
+	if c == nil {
+		return nil, false
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	gen, ok := c.gens[seqNr]

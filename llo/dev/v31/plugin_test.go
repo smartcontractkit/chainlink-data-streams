@@ -456,8 +456,7 @@ func Test_Precursor_RoundTrip_And_Determinism(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, b1, b2, "precursor encoding must be deterministic")
 
-	got, err := decodePrecursor(b1)
-	require.NoError(t, err)
+	got := decodeResolvedPrecursor(t, b1)
 	assert.Equal(t, p.LifeCycleStage, got.LifeCycleStage)
 	assert.Equal(t, p.ObservationTimestampNanoseconds, got.ObservationTimestampNanoseconds)
 	assert.Equal(t, p.ValidAfterNanoseconds, got.ValidAfterNanoseconds)
@@ -1055,9 +1054,7 @@ func Test_CalculatedStreams(t *testing.T) {
 	}}
 
 	channelCache := protocol.NewChannelCache()
-	generation, err := channelCache.Load(1, func() (llotypes.ChannelDefinitions, error) {
-		return definitions, nil
-	})
+	generation, err := loadDefinitions(channelCache, 1, definitions)
 	require.NoError(t, err)
 
 	prec := precursor{
@@ -1762,20 +1759,17 @@ func Test_Precursor_ReportableChannelIDs_RoundTrip(t *testing.T) {
 	require.ErrorContains(t, err, "reportable channel 4 has no definition")
 
 	encodeRaw := func(ids ...uint32) []byte {
-		pb := &protocol.LLOPrecursorProto{ReportableChannelIDs: ids}
-		for id := range defs {
-			pb.ChannelDefinitions = append(pb.ChannelDefinitions, &protocol.LLOChannelIDAndDefinitionProto{
-				ChannelID:         id,
-				ChannelDefinition: protocol.ChannelDefinitionToProto(defs[id]),
-			})
-		}
-		b, err := proto.Marshal(pb)
+		state, err := encodeChannelState(defs)
+		require.NoError(t, err)
+		b, err := proto.Marshal(&protocol.LLOPrecursorProto{ReportableChannelIDs: ids, ChannelState: state})
 		require.NoError(t, err)
 		framed, err := framePrecursor(b)
 		require.NoError(t, err)
 		return framed
 	}
-	_, err = decodePrecursor(encodeRaw(4))
+	missing, err := decodePrecursor(encodeRaw(4))
+	require.NoError(t, err)
+	_, err = missing.definitions(protocol.NewChannelCache())
 	require.ErrorContains(t, err, "reportable channel 4 has no definition")
 	// Unsorted or repeated IDs would let Reports emit a channel twice.
 	_, err = decodePrecursor(encodeRaw(2, 1))
@@ -2586,4 +2580,10 @@ func Test_Precursor_ReportedAggregates(t *testing.T) {
 		300: {llotypes.AggregatorMedian: one},
 		999: {llotypes.AggregatorCalculated: one},
 	}, prec.reportedAggregates(nil))
+}
+
+// loadDefinitions loads defs into c under seqNr as an encoded c/defs record,
+// the way StateTransition and Reports load them.
+func loadDefinitions(c *protocol.ChannelCache, seqNr uint64, defs llotypes.ChannelDefinitions) (*protocol.ChannelGeneration, error) {
+	return c.Load(seqNr, func() ([]byte, error) { return encodeChannelState(defs) }, decodeChannelState)
 }

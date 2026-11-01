@@ -107,6 +107,7 @@ func (p *Plugin) StateTransition(ctx context.Context, seqNr uint64, _ ocrtypes.A
 	out := precursor{
 		ObservationTimestampNanoseconds: p.agreedObservationTimestamp(tally.timestampsNanoseconds, prev.observationTimestampNs, seqNr),
 		ChannelDefinitions:              effective,
+		ChannelState:                    prev.channelState,
 		ChannelStateSeqNr:               prev.channelStateSeqNr,
 		ValidAfterNanoseconds:           map[llotypes.ChannelID]uint64{},
 		StreamAggregates:                protocol.StreamAggregates{},

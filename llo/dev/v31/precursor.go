@@ -1,7 +1,6 @@
 package llo
 
 import (
-	"errors"
 	"fmt"
 	"slices"
 	"sort"
@@ -20,7 +19,13 @@ import (
 type precursor struct {
 	LifeCycleStage                  llotypes.LifeCycleStage
 	ObservationTimestampNanoseconds uint64
-	ChannelDefinitions              llotypes.ChannelDefinitions
+	// ChannelDefinitions are the definitions ChannelState encodes. The wire
+	// carries ChannelState only, so a decoded precursor leaves this nil and
+	// Reports resolves it through the channel cache (see definitions).
+	ChannelDefinitions llotypes.ChannelDefinitions
+	// ChannelState is the encoded c/defs record ChannelDefinitions were decoded
+	// from. Nil encodes ChannelDefinitions instead, which yields the same bytes.
+	ChannelState []byte
 	ValidAfterNanoseconds           map[llotypes.ChannelID]uint64
 	StreamAggregates                protocol.StreamAggregates
 	// ChannelStateSeqNr is the c/seqnr of the channel-definitions record that
@@ -55,19 +60,15 @@ func marshalPrecursor(p precursor) ([]byte, error) {
 		LifeCycleStage:                  string(p.LifeCycleStage),
 		ObservationTimestampNanoseconds: p.ObservationTimestampNanoseconds,
 		ChannelStateSeqNr:               p.ChannelStateSeqNr,
+		ChannelState:                    p.ChannelState,
 	}
 
-	if len(p.ChannelDefinitions) > 0 {
-		pb.ChannelDefinitions = make([]*protocol.LLOChannelIDAndDefinitionProto, 0, len(p.ChannelDefinitions))
-		for id, cd := range p.ChannelDefinitions {
-			pb.ChannelDefinitions = append(pb.ChannelDefinitions, &protocol.LLOChannelIDAndDefinitionProto{
-				ChannelID:         id,
-				ChannelDefinition: protocol.ChannelDefinitionToProto(cd),
-			})
+	if pb.ChannelState == nil && len(p.ChannelDefinitions) > 0 {
+		b, err := encodeChannelState(p.ChannelDefinitions)
+		if err != nil {
+			return nil, err
 		}
-		sort.Slice(pb.ChannelDefinitions, func(i, j int) bool {
-			return pb.ChannelDefinitions[i].ChannelID < pb.ChannelDefinitions[j].ChannelID
-		})
+		pb.ChannelState = b
 	}
 
 	if len(p.ValidAfterNanoseconds) > 0 {
@@ -108,7 +109,9 @@ func marshalPrecursor(p precursor) ([]byte, error) {
 	if len(p.ReportableChannelIDs) > 0 {
 		pb.ReportableChannelIDs = make([]uint32, 0, len(p.ReportableChannelIDs))
 		for _, id := range p.ReportableChannelIDs {
-			if _, ok := p.ChannelDefinitions[id]; !ok {
+			// A decoded precursor holds its definitions only encoded, and
+			// definitions checks them when Reports resolves them.
+			if _, ok := p.ChannelDefinitions[id]; !ok && p.ChannelDefinitions != nil {
 				return nil, fmt.Errorf("reportable channel %d has no definition", id)
 			}
 			pb.ReportableChannelIDs = append(pb.ReportableChannelIDs, id)
@@ -124,10 +127,12 @@ func marshalPrecursor(p precursor) ([]byte, error) {
 }
 
 // decodePrecursor decodes a precursor this oracle produced, or one fetched from
-// a peer that libocr verified against the certified digest and size limit. Its
-// channel definitions are the committed set, so the per-definition stream and
-// opts caps are not applied here: they are admission-only, and rejecting a
-// committed definition would fail Reports on every oracle.
+// a peer that libocr verified against the certified digest and size limit. The
+// channel definitions are left encoded in ChannelState: Reports resolves them
+// through the channel cache, which in steady state already holds them. They are
+// the committed set, so the per-definition stream and opts caps are not applied
+// to them: they are admission-only, and rejecting a committed definition would
+// fail Reports on every oracle.
 func decodePrecursor(b ocr3_1types.ReportsPlusPrecursor) (precursor, error) {
 	raw, err := decodeFramedPayload(b, maxDecompressedPrecursorBytes, "precursor")
 	if err != nil {
@@ -141,32 +146,23 @@ func decodePrecursor(b ocr3_1types.ReportsPlusPrecursor) (precursor, error) {
 		LifeCycleStage:                  llotypes.LifeCycleStage(pb.LifeCycleStage),
 		ObservationTimestampNanoseconds: pb.ObservationTimestampNanoseconds,
 		ChannelStateSeqNr:               pb.ChannelStateSeqNr,
-		ChannelDefinitions:              llotypes.ChannelDefinitions{},
+		ChannelState:                    pb.ChannelState,
 		ValidAfterNanoseconds:           map[llotypes.ChannelID]uint64{},
 		StreamAggregates:                protocol.StreamAggregates{},
-	}
-	for _, cd := range pb.ChannelDefinitions {
-		if cd.ChannelDefinition == nil {
-			return precursor{}, errors.New("nil channel definition in precursor")
-		}
-		p.ChannelDefinitions[cd.ChannelID] = protocol.ChannelDefinitionFromProto(cd.ChannelDefinition)
 	}
 	for _, va := range pb.ValidAfterNanoseconds {
 		p.ValidAfterNanoseconds[va.ChannelID] = va.ValidAfterNanoseconds
 	}
-	// Every reportable channel must have a definition and appear once, in
-	// ascending order, so Reports emits each at most once. The collections are
-	// otherwise left unbounded on purpose: the precursor is certified state,
-	// libocr bounds its size, and the promotion round legitimately carries more
-	// validAfter entries than channels.
+	// Every reportable channel must appear once, in ascending order, so Reports
+	// emits each at most once. definitions checks that each has a definition.
+	// The collections are otherwise left unbounded on purpose: the precursor is
+	// certified state, libocr bounds its size, and the promotion round
+	// legitimately carries more validAfter entries than channels.
 	if len(pb.ReportableChannelIDs) > 0 {
 		p.ReportableChannelIDs = make([]llotypes.ChannelID, 0, len(pb.ReportableChannelIDs))
 		for i, id := range pb.ReportableChannelIDs {
 			if i > 0 && id <= pb.ReportableChannelIDs[i-1] {
 				return precursor{}, fmt.Errorf("reportable channel IDs not strictly ascending at index %d", i)
-			}
-			if _, ok := p.ChannelDefinitions[id]; !ok {
-				return precursor{}, fmt.Errorf("reportable channel %d has no definition", id)
 			}
 			p.ReportableChannelIDs = append(p.ReportableChannelIDs, id)
 		}
@@ -182,6 +178,26 @@ func decodePrecursor(b ocr3_1types.ReportsPlusPrecursor) (precursor, error) {
 		p.StreamAggregates[sa.StreamID][llotypes.Aggregator(sa.Aggregator)] = sv
 	}
 	return p, nil
+}
+
+// definitions resolves the precursor's channel definitions through cache,
+// decoding ChannelState only on a miss, and sets ChannelDefinitions to them.
+// The generation for ChannelStateSeqNr is a pure function of that sequence
+// number, so a hit serves the same definitions ChannelState decodes to. The
+// returned generation carries the opts decoded from exactly these definitions.
+func (o *precursor) definitions(cache *protocol.ChannelCache) (*protocol.ChannelGeneration, error) {
+	gen, err := cache.Load(o.ChannelStateSeqNr, func() ([]byte, error) { return o.ChannelState, nil }, decodeChannelState)
+	if err != nil {
+		return nil, fmt.Errorf("error loading channel generation: %w", err)
+	}
+	defs := gen.Definitions()
+	for _, id := range o.ReportableChannelIDs {
+		if _, ok := defs[id]; !ok {
+			return nil, fmt.Errorf("reportable channel %d has no definition", id)
+		}
+	}
+	o.ChannelDefinitions = defs
+	return gen, nil
 }
 
 // reportedAggregates returns the aggregates the reportable channels report,

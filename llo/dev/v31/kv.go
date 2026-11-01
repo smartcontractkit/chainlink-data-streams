@@ -140,6 +140,9 @@ type kvState struct {
 	// concurrently-running round from swapping decoded opts out from under this
 	// one; always read opts from here rather than from plugin-wide state.
 	opts *protocol.OptsCache
+	// channelState is the encoded c/defs record channelDefinitions were decoded
+	// from, owned by the same generation. The precursor carries it as is.
+	channelState []byte
 	// codecSupport[oracleID] is the report formats that oracle last advertised
 	// a codec for. See writeCodecSupport for why it is remembered per oracle
 	// instead of being counted per round.
@@ -211,14 +214,15 @@ func loadColdKVState(r ocr3_1types.KeyValueStateReader, cache *protocol.ChannelC
 		s.channelStateSeqNr = binary.BigEndian.Uint64(seqNrBytes)
 	}
 
-	gen, err := cache.Load(s.channelStateSeqNr, func() (llotypes.ChannelDefinitions, error) {
-		return readChannelState(r)
-	})
+	gen, err := cache.Load(s.channelStateSeqNr, func() ([]byte, error) {
+		return readKVRecord(r, keyChannelState, "channel state")
+	}, decodeChannelState)
 	if err != nil {
 		return nil, err
 	}
 	s.channelDefinitions = gen.Definitions()
 	s.opts = gen.Opts()
+	s.channelState = gen.Record()
 
 	support, err := readCodecSupport(r)
 	if err != nil {
@@ -302,6 +306,13 @@ func readChannelState(r ocr3_1types.KeyValueStateReader) (llotypes.ChannelDefini
 	if err != nil {
 		return nil, err
 	}
+	return decodeChannelState(b)
+}
+
+// decodeChannelState decodes an encoded c/defs record. The KeyValueState read
+// and Reports both decode through it, so a record decodes the same wherever it
+// comes from.
+func decodeChannelState(b []byte) (llotypes.ChannelDefinitions, error) {
 	defs := llotypes.ChannelDefinitions{}
 	if b == nil {
 		return defs, nil
@@ -378,6 +389,18 @@ func writeLifecycle(w ocr3_1types.KeyValueStateReadWriter, stage llotypes.LifeCy
 // sequence number of this write. Call it only when the definitions actually
 // changed, so that readers can keep serving their in-memory copy.
 func writeChannelState(w ocr3_1types.KeyValueStateReadWriter, seqNr uint64, defs llotypes.ChannelDefinitions) error {
+	b, err := encodeChannelState(defs)
+	if err != nil {
+		return err
+	}
+	if err := writeKVRecord(w, keyChannelState, b, "channel state"); err != nil {
+		return err
+	}
+	return w.Write(keyChannelSeqNr, beU64(seqNr))
+}
+
+// encodeChannelState encodes the definitions as a c/defs record.
+func encodeChannelState(defs llotypes.ChannelDefinitions) ([]byte, error) {
 	pb := &protocol.LLOChannelStateProto{
 		ChannelDefinitions: make([]*protocol.LLOChannelIDAndDefinitionProto, 0, len(defs)),
 	}
@@ -392,12 +415,9 @@ func writeChannelState(w ocr3_1types.KeyValueStateReadWriter, seqNr uint64, defs
 	})
 	b, err := deterministicMarshal.Marshal(pb)
 	if err != nil {
-		return fmt.Errorf("marshal channel state: %w", err)
+		return nil, fmt.Errorf("marshal channel state: %w", err)
 	}
-	if err := writeKVRecord(w, keyChannelState, b, "channel state"); err != nil {
-		return err
-	}
-	return w.Write(keyChannelSeqNr, beU64(seqNr))
+	return b, nil
 }
 
 // writeHotState persists the per-round state: observation timestamp, validAfter

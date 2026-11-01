@@ -100,16 +100,20 @@ func Test_Golden_Precursor(t *testing.T) {
 			// regenerated file.
 			want, err := os.ReadFile(filepath.Join(goldenDir, tc.name))
 			require.NoError(t, err)
-			got, err := decodePrecursor(want)
-			require.NoError(t, err)
-			require.Equal(t, normalizePrecursor(tc.p), got)
+			require.Equal(t, normalizePrecursor(t, tc.p), decodeResolvedPrecursor(t, want))
 		})
 	}
 }
 
 // normalizePrecursor fills in the empty maps decodePrecursor always returns, so
 // that a nil-map input compares equal to its decoded form.
-func normalizePrecursor(p precursor) precursor {
+func normalizePrecursor(t *testing.T, p precursor) precursor {
+	t.Helper()
+	if p.ChannelState == nil && len(p.ChannelDefinitions) > 0 {
+		b, err := encodeChannelState(p.ChannelDefinitions)
+		require.NoError(t, err)
+		p.ChannelState = b
+	}
 	if p.ChannelDefinitions == nil {
 		p.ChannelDefinitions = llotypes.ChannelDefinitions{}
 	}
@@ -119,6 +123,17 @@ func normalizePrecursor(p precursor) precursor {
 	if p.StreamAggregates == nil {
 		p.StreamAggregates = protocol.StreamAggregates{}
 	}
+	return p
+}
+
+// decodeResolvedPrecursor decodes b and resolves its channel definitions with
+// a fresh cache, giving the precursor Reports works from.
+func decodeResolvedPrecursor(t *testing.T, b []byte) precursor {
+	t.Helper()
+	p, err := decodePrecursor(b)
+	require.NoError(t, err)
+	_, err = p.definitions(protocol.NewChannelCache())
+	require.NoError(t, err)
 	return p
 }
 

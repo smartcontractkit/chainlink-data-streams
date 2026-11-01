@@ -180,9 +180,7 @@ func Test_decodePrecursor_Framing(t *testing.T) {
 		require.ErrorContains(t, err, "unknown precursor codec")
 	})
 	t.Run("raw codec decodes", func(t *testing.T) {
-		got, err := decodePrecursor(append([]byte{payloadCodecRaw}, raw...))
-		require.NoError(t, err)
-		require.Equal(t, normalizePrecursor(goldenPrecursor()), got)
+		require.Equal(t, normalizePrecursor(t, goldenPrecursor()), decodeResolvedPrecursor(t, append([]byte{payloadCodecRaw}, raw...)))
 	})
 	t.Run("declared size above the bound is rejected", func(t *testing.T) {
 		c, err := getPayloadCompressor()

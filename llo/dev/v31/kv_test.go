@@ -271,9 +271,7 @@ func Test_DeferredDefinitions_TakeEffectNextRound(t *testing.T) {
 		}
 		raw, err := p.StateTransition(ctx, seqNr, ocrtypes.AttributedQuery{}, aos, kv, testBlobs)
 		require.NoError(t, err)
-		prec, err := decodePrecursor(raw)
-		require.NoError(t, err)
-		return prec
+		return decodeResolvedPrecursor(t, raw)
 	}
 
 	_, err := p.StateTransition(ctx, 1, ocrtypes.AttributedQuery{}, []ocrtypes.AttributedObservation{ao(0, nil), ao(1, nil), ao(2, nil)}, kv, testBlobs)

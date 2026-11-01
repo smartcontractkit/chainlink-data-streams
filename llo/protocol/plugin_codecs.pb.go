@@ -1346,19 +1346,24 @@ func (x *LLOBlobPayloadProto) GetStreamValues() map[uint32]*LLOStreamValue {
 // from, so that consumers can tell whether their decoded-opts cache already
 // matches these definitions.
 //
+// channelState is that record as stored under c/defs, an encoded
+// LLOChannelStateProto. It is carried as bytes so a consumer whose cache holds
+// the generation for channelStateSeqNr skips decoding it, and one that does not
+// decodes it exactly as the KeyValueState read does.
+//
 // reportableChannelIDs is the reportability decision StateTransition made for
 // the round, so Reports emits exactly the channels whose watermark advances.
 // streamAggregates carries only the values those channels report.
 //
 // NOTE: must serialize deterministically, hence use of repeated tuple instead of
-// maps. channelDefinitions, validAfterNanoseconds and reportableChannelIDs MUST
-// be sorted ascending by channelID; streamAggregates MUST be sorted ascending by
-// (streamID, aggregator).
+// maps. validAfterNanoseconds and reportableChannelIDs MUST be sorted ascending
+// by channelID; streamAggregates MUST be sorted ascending by (streamID,
+// aggregator).
 type LLOPrecursorProto struct {
 	state                           protoimpl.MessageState                       `protogen:"open.v1"`
 	LifeCycleStage                  string                                       `protobuf:"bytes,1,opt,name=lifeCycleStage,proto3" json:"lifeCycleStage,omitempty"`
 	ObservationTimestampNanoseconds uint64                                       `protobuf:"varint,2,opt,name=observationTimestampNanoseconds,proto3" json:"observationTimestampNanoseconds,omitempty"`
-	ChannelDefinitions              []*LLOChannelIDAndDefinitionProto            `protobuf:"bytes,3,rep,name=channelDefinitions,proto3" json:"channelDefinitions,omitempty"`
+	ChannelState                    []byte                                       `protobuf:"bytes,3,opt,name=channelState,proto3" json:"channelState,omitempty"`
 	ValidAfterNanoseconds           []*LLOChannelIDAndValidAfterNanosecondsProto `protobuf:"bytes,4,rep,name=validAfterNanoseconds,proto3" json:"validAfterNanoseconds,omitempty"`
 	StreamAggregates                []*LLOStreamAggregate                        `protobuf:"bytes,5,rep,name=streamAggregates,proto3" json:"streamAggregates,omitempty"`
 	ChannelStateSeqNr               uint64                                       `protobuf:"varint,6,opt,name=channelStateSeqNr,proto3" json:"channelStateSeqNr,omitempty"`
@@ -1411,9 +1416,9 @@ func (x *LLOPrecursorProto) GetObservationTimestampNanoseconds() uint64 {
 	return 0
 }
 
-func (x *LLOPrecursorProto) GetChannelDefinitions() []*LLOChannelIDAndDefinitionProto {
+func (x *LLOPrecursorProto) GetChannelState() []byte {
 	if x != nil {
-		return x.ChannelDefinitions
+		return x.ChannelState
 	}
 	return nil
 }
@@ -1652,11 +1657,11 @@ const file_plugin_codecs_proto_rawDesc = "" +
 	"\fstreamValues\x18\x02 \x03(\v2).v1.LLOBlobPayloadProto.StreamValuesEntryR\fstreamValues\x1aS\n" +
 	"\x11StreamValuesEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\rR\x03key\x12(\n" +
-	"\x05value\x18\x02 \x01(\v2\x12.v1.LLOStreamValueR\x05value:\x028\x01\"\xe4\x03\n" +
+	"\x05value\x18\x02 \x01(\v2\x12.v1.LLOStreamValueR\x05value:\x028\x01\"\xb4\x03\n" +
 	"\x11LLOPrecursorProto\x12&\n" +
 	"\x0elifeCycleStage\x18\x01 \x01(\tR\x0elifeCycleStage\x12H\n" +
-	"\x1fobservationTimestampNanoseconds\x18\x02 \x01(\x04R\x1fobservationTimestampNanoseconds\x12R\n" +
-	"\x12channelDefinitions\x18\x03 \x03(\v2\".v1.LLOChannelIDAndDefinitionProtoR\x12channelDefinitions\x12c\n" +
+	"\x1fobservationTimestampNanoseconds\x18\x02 \x01(\x04R\x1fobservationTimestampNanoseconds\x12\"\n" +
+	"\fchannelState\x18\x03 \x01(\fR\fchannelState\x12c\n" +
 	"\x15validAfterNanoseconds\x18\x04 \x03(\v2-.v1.LLOChannelIDAndValidAfterNanosecondsProtoR\x15validAfterNanoseconds\x12B\n" +
 	"\x10streamAggregates\x18\x05 \x03(\v2\x16.v1.LLOStreamAggregateR\x10streamAggregates\x12,\n" +
 	"\x11channelStateSeqNr\x18\x06 \x01(\x04R\x11channelStateSeqNr\x122\n" +
@@ -1730,18 +1735,17 @@ var file_plugin_codecs_proto_depIdxs = []int32{
 	15, // 16: v1.LLOHotStateProto.validAfterNanoseconds:type_name -> v1.LLOChannelIDAndValidAfterNanosecondsProto
 	16, // 17: v1.LLOHotStateProto.streamAggregates:type_name -> v1.LLOStreamAggregate
 	25, // 18: v1.LLOBlobPayloadProto.streamValues:type_name -> v1.LLOBlobPayloadProto.StreamValuesEntry
-	13, // 19: v1.LLOPrecursorProto.channelDefinitions:type_name -> v1.LLOChannelIDAndDefinitionProto
-	15, // 20: v1.LLOPrecursorProto.validAfterNanoseconds:type_name -> v1.LLOChannelIDAndValidAfterNanosecondsProto
-	16, // 21: v1.LLOPrecursorProto.streamAggregates:type_name -> v1.LLOStreamAggregate
-	22, // 22: v1.LLOCodecSupportProto.oracles:type_name -> v1.LLOOracleCodecSupportProto
-	8,  // 23: v1.LLOObservationProto.UpdateChannelDefinitionsEntry.value:type_name -> v1.LLOChannelDefinitionProto
-	2,  // 24: v1.LLOObservationProto.StreamValuesEntry.value:type_name -> v1.LLOStreamValue
-	2,  // 25: v1.LLOBlobPayloadProto.StreamValuesEntry.value:type_name -> v1.LLOStreamValue
-	26, // [26:26] is the sub-list for method output_type
-	26, // [26:26] is the sub-list for method input_type
-	26, // [26:26] is the sub-list for extension type_name
-	26, // [26:26] is the sub-list for extension extendee
-	0,  // [0:26] is the sub-list for field type_name
+	15, // 19: v1.LLOPrecursorProto.validAfterNanoseconds:type_name -> v1.LLOChannelIDAndValidAfterNanosecondsProto
+	16, // 20: v1.LLOPrecursorProto.streamAggregates:type_name -> v1.LLOStreamAggregate
+	22, // 21: v1.LLOCodecSupportProto.oracles:type_name -> v1.LLOOracleCodecSupportProto
+	8,  // 22: v1.LLOObservationProto.UpdateChannelDefinitionsEntry.value:type_name -> v1.LLOChannelDefinitionProto
+	2,  // 23: v1.LLOObservationProto.StreamValuesEntry.value:type_name -> v1.LLOStreamValue
+	2,  // 24: v1.LLOBlobPayloadProto.StreamValuesEntry.value:type_name -> v1.LLOStreamValue
+	25, // [25:25] is the sub-list for method output_type
+	25, // [25:25] is the sub-list for method input_type
+	25, // [25:25] is the sub-list for extension type_name
+	25, // [25:25] is the sub-list for extension extendee
+	0,  // [0:25] is the sub-list for field type_name
 }
 
 func init() { file_plugin_codecs_proto_init() }
