@@ -73,6 +73,10 @@ func getPayloadCompressor() (payloadCompressor, error) {
 			zstd.WithEncoderLevel(zstd.SpeedDefault),
 			zstd.WithEncoderCRC(true),
 			zstd.WithZeroFrames(false),
+			// Declare the content size in every frame. Without it zstd omits
+			// the size from frames under 256 bytes, and decodeFramedPayload
+			// rejects a frame that does not declare it.
+			zstd.WithSingleSegment(true),
 		)
 		if err != nil {
 			payloadZstdErr = fmt.Errorf("new zstd encoder: %w", err)
@@ -125,9 +129,9 @@ func encodeFramedPayload(raw []byte, maxRaw, maxFramed int, what string) ([]byte
 }
 
 // decodeFramedPayload reverses encodeFramedPayload. The payload is untrusted,
-// so the decompressed size is bounded by maxOut: cheaply up front via the zstd
-// frame header when it declares a content size, and during decompression via
-// the capacity of the destination buffer in case it does not.
+// so the decompressed size is bounded by maxOut up front via the content size
+// the zstd frame header declares, and during decompression via the capacity of
+// the destination buffer, which is that declared size.
 func decodeFramedPayload(payload []byte, maxOut int, what string) ([]byte, error) {
 	if len(payload) == 0 {
 		return nil, fmt.Errorf("empty %s", what)
@@ -147,25 +151,23 @@ func decodeFramedPayload(payload []byte, maxOut int, what string) ([]byte, error
 		if err != nil {
 			return nil, err
 		}
-		// Reject an oversized frame before spending decompression work on it.
-		// A hostile peer can omit or understate the declared size, so this is
-		// an optimization, not the enforcement point.
+		// encodeFramedPayload always declares the content size. Require it, so
+		// a tiny frame cannot make every decode allocate the whole budget, and
+		// reject an oversized frame before spending decompression work on it.
 		var hdr zstd.Header
 		if err := hdr.Decode(body); err != nil {
 			return nil, fmt.Errorf("decode %s header: %w", what, err)
 		}
-		if hdr.HasFCS && hdr.FrameContentSize > uint64(maxOut) {
+		if !hdr.HasFCS {
+			return nil, fmt.Errorf("%s frame does not declare its content size", what)
+		}
+		if hdr.FrameContentSize > uint64(maxOut) {
 			return nil, fmt.Errorf("declared decompressed %s too large: %d > %d bytes", what, hdr.FrameContentSize, maxOut)
 		}
-		// The decoder stops once the output outgrows the destination capacity,
-		// so the per-call budget holds while decompressing, not only after.
-		// encodeFramedPayload always declares the content size, so an honest
-		// payload allocates exactly its size here.
-		capacity := maxOut
-		if hdr.HasFCS {
-			capacity = int(hdr.FrameContentSize) //nolint:gosec // bounded by maxOut above
-		}
-		out, err := c.decoder.DecodeAll(body, make([]byte, 0, capacity))
+		// A hostile peer can understate the declared size. The decoder stops
+		// once the output outgrows the destination capacity, so the declared
+		// size holds while decompressing, not only after.
+		out, err := c.decoder.DecodeAll(body, make([]byte, 0, int(hdr.FrameContentSize))) //nolint:gosec // bounded by maxOut above
 		if err != nil {
 			return nil, fmt.Errorf("decompress %s: %w", what, err)
 		}

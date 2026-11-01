@@ -110,9 +110,9 @@ func Test_decodeBlobPayload_Errors(t *testing.T) {
 	})
 }
 
-func Test_decodeBlobPayload_UndeclaredSize(t *testing.T) {
+func Test_decodeBlobPayload_RejectsUndeclaredSize(t *testing.T) {
 	// A streaming encoder does not know the content size up front, so the frame
-	// omits it and the header check cannot reject the payload.
+	// omits it. Decoding it would need a buffer sized to the whole budget.
 	var buf bytes.Buffer
 	buf.WriteByte(payloadCodecZstd)
 	enc, err := zstd.NewWriter(&buf)
@@ -125,23 +125,45 @@ func Test_decodeBlobPayload_UndeclaredSize(t *testing.T) {
 	require.NoError(t, hdr.Decode(buf.Bytes()[1:]))
 	require.False(t, hdr.HasFCS)
 
-	// Stopped by the decoder, not by the length check after it.
-	_, err = decodeBlobPayload(buf.Bytes(), 4096)
-	require.ErrorIs(t, err, zstd.ErrDecoderSizeExceeded)
-
-	got, err := decodeBlobPayload(buf.Bytes(), 1<<20)
-	require.NoError(t, err)
-	assert.Len(t, got, 1<<20)
+	_, err = decodeBlobPayload(buf.Bytes(), 1<<20)
+	require.ErrorContains(t, err, "frame does not declare its content size")
 }
 
-func Test_encodeBlobPayload_DeclaresContentSize(t *testing.T) {
+func Test_decodeBlobPayload_RejectsUnderstatedSize(t *testing.T) {
 	framed, err := encodeBlobPayload(make([]byte, 4096))
 	require.NoError(t, err)
 	require.Equal(t, payloadCodecZstd, framed[0])
-	var hdr zstd.Header
+
+	// Rewrite the declared size to 1024 without touching the blocks.
+	hostile, err := zstd.NewWriter(nil, zstd.WithEncoderCRC(true), zstd.WithSingleSegment(true))
+	require.NoError(t, err)
+	small := hostile.EncodeAll(make([]byte, 1024), nil)
+	var smallHdr, hdr zstd.Header
+	require.NoError(t, smallHdr.Decode(small))
 	require.NoError(t, hdr.Decode(framed[1:]))
-	require.True(t, hdr.HasFCS)
-	assert.Equal(t, uint64(4096), hdr.FrameContentSize)
+	require.Equal(t, smallHdr.HeaderSize, hdr.HeaderSize)
+	understated := append([]byte{payloadCodecZstd}, small[:smallHdr.HeaderSize]...)
+	understated = append(understated, framed[1+hdr.HeaderSize:]...)
+
+	// Stopped while decompressing, not by the length check after it. A single
+	// segment frame sizes its window to the declared size, so the window check
+	// fires before the capacity limit.
+	_, err = decodeBlobPayload(understated, 1<<20)
+	require.ErrorContains(t, err, "decompress blob payload")
+}
+
+func Test_encodeBlobPayload_DeclaresContentSize(t *testing.T) {
+	// zstd omits the size from frames under 256 bytes unless they are single
+	// segment, so cover both sides of that boundary.
+	for _, n := range []int{64, 255, 256, 4096} {
+		framed, err := encodeBlobPayload(make([]byte, n))
+		require.NoError(t, err)
+		require.Equal(t, payloadCodecZstd, framed[0], "n=%d", n)
+		var hdr zstd.Header
+		require.NoError(t, hdr.Decode(framed[1:]))
+		require.True(t, hdr.HasFCS, "n=%d", n)
+		assert.Equal(t, uint64(n), hdr.FrameContentSize, "n=%d", n)
+	}
 }
 
 func Test_encodeBlobPayload_RejectsOversized(t *testing.T) {
