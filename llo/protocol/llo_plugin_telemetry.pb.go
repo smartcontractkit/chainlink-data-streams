@@ -39,8 +39,14 @@ type LLOOutcomeTelemetry struct {
 	// 2*aggregationFaultTolerance+1. Zero in LLO v30, which derives the floor
 	// from the consensus F instead.
 	MinContributions uint32 `protobuf:"varint,12,opt,name=min_contributions,json=minContributions,proto3" json:"min_contributions,omitempty"`
-	unknownFields    protoimpl.UnknownFields
-	sizeCache        protoimpl.SizeCache
+	// Stream value freshness, LLO v31 only: streams whose aggregation left out
+	// stale contributions, streams that fell back to every contribution because
+	// the fresh ones missed min_contributions, and contributions judged stale.
+	StreamsFiltered    uint32 `protobuf:"varint,13,opt,name=streams_filtered,json=streamsFiltered,proto3" json:"streams_filtered,omitempty"`
+	StreamsFallenBack  uint32 `protobuf:"varint,14,opt,name=streams_fallen_back,json=streamsFallenBack,proto3" json:"streams_fallen_back,omitempty"`
+	ContributionsStale uint32 `protobuf:"varint,15,opt,name=contributions_stale,json=contributionsStale,proto3" json:"contributions_stale,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
 }
 
 func (x *LLOOutcomeTelemetry) Reset() {
@@ -132,6 +138,27 @@ func (x *LLOOutcomeTelemetry) GetDonId() uint32 {
 func (x *LLOOutcomeTelemetry) GetMinContributions() uint32 {
 	if x != nil {
 		return x.MinContributions
+	}
+	return 0
+}
+
+func (x *LLOOutcomeTelemetry) GetStreamsFiltered() uint32 {
+	if x != nil {
+		return x.StreamsFiltered
+	}
+	return 0
+}
+
+func (x *LLOOutcomeTelemetry) GetStreamsFallenBack() uint32 {
+	if x != nil {
+		return x.StreamsFallenBack
+	}
+	return 0
+}
+
+func (x *LLOOutcomeTelemetry) GetContributionsStale() uint32 {
+	if x != nil {
+		return x.ContributionsStale
 	}
 	return 0
 }
@@ -445,7 +472,7 @@ var File_llo_plugin_telemetry_proto protoreflect.FileDescriptor
 
 const file_llo_plugin_telemetry_proto_rawDesc = "" +
 	"\n" +
-	"\x1allo_plugin_telemetry.proto\x12\x02v1\x1a\x13plugin_codecs.proto\"\xc8\x06\n" +
+	"\x1allo_plugin_telemetry.proto\x12\x02v1\x1a\x13plugin_codecs.proto\"\xd4\a\n" +
 	"\x13LLOOutcomeTelemetry\x12(\n" +
 	"\x10life_cycle_stage\x18\x01 \x01(\tR\x0elifeCycleStage\x12J\n" +
 	"!observation_timestamp_nanoseconds\x18\x02 \x01(\x04R\x1fobservationTimestampNanoseconds\x12`\n" +
@@ -456,7 +483,10 @@ const file_llo_plugin_telemetry_proto_rawDesc = "" +
 	"\rconfig_digest\x18\n" +
 	" \x01(\fR\fconfigDigest\x12\x15\n" +
 	"\x06don_id\x18\v \x01(\rR\x05donId\x12+\n" +
-	"\x11min_contributions\x18\f \x01(\rR\x10minContributions\x1ad\n" +
+	"\x11min_contributions\x18\f \x01(\rR\x10minContributions\x12)\n" +
+	"\x10streams_filtered\x18\r \x01(\rR\x0fstreamsFiltered\x12.\n" +
+	"\x13streams_fallen_back\x18\x0e \x01(\rR\x11streamsFallenBack\x12/\n" +
+	"\x13contributions_stale\x18\x0f \x01(\rR\x12contributionsStale\x1ad\n" +
 	"\x17ChannelDefinitionsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\rR\x03key\x123\n" +
 	"\x05value\x18\x02 \x01(\v2\x1d.v1.LLOChannelDefinitionProtoR\x05value:\x028\x01\x1aH\n" +

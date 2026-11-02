@@ -24,11 +24,11 @@ import (
 // captureOutcomeTelemetry emits the outcome of rounds whose stage emits
 // telemetry, when this oracle is one of the f+1 telemetry emitters for seqNr.
 // Every oracle computes the same outcome, so f+1 copies suffice.
-func (p *Plugin) captureOutcomeTelemetry(out precursor, seqNr uint64) {
+func (p *Plugin) captureOutcomeTelemetry(out precursor, seqNr uint64, freshness freshnessStats) {
 	if p.OutcomeTelemetryCh == nil || !p.emitsTelemetry(out.LifeCycleStage) || !p.isTelemetryEmitter(seqNr) {
 		return
 	}
-	ot, err := makeOutcomeTelemetry(out, p.ConfigDigest, seqNr, p.DonID, p.minContributions())
+	ot, err := makeOutcomeTelemetry(out, p.ConfigDigest, seqNr, p.DonID, p.minContributions(), freshness)
 	if err != nil {
 		p.Logger.Warnw("Error making outcome telemetry", "err", err)
 		return
@@ -40,7 +40,7 @@ func (p *Plugin) captureOutcomeTelemetry(out precursor, seqNr uint64) {
 	}
 }
 
-func makeOutcomeTelemetry(out precursor, configDigest ocrtypes.ConfigDigest, seqNr uint64, donID uint32, minContributions int) (*protocol.LLOOutcomeTelemetry, error) {
+func makeOutcomeTelemetry(out precursor, configDigest ocrtypes.ConfigDigest, seqNr uint64, donID uint32, minContributions int, freshness freshnessStats) (*protocol.LLOOutcomeTelemetry, error) {
 	ot := &protocol.LLOOutcomeTelemetry{
 		LifeCycleStage:                  string(out.LifeCycleStage),
 		ObservationTimestampNanoseconds: out.ObservationTimestampNanoseconds,
@@ -51,6 +51,9 @@ func makeOutcomeTelemetry(out precursor, configDigest ocrtypes.ConfigDigest, seq
 		ConfigDigest:                    configDigest[:],
 		DonId:                           donID,
 		MinContributions:                uint32(minContributions),
+		StreamsFiltered:                 uint32(freshness.streamsFiltered),    //nolint:gosec // G115 bounded by stream count
+		StreamsFallenBack:               uint32(freshness.streamsFallenBack),  //nolint:gosec // G115 bounded by stream count
+		ContributionsStale:              uint32(freshness.contributionsStale), //nolint:gosec // G115 bounded by N times streams
 	}
 	for id, cd := range out.ChannelDefinitions {
 		ot.ChannelDefinitions[id] = protocol.ChannelDefinitionToProto(cd)
@@ -145,12 +148,11 @@ const maxAttributedObservationTelemetryBytes = 1 << 20
 const attributedObservationTelemetryQueueSize = 8
 
 // attributedObservation is one entry of the round attributed observations, as
-// decoded by StateTransition. decodeErr is set when the observation was dropped
-// as invalid.
+// decoded by StateTransition. Every entry decoded: an observation that fails
+// to decode fails the round, which emits no telemetry.
 type attributedObservation struct {
-	observer  commontypes.OracleID
-	obs       Observation
-	decodeErr error
+	observer commontypes.OracleID
+	obs      Observation
 }
 
 type attributedObservationRound struct {
@@ -293,16 +295,12 @@ func (t *attributedObservationTelemeter) makeTelemetry(seqNr, agreedTs uint64, a
 			DonId:                                 t.donID,
 			Observer:                              uint32(ao.observer),
 			Emitter:                               uint32(t.emitter),
-			OracleObservationTimestampNanoseconds: ao.obs.UnixTimestampNanoseconds,
+			OracleObservationTimestampNanoseconds: ao.obs.ObservationTimestampNanoseconds,
 			AgreedObservationTimestampNanoseconds: agreedTs,
 		}
 	}
 
 	first := header()
-	if ao.decodeErr != nil {
-		first.DecodeError = proto.String(ao.decodeErr.Error())
-		return []*protocol.LLOAttributedObservationTelemetry{first}
-	}
 	if len(ao.obs.RemoveChannelIDs) > 0 {
 		first.RemoveChannelIds = make([]uint32, 0, len(ao.obs.RemoveChannelIDs))
 		for id := range ao.obs.RemoveChannelIDs {

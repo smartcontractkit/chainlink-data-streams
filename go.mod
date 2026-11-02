@@ -3,6 +3,7 @@ module github.com/smartcontractkit/chainlink-data-streams
 go 1.27.1
 
 require (
+	github.com/cespare/xxhash/v2 v2.3.0
 	github.com/esote/minmaxheap v1.0.0
 	github.com/ethereum/go-ethereum v1.17.4
 	github.com/expr-lang/expr v1.17.8
@@ -11,12 +12,13 @@ require (
 	github.com/hashicorp/go-plugin v1.8.0
 	github.com/jmoiron/sqlx v1.4.0
 	github.com/jpillora/backoff v1.0.0
-	github.com/klauspost/compress v1.18.6
+	github.com/klauspost/compress v1.20.3
 	github.com/leanovate/gopter v0.2.11
 	github.com/lib/pq v1.12.3
 	github.com/pelletier/go-toml/v2 v2.3.1
 	github.com/pkg/errors v0.9.1
 	github.com/prometheus/client_golang v1.23.2
+	github.com/prometheus/client_model v0.6.2
 	github.com/shopspring/decimal v1.4.0
 	github.com/smartcontractkit/chainlink-common v0.11.2-0.20260918171610-2b348aaadc86
 	github.com/smartcontractkit/chainlink-common/keystore v1.1.0
@@ -45,7 +47,6 @@ require (
 	github.com/buger/jsonparser v1.2.0 // indirect
 	github.com/cenkalti/backoff v2.2.1+incompatible // indirect
 	github.com/cenkalti/backoff/v5 v5.0.3 // indirect
-	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/cloudevents/sdk-go/binding/format/protobuf/v2 v2.16.2 // indirect
 	github.com/cloudevents/sdk-go/v2 v2.16.2 // indirect
 	github.com/cockroachdb/errors v1.11.3 // indirect
@@ -132,7 +133,6 @@ require (
 	github.com/pion/logging v0.2.4 // indirect
 	github.com/pion/stun/v3 v3.1.5 // indirect
 	github.com/pion/transport/v4 v4.0.2 // indirect
-	github.com/prometheus/client_model v0.6.2 // indirect
 	github.com/prometheus/common v0.67.5 // indirect
 	github.com/prometheus/procfs v0.20.1 // indirect
 	github.com/rogpeppe/go-internal v1.14.1 // indirect
