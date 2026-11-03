@@ -254,7 +254,8 @@ DELETE FROM llo_mercury_transmit_queue AS q
 USING (
     SELECT transmission_hash
     FROM llo_mercury_transmit_queue
-    WHERE transmission_hash IN (
+    WHERE don_id = $1 AND server_url = $2
+      AND transmission_hash IN (
         SELECT transmission_hash
         FROM llo_mercury_transmit_queue
         WHERE don_id = $1 AND server_url = $2
