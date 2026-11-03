@@ -121,7 +121,7 @@ func benchObservationHandles(b *testing.B, c stateTransitionBenchCase, blobs *ll
 		for s := range c.streams + 2 {
 			values[llotypes.StreamID(s+1)] = protocol.ToDecimal(decimal.New(int64(1_000_000_000+s*1_000+o), -8)) //nolint:gosec // G115 bounded by the case
 		}
-		payload, err := marshalStreamValues(values)
+		payload, err := marshalStreamValues(values, 1)
 		require.NoError(b, err)
 		handle, err := blobs.BroadcastBlob(context.Background(), payload, ocr3_1types.BlobExpirationHintSequenceNumber{SeqNr: 0})
 		require.NoError(b, err)
@@ -145,8 +145,8 @@ func BenchmarkStateTransition(b *testing.B) {
 				aos := make([]ocrtypes.AttributedObservation, c.n)
 				for o := range c.n {
 					obs, err := encodeObservation(Observation{
-						UnixTimestampNanoseconds: ts,
-						SupportedReportFormats:   formatSet(llotypes.ReportFormatEVMABIEncodeUnpacked),
+						ObservationTimestampNanoseconds: ts,
+						SupportedReportFormats:          formatSet(llotypes.ReportFormatEVMABIEncodeUnpacked),
 					}, [][]byte{handles[o]})
 					require.NoError(b, err)
 					aos[o] = ao(o, obs)
@@ -156,9 +156,14 @@ func BenchmarkStateTransition(b *testing.B) {
 
 			// Bootstrap, then install the channels directly: voting them in
 			// takes MaxObservationUpdateChannelDefinitionsLength per round.
+			// Round 1 accepts only empty observations.
 			kv := newMemKV()
 			seqNr := uint64(1)
-			_, err := p.StateTransition(ctx, seqNr, ocrtypes.AttributedQuery{}, round(), kv, blobs)
+			bootstrap := make([]ocrtypes.AttributedObservation, c.n)
+			for o := range c.n {
+				bootstrap[o] = ao(o, nil)
+			}
+			_, err := p.StateTransition(ctx, seqNr, ocrtypes.AttributedQuery{}, bootstrap, kv, blobs)
 			require.NoError(b, err)
 			seqNr++
 			require.NoError(b, writeChannelState(kv, seqNr, benchChannelDefinitions(c)))
@@ -188,6 +193,9 @@ func BenchmarkStateTransition(b *testing.B) {
 				}
 				seqNr++
 			}
+			// The hot state is rewritten every round, so its stored size is
+			// the per-round KV write the benchmark pays for.
+			b.ReportMetric(float64(len(kv.m[string(keyHotState)])), "hotStateBytes")
 		})
 	}
 }

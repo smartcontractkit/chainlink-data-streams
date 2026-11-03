@@ -24,6 +24,40 @@ func genTestDefs(v int) llotypes.ChannelDefinitions {
 	}
 }
 
+// load adapts a definitions builder to Load for tests that do not care about
+// the record: the record is fixed bytes and decode returns what build built.
+func load(c *ChannelCache, seqNr uint64, build func() (llotypes.ChannelDefinitions, error)) (*ChannelGeneration, error) {
+	var defs llotypes.ChannelDefinitions
+	read := func() ([]byte, error) {
+		var err error
+		defs, err = build()
+		return []byte("record"), err
+	}
+	return c.Load(seqNr, read, func([]byte) (llotypes.ChannelDefinitions, error) { return defs, nil })
+}
+
+func Test_ChannelCache_KeepsTheRecordItDecoded(t *testing.T) {
+	c := NewChannelCache()
+	record := []byte("encoded definitions")
+	var decoded []byte
+	gen, err := c.Load(1, func() ([]byte, error) { return record, nil }, func(b []byte) (llotypes.ChannelDefinitions, error) {
+		decoded = b
+		return genTestDefs(1), nil
+	})
+	require.NoError(t, err)
+	require.Equal(t, record, decoded)
+	require.Equal(t, record, gen.Record())
+
+	// The generation owns its copy, so the reader may reuse its buffer.
+	record[0] = 'X'
+	require.Equal(t, []byte("encoded definitions"), gen.Record())
+
+	// A hit serves the stored record without reading again.
+	again, err := c.Load(1, func() ([]byte, error) { return nil, fmt.Errorf("must not read on a hit") }, nil)
+	require.NoError(t, err)
+	require.Same(t, gen, again)
+}
+
 func Test_ChannelCache_MemoizesBySeqNr(t *testing.T) {
 	c := NewChannelCache()
 
@@ -35,18 +69,18 @@ func Test_ChannelCache_MemoizesBySeqNr(t *testing.T) {
 		}
 	}
 
-	first, err := c.Load(7, build(1))
+	first, err := load(c, 7, build(1))
 	require.NoError(t, err)
 	require.Equal(t, 1, builds)
 
 	// Same seqNr resolves to the same generation without rebuilding: the record
 	// is a pure function of its sequence number.
-	again, err := c.Load(7, build(2))
+	again, err := load(c, 7, build(2))
 	require.NoError(t, err)
 	require.Same(t, first, again)
 	require.Equal(t, 1, builds)
 
-	other, err := c.Load(8, build(2))
+	other, err := load(c, 8, build(2))
 	require.NoError(t, err)
 	require.NotSame(t, first, other)
 	require.Equal(t, 2, builds)
@@ -63,7 +97,7 @@ func Test_ChannelCache_MemoizesBySeqNr(t *testing.T) {
 func Test_ChannelCache_NilReceiverBuildsEveryTime(t *testing.T) {
 	var c *ChannelCache
 
-	gen, err := c.Load(1, func() (llotypes.ChannelDefinitions, error) { return genTestDefs(3), nil })
+	gen, err := load(c, 1, func() (llotypes.ChannelDefinitions, error) { return genTestDefs(3), nil })
 	require.NoError(t, err)
 	require.Equal(t, uint64(1), gen.SeqNr())
 
@@ -74,13 +108,13 @@ func Test_ChannelCache_NilReceiverBuildsEveryTime(t *testing.T) {
 
 func Test_ChannelCache_LoadPropagatesBuildError(t *testing.T) {
 	c := NewChannelCache()
-	_, err := c.Load(1, func() (llotypes.ChannelDefinitions, error) {
+	_, err := load(c, 1, func() (llotypes.ChannelDefinitions, error) {
 		return nil, fmt.Errorf("boom")
 	})
 	require.ErrorContains(t, err, "boom")
 
 	// The failure must not be memoized.
-	gen, err := c.Load(1, func() (llotypes.ChannelDefinitions, error) { return genTestDefs(1), nil })
+	gen, err := load(c, 1, func() (llotypes.ChannelDefinitions, error) { return genTestDefs(1), nil })
 	require.NoError(t, err)
 	require.NotNil(t, gen)
 }
@@ -88,12 +122,12 @@ func Test_ChannelCache_LoadPropagatesBuildError(t *testing.T) {
 func Test_ChannelCache_EvictionDoesNotInvalidateHeldGeneration(t *testing.T) {
 	c := NewChannelCache()
 
-	held, err := c.Load(1, func() (llotypes.ChannelDefinitions, error) { return genTestDefs(1), nil })
+	held, err := load(c, 1, func() (llotypes.ChannelDefinitions, error) { return genTestDefs(1), nil })
 	require.NoError(t, err)
 
 	for seqNr := uint64(2); seqNr <= uint64(channelGenerationsRetained+3); seqNr++ {
 		v := int(seqNr)
-		_, err := c.Load(seqNr, func() (llotypes.ChannelDefinitions, error) { return genTestDefs(v), nil })
+		_, err := load(c, seqNr, func() (llotypes.ChannelDefinitions, error) { return genTestDefs(v), nil })
 		require.NoError(t, err)
 	}
 
@@ -111,7 +145,7 @@ func Test_ChannelCache_EvictionDoesNotInvalidateHeldGeneration(t *testing.T) {
 
 func Test_ChannelGeneration_OptsAreSealed(t *testing.T) {
 	c := NewChannelCache()
-	gen, err := c.Load(1, func() (llotypes.ChannelDefinitions, error) { return genTestDefs(1), nil })
+	gen, err := load(c, 1, func() (llotypes.ChannelDefinitions, error) { return genTestDefs(1), nil })
 	require.NoError(t, err)
 
 	// Every mutator is a no-op: a generation's opts can never be repointed at
@@ -130,7 +164,7 @@ func Test_ChannelGeneration_DoesNotAliasItsSource(t *testing.T) {
 	c := NewChannelCache()
 
 	source := genTestDefs(1)
-	gen, err := c.Load(1, func() (llotypes.ChannelDefinitions, error) { return source, nil })
+	gen, err := load(c, 1, func() (llotypes.ChannelDefinitions, error) { return source, nil })
 	require.NoError(t, err)
 
 	// Mutating the source after the build must not reach the snapshot.
@@ -174,7 +208,7 @@ func Test_ChannelCache_ConcurrentLoadYieldsOneGeneration(t *testing.T) {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			gen, err := c.Load(1, func() (llotypes.ChannelDefinitions, error) { return genTestDefs(1), nil })
+			gen, err := load(c, 1, func() (llotypes.ChannelDefinitions, error) { return genTestDefs(1), nil })
 			require.NoError(t, err)
 			o, err := GetOpts[genTestOpts](gen.Opts(), 1)
 			require.NoError(t, err)

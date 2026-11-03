@@ -32,11 +32,9 @@ func (p *Plugin) Reports(ctx context.Context, seqNr uint64, rawPrecursor ocr3_1t
 	// behind) the definitions being reported - not when a StateTransition for a
 	// later seqNr is running concurrently, and not after a restart, where no
 	// StateTransition ran on this node to populate the cache.
-	gen, err := p.ChannelCache.Load(out.ChannelStateSeqNr, func() (llotypes.ChannelDefinitions, error) {
-		return out.ChannelDefinitions, nil
-	})
+	gen, err := out.definitions(p.ChannelCache)
 	if err != nil {
-		return nil, fmt.Errorf("error loading channel generation: %w", err)
+		return nil, err
 	}
 	channelOpts := gen.Opts()
 

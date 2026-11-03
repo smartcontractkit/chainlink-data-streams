@@ -118,14 +118,26 @@ func TestLimits_HotStateWorstCaseFitsPerKeyLimit(t *testing.T) {
 		reportable[cid] = true
 	}
 
+	// A full window of maximal agreed timestamps.
+	window := make([]uint64, agreedTimestampWindow)
+	for i := range window {
+		window[i] = maxTimestamp
+	}
+
+	// The write refuses a raw record over the per-key limit, so succeeding here
+	// is what proves admission keeps it under on its own: compression is
+	// headroom, not what makes it fit.
 	kv := newMemKV()
-	require.NoError(t, writeHotState(kv, maxTimestamp, validAfter, reportable, carry, logger.Test(t)))
+	require.NoError(t, writeHotState(kv, maxTimestamp, validAfter, reportable, carry, window, logger.Test(t)))
 
 	record, err := kv.Read(keyHotState)
 	require.NoError(t, err)
 	require.LessOrEqual(t, len(record), ocr3_1types.MaxMaxKeyValueValueBytes,
 		"worst-case r/agg record (%d bytes) exceeds the per-key limit", len(record))
-	t.Logf("worst-case r/agg record: %d bytes of %d", len(record), ocr3_1types.MaxMaxKeyValueValueBytes)
+	raw, err := decodeKVRecord(record, "hot state")
+	require.NoError(t, err)
+	t.Logf("worst-case r/agg record: %d bytes raw, %d framed (%.2fx), of %d",
+		len(raw), len(record), float64(len(raw))/float64(len(record)), ocr3_1types.MaxMaxKeyValueValueBytes)
 }
 
 // TestLimits_HotStateTruncatesAboveCap covers the cap itself: above it, pairs
@@ -145,7 +157,7 @@ func TestLimits_HotStateTruncatesAboveCap(t *testing.T) {
 	}
 
 	kv := newMemKV()
-	require.NoError(t, writeHotState(kv, 1, nil, nil, carry, logger.Test(t)))
+	require.NoError(t, writeHotState(kv, 1, nil, nil, carry, nil, logger.Test(t)))
 
 	state := &kvState{
 		channelDefinitions:    llotypes.ChannelDefinitions{},
@@ -337,14 +349,17 @@ func TestLimits_ChannelStateWorstCaseFitsPerKeyLimit(t *testing.T) {
 	require.Greater(t, channels*optsEach, protocol.MaxTotalOptsBytes-channels)
 	require.LessOrEqual(t, optsEach, protocol.MaxChannelOptsBytes)
 
+	// As for r/agg, the write itself refuses a raw record over the limit.
 	kv := newMemKV()
 	require.NoError(t, writeChannelState(kv, 1, defs))
 	record, err := kv.Read(keyChannelState)
 	require.NoError(t, err)
 	require.LessOrEqual(t, len(record), ocr3_1types.MaxMaxKeyValueValueBytes,
 		"worst-case c/defs record (%d bytes) exceeds the per-key limit", len(record))
-	t.Logf("worst-case c/defs record: %d bytes of the %d per-key limit",
-		len(record), ocr3_1types.MaxMaxKeyValueValueBytes)
+	raw, err := decodeKVRecord(record, "channel state")
+	require.NoError(t, err)
+	t.Logf("worst-case c/defs record: %d bytes raw, %d framed (%.2fx), of the %d per-key limit",
+		len(raw), len(record), float64(len(raw))/float64(len(record)), ocr3_1types.MaxMaxKeyValueValueBytes)
 }
 
 // Observation decode rejects an oversized coefficient (see
@@ -454,14 +469,14 @@ func TestLimits_ObservationWorstCaseFitsDeclared(t *testing.T) {
 	}
 
 	obs := Observation{
-		AttestedPredecessorRetirement: attestedBytes,
-		ShouldRetire:                  true,
-		UnixTimestampNanoseconds:      math.MaxUint64,
-		RemoveChannelIDs:              removals,
-		UpdateChannelDefinitions:      updates,
-		SupportedReportFormats:        formats,
-		PredecessorSigners:            signers,
-		PredecessorF:                  math.MaxUint8,
+		AttestedPredecessorRetirement:   attestedBytes,
+		ShouldRetire:                    true,
+		ObservationTimestampNanoseconds: math.MaxUint64,
+		RemoveChannelIDs:                removals,
+		UpdateChannelDefinitions:        updates,
+		SupportedReportFormats:          formats,
+		PredecessorSigners:              signers,
+		PredecessorF:                    math.MaxUint8,
 	}
 	// The encoder references one blob. A handle carries at most one
 	// availability signature per oracle, well under 4 KiB.
@@ -508,7 +523,7 @@ func TestLimits_PrecursorWorstCaseFitsDeclared(t *testing.T) {
 	// Every channel reportable, under the largest IDs.
 	reportable := slices.Sorted(maps.Keys(defs))
 
-	encoded, err := encodePrecursor(precursor{
+	raw, err := marshalPrecursor(precursor{
 		LifeCycleStage:                  llotypes.LifeCycleStage(strings.Repeat("x", 32)),
 		ObservationTimestampNanoseconds: math.MaxUint64,
 		ChannelDefinitions:              defs,
@@ -518,8 +533,14 @@ func TestLimits_PrecursorWorstCaseFitsDeclared(t *testing.T) {
 		ReportableChannelIDs:            reportable,
 	})
 	require.NoError(t, err)
-	require.LessOrEqual(t, len(encoded), ocr3_1types.MaxMaxReportsPlusPrecursorBytes,
-		"worst-case precursor (%d bytes) exceeds the declared limit", len(encoded))
-	t.Logf("worst-case precursor: %d bytes of the %d limit",
-		len(encoded), ocr3_1types.MaxMaxReportsPlusPrecursorBytes)
+	// Admission must keep the raw precursor under the limit on its own:
+	// compression is headroom, not what makes it fit.
+	require.LessOrEqual(t, len(raw), maxDecompressedPrecursorBytes,
+		"worst-case raw precursor (%d bytes) exceeds the decompression bound", len(raw))
+	framed, err := framePrecursor(raw)
+	require.NoError(t, err)
+	require.LessOrEqual(t, len(framed), ocr3_1types.MaxMaxReportsPlusPrecursorBytes,
+		"worst-case framed precursor (%d bytes) exceeds the declared limit", len(framed))
+	t.Logf("worst-case precursor: %d bytes raw, %d framed (%.2fx), of the %d limit",
+		len(raw), len(framed), float64(len(raw))/float64(len(framed)), ocr3_1types.MaxMaxReportsPlusPrecursorBytes)
 }

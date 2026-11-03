@@ -81,13 +81,18 @@ func Test_Golden_Precursor(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		p    precursor
+
+		codec byte
 	}{
-		{"precursor_empty.bin", precursor{}},
-		{"precursor_full.bin", goldenPrecursor()},
+		{"precursor_empty.bin", precursor{}, payloadCodecRaw},
+		// Also freezes the zstd bitstream: a compress library bump that changes
+		// it would split oracles on the precursor digest.
+		{"precursor_full.bin", goldenPrecursor(), payloadCodecZstd},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			b, err := encodePrecursor(tc.p)
 			require.NoError(t, err)
+			require.Equal(t, tc.codec, b[0])
 			goldenBytes(t, tc.name, b)
 
 			// The golden bytes must also decode back to the same projection, so
@@ -95,16 +100,20 @@ func Test_Golden_Precursor(t *testing.T) {
 			// regenerated file.
 			want, err := os.ReadFile(filepath.Join(goldenDir, tc.name))
 			require.NoError(t, err)
-			got, err := decodePrecursor(want)
-			require.NoError(t, err)
-			require.Equal(t, normalizePrecursor(tc.p), got)
+			require.Equal(t, normalizePrecursor(t, tc.p), decodeResolvedPrecursor(t, want))
 		})
 	}
 }
 
 // normalizePrecursor fills in the empty maps decodePrecursor always returns, so
 // that a nil-map input compares equal to its decoded form.
-func normalizePrecursor(p precursor) precursor {
+func normalizePrecursor(t *testing.T, p precursor) precursor {
+	t.Helper()
+	if p.ChannelState == nil && len(p.ChannelDefinitions) > 0 {
+		b, err := encodeChannelState(p.ChannelDefinitions)
+		require.NoError(t, err)
+		p.ChannelState = b
+	}
 	if p.ChannelDefinitions == nil {
 		p.ChannelDefinitions = llotypes.ChannelDefinitions{}
 	}
@@ -114,6 +123,17 @@ func normalizePrecursor(p precursor) precursor {
 	if p.StreamAggregates == nil {
 		p.StreamAggregates = protocol.StreamAggregates{}
 	}
+	return p
+}
+
+// decodeResolvedPrecursor decodes b and resolves its channel definitions with
+// a fresh cache, giving the precursor Reports works from.
+func decodeResolvedPrecursor(t *testing.T, b []byte) precursor {
+	t.Helper()
+	p, err := decodePrecursor(b)
+	require.NoError(t, err)
+	_, err = p.definitions(protocol.NewChannelCache())
+	require.NoError(t, err)
 	return p
 }
 
@@ -135,6 +155,7 @@ func Test_Golden_KVRecords(t *testing.T) {
 			}}},
 			100: {llotypes.AggregatorMedian: {ObservedAtNanoseconds: 1, StreamValue: protocol.ToDecimal(decimal.NewFromInt(123))}},
 		},
+		nil,
 		logger.Test(t),
 	))
 	// Out-of-order oracles and formats, so the sorting the writer does is part
@@ -245,6 +266,45 @@ func Test_Golden_KVHistoryRecords(t *testing.T) {
 	chunk, err := readHistoryChunk(kv, sid, agg, set.Chunk.Slot())
 	require.NoError(t, err)
 	require.Len(t, chunk.Records(), 3)
+}
+
+// Test_Golden_KVHistoryChunkCompressed freezes a full ring slot of realistic
+// prices. Unlike the smaller golden records it compresses, so it is what
+// catches a zstd bump that changes the bitstream of KV records.
+func Test_Golden_KVHistoryChunkCompressed(t *testing.T) {
+	const (
+		sid = llotypes.StreamID(100)
+		agg = llotypes.AggregatorMedian
+	)
+
+	kv := newMemKV()
+	var set protocol.RingWriteSet
+	for i := range protocol.MaxHistoryChunkRecords {
+		w := readHistory(t, kv, sid, agg)
+		if w == nil {
+			w = protocol.NewRingWindow(nil)
+		}
+		_, err := w.SetRequiredCount(protocol.MaxHistoryChunkRecords)
+		require.NoError(t, err)
+		price := decimal.RequireFromString("3412.57").Add(decimal.New(int64(i%7), -2))
+		appended, err := w.Append(1_700_000_000_000_000_000+uint64(i)*1_000_000_000, protocol.ToDecimal(price))
+		require.NoError(t, err)
+		require.True(t, appended)
+
+		set = w.WriteSet()
+		_, err = writeHistoryHeader(kv, sid, agg, set.Header)
+		require.NoError(t, err)
+		_, err = writeHistoryChunk(kv, sid, agg, set.Chunk)
+		require.NoError(t, err)
+	}
+
+	b := kv.m[string(historyChunkKey(sid, agg, set.Chunk.Slot()))]
+	require.Equal(t, payloadCodecZstd, b[0], "a full chunk must compress, or this golden freezes nothing")
+	goldenBytes(t, "kv_history_chunk_full.bin", b)
+
+	chunk, err := readHistoryChunk(kv, sid, agg, set.Chunk.Slot())
+	require.NoError(t, err)
+	require.Len(t, chunk.Records(), protocol.MaxHistoryChunkRecords)
 }
 
 // Test_Golden_KVKeys freezes the key layout. Keys are part of the replicated

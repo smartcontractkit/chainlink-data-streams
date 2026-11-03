@@ -57,13 +57,9 @@ type V31Config struct {
 	// VerboseLogging enables additional, potentially expensive logging.
 	VerboseLogging bool `json:"verboseLogging" toml:"verboseLogging"`
 
-	// MaxSnapshotRounds bounds how stale this node's own stream values may be
-	// when it references them. Must be at least 2 and leave
-	// BlobFetchMarginRounds below BlobLifetimeRounds.
-	MaxSnapshotRounds uint64 `json:"maxSnapshotRounds" toml:"maxSnapshotRounds"`
-
 	// BlobLifetimeRounds bounds how long peers can still fetch a broadcast
-	// blob. It does not bound staleness, MaxSnapshotRounds does.
+	// blob, and so for how many rounds a snapshot can be offered. It does not
+	// bound staleness, the state transition does.
 	BlobLifetimeRounds uint64 `json:"blobLifetimeRounds" toml:"blobLifetimeRounds"`
 
 	// MaxDurationBlobObservation is the blob pump's per-cycle observation
@@ -74,17 +70,6 @@ type V31Config struct {
 	// waits for a cycle already in flight to park, so a larger factor waits
 	// less.
 	BlobInFlightWaitFactor uint64 `json:"blobInFlightWaitFactor" toml:"blobInFlightWaitFactor"`
-
-	// MaxBlobSnapshotAge pins the wall-clock age at which a parked snapshot is
-	// discarded. Left at zero the pump derives it from the round period it
-	// measures. A negative value disables the check, leaving MaxSnapshotRounds
-	// as the only staleness bound.
-	MaxBlobSnapshotAge Duration `json:"maxBlobSnapshotAge" toml:"maxBlobSnapshotAge"`
-
-	// MaxRoundPeriod bounds the round period the pump measures, so a stalled
-	// round cannot inflate the derived snapshot age bound. Must be set above the
-	// DON real round cadence.
-	MaxRoundPeriod Duration `json:"maxRoundPeriod" toml:"maxRoundPeriod"`
 
 	// Plugin telemetry. Each is decided here for v31, independently of
 	// the node CaptureEATelemetry parameter, which keeps driving data source telemetry.
@@ -108,14 +93,11 @@ func (o V31Config) IsZero() bool {
 }
 
 func (o V31Config) Validate() (merr error) {
-	if _, _, err := v31.ResolveBlobRounds(o.MaxSnapshotRounds, o.BlobLifetimeRounds); err != nil {
+	if _, err := v31.ResolveBlobLifetimeRounds(o.BlobLifetimeRounds); err != nil {
 		merr = errors.Join(merr, fmt.Errorf("llo: v31: %w", err))
 	}
 	if o.MaxDurationBlobObservation < 0 {
 		merr = errors.Join(merr, fmt.Errorf("llo: v31: MaxDurationBlobObservation must not be negative, got: %s", o.MaxDurationBlobObservation))
-	}
-	if o.MaxRoundPeriod < 0 {
-		merr = errors.Join(merr, fmt.Errorf("llo: v31: MaxRoundPeriod must not be negative, got: %s", o.MaxRoundPeriod))
 	}
 	return merr
 }

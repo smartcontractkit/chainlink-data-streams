@@ -46,6 +46,14 @@
 // proto maps — or fixed-width big-endian integers) because the store is
 // replicated across oracles and any divergence halts the protocol.
 //
+// The proto records (c/defs, c/codecs, r/agg and the history header and chunks)
+// are then framed like blobs and the precursor, zstd-compressed whenever that
+// shrinks them. libocr builds the state root from the framed bytes, so the
+// same rule as for the precursor applies: Test_Golden_KVRecords and
+// Test_Golden_KVHistoryChunkCompressed freeze them, and a dependency bump that
+// changes them must roll out to the whole DON at once. Admission bounds the raw
+// records under the per-key limit, so compression is headroom only.
+//
 // # Deferred channel definitions
 //
 // Channel definition changes agreed in a round take effect in the NEXT round.
@@ -81,7 +89,7 @@
 // Stream values are always disseminated as a blob, never inline: an observation
 // carries only votes, the retirement report, its timestamp, and the handle of a
 // blob holding the round's stream values. See observation.go for the framing.
-// The blob payload itself is framed by blobcompress.go: a leading codec byte
+// The blob payload itself is framed by payloadcodec.go: a leading codec byte
 // followed by the stream-values proto, zstd-compressed whenever that shrinks
 // it. The codec is chosen by the writer and read from the byte, so nodes need
 // not agree on whether compression paid off.
@@ -94,25 +102,39 @@
 // discards a snapshot, so the pump rate tracks the round rate without knowing
 // deltaRound, and cycles are serial so only one Observe is ever in flight.
 //
-// A snapshot is therefore gathered one round before it is used. Two separate
-// bounds apply to it. MaxSnapshotRounds is local: it decides how stale the
-// values may be when this node references them (forSeqNr + MaxSnapshotRounds),
-// and is what a report format's staleness budget should be tuned against.
-// BlobLifetimeRounds is remote: it is the expiration hint given to the blob
-// transport (forSeqNr + BlobLifetimeRounds), deciding how long peers can still
-// fetch the blob, and sits BlobFetchMarginRounds beyond the last seqNr at which
-// the handle can be referenced. A broadcast that the transport refuses is
+// A snapshot is therefore gathered one round before it is used, and stays
+// offered until a newer one parks: a cycle that runs longer than a round, or
+// fails, costs no round its stream values while the previous snapshot is still
+// fetchable. The pump applies one bound to it, fetchability. BlobLifetimeRounds
+// is the expiration hint given to the blob transport (cycleStartSeqNr +
+// BlobLifetimeRounds), after which peers can no longer fetch the blob, and
+// Take offers a snapshot only while its blob stays fetchable for
+// BlobFetchMarginRounds more rounds, so slow or lagging peers can still fetch
+// it. With the default lifetime that lets one snapshot serve
+// SnapshotReuseRounds rounds. A broadcast that the transport refuses is
 // retried inside the cycle (BlobBroadcastAttempts), which is what keeps the
 // round trip off the OCR critical path; a retry recomputes the hint from the
-// round current at that attempt, so the values stay bounded by MaxSnapshotRounds
-// while the blob stays fetchable for the round that will reference it. A wall-clock age check derived from the
-// measured round period guards against jitter on top. A round that finds
-// nothing usable — cold start, a failed cycle, or a stale snapshot — emits an
-// observation with no stream values. That is not a halt: quorum counts
-// observations, not values. The cost lands in aggregation, which needs >F values
-// per stream, so streams miss the round only if more than F nodes miss together.
-// The pump counts misses and cycles (Misses / Cycles) so correlated misses show
-// up as more than an unexplained report gap.
+// round current at that attempt, so the blob stays fetchable for the round
+// that will reference it. A round that finds nothing usable, on cold start or
+// once the blob is about to expire, emits an observation with no stream
+// values. That is not a halt: quorum counts observations, not values. The cost
+// lands in aggregation, which needs >F values per stream, so streams miss the
+// round only if more than F nodes miss together. The pump counts misses,
+// cycles and reuses (Misses / Cycles / Reuses, exported as the
+// llo_blob_pump_* counters) so correlated misses show up as more than an
+// unexplained report gap.
+//
+// The pump does not judge whether its values are still fresh. A decision taken
+// on one node, from its own clock, is invisible to its peers and withholds the
+// node's values with no trace in consensus. The state transition judges
+// instead, from replicated data only, so every oracle keeps the same values.
+// The blob carries the seqNr its cycle started in (LLOBlobPayloadProto), the
+// hot state carries the agreed timestamps of the last few rounds, and each
+// contribution is held to a round age and a time age derived from those
+// (freshness.go). A stream whose fresh contributions cannot reach the
+// contribution floor aggregates every contribution instead, which is the
+// behaviour without the rule, so a bound that proves too tight for a DON costs
+// freshness, never liveness. The fallback is counted (llo_freshness metrics).
 //
 // # Parity status (vs v30)
 //
@@ -140,6 +162,13 @@
 // in the precursor (ReportableChannelIDs), together with only the aggregates
 // those channels report. Reports emits exactly those channels, so emission and
 // the validAfter advance read the same decision.
+//
+// The precursor uses the same framing as blobs. Unlike a blob, its bytes must
+// match on every oracle, because libocr digests and signs them. The choice of
+// codec depends only on the raw bytes, and zstd output is stable for one
+// library version with pinned options, so this holds within a version.
+// Test_Golden_Precursor freezes the compressed bytes. A dependency bump that
+// changes them must roll out to the whole DON at once.
 //
 // Cross-round timestamped-aggregate carry-forward (in the r/agg record,
 // newer-wins monotonicity) and best-effort outcome/report telemetry are also

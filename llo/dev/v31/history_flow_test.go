@@ -32,8 +32,8 @@ func historyExprChannel(expression string) llotypes.ChannelDefinition {
 func valueRound(t *testing.T, ts uint64, value int64) []ocrtypes.AttributedObservation {
 	t.Helper()
 	obs := Observation{
-		UnixTimestampNanoseconds: ts,
-		StreamValues:             protocol.StreamValues{100: protocol.ToDecimal(decimal.NewFromInt(value))},
+		ObservationTimestampNanoseconds: ts,
+		StreamValues:                    protocol.StreamValues{100: protocol.ToDecimal(decimal.NewFromInt(value))},
 	}
 	aos := make([]ocrtypes.AttributedObservation, 0, 4)
 	for i := range 4 {
@@ -182,7 +182,7 @@ func Test_History_ReclaimedOnChannelRemoval(t *testing.T) {
 	require.NotEmpty(t, kv.m[string(keyHistoryIndex)])
 
 	// Vote the channel away.
-	removeObs := Observation{UnixTimestampNanoseconds: 20_000, RemoveChannelIDs: map[llotypes.ChannelID]struct{}{1: {}}}
+	removeObs := Observation{ObservationTimestampNanoseconds: 20_000, RemoveChannelIDs: map[llotypes.ChannelID]struct{}{1: {}}}
 	removeAOs := make([]ocrtypes.AttributedObservation, 0, 4)
 	for i := range 4 {
 		removeAOs = append(removeAOs, ao(i, mustEncodeObs(t, removeObs)))

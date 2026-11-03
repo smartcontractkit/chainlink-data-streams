@@ -23,7 +23,7 @@ import (
 // enforces.
 
 // payloadFetcher returns the same payload for every handle, so a fuzzer can
-// drive the blob path of decodeObservation with arbitrary bytes.
+// drive the blob path of fetchBlobsAndDecodeObservation with arbitrary bytes.
 type payloadFetcher struct{ payload []byte }
 
 func (f payloadFetcher) FetchBlob(context.Context, ocr3_1types.BlobHandle) ([]byte, error) {
@@ -37,12 +37,12 @@ var _ ocr3_1types.BlobFetcher = payloadFetcher{}
 // byzantine peer picks these bytes, and every other oracle decodes them.
 func FuzzDecodeObservation(f *testing.F) {
 	obs := Observation{
-		AttestedPredecessorRetirement: []byte("retirement"),
-		ShouldRetire:                  true,
-		UnixTimestampNanoseconds:      1_700_000_000_000_000_000,
-		RemoveChannelIDs:              map[llotypes.ChannelID]struct{}{7: {}},
-		UpdateChannelDefinitions:      llotypes.ChannelDefinitions{1: jsonChannel()},
-		SupportedReportFormats:        formatSet(llotypes.ReportFormatJSON, llotypes.ReportFormatEVMPremiumLegacy),
+		AttestedPredecessorRetirement:   []byte("retirement"),
+		ShouldRetire:                    true,
+		ObservationTimestampNanoseconds: 1_700_000_000_000_000_000,
+		RemoveChannelIDs:                map[llotypes.ChannelID]struct{}{7: {}},
+		UpdateChannelDefinitions:        llotypes.ChannelDefinitions{1: jsonChannel()},
+		SupportedReportFormats:          formatSet(llotypes.ReportFormatJSON, llotypes.ReportFormatEVMPremiumLegacy),
 	}
 	encoded, err := encodeObservation(obs, nil)
 	if err != nil {
@@ -55,7 +55,7 @@ func FuzzDecodeObservation(f *testing.F) {
 		f.Fatal(err)
 	}
 
-	payload, err := marshalStreamValues(protocol.StreamValues{100: protocol.ToDecimal(decimal.NewFromInt(123))})
+	payload, err := marshalStreamValues(protocol.StreamValues{100: protocol.ToDecimal(decimal.NewFromInt(123))}, 1)
 	if err != nil {
 		f.Fatal(err)
 	}
@@ -68,7 +68,7 @@ func FuzzDecodeObservation(f *testing.F) {
 	f.Add([]byte("not an observation"), []byte("not a payload"))
 
 	f.Fuzz(func(t *testing.T, raw, payload []byte) {
-		decoded, err := decodeObservation(context.Background(), ocrtypes.Observation(raw), payloadFetcher{payload: payload}, nil)
+		decoded, err := fetchBlobsAndDecodeObservation(context.Background(), ocrtypes.Observation(raw), payloadFetcher{payload: payload}, nil)
 		if err != nil {
 			return
 		}
@@ -108,8 +108,17 @@ func FuzzDecodePrecursor(f *testing.F) {
 	if err != nil {
 		f.Fatal(err)
 	}
+	c, err := getPayloadCompressor()
+	if err != nil {
+		f.Fatal(err)
+	}
+	// A zstd frame that declares more than the precursor bound.
+	bomb := c.encoder.EncodeAll(make([]byte, maxDecompressedPrecursorBytes+1), []byte{payloadCodecZstd})
 	f.Add([]byte(full))
 	f.Add([]byte(empty))
+	f.Add(bomb)
+	f.Add([]byte{payloadCodecRaw, 0x0a, 0x00})
+	f.Add([]byte{payloadCodecZstd, 0xde, 0xad, 0xbe, 0xef})
 	f.Add([]byte{0x0a, 0x00})
 	f.Add([]byte("not a precursor"))
 	f.Add([]byte{})
@@ -153,7 +162,7 @@ func FuzzLoadKVState(f *testing.F) {
 	f.Add([]byte("production"), seeded.m[string(keyChannelState)], beU64(9), []byte(nil))
 	f.Add([]byte{}, []byte{}, []byte{}, []byte{})
 	f.Add([]byte("staging"), []byte("not a proto"), []byte{0x01}, []byte{0x01, 0x02})
-	f.Add([]byte(nil), []byte{0x0a, 0x02, 0x08, 0x01}, beU64(1), append(beU32(100), beU32(1)...))
+	f.Add([]byte(nil), []byte{payloadCodecRaw, 0x0a, 0x02, 0x08, 0x01}, beU64(1), []byte{payloadCodecZstd, 0x01, 0x02})
 
 	f.Fuzz(func(t *testing.T, lifecycle, channelState, seqNr, hotState []byte) {
 		kv := newMemKV()
@@ -195,6 +204,7 @@ func FuzzLoadKVState(f *testing.F) {
 func FuzzDecodeHistoryRecords(f *testing.F) {
 	f.Add(append(beU32(100), beU32(1)...), []byte(nil), []byte(nil))
 	f.Add([]byte{0x01}, []byte("not a proto"), []byte("not a proto"))
+	f.Add([]byte{}, []byte{payloadCodecRaw, 0x08, 0x01}, []byte{payloadCodecZstd, 0x28, 0xb5, 0x2f, 0xfd})
 	f.Add([]byte{}, []byte{}, []byte{})
 
 	f.Fuzz(func(t *testing.T, index, header, chunk []byte) {
