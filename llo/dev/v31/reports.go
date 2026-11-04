@@ -112,7 +112,6 @@ func (p *Plugin) Reports(ctx context.Context, seqNr uint64, rawPrecursor ocr3_1t
 			reportForEncode := report
 			reportForEncode.ChannelID = opts.TargetChannelID
 
-			p.captureReportTelemetry(reportForEncode, targetCD, targetCD.Streams, out.LifeCycleStage)
 			codec, exists := p.ReportCodecs[targetCD.ReportFormat]
 			if !exists {
 				p.reportNotEmitted(seqNr, cid, targetCD.ReportFormat, "codec_missing", "targetChannelID", opts.TargetChannelID)
@@ -125,15 +124,17 @@ func (p *Plugin) Reports(ctx context.Context, seqNr uint64, rawPrecursor ocr3_1t
 			}
 			// The backfill report is signed like the target channel's own
 			// reports, so its consumers verify both the same way.
-			family, leaf, err := p.signingFamily(targetCD)
+			family, leaf, err := protocol.SigningFamily(targetCD)
 			if err != nil {
 				p.reportNotEmitted(seqNr, cid, targetCD.ReportFormat, "signing_scheme_unsupported", "targetChannelID", opts.TargetChannelID, "err", err)
 				continue
 			}
+			emitted := func() { p.captureReportTelemetry(reportForEncode, targetCD, targetCD.Streams, out.LifeCycleStage) }
 			if leaf {
-				bundler.add(family, cid, opts.TargetChannelID, targetCD.ReportFormat, encoded)
+				bundler.add(family, cid, opts.TargetChannelID, targetCD.ReportFormat, encoded, emitted)
 				continue
 			}
+			emitted()
 			rwis = append(rwis, ocr3types.ReportPlus[llotypes.ReportInfo]{
 				ReportWithInfo: ocr3types.ReportWithInfo[llotypes.ReportInfo]{
 					Report: encoded,
@@ -167,8 +168,6 @@ func (p *Plugin) Reports(ctx context.Context, seqNr uint64, rawPrecursor ocr3_1t
 			Specimen:                        out.LifeCycleStage != protocol.LifeCycleStageProduction,
 		}
 
-		p.captureReportTelemetry(report, cd, streams, out.LifeCycleStage)
-
 		codec, exists := p.ReportCodecs[cd.ReportFormat]
 		if !exists {
 			p.reportNotEmitted(seqNr, cid, cd.ReportFormat, "codec_missing")
@@ -179,15 +178,19 @@ func (p *Plugin) Reports(ctx context.Context, seqNr uint64, rawPrecursor ocr3_1t
 			p.reportNotEmitted(seqNr, cid, cd.ReportFormat, "encode_failed", "err", encErr)
 			continue
 		}
-		family, leaf, err := p.signingFamily(cd)
+		family, leaf, err := protocol.SigningFamily(cd)
 		if err != nil {
 			p.reportNotEmitted(seqNr, cid, cd.ReportFormat, "signing_scheme_unsupported", "err", err)
 			continue
 		}
+		// Telemetry is captured only for a report that is emitted, which for a
+		// leaf is once it is in a bundle.
+		emitted := func() { p.captureReportTelemetry(report, cd, streams, out.LifeCycleStage) }
 		if leaf {
-			bundler.add(family, cid, cid, cd.ReportFormat, encoded)
+			bundler.add(family, cid, cid, cd.ReportFormat, encoded, emitted)
 			continue
 		}
+		emitted()
 		rwis = append(rwis, ocr3types.ReportPlus[llotypes.ReportInfo]{
 			ReportWithInfo: ocr3types.ReportWithInfo[llotypes.ReportInfo]{
 				Report: encoded,
@@ -199,11 +202,7 @@ func (p *Plugin) Reports(ctx context.Context, seqNr uint64, rawPrecursor ocr3_1t
 		})
 	}
 
-	bundles, err := bundler.bundles(p, seqNr, out.LifeCycleStage)
-	if err != nil {
-		return nil, err
-	}
-	rwis = append(rwis, bundles...)
+	rwis = append(rwis, bundler.bundles(p, seqNr, out.LifeCycleStage)...)
 
 	// The staging marker goes last, so the other reports keep their positions,
 	// and only within the report count limit.

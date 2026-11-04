@@ -1,70 +1,51 @@
 package llo
 
 import (
-	"fmt"
 	"slices"
 
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
 
 	protocol "github.com/smartcontractkit/chainlink-data-streams/llo/protocol"
 
-	"github.com/smartcontractkit/libocr/offchainreporting2plus/ocr3_1types"
 	"github.com/smartcontractkit/libocr/offchainreporting2plus/ocr3types"
 )
-
-// merkleBundleMaxBytes is the MaxReportBytes NewReportingPlugin declares. A
-// bundle is one report, so it must fit in it.
-const merkleBundleMaxBytes = ocr3_1types.MaxMaxReportBytes
 
 // merkleBundler collects the channel reports of a round that are signed as
 // leaves, per signing family.
 type merkleBundler struct {
-	leaves map[llotypes.ReportFormat][]*protocol.LLOMerkleLeafProto
-	// sources are the reportable channels the leaves were emitted for, in leaf
-	// order. It differs from the leaf channel ID for backfill reports.
-	sources map[llotypes.ReportFormat][]llotypes.ChannelID
+	leaves map[llotypes.ReportFormat][]bundlerLeaf
+}
+
+type bundlerLeaf struct {
+	leaf *protocol.LLOMerkleLeafProto
+	// source is the reportable channel the leaf was emitted for. It differs
+	// from the leaf channel ID for backfill reports.
+	source llotypes.ChannelID
+	// emitted captures the report telemetry once the leaf is in a bundle.
+	emitted func()
 }
 
 // add records the report encoded for channelID in format as a leaf of family.
-func (b *merkleBundler) add(family llotypes.ReportFormat, source, channelID llotypes.ChannelID, format llotypes.ReportFormat, report []byte) {
+func (b *merkleBundler) add(family llotypes.ReportFormat, source, channelID llotypes.ChannelID, format llotypes.ReportFormat, report []byte, emitted func()) {
 	if b.leaves == nil {
-		b.leaves = map[llotypes.ReportFormat][]*protocol.LLOMerkleLeafProto{}
-		b.sources = map[llotypes.ReportFormat][]llotypes.ChannelID{}
+		b.leaves = map[llotypes.ReportFormat][]bundlerLeaf{}
 	}
-	b.leaves[family] = append(b.leaves[family], &protocol.LLOMerkleLeafProto{
-		ChannelID:    channelID,
-		ReportFormat: uint32(format),
-		Report:       report,
+	b.leaves[family] = append(b.leaves[family], bundlerLeaf{
+		leaf: &protocol.LLOMerkleLeafProto{
+			ChannelID:    channelID,
+			ReportFormat: uint32(format),
+			Report:       report,
+		},
+		source:  source,
+		emitted: emitted,
 	})
-	b.sources[family] = append(b.sources[family], source)
-}
-
-// signingFamily decides how the report of a channel encoded with cd is signed.
-// It returns the family when the report is a leaf, and false when it is signed
-// on its own. A scheme the instance cannot sign with returns an error and the
-// report is not emitted.
-//
-// Baseline verification keeps such a scheme out of the committed set. The
-// error path only guards against it getting there anyway.
-func (p *Plugin) signingFamily(cd llotypes.ChannelDefinition) (llotypes.ReportFormat, bool, error) {
-	switch cd.SigningScheme {
-	case llotypes.SigningSchemeDefault:
-		return 0, false, nil
-	case llotypes.SigningSchemeMerkle:
-		family, ok := protocol.MerkleFamily(cd.ReportFormat)
-		if !ok {
-			return 0, false, fmt.Errorf("report format %s has no signing family", cd.ReportFormat)
-		}
-		return family, true, nil
-	default:
-		return 0, false, fmt.Errorf("unknown signing scheme %q", cd.SigningScheme)
-	}
 }
 
 // bundles returns one bundle report per family, split by size, in family
 // order. Leaves are in the order they were added, which is ascending
-// reportable channel ID.
-func (b *merkleBundler) bundles(p *Plugin, seqNr uint64, stage llotypes.LifeCycleStage) ([]ocr3types.ReportPlus[llotypes.ReportInfo], error) {
+// reportable channel ID. A family that fails to encode emits none of its
+// leaves, and the other families are unaffected.
+func (b *merkleBundler) bundles(p *Plugin, seqNr uint64, stage llotypes.LifeCycleStage) []ocr3types.ReportPlus[llotypes.ReportInfo] {
 	families := make([]llotypes.ReportFormat, 0, len(b.leaves))
 	for family := range b.leaves {
 		families = append(families, family)
@@ -73,13 +54,27 @@ func (b *merkleBundler) bundles(p *Plugin, seqNr uint64, stage llotypes.LifeCycl
 
 	var rwis []ocr3types.ReportPlus[llotypes.ReportInfo]
 	for _, family := range families {
-		encoded, oversized, err := protocol.SplitMerkleBundle(family, b.leaves[family], merkleBundleMaxBytes)
+		pending := b.leaves[family]
+		leaves := make([]*protocol.LLOMerkleLeafProto, len(pending))
+		for i, l := range pending {
+			leaves[i] = l.leaf
+		}
+		encoded, oversized, err := protocol.SplitMerkleBundle(family, leaves, MaxReportBytes)
 		if err != nil {
-			return nil, fmt.Errorf("error encoding %s bundle: %w", family, err)
+			for _, l := range pending {
+				p.reportNotEmitted(seqNr, l.source, llotypes.ReportFormat(l.leaf.ReportFormat), "merkle_bundle_encode_failed", "family", family, "err", err)
+			}
+			continue
 		}
 		for _, i := range oversized {
-			leaf := b.leaves[family][i]
-			p.reportNotEmitted(seqNr, b.sources[family][i], llotypes.ReportFormat(leaf.ReportFormat), "merkle_leaf_too_large", "reportBytes", len(leaf.Report))
+			l := pending[i]
+			p.reportNotEmitted(seqNr, l.source, llotypes.ReportFormat(l.leaf.ReportFormat), "merkle_leaf_too_large", "reportBytes", len(l.leaf.Report))
+			pending[i].emitted = nil
+		}
+		for _, l := range pending {
+			if l.emitted != nil {
+				l.emitted()
+			}
 		}
 		for _, bundle := range encoded {
 			rwis = append(rwis, ocr3types.ReportPlus[llotypes.ReportInfo]{
@@ -93,5 +88,5 @@ func (b *merkleBundler) bundles(p *Plugin, seqNr uint64, stage llotypes.LifeCycl
 			})
 		}
 	}
-	return rwis, nil
+	return rwis
 }

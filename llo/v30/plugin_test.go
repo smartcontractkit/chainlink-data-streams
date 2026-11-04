@@ -2,6 +2,7 @@ package llo
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/shopspring/decimal"
@@ -174,4 +175,22 @@ func Test_withoutSigningSchemes(t *testing.T) {
 	assert.Equal(t, llotypes.ChannelDefinitions{1: plain, 2: plain}, got)
 	assert.Equal(t, []llotypes.ChannelID{2, 3}, unsupported)
 	assert.Equal(t, merkle, expected[2], "the input must not be modified")
+
+	// A backfill channel follows a target that is reverted or left out.
+	backfill := func(target llotypes.ChannelID) llotypes.ChannelDefinition {
+		return llotypes.ChannelDefinition{
+			ReportFormat: llotypes.ReportFormatHistoryBackfill,
+			Opts:         llotypes.ChannelOpts(fmt.Sprintf(`{"targetChannelId":%d,"observations":{"1":{"1":"1"}}}`, target)),
+		}
+	}
+	committed = llotypes.ChannelDefinitions{1: plain, 2: plain, 4: backfill(2)}
+	expected = llotypes.ChannelDefinitions{1: plain, 2: merkle, 3: merkle, 4: backfill(1), 5: backfill(3), 6: backfill(1)}
+	got, unsupported = withoutSigningSchemes(committed, expected)
+	assert.Equal(t, llotypes.ChannelDefinitions{1: plain, 2: plain, 4: backfill(1), 6: backfill(1)}, got)
+	assert.Equal(t, []llotypes.ChannelID{2, 3, 5}, unsupported)
+
+	expected = llotypes.ChannelDefinitions{1: plain, 2: merkle, 4: backfill(2)}
+	got, unsupported = withoutSigningSchemes(committed, expected)
+	assert.Equal(t, committed, got)
+	assert.Equal(t, []llotypes.ChannelID{2, 4}, unsupported)
 }

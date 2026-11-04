@@ -10,8 +10,10 @@ option go_package = ".;protocol";
 // and verified by the Data Streams server and onchain.
 
 // LLOMerkleBundleProto is the report a signing family signs once per round.
-// Leaves are in ascending channel ID order. The root is not stored: every
-// oracle and the keyring recompute it from the leaves.
+// Leaves are in ascending order of the reportable channel that emitted them.
+// A backfill leaf carries its target's channel ID, so leaf channel IDs are
+// neither sorted nor unique. The root is not stored: every oracle and the
+// keyring recompute it from the leaves.
 message LLOMerkleBundleProto {
     uint32 family = 1;
     repeated LLOMerkleLeafProto leaves = 2;

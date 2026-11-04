@@ -89,7 +89,7 @@ func Test_Reports_MerkleBundle(t *testing.T) {
 	defs := llotypes.ChannelDefinitions{
 		1: merkleChannel(llotypes.ReportFormatJSON, llotypes.SigningSchemeDefault),
 		2: merkleChannel(llotypes.ReportFormatEVMABIEncodeUnpacked, llotypes.SigningSchemeMerkle),
-		3: merkleChannel(llotypes.ReportFormatEVMStreamlined, llotypes.SigningSchemeMerkle),
+		3: merkleChannel(llotypes.ReportFormatEVMPremiumLegacy, llotypes.SigningSchemeMerkle),
 		4: merkleChannel(llotypes.ReportFormatEVMABIEncodeUnpacked, llotypes.SigningSchemeDefault),
 		5: merkleChannel(llotypes.ReportFormatEVMPremiumLegacy, llotypes.SigningSchemeMerkle),
 	}
@@ -112,7 +112,7 @@ func Test_Reports_MerkleBundle(t *testing.T) {
 			format llotypes.ReportFormat
 		}{
 			{2, llotypes.ReportFormatEVMABIEncodeUnpacked},
-			{3, llotypes.ReportFormatEVMStreamlined},
+			{3, llotypes.ReportFormatEVMPremiumLegacy},
 			{5, llotypes.ReportFormatEVMPremiumLegacy},
 		} {
 			leaf := bundle.Leaves[i]
@@ -149,11 +149,11 @@ func Test_Reports_MerkleBundle(t *testing.T) {
 
 func Test_Reports_MerkleBundleSplitsBySize(t *testing.T) {
 	// Three reports of 40% of the report size limit fit two to a bundle.
-	p := merklePlugin(t, leafCodec{size: merkleBundleMaxBytes * 4 / 10})
+	p := merklePlugin(t, leafCodec{size: MaxReportBytes * 4 / 10})
 	defs := llotypes.ChannelDefinitions{
 		1: merkleChannel(llotypes.ReportFormatEVMABIEncodeUnpacked, llotypes.SigningSchemeMerkle),
 		2: merkleChannel(llotypes.ReportFormatEVMABIEncodeUnpacked, llotypes.SigningSchemeMerkle),
-		3: merkleChannel(llotypes.ReportFormatEVMStreamlined, llotypes.SigningSchemeMerkle),
+		3: merkleChannel(llotypes.ReportFormatEVMPremiumLegacy, llotypes.SigningSchemeMerkle),
 	}
 	rwis, err := p.Reports(t.Context(), 3, merklePrecursor(t, protocol.LifeCycleStageProduction, defs))
 	require.NoError(t, err)
@@ -161,10 +161,29 @@ func Test_Reports_MerkleBundleSplitsBySize(t *testing.T) {
 
 	var ids []llotypes.ChannelID
 	for _, rwi := range rwis {
-		assert.LessOrEqual(t, len(rwi.ReportWithInfo.Report), merkleBundleMaxBytes)
+		assert.LessOrEqual(t, len(rwi.ReportWithInfo.Report), MaxReportBytes)
 		for _, leaf := range bundleOf(t, rwi).Leaves {
 			ids = append(ids, leaf.ChannelID)
 		}
 	}
 	assert.Equal(t, []llotypes.ChannelID{1, 2, 3}, ids)
+}
+
+func Test_Reports_MerkleOversizedLeafHasNoTelemetry(t *testing.T) {
+	p := merklePlugin(t, leafCodec{size: MaxReportBytes})
+	rtCh := make(chan *protocol.LLOReportTelemetry, 8)
+	p.ReportTelemetryCh = rtCh
+	// Emitters with N=4, F=1 for seqNr 3 are {3, 0}.
+	p.OracleID = 0
+	defs := llotypes.ChannelDefinitions{
+		1: merkleChannel(llotypes.ReportFormatJSON, llotypes.SigningSchemeDefault),
+		2: merkleChannel(llotypes.ReportFormatEVMABIEncodeUnpacked, llotypes.SigningSchemeMerkle),
+	}
+	rwis, err := p.Reports(t.Context(), 3, merklePrecursor(t, protocol.LifeCycleStageProduction, defs))
+	require.NoError(t, err)
+	require.Len(t, rwis, 1)
+	assert.Equal(t, llotypes.ReportFormatJSON, rwis[0].ReportWithInfo.Info.ReportFormat)
+
+	require.Len(t, rtCh, 1)
+	assert.Equal(t, uint32(1), (<-rtCh).ChannelId)
 }

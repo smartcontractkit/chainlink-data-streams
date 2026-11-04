@@ -48,15 +48,15 @@ type MerkleHash = [32]byte
 // MerkleFamily returns the signing family that channels in format join under
 // SigningSchemeMerkle, and false if format has none.
 //
-// The EVM family covers every format with a codec in llo/reportcodec/evm. They
-// all produce reports for EVM verifiers and hash with keccak256, so one bundle
-// can hold all of them.
+// The EVM family covers the formats in llo/reportcodec/evm whose reports start
+// with the feed ID, as the fee manager reads them. They all hash with
+// keccak256, so one bundle can hold all of them. EVMStreamlined reports are
+// packed without that header and stay out.
 func MerkleFamily(format llotypes.ReportFormat) (llotypes.ReportFormat, bool) {
 	switch format {
 	case llotypes.ReportFormatEVMPremiumLegacy,
 		llotypes.ReportFormatEVMABIEncodeUnpacked,
-		llotypes.ReportFormatEVMABIEncodeUnpackedExpr,
-		llotypes.ReportFormatEVMStreamlined:
+		llotypes.ReportFormatEVMABIEncodeUnpackedExpr:
 		return llotypes.ReportFormatEVMMerkle, true
 	default:
 		return 0, false
@@ -68,25 +68,33 @@ func IsMerkleFamily(format llotypes.ReportFormat) bool {
 	return format == llotypes.ReportFormatEVMMerkle
 }
 
+// SigningFamily returns how the reports of a channel defined by cd are signed:
+// the family they join as Merkle leaves and true, or false when each report is
+// signed on its own. It fails for an unknown scheme, or SigningSchemeMerkle on
+// a format with no signing family.
+func SigningFamily(cd llotypes.ChannelDefinition) (llotypes.ReportFormat, bool, error) {
+	switch cd.SigningScheme {
+	case llotypes.SigningSchemeDefault:
+		return 0, false, nil
+	case llotypes.SigningSchemeMerkle:
+		family, ok := MerkleFamily(cd.ReportFormat)
+		if !ok {
+			return 0, false, fmt.Errorf("signing scheme %q is not supported for report format %s", cd.SigningScheme, cd.ReportFormat)
+		}
+		return family, true, nil
+	default:
+		return 0, false, fmt.Errorf("unknown signing scheme %q", cd.SigningScheme)
+	}
+}
+
 // VerifySigningScheme checks how a channel definition is signed. A signing
-// family is never a channel format, the scheme must be empty or
-// SigningSchemeMerkle, and SigningSchemeMerkle needs a format with a signing
-// family.
+// family is never a channel format, and SigningFamily must accept the scheme.
 func VerifySigningScheme(cd llotypes.ChannelDefinition) error {
 	if IsMerkleFamily(cd.ReportFormat) {
 		return fmt.Errorf("report format %s is a signing family, not a channel format", cd.ReportFormat)
 	}
-	switch cd.SigningScheme {
-	case llotypes.SigningSchemeDefault:
-		return nil
-	case llotypes.SigningSchemeMerkle:
-		if _, ok := MerkleFamily(cd.ReportFormat); !ok {
-			return fmt.Errorf("signing scheme %q is not supported for report format %s", cd.SigningScheme, cd.ReportFormat)
-		}
-		return nil
-	default:
-		return fmt.Errorf("unknown signing scheme %q", cd.SigningScheme)
-	}
+	_, _, err := SigningFamily(cd)
+	return err
 }
 
 func keccak(parts ...[]byte) (h MerkleHash) {

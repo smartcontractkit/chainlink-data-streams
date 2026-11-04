@@ -22,8 +22,10 @@ const (
 )
 
 // LLOMerkleBundleProto is the report a signing family signs once per round.
-// Leaves are in ascending channel ID order. The root is not stored: every
-// oracle and the keyring recompute it from the leaves.
+// Leaves are in ascending order of the reportable channel that emitted them.
+// A backfill leaf carries its target's channel ID, so leaf channel IDs are
+// neither sorted nor unique. The root is not stored: every oracle and the
+// keyring recompute it from the leaves.
 type LLOMerkleBundleProto struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Family        uint32                 `protobuf:"varint,1,opt,name=family,proto3" json:"family,omitempty"`

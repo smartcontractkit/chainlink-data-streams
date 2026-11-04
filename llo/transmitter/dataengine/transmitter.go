@@ -124,8 +124,8 @@ type transmitter struct {
 	stopCh services.StopChan
 	wg     *sync.WaitGroup
 
-	// commitCh carries transmissions to the commit loops, one per send for
-	// Transmit and a whole batch per send for TransmitBatch.
+	// commitCh carries the transmissions of one Transmit or TransmitBatch
+	// call, for every server, per send.
 	commitCh chan []*Transmission
 }
 
@@ -254,29 +254,8 @@ func (mt *transmitter) Transmit(
 	seqNr uint64,
 	report ocr3types.ReportWithInfo[llotypes.ReportInfo],
 	sigs []types.AttributedOnchainSignature,
-) (err error) {
-	ok := mt.IfStarted(func() {
-		for serverURL := range mt.servers {
-			t := &Transmission{
-				ServerURL:    serverURL,
-				ConfigDigest: digest,
-				SeqNr:        seqNr,
-				Report:       report,
-				Sigs:         sigs,
-			}
-			select {
-			case mt.commitCh <- []*Transmission{t}:
-			case <-ctx.Done():
-				err = fmt.Errorf("failed to add transmission to commit channel: %w", ctx.Err())
-			}
-		}
-	})
-
-	if !ok {
-		return errors.New("transmitter is not started")
-	}
-
-	return err
+) error {
+	return mt.TransmitBatch(ctx, digest, seqNr, []ocr3types.ReportWithInfo[llotypes.ReportInfo]{report}, sigs)
 }
 
 // TransmitBatch enqueues reports that share a digest, seqNr and signatures,

@@ -81,7 +81,7 @@ func (p *Plugin) observation(ctx context.Context, outctx ocr3types.OutcomeContex
 			// ChannelIDs should always be sorted the same way (channel ID ascending).
 			expectedChannelDefs, unsupported := withoutSigningSchemes(previousOutcome.ChannelDefinitions, p.ChannelDefinitionCache.Definitions(previousOutcome.ChannelDefinitions))
 			if len(unsupported) > 0 {
-				p.Logger.Errorw("ChannelDefinitionCache.Definitions has channels with a signing scheme, which LLO v30 does not support, not voting for them", "channelIDs", unsupported)
+				p.Logger.Errorw("ChannelDefinitionCache.Definitions has channels with a signing scheme, which LLO v30 does not support, or backfilling one, not voting for them", "channelIDs", unsupported)
 			}
 			// Only the channels this node would vote to add or change are held
 			// to the admission-only checks; the ones already committed are not,
@@ -225,14 +225,13 @@ func sortChannelIDs(cids []llotypes.ChannelID) {
 // SigningScheme reverted to its committed definition, or left out if it has
 // none, and the reverted channel IDs in ascending order. v30 signs every report
 // on its own, so it never votes for such a channel, which a channel
-// definitions cache shared with a v31 instance can hold.
+// definitions cache shared with a v31 instance can hold. A history_backfill
+// channel that targets a reverted channel is reverted with it, or admission
+// would fail for the whole set on a target v30 leaves out.
 func withoutSigningSchemes(committed, expected llotypes.ChannelDefinitions) (llotypes.ChannelDefinitions, []llotypes.ChannelID) {
 	var out llotypes.ChannelDefinitions
 	var unsupported []llotypes.ChannelID
-	for channelID, cd := range expected {
-		if cd.SigningScheme == llotypes.SigningSchemeDefault {
-			continue
-		}
+	revert := func(channelID llotypes.ChannelID) {
 		if out == nil {
 			// expected may share its backing map with the previous outcome.
 			out = maps.Clone(expected)
@@ -244,8 +243,31 @@ func withoutSigningSchemes(committed, expected llotypes.ChannelDefinitions) (llo
 		}
 		unsupported = append(unsupported, channelID)
 	}
+	for channelID, cd := range expected {
+		if cd.SigningScheme != llotypes.SigningSchemeDefault {
+			revert(channelID)
+		}
+	}
 	if out == nil {
 		return expected, nil
+	}
+	reverted := make(map[llotypes.ChannelID]struct{}, len(unsupported))
+	for _, channelID := range unsupported {
+		reverted[channelID] = struct{}{}
+	}
+	// A backfill channel never targets another backfill channel, so one pass
+	// reaches every dependent.
+	for channelID, cd := range expected {
+		if _, ok := reverted[channelID]; ok || cd.ReportFormat != llotypes.ReportFormatHistoryBackfill {
+			continue
+		}
+		opts, err := protocol.ParseHistoryBackfillOpts(cd.Opts)
+		if err != nil {
+			continue
+		}
+		if _, ok := reverted[opts.TargetChannelID]; ok {
+			revert(channelID)
+		}
 	}
 	sort.Slice(unsupported, func(i, j int) bool { return unsupported[i] < unsupported[j] })
 	return out, unsupported

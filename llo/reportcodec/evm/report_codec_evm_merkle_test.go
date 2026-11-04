@@ -28,7 +28,7 @@ func Test_ReportCodecEVMMerkle_Pack(t *testing.T) {
 			{ChannelID: 1, ReportFormat: uint32(llotypes.ReportFormatEVMPremiumLegacy), Report: []byte{0x01}},
 			{ChannelID: 2, ReportFormat: uint32(llotypes.ReportFormatEVMABIEncodeUnpacked), Report: []byte{0x02, 0x02}},
 			{ChannelID: 7, ReportFormat: uint32(llotypes.ReportFormatEVMABIEncodeUnpackedExpr), Report: []byte{0x07}},
-			{ChannelID: 9, ReportFormat: uint32(llotypes.ReportFormatEVMStreamlined), Report: []byte{}},
+			{ChannelID: 9, ReportFormat: uint32(llotypes.ReportFormatEVMPremiumLegacy), Report: []byte{}},
 			{ChannelID: 10, ReportFormat: uint32(llotypes.ReportFormatEVMABIEncodeUnpacked), Report: []byte("ten")},
 		},
 	}
