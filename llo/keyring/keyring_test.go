@@ -2,6 +2,7 @@ package keyring
 
 import (
 	crand "crypto/rand"
+	"crypto/sha256"
 	"fmt"
 	"math"
 	"math/rand/v2"
@@ -11,6 +12,7 @@ import (
 	gethcrypto "github.com/ethereum/go-ethereum/crypto"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/smartcontractkit/libocr/offchainreporting2plus/ocr3types"
 	"github.com/smartcontractkit/libocr/offchainreporting2plus/types"
@@ -19,6 +21,7 @@ import (
 	"github.com/smartcontractkit/chainlink-common/keystore/corekeys/ocr2key"
 	"github.com/smartcontractkit/chainlink-common/pkg/logger"
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
+	"github.com/smartcontractkit/chainlink-data-streams/llo/protocol"
 )
 
 var _ Key = &mockKey{}
@@ -163,4 +166,102 @@ func mustRandBytes(n int) (b []byte) {
 		panic(err)
 	}
 	return b
+}
+
+func Test_Keyring_EVMMerkle(t *testing.T) {
+	t.Parallel()
+	lggr := logger.Test(t)
+	newKeyring := func() (OnchainKeyring, ocr2key.KeyBundle) {
+		kb := ocr2key.MustNewInsecure(crand.Reader, corekeys.EVM)
+		return NewOnchainKeyring(lggr, map[llotypes.ReportFormat]Key{llotypes.ReportFormatEVMMerkle: kb}, 2), kb
+	}
+	signer, signerKey := newKeyring()
+	verifier, _ := newKeyring()
+
+	bundle := &protocol.LLOMerkleBundleProto{
+		Family: uint32(llotypes.ReportFormatEVMMerkle),
+		Leaves: []*protocol.LLOMerkleLeafProto{
+			{ChannelID: 1, ReportFormat: uint32(llotypes.ReportFormatEVMABIEncodeUnpacked), Report: []byte("one")},
+			{ChannelID: 2, ReportFormat: uint32(llotypes.ReportFormatEVMStreamlined), Report: []byte("two")},
+			{ChannelID: 3, ReportFormat: uint32(llotypes.ReportFormatEVMPremiumLegacy), Report: []byte("three")},
+		},
+	}
+	encoded, err := protocol.EncodeMerkleBundle(bundle)
+	require.NoError(t, err)
+	report := ocr3types.ReportWithInfo[llotypes.ReportInfo]{Report: encoded, Info: llotypes.ReportInfo{ReportFormat: llotypes.ReportFormatEVMMerkle}}
+	cd, err := types.BytesToConfigDigest(mustRandBytes(32))
+	require.NoError(t, err)
+	seqNr := uint64(42)
+
+	sig, err := signer.Sign(cd, seqNr, report)
+	require.NoError(t, err)
+	pub := signerKey.PublicKey()
+
+	t.Run("verifies", func(t *testing.T) {
+		require.True(t, verifier.Verify(pub, cd, seqNr, report, sig))
+		// The second check is served from the root cache.
+		require.True(t, verifier.Verify(pub, cd, seqNr, report, sig))
+	})
+
+	t.Run("signs the merkle message an onchain verifier recovers", func(t *testing.T) {
+		root, err := protocol.MerkleBundleRoot(bundle)
+		require.NoError(t, err)
+		msg := protocol.MerkleSigningMessage(cd, seqNr, llotypes.ReportFormatEVMMerkle, uint32(len(bundle.Leaves)), root)
+		recovered, err := gethcrypto.SigToPub(msg[:], sig)
+		require.NoError(t, err)
+		assert.Equal(t, common.BytesToAddress(pub), gethcrypto.PubkeyToAddress(*recovered))
+	})
+
+	t.Run("rejects another round or configuration", func(t *testing.T) {
+		assert.False(t, verifier.Verify(pub, cd, seqNr+1, report, sig))
+		otherCD := cd
+		otherCD[0] ^= 1
+		assert.False(t, verifier.Verify(pub, otherCD, seqNr, report, sig))
+	})
+
+	t.Run("rejects a bundle whose leaves differ from the signed ones", func(t *testing.T) {
+		changed := proto.Clone(bundle).(*protocol.LLOMerkleBundleProto)
+		changed.Leaves[1].Report = []byte("TWO")
+		b, err := protocol.EncodeMerkleBundle(changed)
+		require.NoError(t, err)
+		assert.False(t, verifier.Verify(pub, cd, seqNr, ocr3types.ReportWithInfo[llotypes.ReportInfo]{Report: b, Info: report.Info}, sig))
+
+		dropped := proto.Clone(bundle).(*protocol.LLOMerkleBundleProto)
+		dropped.Leaves = dropped.Leaves[:2]
+		b, err = protocol.EncodeMerkleBundle(dropped)
+		require.NoError(t, err)
+		assert.False(t, verifier.Verify(pub, cd, seqNr, ocr3types.ReportWithInfo[llotypes.ReportInfo]{Report: b, Info: report.Info}, sig))
+	})
+
+	t.Run("rejects an invalid bundle", func(t *testing.T) {
+		invalid := ocr3types.ReportWithInfo[llotypes.ReportInfo]{Report: []byte{0xff}, Info: report.Info}
+		_, err := signer.Sign(cd, seqNr, invalid)
+		require.ErrorContains(t, err, "Sign failed; invalid merkle bundle")
+		assert.False(t, verifier.Verify(pub, cd, seqNr, invalid, sig))
+	})
+
+	t.Run("rejects a bundle under another report format", func(t *testing.T) {
+		other := ocr3types.ReportWithInfo[llotypes.ReportInfo]{Report: encoded, Info: llotypes.ReportInfo{ReportFormat: llotypes.ReportFormatEVMStreamlined}}
+		_, err := signer.(*onchainKeyring).merkleSigningMessage(cd, seqNr, other)
+		require.EqualError(t, err, "bundle family evm_merkle does not match report format evm_streamlined")
+	})
+}
+
+func Test_merkleRootCache_Evicts(t *testing.T) {
+	t.Parallel()
+	c := newMerkleRootCache(2)
+	bundles := make([][]byte, 3)
+	for i := range bundles {
+		b, err := protocol.EncodeMerkleBundle(&protocol.LLOMerkleBundleProto{
+			Family: uint32(llotypes.ReportFormatEVMMerkle),
+			Leaves: []*protocol.LLOMerkleLeafProto{{ChannelID: uint32(i + 1), ReportFormat: uint32(llotypes.ReportFormatEVMStreamlined)}}, //nolint:gosec // test
+		})
+		require.NoError(t, err)
+		bundles[i] = b
+		_, err = c.root(b)
+		require.NoError(t, err)
+	}
+	assert.Len(t, c.entries, 2)
+	assert.Len(t, c.order, 2)
+	assert.NotContains(t, c.entries, sha256.Sum256(bundles[0]))
 }

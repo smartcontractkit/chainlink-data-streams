@@ -37,6 +37,7 @@ func ChannelDefinitionToProto(d llotypes.ChannelDefinition) *LLOChannelDefinitio
 		Tombstone:              d.Tombstone,
 		Source:                 d.Source,
 		DisableNilStreamValues: d.DisableNilStreamValues,
+		SigningScheme:          string(d.SigningScheme),
 	}
 }
 
@@ -57,5 +58,6 @@ func ChannelDefinitionFromProto(pb *LLOChannelDefinitionProto) llotypes.ChannelD
 		Tombstone:              pb.Tombstone,
 		Source:                 pb.Source,
 		DisableNilStreamValues: pb.DisableNilStreamValues,
+		SigningScheme:          llotypes.SigningScheme(pb.SigningScheme),
 	}
 }

@@ -155,3 +155,23 @@ func Test_NewReportingPlugin_setsValues(t *testing.T) {
 		assert.Equal(t, uint64(12345), p.(*Plugin).DefaultMinReportIntervalNanoseconds)
 	})
 }
+
+func Test_withoutSigningSchemes(t *testing.T) {
+	plain := llotypes.ChannelDefinition{ReportFormat: llotypes.ReportFormatEVMABIEncodeUnpacked}
+	merkle := plain
+	merkle.SigningScheme = llotypes.SigningSchemeMerkle
+
+	committed := llotypes.ChannelDefinitions{1: plain, 2: plain}
+
+	got, unsupported := withoutSigningSchemes(committed, committed)
+	assert.Equal(t, committed, got)
+	assert.Empty(t, unsupported)
+
+	// A committed channel switched to a scheme keeps its committed
+	// definition, and a new channel with a scheme is left out.
+	expected := llotypes.ChannelDefinitions{1: plain, 2: merkle, 3: merkle}
+	got, unsupported = withoutSigningSchemes(committed, expected)
+	assert.Equal(t, llotypes.ChannelDefinitions{1: plain, 2: plain}, got)
+	assert.Equal(t, []llotypes.ChannelID{2, 3}, unsupported)
+	assert.Equal(t, merkle, expected[2], "the input must not be modified")
+}

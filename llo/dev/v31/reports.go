@@ -39,6 +39,9 @@ func (p *Plugin) Reports(ctx context.Context, seqNr uint64, rawPrecursor ocr3_1t
 	channelOpts := gen.Opts()
 
 	rwis := []ocr3types.ReportPlus[llotypes.ReportInfo]{}
+	// Reports of channels signed as Merkle leaves are collected here and
+	// emitted as one bundle per signing family after the loop.
+	var bundler merkleBundler
 
 	if out.LifeCycleStage == protocol.LifeCycleStageRetired {
 		// Emit a retirement report to hand over ValidAfterNanoseconds for a gapless handover.
@@ -120,6 +123,17 @@ func (p *Plugin) Reports(ctx context.Context, seqNr uint64, rawPrecursor ocr3_1t
 				p.reportNotEmitted(seqNr, cid, targetCD.ReportFormat, "encode_failed", "targetChannelID", opts.TargetChannelID, "err", err)
 				continue
 			}
+			// The backfill report is signed like the target channel's own
+			// reports, so its consumers verify both the same way.
+			family, leaf, err := p.signingFamily(targetCD)
+			if err != nil {
+				p.reportNotEmitted(seqNr, cid, targetCD.ReportFormat, "signing_scheme_unsupported", "targetChannelID", opts.TargetChannelID, "err", err)
+				continue
+			}
+			if leaf {
+				bundler.add(family, cid, opts.TargetChannelID, targetCD.ReportFormat, encoded)
+				continue
+			}
 			rwis = append(rwis, ocr3types.ReportPlus[llotypes.ReportInfo]{
 				ReportWithInfo: ocr3types.ReportWithInfo[llotypes.ReportInfo]{
 					Report: encoded,
@@ -165,6 +179,15 @@ func (p *Plugin) Reports(ctx context.Context, seqNr uint64, rawPrecursor ocr3_1t
 			p.reportNotEmitted(seqNr, cid, cd.ReportFormat, "encode_failed", "err", encErr)
 			continue
 		}
+		family, leaf, err := p.signingFamily(cd)
+		if err != nil {
+			p.reportNotEmitted(seqNr, cid, cd.ReportFormat, "signing_scheme_unsupported", "err", err)
+			continue
+		}
+		if leaf {
+			bundler.add(family, cid, cid, cd.ReportFormat, encoded)
+			continue
+		}
 		rwis = append(rwis, ocr3types.ReportPlus[llotypes.ReportInfo]{
 			ReportWithInfo: ocr3types.ReportWithInfo[llotypes.ReportInfo]{
 				Report: encoded,
@@ -175,6 +198,12 @@ func (p *Plugin) Reports(ctx context.Context, seqNr uint64, rawPrecursor ocr3_1t
 			},
 		})
 	}
+
+	bundles, err := bundler.bundles(p, seqNr, out.LifeCycleStage)
+	if err != nil {
+		return nil, err
+	}
+	rwis = append(rwis, bundles...)
 
 	// The staging marker goes last, so the other reports keep their positions,
 	// and only within the report count limit.
