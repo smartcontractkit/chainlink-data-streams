@@ -122,6 +122,56 @@ func Test_ReportCodecEVMMerkle_Pack(t *testing.T) {
 		}
 	})
 
+	// The byte layout is the spec the onchain verifier is written against.
+	t.Run("byte layout", func(t *testing.T) {
+		d := deliveries[1]
+		report, err := protocol.EncodeMerkleDelivery(d)
+		require.NoError(t, err)
+		payload, err := ReportCodecEVMMerkle{}.Pack(digest, seqNr, report, sigs)
+		require.NoError(t, err)
+
+		word := func(offset int) []byte { return payload[offset : offset+32] }
+		uint64At := func(offset int) uint64 { return binary.BigEndian.Uint64(word(offset)[24:]) }
+
+		n, p, l := len(sigs), len(d.Proof), len(d.Leaf.Report)
+		reportOffset := 384
+		rsOffset := reportOffset + 32 + (l+31)/32*32
+		ssOffset := rsOffset + 32 + 32*n
+		proofOffset := ssOffset + 32 + 32*n
+		require.Len(t, payload, proofOffset+32+32*p)
+
+		assert.Equal(t, digest[:], word(0))
+		assert.Equal(t, []byte(MerkleReportContextTag), word(32)[:len(MerkleReportContextTag)])
+		assert.Equal(t, make([]byte, 24-len(MerkleReportContextTag)), word(32)[len(MerkleReportContextTag):24])
+		assert.Equal(t, seqNr, uint64At(32))
+		assert.Equal(t, make([]byte, 32), word(64))
+		assert.Equal(t, uint64(reportOffset), uint64At(96))
+		assert.Equal(t, uint64(rsOffset), uint64At(128))
+		assert.Equal(t, uint64(ssOffset), uint64At(160))
+		for i, sig := range sigs {
+			assert.Equal(t, sig.Signature[64], word(192)[i])
+		}
+		assert.Equal(t, make([]byte, 32-n), word(192)[n:])
+		assert.Equal(t, uint64(d.LeafCount), uint64At(224))
+		assert.Equal(t, uint64(d.LeafIndex), uint64At(256))
+		assert.Equal(t, uint64(d.Leaf.ChannelID), uint64At(288))
+		assert.Equal(t, uint64(d.Leaf.ReportFormat), uint64At(320))
+		assert.Equal(t, uint64(proofOffset), uint64At(352))
+
+		assert.Equal(t, uint64(l), uint64At(reportOffset))
+		assert.Equal(t, d.Leaf.Report, payload[reportOffset+32:reportOffset+32+l])
+		assert.Equal(t, uint64(n), uint64At(rsOffset))
+		assert.Equal(t, uint64(n), uint64At(ssOffset))
+		for i, sig := range sigs {
+			assert.Equal(t, sig.Signature[:32], word(rsOffset+32+32*i))
+			assert.Equal(t, sig.Signature[32:64], word(ssOffset+32+32*i))
+		}
+		assert.Equal(t, uint64(p), uint64At(proofOffset))
+		for i, h := range d.Proof {
+			assert.Equal(t, h, word(proofOffset+32+32*i))
+		}
+	})
+
 	t.Run("rejects an invalid delivery", func(t *testing.T) {
 		_, err := ReportCodecEVMMerkle{}.Pack(digest, seqNr, []byte{0xff}, sigs)
 		require.Error(t, err)
