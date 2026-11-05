@@ -78,7 +78,7 @@ func Test_transmitter_ExpandsMerkleBundle(t *testing.T) {
 		Family: uint32(llotypes.ReportFormatEVMMerkle),
 		Leaves: []*protocol.LLOMerkleLeafProto{
 			{ChannelID: 1, ReportFormat: uint32(llotypes.ReportFormatEVMABIEncodeUnpacked), Report: []byte("one")},
-			{ChannelID: 2, ReportFormat: uint32(llotypes.ReportFormatEVMABIEncodeUnpackedExpr), Report: []byte("two")},
+			{ChannelID: 2, ReportFormat: uint32(llotypes.ReportFormatEVMStreamlined), Report: []byte("two")},
 			{ChannelID: 5, ReportFormat: uint32(llotypes.ReportFormatEVMPremiumLegacy), Report: []byte("five")},
 		},
 	}

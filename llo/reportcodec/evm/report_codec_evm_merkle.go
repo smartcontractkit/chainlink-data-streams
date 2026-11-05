@@ -18,6 +18,10 @@ import (
 // verifier proxy routes it by reportContext[0], the config digest, and the fee
 // manager reads the report from it unchanged. The Merkle fields follow.
 //
+// An EVMStreamlined leaf starts with its feed ID but carries no fee fields. A
+// fee manager that decodes fees from the report, unlike NoOpFeeManager, must
+// skip it.
+//
 // reportContext[1] holds MerkleReportContextTag in its first bytes and seqNr in
 // its last 8. A legacy report context has 27 zero bytes there, so a verifier
 // tells the two payloads apart by the tag. reportContext[2] is zero.

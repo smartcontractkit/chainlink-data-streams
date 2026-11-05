@@ -89,7 +89,7 @@ func Test_Reports_MerkleBundle(t *testing.T) {
 	defs := llotypes.ChannelDefinitions{
 		1: merkleChannel(llotypes.ReportFormatJSON, llotypes.SigningSchemeDefault),
 		2: merkleChannel(llotypes.ReportFormatEVMABIEncodeUnpacked, llotypes.SigningSchemeMerkle),
-		3: merkleChannel(llotypes.ReportFormatEVMPremiumLegacy, llotypes.SigningSchemeMerkle),
+		3: merkleChannel(llotypes.ReportFormatEVMStreamlined, llotypes.SigningSchemeMerkle),
 		4: merkleChannel(llotypes.ReportFormatEVMABIEncodeUnpacked, llotypes.SigningSchemeDefault),
 		5: merkleChannel(llotypes.ReportFormatEVMPremiumLegacy, llotypes.SigningSchemeMerkle),
 	}
@@ -112,7 +112,7 @@ func Test_Reports_MerkleBundle(t *testing.T) {
 			format llotypes.ReportFormat
 		}{
 			{2, llotypes.ReportFormatEVMABIEncodeUnpacked},
-			{3, llotypes.ReportFormatEVMPremiumLegacy},
+			{3, llotypes.ReportFormatEVMStreamlined},
 			{5, llotypes.ReportFormatEVMPremiumLegacy},
 		} {
 			leaf := bundle.Leaves[i]
@@ -153,7 +153,7 @@ func Test_Reports_MerkleBundleSplitsBySize(t *testing.T) {
 	defs := llotypes.ChannelDefinitions{
 		1: merkleChannel(llotypes.ReportFormatEVMABIEncodeUnpacked, llotypes.SigningSchemeMerkle),
 		2: merkleChannel(llotypes.ReportFormatEVMABIEncodeUnpacked, llotypes.SigningSchemeMerkle),
-		3: merkleChannel(llotypes.ReportFormatEVMPremiumLegacy, llotypes.SigningSchemeMerkle),
+		3: merkleChannel(llotypes.ReportFormatEVMStreamlined, llotypes.SigningSchemeMerkle),
 	}
 	rwis, err := p.Reports(t.Context(), 3, merklePrecursor(t, protocol.LifeCycleStageProduction, defs))
 	require.NoError(t, err)

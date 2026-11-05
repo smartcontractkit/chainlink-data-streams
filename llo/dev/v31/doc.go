@@ -209,10 +209,9 @@
 // delivery per channel with its proof. See protocol/merkle.go for the tree and
 // the signed message.
 //
-// The EVM family, llotypes.ReportFormatEVMMerkle in ReportInfo, covers the
-// formats in llo/reportcodec/evm whose reports start with the feed ID, so every
-// one but EVMStreamlined. Backfill reports follow the scheme of their target
-// channel.
+// The EVM family, llotypes.ReportFormatEVMMerkle in ReportInfo, covers every
+// format in llo/reportcodec/evm. An EVMStreamlined channel needs a feed ID to
+// join. Backfill reports follow the scheme of their target channel.
 //
 // A family is not tied to a destination chain. It fixes one signing key, one
 // hash and signature scheme, and one delivery packer. The root is signed once

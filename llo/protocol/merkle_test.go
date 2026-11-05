@@ -20,6 +20,7 @@ func testLeaves(n int) []*LLOMerkleLeafProto {
 		llotypes.ReportFormatEVMPremiumLegacy,
 		llotypes.ReportFormatEVMABIEncodeUnpacked,
 		llotypes.ReportFormatEVMABIEncodeUnpackedExpr,
+		llotypes.ReportFormatEVMStreamlined,
 	}
 	leaves := make([]*LLOMerkleLeafProto, n)
 	for i := range leaves {
@@ -45,13 +46,13 @@ func Test_MerkleFamily(t *testing.T) {
 		llotypes.ReportFormatEVMPremiumLegacy,
 		llotypes.ReportFormatEVMABIEncodeUnpacked,
 		llotypes.ReportFormatEVMABIEncodeUnpackedExpr,
+		llotypes.ReportFormatEVMStreamlined,
 	} {
 		family, ok := MerkleFamily(rf)
 		assert.True(t, ok, rf.String())
 		assert.Equal(t, evmMerkle, family, rf.String())
 	}
 	for _, rf := range []llotypes.ReportFormat{
-		llotypes.ReportFormatEVMStreamlined,
 		llotypes.ReportFormatJSON,
 		llotypes.ReportFormatRetirement,
 		llotypes.ReportFormatCapabilityTrigger,
@@ -65,14 +66,12 @@ func Test_MerkleFamily(t *testing.T) {
 
 func Test_VerifySigningScheme(t *testing.T) {
 	require.NoError(t, VerifySigningScheme(llotypes.ChannelDefinition{ReportFormat: llotypes.ReportFormatJSON}))
-	require.NoError(t, VerifySigningScheme(llotypes.ChannelDefinition{ReportFormat: llotypes.ReportFormatEVMPremiumLegacy, SigningScheme: llotypes.SigningSchemeMerkle}))
-	require.EqualError(t, VerifySigningScheme(llotypes.ChannelDefinition{ReportFormat: llotypes.ReportFormatEVMStreamlined, SigningScheme: llotypes.SigningSchemeMerkle}),
-		`signing scheme "merkle" is not supported for report format evm_streamlined`)
+	require.NoError(t, VerifySigningScheme(llotypes.ChannelDefinition{ReportFormat: llotypes.ReportFormatEVMStreamlined, SigningScheme: llotypes.SigningSchemeMerkle}))
 	require.EqualError(t, VerifySigningScheme(llotypes.ChannelDefinition{ReportFormat: llotypes.ReportFormatJSON, SigningScheme: llotypes.SigningSchemeMerkle}),
 		`signing scheme "merkle" is not supported for report format json`)
 	require.EqualError(t, VerifySigningScheme(llotypes.ChannelDefinition{ReportFormat: llotypes.ReportFormatEVMMerkle}),
 		`report format evm_merkle is a signing family, not a channel format`)
-	require.EqualError(t, VerifySigningScheme(llotypes.ChannelDefinition{ReportFormat: llotypes.ReportFormatEVMPremiumLegacy, SigningScheme: "both"}),
+	require.EqualError(t, VerifySigningScheme(llotypes.ChannelDefinition{ReportFormat: llotypes.ReportFormatEVMStreamlined, SigningScheme: "both"}),
 		`unknown signing scheme "both"`)
 }
 
@@ -110,7 +109,7 @@ func Test_MerkleLeafHash_DomainSeparation(t *testing.T) {
 	assert.NotEqual(t, h, MerkleLeafHash(evmMerkle, other), "channel ID")
 
 	other = proto.Clone(leaf).(*LLOMerkleLeafProto)
-	other.ReportFormat = uint32(llotypes.ReportFormatEVMABIEncodeUnpacked)
+	other.ReportFormat = uint32(llotypes.ReportFormatEVMStreamlined)
 	assert.NotEqual(t, h, MerkleLeafHash(evmMerkle, other), "report format")
 
 	assert.NotEqual(t, h, MerkleLeafHash(evmMerkle+1, leaf), "family")
@@ -190,7 +189,7 @@ func Test_Merkle_GoldenVectors(t *testing.T) {
 			{ChannelID: 1, ReportFormat: uint32(llotypes.ReportFormatEVMPremiumLegacy), Report: []byte{0x01}},
 			{ChannelID: 2, ReportFormat: uint32(llotypes.ReportFormatEVMABIEncodeUnpacked), Report: []byte{0x02, 0x02}},
 			{ChannelID: 7, ReportFormat: uint32(llotypes.ReportFormatEVMABIEncodeUnpackedExpr), Report: []byte{0x07}},
-			{ChannelID: 9, ReportFormat: uint32(llotypes.ReportFormatEVMPremiumLegacy), Report: []byte{}},
+			{ChannelID: 9, ReportFormat: uint32(llotypes.ReportFormatEVMStreamlined), Report: []byte{}},
 			{ChannelID: 10, ReportFormat: uint32(llotypes.ReportFormatEVMABIEncodeUnpacked), Report: []byte("ten")},
 		},
 	}
@@ -202,10 +201,10 @@ func Test_Merkle_GoldenVectors(t *testing.T) {
 
 	root, err := MerkleBundleRoot(bundle)
 	require.NoError(t, err)
-	assert.Equal(t, "35096b66f71a326ee2afaddabd3aac3eb7aa0e585cd0d6efa8d5b904cddad81d", hex.EncodeToString(root[:]))
+	assert.Equal(t, "cee789eea2b2295270c2507936405a5dc9e3af1fcfc3c8c9cb605bae8e57b4e9", hex.EncodeToString(root[:]))
 
 	msg := MerkleSigningMessage(digest, seqNr, evmMerkle, uint32(len(bundle.Leaves)), root)
-	assert.Equal(t, "2745858e100b98d464dc9a0c031dbddd298b3ffca53d0af0bf8fd5dd867529ca", hex.EncodeToString(msg[:]))
+	assert.Equal(t, "82a749ca4b50caa0ea66a307bb3cffbc933bca6be71832179c775be8dee4ebac", hex.EncodeToString(msg[:]))
 
 	deliveries, err := ExpandMerkleBundle(bundle)
 	require.NoError(t, err)
@@ -216,13 +215,13 @@ func Test_Merkle_GoldenVectors(t *testing.T) {
 		}
 	}
 	assert.Equal(t, [][]string{
-		{"a9ca2f12f60482dba94c617c2c752d6f1770af1e796a3fe319e3a69bba71fc5a", "c7d0680ae16ca7253972f33387a0a84bb662083739bc61c5cd04c83ce793b3e5", "cb05384430fa7e800cea5134251e599c40b4f2b52a46a5bccc70a21f69483a0b"},
-		{"c77f76bdb77a1e6a7145ea23d2f9309047f3020187de3013c01cee82bff6f057", "c7d0680ae16ca7253972f33387a0a84bb662083739bc61c5cd04c83ce793b3e5", "cb05384430fa7e800cea5134251e599c40b4f2b52a46a5bccc70a21f69483a0b"},
-		{"7c99b6d566a0caba97492cfbfef19f6fbbfc6f2198eec1cb3b27922472a93d90", "b31bd790ac0b0f71e3db167a3d275efab380d4fbcaca3ec7646958b8f6e0bf19", "cb05384430fa7e800cea5134251e599c40b4f2b52a46a5bccc70a21f69483a0b"},
+		{"a9ca2f12f60482dba94c617c2c752d6f1770af1e796a3fe319e3a69bba71fc5a", "ba2504762e114a693f259e800f8e66387fb59e0a217d6caa40e6f5e54703ada2", "cb05384430fa7e800cea5134251e599c40b4f2b52a46a5bccc70a21f69483a0b"},
+		{"c77f76bdb77a1e6a7145ea23d2f9309047f3020187de3013c01cee82bff6f057", "ba2504762e114a693f259e800f8e66387fb59e0a217d6caa40e6f5e54703ada2", "cb05384430fa7e800cea5134251e599c40b4f2b52a46a5bccc70a21f69483a0b"},
+		{"ae0b62b9ce280ffba7c5c0c1cad41c77928a9a408988e550d857e6ffe04dad22", "b31bd790ac0b0f71e3db167a3d275efab380d4fbcaca3ec7646958b8f6e0bf19", "cb05384430fa7e800cea5134251e599c40b4f2b52a46a5bccc70a21f69483a0b"},
 		{"4d1c23853ce24ad78df071013d6300555c3d36fa656a046b94c750b74661660a", "b31bd790ac0b0f71e3db167a3d275efab380d4fbcaca3ec7646958b8f6e0bf19", "cb05384430fa7e800cea5134251e599c40b4f2b52a46a5bccc70a21f69483a0b"},
 		// The last leaf is promoted twice, so its only sibling is the root of
 		// the first four.
-		{"6700579b32d25919b4a3b229eb3c443e9b37f76252ec10911cb135ec0ba64dd4"},
+		{"7e4ba02ae94d30d32ef66b329b325986ebadd188a13178fb2c0b9159268b9369"},
 	}, proofs)
 }
 
@@ -301,11 +300,9 @@ func Test_MerkleDelivery(t *testing.T) {
 	for name, f := range map[string]func(d *LLOMerkleDeliveryProto){
 		"report":  func(d *LLOMerkleDeliveryProto) { d.Leaf.Report = append(d.Leaf.Report, 0) },
 		"channel": func(d *LLOMerkleDeliveryProto) { d.Leaf.ChannelID++ },
-		"format": func(d *LLOMerkleDeliveryProto) {
-			d.Leaf.ReportFormat = uint32(llotypes.ReportFormatEVMABIEncodeUnpacked)
-		},
-		"index": func(d *LLOMerkleDeliveryProto) { d.LeafIndex = 2 },
-		"proof": func(d *LLOMerkleDeliveryProto) { d.Proof[0][0] ^= 1 },
+		"format":  func(d *LLOMerkleDeliveryProto) { d.Leaf.ReportFormat = uint32(llotypes.ReportFormatEVMPremiumLegacy) },
+		"index":   func(d *LLOMerkleDeliveryProto) { d.LeafIndex = 2 },
+		"proof":   func(d *LLOMerkleDeliveryProto) { d.Proof[0][0] ^= 1 },
 		// A changed leaf count can still reach the root. The signed message
 		// binds it, see Test_MerkleProof_EveryLeaf.
 		"leaf count": func(d *LLOMerkleDeliveryProto) { d.LeafCount = 9 },
@@ -369,7 +366,7 @@ func Test_SplitMerkleBundle(t *testing.T) {
 	})
 
 	t.Run("oversized leaf is left out", func(t *testing.T) {
-		big := &LLOMerkleLeafProto{ChannelID: 99, ReportFormat: uint32(llotypes.ReportFormatEVMPremiumLegacy), Report: make([]byte, 200)}
+		big := &LLOMerkleLeafProto{ChannelID: 99, ReportFormat: uint32(llotypes.ReportFormatEVMStreamlined), Report: make([]byte, 200)}
 		input := []*LLOMerkleLeafProto{leaves[0], big, leaves[1]}
 		bundles, oversized, err := SplitMerkleBundle(evmMerkle, input, 100)
 		require.NoError(t, err)

@@ -32,7 +32,7 @@ func Test_server_transmit_EVMMerkle(t *testing.T) {
 		Family: uint32(llotypes.ReportFormatEVMMerkle),
 		Leaves: []*protocol.LLOMerkleLeafProto{
 			{ChannelID: 1, ReportFormat: uint32(llotypes.ReportFormatEVMABIEncodeUnpacked), Report: []byte("one")},
-			{ChannelID: 2, ReportFormat: uint32(llotypes.ReportFormatEVMABIEncodeUnpackedExpr), Report: []byte("two")},
+			{ChannelID: 2, ReportFormat: uint32(llotypes.ReportFormatEVMStreamlined), Report: []byte("two")},
 		},
 	}
 	deliveries, err := protocol.ExpandMerkleBundle(bundle)

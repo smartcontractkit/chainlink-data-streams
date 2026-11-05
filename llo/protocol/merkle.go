@@ -48,15 +48,16 @@ type MerkleHash = [32]byte
 // MerkleFamily returns the signing family that channels in format join under
 // SigningSchemeMerkle, and false if format has none.
 //
-// The EVM family covers the formats in llo/reportcodec/evm whose reports start
-// with the feed ID, as the fee manager reads them. They all hash with
-// keccak256, so one bundle can hold all of them. EVMStreamlined reports are
-// packed without that header and stay out.
+// The EVM family covers every format with a codec in llo/reportcodec/evm. They
+// all produce reports for EVM verifiers and hash with keccak256, so one bundle
+// can hold all of them. An EVMStreamlined channel joins only with a feed ID, so
+// its reports start with one like the others (see ReportCodecEVMStreamlined).
 func MerkleFamily(format llotypes.ReportFormat) (llotypes.ReportFormat, bool) {
 	switch format {
 	case llotypes.ReportFormatEVMPremiumLegacy,
 		llotypes.ReportFormatEVMABIEncodeUnpacked,
-		llotypes.ReportFormatEVMABIEncodeUnpackedExpr:
+		llotypes.ReportFormatEVMABIEncodeUnpackedExpr,
+		llotypes.ReportFormatEVMStreamlined:
 		return llotypes.ReportFormatEVMMerkle, true
 	default:
 		return 0, false
