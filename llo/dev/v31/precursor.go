@@ -50,7 +50,7 @@ func encodePrecursor(p precursor) (ocr3_1types.ReportsPlusPrecursor, error) {
 }
 
 func framePrecursor(raw []byte) (ocr3_1types.ReportsPlusPrecursor, error) {
-	return encodeFramedPayload(raw, maxDecompressedPrecursorBytes, ocr3_1types.MaxMaxReportsPlusPrecursorBytes, "precursor")
+	return encodeFramedPayload(raw, precursorCodec, maxDecompressedPrecursorBytes, ocr3_1types.MaxMaxReportsPlusPrecursorBytes, "precursor")
 }
 
 // marshalPrecursor serializes the precursor deterministically as

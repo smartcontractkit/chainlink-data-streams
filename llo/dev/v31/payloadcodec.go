@@ -21,6 +21,19 @@ const (
 	payloadCodecZstd byte = 1
 )
 
+// Codec each framed payload kind is written with. payloadCodecZstd compresses
+// when that shrinks the payload and falls back to raw otherwise.
+// payloadCodecRaw never compresses. Readers accept every codec, so these only
+// steer the write side. The precursor is digested and signed and KV records
+// feed the state root, so changing precursorCodec or kvRecordCodec changes
+// consensus bytes and needs every oracle to switch together. blobPayloadCodec
+// can change freely: each node decodes blobs on its own.
+const (
+	blobPayloadCodec = payloadCodecZstd
+	precursorCodec   = payloadCodecZstd
+	kvRecordCodec    = payloadCodecZstd
+)
+
 // maxDecompressedBlobPayloadBytes bounds the size of a blob payload after
 // decompression. A blob is a stream-values-only observation proto, so the same
 // bound the v30 observation codec uses applies here: it is generously above any
@@ -103,23 +116,36 @@ func getPayloadCompressor() (payloadCompressor, error) {
 	return payloadZstd, payloadZstdErr
 }
 
-// encodeFramedPayload frames raw bytes behind a codec byte, compressing them
-// when that actually shrinks the payload. The choice depends only on raw, so
-// two encoders built from the same library version always agree on it. maxRaw
-// bounds raw so a reader with the same bound can decode it, and maxFramed is
-// the size libocr accepts. what names the payload in errors.
-func encodeFramedPayload(raw []byte, maxRaw, maxFramed int, what string) ([]byte, error) {
+// encodeFramedPayload frames raw bytes behind a codec byte. With
+// payloadCodecZstd it compresses them when that actually shrinks the payload.
+// The choice depends only on raw and codec, so two encoders built from the same
+// library version always agree on it. maxRaw bounds raw so a reader with the
+// same bound can decode it, and maxFramed is the size libocr accepts. what
+// names the payload in errors.
+func encodeFramedPayload(raw []byte, codec byte, maxRaw, maxFramed int, what string) ([]byte, error) {
+	if codec == payloadCodecRaw {
+		// The codec byte must fit too, so raw gets one byte less than the
+		// framed limit.
+		maxRaw = min(maxRaw, maxFramed-1)
+	}
 	if len(raw) > maxRaw {
 		// Refuse to emit a payload every peer would reject on decompression;
 		// fail loudly here instead.
 		return nil, fmt.Errorf("%s too large: %d > %d bytes", what, len(raw), maxRaw)
 	}
-	c, err := getPayloadCompressor()
-	if err != nil {
-		return nil, err
+	var out []byte
+	switch codec {
+	case payloadCodecRaw:
+	case payloadCodecZstd:
+		c, err := getPayloadCompressor()
+		if err != nil {
+			return nil, err
+		}
+		out = c.encoder.EncodeAll(raw, []byte{payloadCodecZstd})
+	default:
+		return nil, fmt.Errorf("unknown %s codec %d", what, codec)
 	}
-	out := c.encoder.EncodeAll(raw, []byte{payloadCodecZstd})
-	if len(out) >= len(raw)+1 {
+	if out == nil || len(out) >= len(raw)+1 {
 		out = make([]byte, 0, len(raw)+1)
 		out = append(out, payloadCodecRaw)
 		out = append(out, raw...)
@@ -189,7 +215,7 @@ func decodeFramedPayload(payload []byte, maxOut int, what string) ([]byte, error
 // precursor, nodes need not agree on these bytes: each blob is fetched and
 // decoded on its own.
 func encodeBlobPayload(raw []byte) ([]byte, error) {
-	return encodeFramedPayload(raw, maxDecompressedBlobPayloadBytes, MaxBlobPayloadBytes, "blob payload")
+	return encodeFramedPayload(raw, blobPayloadCodec, maxDecompressedBlobPayloadBytes, MaxBlobPayloadBytes, "blob payload")
 }
 
 // decodeBlobPayload reverses encodeBlobPayload. maxOut is a caller-supplied
@@ -203,7 +229,7 @@ func decodeBlobPayload(payload []byte, maxOut int) ([]byte, error) {
 // state root from these bytes, so they must match on every oracle, as for the
 // precursor.
 func encodeKVRecord(raw []byte, what string) ([]byte, error) {
-	return encodeFramedPayload(raw, maxKVRecordBytes, maxKVRecordBytes, what)
+	return encodeFramedPayload(raw, kvRecordCodec, maxKVRecordBytes, maxKVRecordBytes, what)
 }
 
 // decodeKVRecord reverses encodeKVRecord.
