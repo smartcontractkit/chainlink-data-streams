@@ -53,8 +53,10 @@ func TestLimits_BlobPayloadRejectsOversizedFraming(t *testing.T) {
 	}
 	require.Less(t, len(raw), maxDecompressedBlobPayloadBytes)
 
+	// Under payloadCodecRaw the raw check fires first, with the codec byte
+	// reserved, so match the message both checks share.
 	_, err := encodeBlobPayload(raw)
-	require.ErrorContains(t, err, "framed blob payload too large")
+	require.ErrorContains(t, err, "blob payload too large")
 }
 
 func TestLimits_HistoryFitsWriteBudgets(t *testing.T) {

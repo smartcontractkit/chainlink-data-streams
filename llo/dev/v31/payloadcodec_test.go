@@ -51,6 +51,43 @@ func Test_BlobPayload_RoundTrip(t *testing.T) {
 	})
 }
 
+func Test_encodeFramedPayload_Codec(t *testing.T) {
+	compressible := []byte(strings.Repeat("stream-values-are-repetitive", 200))
+
+	t.Run("raw codec never compresses", func(t *testing.T) {
+		framed, err := encodeFramedPayload(compressible, payloadCodecRaw, len(compressible), len(compressible)+1, "test")
+		require.NoError(t, err)
+		require.Equal(t, payloadCodecRaw, framed[0])
+		assert.Equal(t, compressible, framed[1:])
+
+		got, err := decodeFramedPayload(framed, len(compressible), "test")
+		require.NoError(t, err)
+		assert.Equal(t, compressible, got)
+	})
+
+	t.Run("raw codec reserves the codec byte", func(t *testing.T) {
+		// maxRaw equals maxFramed, as for the precursor and KV records, so a
+		// raw payload at the limit cannot fit behind the codec byte.
+		_, err := encodeFramedPayload(compressible, payloadCodecRaw, len(compressible), len(compressible), "test")
+		require.ErrorContains(t, err, "test too large")
+
+		framed, err := encodeFramedPayload(compressible[1:], payloadCodecRaw, len(compressible), len(compressible), "test")
+		require.NoError(t, err)
+		assert.Len(t, framed, len(compressible))
+	})
+
+	t.Run("zstd codec compresses at the shared limit", func(t *testing.T) {
+		framed, err := encodeFramedPayload(compressible, payloadCodecZstd, len(compressible), len(compressible), "test")
+		require.NoError(t, err)
+		require.Equal(t, payloadCodecZstd, framed[0])
+	})
+
+	t.Run("unknown codec", func(t *testing.T) {
+		_, err := encodeFramedPayload(compressible, 0xff, len(compressible), len(compressible)+1, "test")
+		require.ErrorContains(t, err, "unknown test codec 255")
+	})
+}
+
 func Test_BlobPayload_MarshalStreamValuesRoundTrip(t *testing.T) {
 	sv := make(protocol.StreamValues, 500)
 	for i := uint32(0); i < 500; i++ {
