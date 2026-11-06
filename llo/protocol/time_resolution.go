@@ -38,7 +38,7 @@ func ReportTimeResolution(optsCache *OptsCache, cd llotypes.ChannelDefinition, c
 		return ResolutionNanoseconds, nil
 	case llotypes.ReportFormatHistoryBackfill:
 		return 0, fmt.Errorf("report format %s is encoded with the target channel's codec", cd.ReportFormat)
-	case llotypes.ReportFormatRetirement, llotypes.ReportFormatCapabilityTrigger:
+	case llotypes.ReportFormatRetirement, llotypes.ReportFormatCapabilityTrigger, llotypes.ReportFormatEVMMerkle:
 		return 0, fmt.Errorf("report format %s has no report codec", cd.ReportFormat)
 	default:
 		return 0, fmt.Errorf("report format %s has no time resolution mapping", cd.ReportFormat)

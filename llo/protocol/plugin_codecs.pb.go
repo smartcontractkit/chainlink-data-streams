@@ -590,8 +590,12 @@ type LLOChannelDefinitionProto struct {
 	Tombstone              bool                   `protobuf:"varint,4,opt,name=tombstone,proto3" json:"tombstone,omitempty"`
 	Source                 uint32                 `protobuf:"varint,5,opt,name=source,proto3" json:"source,omitempty"`
 	DisableNilStreamValues bool                   `protobuf:"varint,6,opt,name=disableNilStreamValues,proto3" json:"disableNilStreamValues,omitempty"`
-	unknownFields          protoimpl.UnknownFields
-	sizeCache              protoimpl.SizeCache
+	// signingScheme selects how the channel's reports are signed. Empty signs
+	// every report on its own. It is omitted from the wire when empty, so the
+	// encoding and channel hash of every definition without it are unchanged.
+	SigningScheme string `protobuf:"bytes,7,opt,name=signingScheme,proto3" json:"signingScheme,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *LLOChannelDefinitionProto) Reset() {
@@ -664,6 +668,13 @@ func (x *LLOChannelDefinitionProto) GetDisableNilStreamValues() bool {
 		return x.DisableNilStreamValues
 	}
 	return false
+}
+
+func (x *LLOChannelDefinitionProto) GetSigningScheme() string {
+	if x != nil {
+		return x.SigningScheme
+	}
+	return ""
 }
 
 type LLOStreamDefinition struct {
@@ -1601,14 +1612,15 @@ const file_plugin_codecs_proto_rawDesc = "" +
 	"\rfirstSequence\x18\x02 \x01(\x04R\rfirstSequence\x12\x16\n" +
 	"\x06counts\x18\x03 \x03(\rR\x06counts\x12\\\n" +
 	")chunkFirstObservationTimestampNanoseconds\x18\x04 \x03(\x04R)chunkFirstObservationTimestampNanoseconds\x12P\n" +
-	"#lastObservationTimestampNanoseconds\x18\x05 \x01(\x04R#lastObservationTimestampNanoseconds\"\xf4\x01\n" +
+	"#lastObservationTimestampNanoseconds\x18\x05 \x01(\x04R#lastObservationTimestampNanoseconds\"\x9a\x02\n" +
 	"\x19LLOChannelDefinitionProto\x12\"\n" +
 	"\freportFormat\x18\x01 \x01(\rR\freportFormat\x121\n" +
 	"\astreams\x18\x02 \x03(\v2\x17.v1.LLOStreamDefinitionR\astreams\x12\x12\n" +
 	"\x04opts\x18\x03 \x01(\fR\x04opts\x12\x1c\n" +
 	"\ttombstone\x18\x04 \x01(\bR\ttombstone\x12\x16\n" +
 	"\x06source\x18\x05 \x01(\rR\x06source\x126\n" +
-	"\x16disableNilStreamValues\x18\x06 \x01(\bR\x16disableNilStreamValues\"Q\n" +
+	"\x16disableNilStreamValues\x18\x06 \x01(\bR\x16disableNilStreamValues\x12$\n" +
+	"\rsigningScheme\x18\a \x01(\tR\rsigningScheme\"Q\n" +
 	"\x13LLOStreamDefinition\x12\x1a\n" +
 	"\bstreamID\x18\x01 \x01(\rR\bstreamID\x12\x1e\n" +
 	"\n" +

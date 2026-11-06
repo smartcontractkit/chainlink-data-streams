@@ -228,7 +228,7 @@ func (f *PluginFactory) NewReportingPlugin(ctx context.Context, cfg ocr3types.Re
 			MaxQueryBytes:                MaxMaxQueryBytesUnused,
 			MaxObservationBytes:          ocr3_1types.MaxMaxObservationBytes,
 			MaxReportsPlusPrecursorBytes: ocr3_1types.MaxMaxReportsPlusPrecursorBytes,
-			MaxReportBytes:               ocr3_1types.MaxMaxReportBytes,
+			MaxReportBytes:               MaxReportBytes,
 			MaxReportCount:               protocol.MaxReportCount,
 
 			MaxKeyValueModifiedKeys:                ocr3_1types.MaxMaxKeyValueModifiedKeys,
@@ -257,3 +257,7 @@ func (f *PluginFactory) NewReportingPlugin(ctx context.Context, cfg ocr3types.Re
 
 // MaxMaxQueryBytesUnused documents that LLO uses an empty query.
 const MaxMaxQueryBytesUnused = 0
+
+// MaxReportBytes is the largest report the plugin emits. A Merkle bundle is one
+// report, so the bundler splits by it.
+const MaxReportBytes = ocr3_1types.MaxMaxReportBytes

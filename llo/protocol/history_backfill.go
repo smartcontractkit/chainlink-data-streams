@@ -238,9 +238,10 @@ func TargetChannelTimeResolution(target llotypes.ChannelDefinition) (TimeResolut
 	case llotypes.ReportFormatJSON, llotypes.ReportFormatRetirement,
 		llotypes.ReportFormatCapabilityTrigger, llotypes.ReportFormatEVMStreamlined:
 		return ResolutionSeconds, nil
-	case llotypes.ReportFormatHistoryBackfill:
-		// Rejected at admission by ValidateHistoryBackfillTarget. Resolving it
-		// keeps already committed definitions passing base validation.
+	case llotypes.ReportFormatHistoryBackfill, llotypes.ReportFormatEVMMerkle:
+		// Rejected at admission by ValidateHistoryBackfillTarget, and
+		// ReportFormatEVMMerkle by VerifySigningScheme. Resolving them keeps
+		// already committed definitions passing base validation.
 		return ResolutionSeconds, nil
 	default:
 		return 0, fmt.Errorf("unsupported history_backfill target report format %s", target.ReportFormat)

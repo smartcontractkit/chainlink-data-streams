@@ -42,6 +42,11 @@ func Test_ChannelHashV2(t *testing.T) {
 			},
 		}
 		assert.Equal(t, "7453e6ac62c0a38ec6f08b5e86adbf3450491be64582ceb9edaf0bbe3213c2d5", fmt.Sprintf("%x", ChannelHashV2(full)))
+
+		// An empty signing scheme is omitted from the encoding, so the hashes
+		// above predate the field and still hold.
+		full.SigningScheme = llotypes.SigningSchemeMerkle
+		assert.NotEqual(t, "7453e6ac62c0a38ec6f08b5e86adbf3450491be64582ceb9edaf0bbe3213c2d5", fmt.Sprintf("%x", ChannelHashV2(full)))
 	})
 
 	t.Run("commits to every field Equals compares", func(t *testing.T) {
@@ -56,6 +61,7 @@ func Test_ChannelHashV2(t *testing.T) {
 			"tombstone":              func(d *ChannelDefinitionWithID) { d.Tombstone = true },
 			"source":                 func(d *ChannelDefinitionWithID) { d.Source = 7 },
 			"disableNilStreamValues": func(d *ChannelDefinitionWithID) { d.DisableNilStreamValues = true },
+			"signingScheme":          func(d *ChannelDefinitionWithID) { d.SigningScheme = llotypes.SigningSchemeMerkle },
 		} {
 			t.Run(name, func(t *testing.T) {
 				mutated := base
