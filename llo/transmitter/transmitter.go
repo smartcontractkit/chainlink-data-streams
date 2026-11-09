@@ -234,14 +234,14 @@ func (t *transmitter) transmitMerkleBundle(ctx context.Context, digest types.Con
 // sub transmitters persist and send it like any other report, under the
 // family's report format.
 func expandMerkleBundle(report ocr3types.ReportWithInfo[llotypes.ReportInfo]) ([]ocr3types.ReportWithInfo[llotypes.ReportInfo], error) {
-	bundle, err := protocol.DecodeMerkleBundle(report.Report)
+	bundle, err := protocol.LoadMerkleBundle(report.Report)
 	if err != nil {
 		return nil, fmt.Errorf("failed to expand %s bundle: %w", report.Info.ReportFormat, err)
 	}
-	if llotypes.ReportFormat(bundle.Family) != report.Info.ReportFormat {
-		return nil, fmt.Errorf("failed to expand %s bundle: bundle is of family %s", report.Info.ReportFormat, llotypes.ReportFormat(bundle.Family))
+	if bundle.Family != report.Info.ReportFormat {
+		return nil, fmt.Errorf("failed to expand %s bundle: bundle is of family %s", report.Info.ReportFormat, bundle.Family)
 	}
-	deliveries, err := protocol.ExpandMerkleBundle(bundle)
+	deliveries, err := bundle.Expand(report.Report)
 	if err != nil {
 		return nil, fmt.Errorf("failed to expand %s bundle: %w", report.Info.ReportFormat, err)
 	}

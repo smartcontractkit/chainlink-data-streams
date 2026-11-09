@@ -264,6 +264,10 @@ func ExpandMerkleBundle(bundle *LLOMerkleBundleProto) ([]*LLOMerkleDeliveryProto
 	if err != nil {
 		return nil, err
 	}
+	return expandMerkleBundle(bundle, tree), nil
+}
+
+func expandMerkleBundle(bundle *LLOMerkleBundleProto, tree merkleTree) []*LLOMerkleDeliveryProto {
 	leafCount := uint32(len(bundle.Leaves)) //nolint:gosec // bounded by MaxMerkleBundleLeaves on decode
 	deliveries := make([]*LLOMerkleDeliveryProto, len(bundle.Leaves))
 	for i, leaf := range bundle.Leaves {
@@ -275,7 +279,7 @@ func ExpandMerkleBundle(bundle *LLOMerkleBundleProto) ([]*LLOMerkleDeliveryProto
 			Proof:     tree.proof(i),
 		}
 	}
-	return deliveries, nil
+	return deliveries
 }
 
 // EncodeMerkleDelivery encodes a delivery deterministically.

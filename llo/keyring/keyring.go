@@ -4,12 +4,10 @@ package keyring
 
 import (
 	"bytes"
-	"crypto/sha256"
 	"fmt"
 	"maps"
 	"slices"
 	"sort"
-	"sync"
 
 	"github.com/ethereum/go-ethereum/crypto"
 
@@ -41,15 +39,14 @@ type Key interface {
 }
 
 type onchainKeyring struct {
-	lggr        logger.Logger
-	keys        map[llotypes.ReportFormat]Key
-	donID       uint32
-	merkleRoots *merkleRootCache
+	lggr  logger.Logger
+	keys  map[llotypes.ReportFormat]Key
+	donID uint32
 }
 
 func NewOnchainKeyring(lggr logger.Logger, keys map[llotypes.ReportFormat]Key, donID uint32) OnchainKeyring {
 	return &onchainKeyring{
-		logger.Sugared(lggr).Named("OnchainKeyring"), keys, donID, newMerkleRootCache(merkleRootCacheSize),
+		logger.Sugared(lggr).Named("OnchainKeyring"), keys, donID,
 	}
 }
 
@@ -165,69 +162,12 @@ func (okr *onchainKeyring) Verify(key types.OnchainPublicKey, digest types.Confi
 // signature always covers exactly the leaves it was made over. The family is
 // the bundle's, and must match the report format the keyring dispatched on.
 func (okr *onchainKeyring) merkleSigningMessage(digest types.ConfigDigest, seqNr uint64, r ocr3types.ReportWithInfo[llotypes.ReportInfo]) (protocol.MerkleHash, error) {
-	root, err := okr.merkleRoots.root(r.Report)
+	bundle, err := protocol.LoadMerkleBundle(r.Report)
 	if err != nil {
 		return protocol.MerkleHash{}, err
 	}
-	if root.family != r.Info.ReportFormat {
-		return protocol.MerkleHash{}, fmt.Errorf("bundle family %s does not match report format %s", root.family, r.Info.ReportFormat)
+	if bundle.Family != r.Info.ReportFormat {
+		return protocol.MerkleHash{}, fmt.Errorf("bundle family %s does not match report format %s", bundle.Family, r.Info.ReportFormat)
 	}
-	return protocol.MerkleSigningMessage(digest, seqNr, root.family, root.leafCount, root.root), nil
-}
-
-// merkleRootCacheSize bounds the bundle roots the keyring remembers. libocr
-// verifies every peer's signature over the same bundle, so a few recent
-// rounds are enough to compute each root once.
-const merkleRootCacheSize = 64
-
-// merkleRootCache memoizes bundle roots by the hash of the bundle bytes.
-type merkleRootCache struct {
-	mu      sync.Mutex
-	size    int
-	entries map[[32]byte]merkleRoot
-	order   [][32]byte
-}
-
-type merkleRoot struct {
-	family    llotypes.ReportFormat
-	root      protocol.MerkleHash
-	leafCount uint32
-}
-
-func newMerkleRootCache(size int) *merkleRootCache {
-	return &merkleRootCache{size: size, entries: make(map[[32]byte]merkleRoot, size)}
-}
-
-// root decodes the bundle and returns its family, root and leaf count, from
-// the cache when the same bytes were seen before.
-func (c *merkleRootCache) root(bundle []byte) (merkleRoot, error) {
-	key := sha256.Sum256(bundle)
-	c.mu.Lock()
-	cached, ok := c.entries[key]
-	c.mu.Unlock()
-	if ok {
-		return cached, nil
-	}
-
-	decoded, err := protocol.DecodeMerkleBundle(bundle)
-	if err != nil {
-		return merkleRoot{}, err
-	}
-	root, err := protocol.MerkleBundleRoot(decoded)
-	if err != nil {
-		return merkleRoot{}, err
-	}
-	entry := merkleRoot{family: llotypes.ReportFormat(decoded.Family), root: root, leafCount: uint32(len(decoded.Leaves))} //nolint:gosec // bounded by protocol.MaxMerkleBundleLeaves on decode
-
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if _, ok := c.entries[key]; !ok {
-		if len(c.order) == c.size {
-			delete(c.entries, c.order[0])
-			c.order = c.order[1:]
-		}
-		c.entries[key] = entry
-		c.order = append(c.order, key)
-	}
-	return entry, nil
+	return protocol.MerkleSigningMessage(digest, seqNr, bundle.Family, bundle.LeafCount, bundle.Root), nil
 }

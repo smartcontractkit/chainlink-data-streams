@@ -2,7 +2,6 @@ package keyring
 
 import (
 	crand "crypto/rand"
-	"crypto/sha256"
 	"fmt"
 	"math"
 	"math/rand/v2"
@@ -245,23 +244,4 @@ func Test_Keyring_EVMMerkle(t *testing.T) {
 		_, err := signer.(*onchainKeyring).merkleSigningMessage(cd, seqNr, other)
 		require.EqualError(t, err, "bundle family evm_merkle does not match report format evm_streamlined")
 	})
-}
-
-func Test_merkleRootCache_Evicts(t *testing.T) {
-	t.Parallel()
-	c := newMerkleRootCache(2)
-	bundles := make([][]byte, 3)
-	for i := range bundles {
-		b, err := protocol.EncodeMerkleBundle(&protocol.LLOMerkleBundleProto{
-			Family: uint32(llotypes.ReportFormatEVMMerkle),
-			Leaves: []*protocol.LLOMerkleLeafProto{{ChannelID: uint32(i + 1), ReportFormat: uint32(llotypes.ReportFormatEVMStreamlined)}}, //nolint:gosec // test
-		})
-		require.NoError(t, err)
-		bundles[i] = b
-		_, err = c.root(b)
-		require.NoError(t, err)
-	}
-	assert.Len(t, c.entries, 2)
-	assert.Len(t, c.order, 2)
-	assert.NotContains(t, c.entries, sha256.Sum256(bundles[0]))
 }
