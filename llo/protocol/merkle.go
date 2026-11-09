@@ -37,9 +37,18 @@ const (
 	// MerkleSigningDomain prefixes the message a bundle root is signed under.
 	MerkleSigningDomain = "LLO_MERKLE_V1"
 
-	// MaxMerkleBundleLeaves bounds the leaves of one bundle. A bundle holds at
-	// most one report per channel definition.
-	MaxMerkleBundleLeaves = MaxOutcomeChannelDefinitionsLength
+	// MaxMerkleBundleLeaves bounds the leaves of one bundle. It is a safety
+	// bound on bundles decoded from bytes, independent of the channel cap: a
+	// bundle is one report, so the libocr report count does not force it. Tree
+	// build time and memory grow linearly with the leaves, about 1 microsecond
+	// and 64 bytes per leaf, so a full bundle builds in about 15 ms and caches
+	// in about 1 MB.
+	//
+	// SplitMerkleBundle starts a new bundle at the byte cap, which binds first
+	// for reports of a few hundred bytes. When raising the channel cap, prefer
+	// more leaves per bundle over more bundles, and review the limits derived
+	// from the channel cap first.
+	MaxMerkleBundleLeaves = 16384
 )
 
 // MerkleHash is a node of the tree.

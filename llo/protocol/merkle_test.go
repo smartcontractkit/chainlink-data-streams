@@ -246,7 +246,7 @@ func Test_MerkleBundle_Codec(t *testing.T) {
 		err    string
 	}{
 		{"unknown family", &LLOMerkleBundleProto{Family: uint32(llotypes.ReportFormatJSON), Leaves: testLeaves(1)}, "merkle bundle has unknown family json"},
-		{"no leaves", &LLOMerkleBundleProto{Family: uint32(evmMerkle)}, "merkle bundle has 0 leaves, expected between 1 and 2000"},
+		{"no leaves", &LLOMerkleBundleProto{Family: uint32(evmMerkle)}, fmt.Sprintf("merkle bundle has 0 leaves, expected between 1 and %d", MaxMerkleBundleLeaves)},
 		{"non member leaf", &LLOMerkleBundleProto{Family: uint32(evmMerkle), Leaves: []*LLOMerkleLeafProto{{ChannelID: 1, ReportFormat: uint32(llotypes.ReportFormatJSON)}}}, "merkle bundle leaf 0: report format json is not a member of family evm_merkle"},
 	}
 	for _, c := range cases {
@@ -258,7 +258,7 @@ func Test_MerkleBundle_Codec(t *testing.T) {
 
 	t.Run("too many leaves", func(t *testing.T) {
 		_, err := DecodeMerkleBundle(encode(&LLOMerkleBundleProto{Family: uint32(evmMerkle), Leaves: testLeaves(MaxMerkleBundleLeaves + 1)}))
-		require.EqualError(t, err, "merkle bundle has 2001 leaves, expected between 1 and 2000")
+		require.EqualError(t, err, fmt.Sprintf("merkle bundle has %d leaves, expected between 1 and %d", MaxMerkleBundleLeaves+1, MaxMerkleBundleLeaves))
 	})
 
 	t.Run("garbage", func(t *testing.T) {
