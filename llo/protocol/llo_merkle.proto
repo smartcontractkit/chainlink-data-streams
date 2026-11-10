@@ -6,7 +6,7 @@ option go_package = ".;protocol";
 // WARNING
 // Use extreme caution making changes in this file
 // All changes MUST be backwards compatible
-// Every oracle must build byte identical bundles, and deliveries are persisted
+// Every oracle must build byte identical bundles, and reports are persisted
 // and verified by the Data Streams server and onchain.
 
 // LLOMerkleBundleProto is the report a signing family signs once per round.
@@ -28,11 +28,11 @@ message LLOMerkleLeafProto {
     bytes report = 3;
 }
 
-// LLOMerkleDeliveryProto is one leaf of an attested bundle together with the
+// LLOMerkleReportProto is one leaf of an attested bundle together with the
 // proof from the leaf to the bundle root. The root is not stored: the
 // verifier recomputes it from the leaf and the proof, and checks the
 // signatures over it.
-message LLOMerkleDeliveryProto {
+message LLOMerkleReportProto {
     uint32 family = 1;
     uint32 leafCount = 2;
     uint32 leafIndex = 3;

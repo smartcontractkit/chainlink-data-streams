@@ -13,7 +13,7 @@ import (
 	protocol "github.com/smartcontractkit/chainlink-data-streams/llo/protocol"
 )
 
-// MerklePayloadTypes is the ABI of the payload an EVM Merkle delivery is
+// MerklePayloadTypes is the ABI of the payload an EVM Merkle report is
 // verified with. It starts with the same five fields as PayloadTypes, so the
 // verifier proxy routes it by reportContext[0], the config digest, and the fee
 // manager reads the report from it unchanged. The Merkle fields follow.
@@ -33,7 +33,7 @@ import (
 // signers from such a payload and rejects it.
 var MerklePayloadTypes = getMerklePayloadTypes()
 
-// MerkleReportContextTag marks reportContext[1] of a Merkle delivery payload.
+// MerkleReportContextTag marks reportContext[1] of a Merkle report payload.
 const MerkleReportContextTag = protocol.MerkleSigningDomain
 
 func getMerklePayloadTypes() abi.Arguments {
@@ -53,7 +53,7 @@ func getMerklePayloadTypes() abi.Arguments {
 	})...)
 }
 
-// MerkleReportContext returns the report context of a Merkle delivery payload.
+// MerkleReportContext returns the report context of a Merkle report payload.
 func MerkleReportContext(digest ocr2types.ConfigDigest, seqNr uint64) (rc [3][32]byte) {
 	rc[0] = [32]byte(digest)
 	copy(rc[1][:], MerkleReportContextTag)
@@ -61,23 +61,23 @@ func MerkleReportContext(digest ocr2types.ConfigDigest, seqNr uint64) (rc [3][32
 	return rc
 }
 
-// ReportCodecEVMMerkle packs ReportFormatEVMMerkle deliveries for EVM
+// ReportCodecEVMMerkle packs ReportFormatEVMMerkle reports for EVM
 // verifiers. It is a packer only: no channel uses the format, so there is
 // nothing to encode.
 type ReportCodecEVMMerkle struct{}
 
-// Pack assembles a delivery, as expanded from an attested bundle, and the root
+// Pack assembles a report, as expanded from an attested bundle, and the root
 // signatures into the payload for verifying on chain.
-func (ReportCodecEVMMerkle) Pack(digest ocr2types.ConfigDigest, seqNr uint64, report ocr2types.Report, sigs []ocr2types.AttributedOnchainSignature) ([]byte, error) {
-	delivery, _, err := protocol.DecodeMerkleDelivery(report)
+func (ReportCodecEVMMerkle) Pack(digest ocr2types.ConfigDigest, seqNr uint64, encoded ocr2types.Report, sigs []ocr2types.AttributedOnchainSignature) ([]byte, error) {
+	report, _, err := protocol.DecodeMerkleReport(encoded)
 	if err != nil {
 		return nil, err
 	}
-	if family := llotypes.ReportFormat(delivery.Family); family != llotypes.ReportFormatEVMMerkle {
-		return nil, fmt.Errorf("expected a delivery of family %s, got %s", llotypes.ReportFormatEVMMerkle, family)
+	if family := llotypes.ReportFormat(report.Family); family != llotypes.ReportFormatEVMMerkle {
+		return nil, fmt.Errorf("expected a report of family %s, got %s", llotypes.ReportFormatEVMMerkle, family)
 	}
-	proof := make([][32]byte, len(delivery.Proof))
-	for i, p := range delivery.Proof {
+	proof := make([][32]byte, len(report.Proof))
+	for i, p := range report.Proof {
 		proof[i] = [32]byte(p)
 	}
 	rs, ss, vs, err := splitSignatures(sigs)
@@ -86,14 +86,14 @@ func (ReportCodecEVMMerkle) Pack(digest ocr2types.ConfigDigest, seqNr uint64, re
 	}
 	payload, err := MerklePayloadTypes.Pack(
 		MerkleReportContext(digest, seqNr),
-		delivery.Leaf.Report,
+		report.Leaf.Report,
 		rs,
 		ss,
 		vs,
-		delivery.LeafCount,
-		delivery.LeafIndex,
-		delivery.Leaf.ChannelID,
-		delivery.Leaf.ReportFormat,
+		report.LeafCount,
+		report.LeafIndex,
+		report.Leaf.ChannelID,
+		report.Leaf.ReportFormat,
 		proof,
 	)
 	if err != nil {

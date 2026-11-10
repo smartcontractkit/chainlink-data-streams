@@ -35,16 +35,16 @@ func Test_server_transmit_EVMMerkle(t *testing.T) {
 			{ChannelID: 2, ReportFormat: uint32(llotypes.ReportFormatEVMStreamlined), Report: []byte("two")},
 		},
 	}
-	deliveries, err := protocol.ExpandMerkleBundle(bundle)
+	reports, err := protocol.ExpandMerkleBundle(bundle)
 	require.NoError(t, err)
-	delivery, err := protocol.EncodeMerkleDelivery(deliveries[1])
+	report, err := protocol.EncodeMerkleReport(reports[1])
 	require.NoError(t, err)
 
 	transmission := &Transmission{
 		ConfigDigest: types.ConfigDigest{1},
 		SeqNr:        7,
 		Report: ocr3types.ReportWithInfo[llotypes.ReportInfo]{
-			Report: delivery,
+			Report: report,
 			Info:   llotypes.ReportInfo{LifeCycleStage: protocol.LifeCycleStageProduction, ReportFormat: llotypes.ReportFormatEVMMerkle},
 		},
 		Sigs: []types.AttributedOnchainSignature{{Signature: make([]byte, 65), Signer: 1}},
@@ -54,7 +54,7 @@ func Test_server_transmit_EVMMerkle(t *testing.T) {
 
 	require.NotNil(t, got)
 	assert.Equal(t, uint32(llotypes.ReportFormatEVMMerkle), got.ReportFormat)
-	want, err := evm.ReportCodecEVMMerkle{}.Pack(transmission.ConfigDigest, transmission.SeqNr, delivery, transmission.Sigs)
+	want, err := evm.ReportCodecEVMMerkle{}.Pack(transmission.ConfigDigest, transmission.SeqNr, report, transmission.Sigs)
 	require.NoError(t, err)
 	assert.Equal(t, want, got.Payload)
 }

@@ -23,10 +23,10 @@ type MerkleBundle struct {
 	tree merkleTree
 }
 
-// Expand returns one delivery per leaf of encoded, in leaf order, each with its
+// Expand returns one report per leaf of encoded, in leaf order, each with its
 // proof to the bundle root. It decodes encoded again and reuses the tree, so
 // encoded must be the bytes this MerkleBundle was loaded from.
-func (m *MerkleBundle) Expand(encoded []byte) ([]*LLOMerkleDeliveryProto, error) {
+func (m *MerkleBundle) Expand(encoded []byte) ([]*LLOMerkleReportProto, error) {
 	bundle, err := DecodeMerkleBundle(encoded)
 	if err != nil {
 		return nil, err

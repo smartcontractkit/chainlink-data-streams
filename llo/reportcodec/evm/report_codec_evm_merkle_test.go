@@ -16,7 +16,7 @@ import (
 	protocol "github.com/smartcontractkit/chainlink-data-streams/llo/protocol"
 )
 
-// Test_ReportCodecEVMMerkle_Pack checks a packed delivery the way an onchain
+// Test_ReportCodecEVMMerkle_Pack checks a packed report the way an onchain
 // verifier would: rebuild the leaf from the payload, hash it up to the root
 // with the proof, and recover the signers from the signed message.
 func Test_ReportCodecEVMMerkle_Pack(t *testing.T) {
@@ -46,10 +46,10 @@ func Test_ReportCodecEVMMerkle_Pack(t *testing.T) {
 		sigs[i].Signer = commontypes.OracleID(i) //nolint:gosec // test
 	}
 
-	deliveries, err := protocol.ExpandMerkleBundle(bundle)
+	reports, err := protocol.ExpandMerkleBundle(bundle)
 	require.NoError(t, err)
-	for i, d := range deliveries {
-		report, err := protocol.EncodeMerkleDelivery(d)
+	for i, d := range reports {
+		report, err := protocol.EncodeMerkleReport(d)
 		require.NoError(t, err)
 		payload, err := ReportCodecEVMMerkle{}.Pack(digest, seqNr, report, sigs)
 		require.NoError(t, err)
@@ -97,7 +97,7 @@ func Test_ReportCodecEVMMerkle_Pack(t *testing.T) {
 	// The fee manager and verifier proxy read a Merkle payload as a legacy
 	// one, and a verifier without Merkle support rejects it.
 	t.Run("decodes as a legacy payload and fails legacy verification", func(t *testing.T) {
-		report, err := protocol.EncodeMerkleDelivery(deliveries[1])
+		report, err := protocol.EncodeMerkleReport(reports[1])
 		require.NoError(t, err)
 		payload, err := ReportCodecEVMMerkle{}.Pack(digest, seqNr, report, sigs)
 		require.NoError(t, err)
@@ -124,8 +124,8 @@ func Test_ReportCodecEVMMerkle_Pack(t *testing.T) {
 
 	// The byte layout is the spec the onchain verifier is written against.
 	t.Run("byte layout", func(t *testing.T) {
-		d := deliveries[1]
-		report, err := protocol.EncodeMerkleDelivery(d)
+		d := reports[1]
+		report, err := protocol.EncodeMerkleReport(d)
 		require.NoError(t, err)
 		payload, err := ReportCodecEVMMerkle{}.Pack(digest, seqNr, report, sigs)
 		require.NoError(t, err)
@@ -172,7 +172,7 @@ func Test_ReportCodecEVMMerkle_Pack(t *testing.T) {
 		}
 	})
 
-	t.Run("rejects an invalid delivery", func(t *testing.T) {
+	t.Run("rejects an invalid report", func(t *testing.T) {
 		_, err := ReportCodecEVMMerkle{}.Pack(digest, seqNr, []byte{0xff}, sigs)
 		require.Error(t, err)
 	})

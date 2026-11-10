@@ -206,7 +206,7 @@
 // family (merkle.go), after the per report channels and before the staging
 // marker, split by size to fit MaxReportBytes. The keyring signs the bundle's
 // Merkle root once, and the transmitter expands the attested bundle into one
-// delivery per channel with its proof. See protocol/merkle.go for the tree and
+// report per channel with its proof. See protocol/merkle.go for the tree and
 // the signed message.
 //
 // The EVM family, llotypes.ReportFormatEVMMerkle in ReportInfo, covers every
@@ -214,10 +214,10 @@
 // join. Backfill reports follow the scheme of their target channel.
 //
 // A family is not tied to a destination chain. It fixes one signing key, one
-// hash and signature scheme, and one delivery packer. The root is signed once
+// hash and signature scheme, and one report packer. The root is signed once
 // with keys[family], so every member format must accept that signer. The EVM
 // family hashes with keccak256, signs with SignBlob over secp256k1 for
-// ecrecover, and packs deliveries with ReportCodecEVMMerkle. A format on
+// ecrecover, and packs reports with ReportCodecEVMMerkle. A format on
 // another key type needs its own family, since one signature cannot cover two
 // keys. Adding a family is a family constant, a protocol.MerkleFamily mapping,
 // a keyring case and a packer. Leaves commit to their member format and the
@@ -226,7 +226,7 @@
 //
 // The family is a report format rather than a signing scheme field on
 // ReportInfo so that a bundle of mixed codecs has a single format to select its
-// key, and so the transmit queue and TransmitRequest recognise deliveries by
+// key, and so the transmit queue and TransmitRequest recognise reports by
 // report_format without a schema or wire change.
 //
 // There is no protocol version gate. A build that predates the field drops it

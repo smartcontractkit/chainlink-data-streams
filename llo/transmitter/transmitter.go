@@ -43,7 +43,7 @@ type Transmitter interface {
 	services.Service
 }
 
-// batchTransmitter is a sub transmitter that can take the deliveries of one
+// batchTransmitter is a sub transmitter that can take the reports of one
 // Merkle bundle at once, rather than one report per call.
 type batchTransmitter interface {
 	TransmitBatch(ctx context.Context, digest types.ConfigDigest, seqNr uint64, reports []ocr3types.ReportWithInfo[llotypes.ReportInfo], sigs []types.AttributedOnchainSignature) error
@@ -202,10 +202,10 @@ func (t *transmitter) Transmit(
 	return g.Wait()
 }
 
-// transmitMerkleBundle hands every delivery of an attested bundle to each sub
+// transmitMerkleBundle hands every report of an attested bundle to each sub
 // transmitter. libocr calls Transmit once for the whole bundle, under one
 // deadline, so a sub transmitter that takes a batch gets all of them in one
-// call. One that does not gets them one at a time, and every delivery is
+// call. One that does not gets them one at a time, and every report is
 // attempted even when an earlier one fails.
 func (t *transmitter) transmitMerkleBundle(ctx context.Context, digest types.ConfigDigest, seqNr uint64, report ocr3types.ReportWithInfo[llotypes.ReportInfo], sigs []types.AttributedOnchainSignature) error {
 	reports, err := expandMerkleBundle(report)
@@ -229,29 +229,29 @@ func (t *transmitter) transmitMerkleBundle(ctx context.Context, digest types.Con
 	return g.Wait()
 }
 
-// expandMerkleBundle turns an attested bundle into one delivery per leaf. Each
-// delivery carries the leaf and its proof to the root the signatures cover, so
+// expandMerkleBundle turns an attested bundle into one report per leaf. Each
+// report carries the leaf and its proof to the root the signatures cover, so
 // sub transmitters persist and send it like any other report, under the
 // family's report format.
-func expandMerkleBundle(report ocr3types.ReportWithInfo[llotypes.ReportInfo]) ([]ocr3types.ReportWithInfo[llotypes.ReportInfo], error) {
-	bundle, err := protocol.LoadMerkleBundle(report.Report)
+func expandMerkleBundle(bundleReport ocr3types.ReportWithInfo[llotypes.ReportInfo]) ([]ocr3types.ReportWithInfo[llotypes.ReportInfo], error) {
+	bundle, err := protocol.LoadMerkleBundle(bundleReport.Report)
 	if err != nil {
-		return nil, fmt.Errorf("failed to expand %s bundle: %w", report.Info.ReportFormat, err)
+		return nil, fmt.Errorf("failed to expand %s bundle: %w", bundleReport.Info.ReportFormat, err)
 	}
-	if bundle.Family != report.Info.ReportFormat {
-		return nil, fmt.Errorf("failed to expand %s bundle: bundle is of family %s", report.Info.ReportFormat, bundle.Family)
+	if bundle.Family != bundleReport.Info.ReportFormat {
+		return nil, fmt.Errorf("failed to expand %s bundle: bundle is of family %s", bundleReport.Info.ReportFormat, bundle.Family)
 	}
-	deliveries, err := bundle.Expand(report.Report)
+	merkleReports, err := bundle.Expand(bundleReport.Report)
 	if err != nil {
-		return nil, fmt.Errorf("failed to expand %s bundle: %w", report.Info.ReportFormat, err)
+		return nil, fmt.Errorf("failed to expand %s bundle: %w", bundleReport.Info.ReportFormat, err)
 	}
-	reports := make([]ocr3types.ReportWithInfo[llotypes.ReportInfo], len(deliveries))
-	for i, delivery := range deliveries {
-		encoded, err := protocol.EncodeMerkleDelivery(delivery)
+	reports := make([]ocr3types.ReportWithInfo[llotypes.ReportInfo], len(merkleReports))
+	for i, merkleReport := range merkleReports {
+		encoded, err := protocol.EncodeMerkleReport(merkleReport)
 		if err != nil {
-			return nil, fmt.Errorf("failed to encode %s delivery: %w", report.Info.ReportFormat, err)
+			return nil, fmt.Errorf("failed to encode %s report: %w", bundleReport.Info.ReportFormat, err)
 		}
-		reports[i] = ocr3types.ReportWithInfo[llotypes.ReportInfo]{Report: encoded, Info: report.Info}
+		reports[i] = ocr3types.ReportWithInfo[llotypes.ReportInfo]{Report: encoded, Info: bundleReport.Info}
 	}
 	return reports, nil
 }

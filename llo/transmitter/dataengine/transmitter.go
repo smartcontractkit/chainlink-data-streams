@@ -259,7 +259,7 @@ func (mt *transmitter) Transmit(
 }
 
 // TransmitBatch enqueues reports that share a digest, seqNr and signatures,
-// such as the deliveries of one Merkle bundle, for every server in one send
+// such as the reports of one Merkle bundle, for every server in one send
 // to the commit loops. Like Transmit it returns once the batch is queued, so a
 // large batch costs one channel slot rather than one per report.
 func (mt *transmitter) TransmitBatch(

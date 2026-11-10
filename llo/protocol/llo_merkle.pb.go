@@ -141,11 +141,11 @@ func (x *LLOMerkleLeafProto) GetReport() []byte {
 	return nil
 }
 
-// LLOMerkleDeliveryProto is one leaf of an attested bundle together with the
+// LLOMerkleReportProto is one leaf of an attested bundle together with the
 // proof from the leaf to the bundle root. The root is not stored: the
 // verifier recomputes it from the leaf and the proof, and checks the
 // signatures over it.
-type LLOMerkleDeliveryProto struct {
+type LLOMerkleReportProto struct {
 	state     protoimpl.MessageState `protogen:"open.v1"`
 	Family    uint32                 `protobuf:"varint,1,opt,name=family,proto3" json:"family,omitempty"`
 	LeafCount uint32                 `protobuf:"varint,2,opt,name=leafCount,proto3" json:"leafCount,omitempty"`
@@ -158,20 +158,20 @@ type LLOMerkleDeliveryProto struct {
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *LLOMerkleDeliveryProto) Reset() {
-	*x = LLOMerkleDeliveryProto{}
+func (x *LLOMerkleReportProto) Reset() {
+	*x = LLOMerkleReportProto{}
 	mi := &file_llo_merkle_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *LLOMerkleDeliveryProto) String() string {
+func (x *LLOMerkleReportProto) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*LLOMerkleDeliveryProto) ProtoMessage() {}
+func (*LLOMerkleReportProto) ProtoMessage() {}
 
-func (x *LLOMerkleDeliveryProto) ProtoReflect() protoreflect.Message {
+func (x *LLOMerkleReportProto) ProtoReflect() protoreflect.Message {
 	mi := &file_llo_merkle_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -183,40 +183,40 @@ func (x *LLOMerkleDeliveryProto) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use LLOMerkleDeliveryProto.ProtoReflect.Descriptor instead.
-func (*LLOMerkleDeliveryProto) Descriptor() ([]byte, []int) {
+// Deprecated: Use LLOMerkleReportProto.ProtoReflect.Descriptor instead.
+func (*LLOMerkleReportProto) Descriptor() ([]byte, []int) {
 	return file_llo_merkle_proto_rawDescGZIP(), []int{2}
 }
 
-func (x *LLOMerkleDeliveryProto) GetFamily() uint32 {
+func (x *LLOMerkleReportProto) GetFamily() uint32 {
 	if x != nil {
 		return x.Family
 	}
 	return 0
 }
 
-func (x *LLOMerkleDeliveryProto) GetLeafCount() uint32 {
+func (x *LLOMerkleReportProto) GetLeafCount() uint32 {
 	if x != nil {
 		return x.LeafCount
 	}
 	return 0
 }
 
-func (x *LLOMerkleDeliveryProto) GetLeafIndex() uint32 {
+func (x *LLOMerkleReportProto) GetLeafIndex() uint32 {
 	if x != nil {
 		return x.LeafIndex
 	}
 	return 0
 }
 
-func (x *LLOMerkleDeliveryProto) GetLeaf() *LLOMerkleLeafProto {
+func (x *LLOMerkleReportProto) GetLeaf() *LLOMerkleLeafProto {
 	if x != nil {
 		return x.Leaf
 	}
 	return nil
 }
 
-func (x *LLOMerkleDeliveryProto) GetProof() [][]byte {
+func (x *LLOMerkleReportProto) GetProof() [][]byte {
 	if x != nil {
 		return x.Proof
 	}
@@ -234,8 +234,8 @@ const file_llo_merkle_proto_rawDesc = "" +
 	"\x12LLOMerkleLeafProto\x12\x1c\n" +
 	"\tchannelID\x18\x01 \x01(\rR\tchannelID\x12\"\n" +
 	"\freportFormat\x18\x02 \x01(\rR\freportFormat\x12\x16\n" +
-	"\x06report\x18\x03 \x01(\fR\x06report\"\xae\x01\n" +
-	"\x16LLOMerkleDeliveryProto\x12\x16\n" +
+	"\x06report\x18\x03 \x01(\fR\x06report\"\xac\x01\n" +
+	"\x14LLOMerkleReportProto\x12\x16\n" +
 	"\x06family\x18\x01 \x01(\rR\x06family\x12\x1c\n" +
 	"\tleafCount\x18\x02 \x01(\rR\tleafCount\x12\x1c\n" +
 	"\tleafIndex\x18\x03 \x01(\rR\tleafIndex\x12*\n" +
@@ -257,13 +257,13 @@ func file_llo_merkle_proto_rawDescGZIP() []byte {
 
 var file_llo_merkle_proto_msgTypes = make([]protoimpl.MessageInfo, 3)
 var file_llo_merkle_proto_goTypes = []any{
-	(*LLOMerkleBundleProto)(nil),   // 0: v1.LLOMerkleBundleProto
-	(*LLOMerkleLeafProto)(nil),     // 1: v1.LLOMerkleLeafProto
-	(*LLOMerkleDeliveryProto)(nil), // 2: v1.LLOMerkleDeliveryProto
+	(*LLOMerkleBundleProto)(nil), // 0: v1.LLOMerkleBundleProto
+	(*LLOMerkleLeafProto)(nil),   // 1: v1.LLOMerkleLeafProto
+	(*LLOMerkleReportProto)(nil), // 2: v1.LLOMerkleReportProto
 }
 var file_llo_merkle_proto_depIdxs = []int32{
 	1, // 0: v1.LLOMerkleBundleProto.leaves:type_name -> v1.LLOMerkleLeafProto
-	1, // 1: v1.LLOMerkleDeliveryProto.leaf:type_name -> v1.LLOMerkleLeafProto
+	1, // 1: v1.LLOMerkleReportProto.leaf:type_name -> v1.LLOMerkleLeafProto
 	2, // [2:2] is the sub-list for method output_type
 	2, // [2:2] is the sub-list for method input_type
 	2, // [2:2] is the sub-list for extension type_name

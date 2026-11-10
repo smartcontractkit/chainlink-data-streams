@@ -37,7 +37,7 @@ func (r *recordingSubTransmitter) FromAccount(context.Context) (types.Account, e
 	return "", nil
 }
 
-// batchingSubTransmitter takes a bundle's deliveries in one call.
+// batchingSubTransmitter takes a bundle's reports in one call.
 type batchingSubTransmitter struct {
 	recordingSubTransmitter
 	batches [][]ocr3types.ReportWithInfo[llotypes.ReportInfo]
@@ -96,15 +96,15 @@ func Test_transmitter_ExpandsMerkleBundle(t *testing.T) {
 		for i, r := range sub.reports {
 			assert.Equal(t, info, r.Info)
 			assert.Equal(t, sigs, sub.sigs[i])
-			delivery, got, err := protocol.DecodeMerkleDelivery(r.Report)
+			report, got, err := protocol.DecodeMerkleReport(r.Report)
 			require.NoError(t, err)
-			assert.Equal(t, root, got, "delivery %d does not reach the signed root", i)
-			assert.Equal(t, uint32(i), delivery.LeafIndex) //nolint:gosec // test
-			assert.Equal(t, bundle.Leaves[i].ChannelID, delivery.Leaf.ChannelID)
+			assert.Equal(t, root, got, "report %d does not reach the signed root", i)
+			assert.Equal(t, uint32(i), report.LeafIndex) //nolint:gosec // test
+			assert.Equal(t, bundle.Leaves[i].ChannelID, report.Leaf.ChannelID)
 		}
 	}
 
-	t.Run("a batching sub transmitter gets every delivery in one call", func(t *testing.T) {
+	t.Run("a batching sub transmitter gets every report in one call", func(t *testing.T) {
 		sub := &batchingSubTransmitter{}
 		tr := &transmitter{lggr: logger.Test(t), subTransmitters: []Transmitter{sub}, onTransmit: &onTransmit{lggr: logger.Test(t)}}
 		require.NoError(t, tr.Transmit(ctx, types.ConfigDigest{1}, 9, ocr3types.ReportWithInfo[llotypes.ReportInfo]{Report: encoded, Info: info}, sigs))
@@ -113,7 +113,7 @@ func Test_transmitter_ExpandsMerkleBundle(t *testing.T) {
 		assert.Empty(t, sub.reports)
 	})
 
-	t.Run("a failed delivery does not drop the rest", func(t *testing.T) {
+	t.Run("a failed report does not drop the rest", func(t *testing.T) {
 		sub := &failingSubTransmitter{}
 		tr := &transmitter{lggr: logger.Test(t), subTransmitters: []Transmitter{sub}, onTransmit: &onTransmit{lggr: logger.Test(t)}}
 		err := tr.Transmit(ctx, types.ConfigDigest{1}, 9, ocr3types.ReportWithInfo[llotypes.ReportInfo]{Report: encoded, Info: info}, sigs)

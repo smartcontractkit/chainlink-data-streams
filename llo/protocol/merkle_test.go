@@ -179,7 +179,7 @@ func Test_MerkleRootFromProof_Errors(t *testing.T) {
 }
 
 // The golden vectors are the shared reference for the verifier contract and
-// the Data Streams server. Changing them breaks every delivery verifier. They
+// the Data Streams server. Changing them breaks every verifier. They
 // were checked against an independent keccak256 implementation of the scheme
 // described in merkle.go.
 func Test_Merkle_GoldenVectors(t *testing.T) {
@@ -206,10 +206,10 @@ func Test_Merkle_GoldenVectors(t *testing.T) {
 	msg := MerkleSigningMessage(digest, seqNr, evmMerkle, uint32(len(bundle.Leaves)), root)
 	assert.Equal(t, "82a749ca4b50caa0ea66a307bb3cffbc933bca6be71832179c775be8dee4ebac", hex.EncodeToString(msg[:]))
 
-	deliveries, err := ExpandMerkleBundle(bundle)
+	reports, err := ExpandMerkleBundle(bundle)
 	require.NoError(t, err)
-	proofs := make([][]string, len(deliveries))
-	for i, d := range deliveries {
+	proofs := make([][]string, len(reports))
+	for i, d := range reports {
 		for _, p := range d.Proof {
 			proofs[i] = append(proofs[i], hex.EncodeToString(p))
 		}
@@ -267,45 +267,45 @@ func Test_MerkleBundle_Codec(t *testing.T) {
 	})
 }
 
-func Test_MerkleDelivery(t *testing.T) {
+func Test_MerkleReport(t *testing.T) {
 	bundle := &LLOMerkleBundleProto{Family: uint32(evmMerkle), Leaves: testLeaves(7)}
 	root, err := MerkleBundleRoot(bundle)
 	require.NoError(t, err)
 
-	deliveries, err := ExpandMerkleBundle(bundle)
+	reports, err := ExpandMerkleBundle(bundle)
 	require.NoError(t, err)
-	require.Len(t, deliveries, 7)
+	require.Len(t, reports, 7)
 
-	for i, d := range deliveries {
+	for i, d := range reports {
 		assert.Equal(t, uint32(i), d.LeafIndex) //nolint:gosec // test
 		assert.Equal(t, uint32(7), d.LeafCount)
 		assert.True(t, proto.Equal(bundle.Leaves[i], d.Leaf))
 
-		b, err := EncodeMerkleDelivery(d)
+		b, err := EncodeMerkleReport(d)
 		require.NoError(t, err)
-		decoded, got, err := DecodeMerkleDelivery(b)
+		decoded, got, err := DecodeMerkleReport(b)
 		require.NoError(t, err)
 		assert.Equal(t, root, got)
 		assert.True(t, proto.Equal(d, decoded))
 	}
 
-	tamper := func(f func(d *LLOMerkleDeliveryProto)) (MerkleHash, error) {
-		d := proto.Clone(deliveries[3]).(*LLOMerkleDeliveryProto)
+	tamper := func(f func(d *LLOMerkleReportProto)) (MerkleHash, error) {
+		d := proto.Clone(reports[3]).(*LLOMerkleReportProto)
 		f(d)
-		b, err := EncodeMerkleDelivery(d)
+		b, err := EncodeMerkleReport(d)
 		require.NoError(t, err)
-		_, got, err := DecodeMerkleDelivery(b)
+		_, got, err := DecodeMerkleReport(b)
 		return got, err
 	}
-	for name, f := range map[string]func(d *LLOMerkleDeliveryProto){
-		"report":  func(d *LLOMerkleDeliveryProto) { d.Leaf.Report = append(d.Leaf.Report, 0) },
-		"channel": func(d *LLOMerkleDeliveryProto) { d.Leaf.ChannelID++ },
-		"format":  func(d *LLOMerkleDeliveryProto) { d.Leaf.ReportFormat = uint32(llotypes.ReportFormatEVMPremiumLegacy) },
-		"index":   func(d *LLOMerkleDeliveryProto) { d.LeafIndex = 2 },
-		"proof":   func(d *LLOMerkleDeliveryProto) { d.Proof[0][0] ^= 1 },
+	for name, f := range map[string]func(d *LLOMerkleReportProto){
+		"report":  func(d *LLOMerkleReportProto) { d.Leaf.Report = append(d.Leaf.Report, 0) },
+		"channel": func(d *LLOMerkleReportProto) { d.Leaf.ChannelID++ },
+		"format":  func(d *LLOMerkleReportProto) { d.Leaf.ReportFormat = uint32(llotypes.ReportFormatEVMPremiumLegacy) },
+		"index":   func(d *LLOMerkleReportProto) { d.LeafIndex = 2 },
+		"proof":   func(d *LLOMerkleReportProto) { d.Proof[0][0] ^= 1 },
 		// A changed leaf count can still reach the root. The signed message
 		// binds it, see Test_MerkleProof_EveryLeaf.
-		"leaf count": func(d *LLOMerkleDeliveryProto) { d.LeafCount = 9 },
+		"leaf count": func(d *LLOMerkleReportProto) { d.LeafCount = 9 },
 	} {
 		got, err := tamper(f)
 		if err == nil {
@@ -314,13 +314,13 @@ func Test_MerkleDelivery(t *testing.T) {
 	}
 
 	for name, c := range map[string]struct {
-		f   func(d *LLOMerkleDeliveryProto)
+		f   func(d *LLOMerkleReportProto)
 		err string
 	}{
-		"family":      {func(d *LLOMerkleDeliveryProto) { d.Family = uint32(llotypes.ReportFormatJSON) }, "merkle delivery has unknown family json"},
-		"non member":  {func(d *LLOMerkleDeliveryProto) { d.Leaf.ReportFormat = uint32(llotypes.ReportFormatJSON) }, "merkle delivery: report format json is not a member of family evm_merkle"},
-		"no leaf":     {func(d *LLOMerkleDeliveryProto) { d.Leaf = nil }, "merkle delivery: nil leaf"},
-		"index range": {func(d *LLOMerkleDeliveryProto) { d.LeafIndex = 7 }, "merkle delivery: leaf index 7 out of range for 7 leaves"},
+		"family":      {func(d *LLOMerkleReportProto) { d.Family = uint32(llotypes.ReportFormatJSON) }, "merkle report has unknown family json"},
+		"non member":  {func(d *LLOMerkleReportProto) { d.Leaf.ReportFormat = uint32(llotypes.ReportFormatJSON) }, "merkle report: report format json is not a member of family evm_merkle"},
+		"no leaf":     {func(d *LLOMerkleReportProto) { d.Leaf = nil }, "merkle report: nil leaf"},
+		"index range": {func(d *LLOMerkleReportProto) { d.LeafIndex = 7 }, "merkle report: leaf index 7 out of range for 7 leaves"},
 	} {
 		_, err := tamper(c.f)
 		require.EqualError(t, err, c.err, name)
@@ -392,7 +392,7 @@ func mustEncodeBundle(t *testing.T, bundle *LLOMerkleBundleProto) []byte {
 	return b
 }
 
-func FuzzMerkleDelivery(f *testing.F) {
+func FuzzMerkleReport(f *testing.F) {
 	f.Add(uint16(1), uint16(0), []byte("a"), uint16(0))
 	f.Add(uint16(7), uint16(6), []byte("seven"), uint16(3))
 	f.Add(uint16(64), uint16(31), []byte{}, uint16(100))
@@ -405,23 +405,23 @@ func FuzzMerkleDelivery(f *testing.F) {
 
 		root, err := MerkleBundleRoot(bundle)
 		require.NoError(t, err)
-		deliveries, err := ExpandMerkleBundle(bundle)
+		reports, err := ExpandMerkleBundle(bundle)
 		require.NoError(t, err)
-		b, err := EncodeMerkleDelivery(deliveries[i])
+		b, err := EncodeMerkleReport(reports[i])
 		require.NoError(t, err)
-		_, got, err := DecodeMerkleDelivery(b)
+		_, got, err := DecodeMerkleReport(b)
 		require.NoError(t, err)
 		require.Equal(t, root, got)
 
-		// Flipping any bit of the delivery either fails to decode or no
+		// Flipping any bit of the report either fails to decode or no
 		// longer reaches the root. The one exception is the leaf count, which
 		// the root does not bind but the signed message does.
 		bit := int(flip) % (len(b) * 8)
 		tampered := append([]byte(nil), b...)
 		tampered[bit/8] ^= 1 << (bit % 8)
-		d, got, err := DecodeMerkleDelivery(tampered)
-		if err == nil && got == root && d.LeafCount == deliveries[i].LeafCount {
-			require.True(t, proto.Equal(deliveries[i], d), "a changed delivery reached the root")
+		d, got, err := DecodeMerkleReport(tampered)
+		if err == nil && got == root && d.LeafCount == reports[i].LeafCount {
+			require.True(t, proto.Equal(reports[i], d), "a changed report reached the root")
 		}
 	})
 }

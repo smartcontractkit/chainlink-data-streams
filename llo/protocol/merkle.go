@@ -18,8 +18,8 @@ import (
 // Channels with SigningSchemeMerkle are not signed one report at a time.
 // Reports groups them by signing family into bundle reports, the keyring signs
 // the Merkle root of each bundle once, and the transmitter expands an attested
-// bundle into one delivery per leaf, carrying the proof from the leaf to the
-// root. The verifier recomputes the root from the delivery and checks the
+// bundle into one report per leaf, carrying the proof from the leaf to the
+// root. The verifier recomputes the root from the report and checks the
 // signatures over it.
 //
 // The tree is domain separated as in RFC 6962. A leaf hashes as
@@ -266,9 +266,9 @@ func MerkleBundleRoot(bundle *LLOMerkleBundleProto) (MerkleHash, error) {
 	return tree.root(), nil
 }
 
-// ExpandMerkleBundle returns one delivery per leaf of a decoded bundle, in
+// ExpandMerkleBundle returns one report per leaf of a decoded bundle, in
 // leaf order, each with its proof to the bundle root.
-func ExpandMerkleBundle(bundle *LLOMerkleBundleProto) ([]*LLOMerkleDeliveryProto, error) {
+func ExpandMerkleBundle(bundle *LLOMerkleBundleProto) ([]*LLOMerkleReportProto, error) {
 	tree, err := bundleTree(bundle)
 	if err != nil {
 		return nil, err
@@ -276,11 +276,11 @@ func ExpandMerkleBundle(bundle *LLOMerkleBundleProto) ([]*LLOMerkleDeliveryProto
 	return expandMerkleBundle(bundle, tree), nil
 }
 
-func expandMerkleBundle(bundle *LLOMerkleBundleProto, tree merkleTree) []*LLOMerkleDeliveryProto {
+func expandMerkleBundle(bundle *LLOMerkleBundleProto, tree merkleTree) []*LLOMerkleReportProto {
 	leafCount := uint32(len(bundle.Leaves)) //nolint:gosec // bounded by MaxMerkleBundleLeaves on decode
-	deliveries := make([]*LLOMerkleDeliveryProto, len(bundle.Leaves))
+	reports := make([]*LLOMerkleReportProto, len(bundle.Leaves))
 	for i, leaf := range bundle.Leaves {
-		deliveries[i] = &LLOMerkleDeliveryProto{
+		reports[i] = &LLOMerkleReportProto{
 			Family:    bundle.Family,
 			LeafCount: leafCount,
 			LeafIndex: uint32(i), //nolint:gosec // below leafCount
@@ -288,37 +288,37 @@ func expandMerkleBundle(bundle *LLOMerkleBundleProto, tree merkleTree) []*LLOMer
 			Proof:     tree.proof(i),
 		}
 	}
-	return deliveries
+	return reports
 }
 
-// EncodeMerkleDelivery encodes a delivery deterministically.
-func EncodeMerkleDelivery(delivery *LLOMerkleDeliveryProto) ([]byte, error) {
-	return deterministicMarshal.Marshal(delivery)
+// EncodeMerkleReport encodes a report deterministically.
+func EncodeMerkleReport(report *LLOMerkleReportProto) ([]byte, error) {
+	return deterministicMarshal.Marshal(report)
 }
 
-// DecodeMerkleDelivery decodes a delivery and returns the root its leaf and
+// DecodeMerkleReport decodes a report and returns the root its leaf and
 // proof hash up to. The caller checks the signatures over
 // MerkleSigningMessage with that root.
-func DecodeMerkleDelivery(b []byte) (*LLOMerkleDeliveryProto, MerkleHash, error) {
-	delivery := new(LLOMerkleDeliveryProto)
-	if err := proto.Unmarshal(b, delivery); err != nil {
-		return nil, MerkleHash{}, fmt.Errorf("failed to decode merkle delivery: %w", err)
+func DecodeMerkleReport(b []byte) (*LLOMerkleReportProto, MerkleHash, error) {
+	report := new(LLOMerkleReportProto)
+	if err := proto.Unmarshal(b, report); err != nil {
+		return nil, MerkleHash{}, fmt.Errorf("failed to decode merkle report: %w", err)
 	}
-	family := llotypes.ReportFormat(delivery.Family)
+	family := llotypes.ReportFormat(report.Family)
 	if !IsMerkleFamily(family) {
-		return nil, MerkleHash{}, fmt.Errorf("merkle delivery has unknown family %s", family)
+		return nil, MerkleHash{}, fmt.Errorf("merkle report has unknown family %s", family)
 	}
-	if delivery.LeafCount > MaxMerkleBundleLeaves {
-		return nil, MerkleHash{}, fmt.Errorf("merkle delivery has %d leaves, max %d", delivery.LeafCount, MaxMerkleBundleLeaves)
+	if report.LeafCount > MaxMerkleBundleLeaves {
+		return nil, MerkleHash{}, fmt.Errorf("merkle report has %d leaves, max %d", report.LeafCount, MaxMerkleBundleLeaves)
 	}
-	if err := verifyMerkleLeaf(family, delivery.Leaf); err != nil {
-		return nil, MerkleHash{}, fmt.Errorf("merkle delivery: %w", err)
+	if err := verifyMerkleLeaf(family, report.Leaf); err != nil {
+		return nil, MerkleHash{}, fmt.Errorf("merkle report: %w", err)
 	}
-	root, err := MerkleRootFromProof(MerkleLeafHash(family, delivery.Leaf), delivery.LeafIndex, delivery.LeafCount, delivery.Proof)
+	root, err := MerkleRootFromProof(MerkleLeafHash(family, report.Leaf), report.LeafIndex, report.LeafCount, report.Proof)
 	if err != nil {
-		return nil, MerkleHash{}, fmt.Errorf("merkle delivery: %w", err)
+		return nil, MerkleHash{}, fmt.Errorf("merkle report: %w", err)
 	}
-	return delivery, root, nil
+	return report, root, nil
 }
 
 // SplitMerkleBundle encodes leaves, in order, into as few consecutive bundles
