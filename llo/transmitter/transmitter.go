@@ -12,9 +12,9 @@ import (
 	ocrtypes "github.com/smartcontractkit/libocr/offchainreporting2plus/types"
 	"golang.org/x/sync/errgroup"
 
+	"github.com/smartcontractkit/chainlink-common/pkg/capabilities/registry"
 	"github.com/smartcontractkit/chainlink-common/pkg/logger"
 	"github.com/smartcontractkit/chainlink-common/pkg/services"
-	coretypes "github.com/smartcontractkit/chainlink-common/pkg/types/core"
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
 
 	"github.com/smartcontractkit/chainlink-data-streams/llo/pluginconfig"
@@ -98,7 +98,7 @@ type TransmitterOpts struct {
 	MercuryTransmitterOpts *mercurytransmitter.Opts
 	Subtransmitters        []pluginconfig.TransmitterConfig
 	RetirementReportCache  TransmitterRetirementReportCacheWriter
-	CapabilitiesRegistry   coretypes.CapabilitiesRegistry
+	CapabilitiesRegistry   registry.CapabilitiesRegistry
 }
 
 // The transmitter will handle starting and stopping the subtransmitters
