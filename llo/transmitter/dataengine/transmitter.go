@@ -18,9 +18,9 @@ import (
 	"github.com/smartcontractkit/libocr/offchainreporting2plus/types"
 	ocrtypes "github.com/smartcontractkit/libocr/offchainreporting2plus/types"
 
+	"github.com/smartcontractkit/chainlink-common/pkg/capabilities/registry"
 	"github.com/smartcontractkit/chainlink-common/pkg/logger"
 	"github.com/smartcontractkit/chainlink-common/pkg/services"
-	coretypes "github.com/smartcontractkit/chainlink-common/pkg/types/core"
 	llotypes "github.com/smartcontractkit/chainlink-common/pkg/types/llo"
 
 	"github.com/smartcontractkit/chainlink-data-streams/rpc"
@@ -135,7 +135,7 @@ type Opts struct {
 	FromAccount          string
 	DonID                uint32
 	ORM                  ORM
-	CapabilitiesRegistry coretypes.CapabilitiesRegistry
+	CapabilitiesRegistry registry.CapabilitiesRegistry
 }
 
 func New(opts Opts) Transmitter {
