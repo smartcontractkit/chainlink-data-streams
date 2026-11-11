@@ -356,7 +356,10 @@ type LLOAttributedObservationTelemetry struct {
 	RemoveChannelIds         []uint32                              `protobuf:"varint,11,rep,packed,name=remove_channel_ids,json=removeChannelIds,proto3" json:"remove_channel_ids,omitempty"`
 	UpdateChannelDefinitions map[uint32]*LLOChannelDefinitionProto `protobuf:"bytes,12,rep,name=update_channel_definitions,json=updateChannelDefinitions,proto3" json:"update_channel_definitions,omitempty" protobuf_key:"varint,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	// observation decode error if any
-	DecodeError   *string `protobuf:"bytes,16,opt,name=decode_error,json=decodeError,proto3,oneof" json:"decode_error,omitempty"`
+	DecodeError *string `protobuf:"bytes,16,opt,name=decode_error,json=decodeError,proto3,oneof" json:"decode_error,omitempty"`
+	// OCR epoch in which the emitter ran StateTransition. Local to the emitter:
+	// oracles may report different epochs for the same seq_nr.
+	Epoch         uint64 `protobuf:"varint,17,opt,name=epoch,proto3" json:"epoch,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -468,6 +471,13 @@ func (x *LLOAttributedObservationTelemetry) GetDecodeError() string {
 	return ""
 }
 
+func (x *LLOAttributedObservationTelemetry) GetEpoch() uint64 {
+	if x != nil {
+		return x.Epoch
+	}
+	return 0
+}
+
 var File_llo_plugin_telemetry_proto protoreflect.FileDescriptor
 
 const file_llo_plugin_telemetry_proto_rawDesc = "" +
@@ -514,7 +524,7 @@ const file_llo_plugin_telemetry_proto_rawDesc = "" +
 	"\x06seq_nr\x18\t \x01(\x04R\x05seqNr\x12#\n" +
 	"\rconfig_digest\x18\n" +
 	" \x01(\fR\fconfigDigest\x12\x15\n" +
-	"\x06don_id\x18\v \x01(\rR\x05donId\"\xe8\x06\n" +
+	"\x06don_id\x18\v \x01(\rR\x05donId\"\xfe\x06\n" +
 	"!LLOAttributedObservationTelemetry\x12#\n" +
 	"\rconfig_digest\x18\x01 \x01(\fR\fconfigDigest\x12\x15\n" +
 	"\x06seq_nr\x18\x02 \x01(\x04R\x05seqNr\x12\x15\n" +
@@ -526,7 +536,8 @@ const file_llo_plugin_telemetry_proto_rawDesc = "" +
 	"\rstream_values\x18\t \x03(\v27.v1.LLOAttributedObservationTelemetry.StreamValuesEntryR\fstreamValues\x12,\n" +
 	"\x12remove_channel_ids\x18\v \x03(\rR\x10removeChannelIds\x12\x81\x01\n" +
 	"\x1aupdate_channel_definitions\x18\f \x03(\v2C.v1.LLOAttributedObservationTelemetry.UpdateChannelDefinitionsEntryR\x18updateChannelDefinitions\x12&\n" +
-	"\fdecode_error\x18\x10 \x01(\tH\x00R\vdecodeError\x88\x01\x01\x1aS\n" +
+	"\fdecode_error\x18\x10 \x01(\tH\x00R\vdecodeError\x88\x01\x01\x12\x14\n" +
+	"\x05epoch\x18\x11 \x01(\x04R\x05epoch\x1aS\n" +
 	"\x11StreamValuesEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\rR\x03key\x12(\n" +
 	"\x05value\x18\x02 \x01(\v2\x12.v1.LLOStreamValueR\x05value:\x028\x01\x1aj\n" +

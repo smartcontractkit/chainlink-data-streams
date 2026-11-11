@@ -1,6 +1,7 @@
 package llo
 
 import (
+	"context"
 	"fmt"
 	"slices"
 	"sync"
@@ -14,6 +15,7 @@ import (
 	protocol "github.com/smartcontractkit/chainlink-data-streams/llo/protocol"
 
 	"github.com/smartcontractkit/libocr/commontypes"
+	"github.com/smartcontractkit/libocr/offchainreporting2plus/ocr3_1types"
 	ocrtypes "github.com/smartcontractkit/libocr/offchainreporting2plus/types"
 )
 
@@ -157,6 +159,7 @@ type attributedObservation struct {
 
 type attributedObservationRound struct {
 	seqNr                           uint64
+	epoch                           uint64
 	agreedObservationTimestampNanos uint64
 	aos                             []attributedObservation
 }
@@ -196,12 +199,16 @@ func (p *Plugin) emitsTelemetry(stage llotypes.LifeCycleStage) bool {
 
 // captureAttributedObservationTelemetry hands the round decoded observations
 // to the telemeter.
-func (p *Plugin) captureAttributedObservationTelemetry(out precursor, seqNr uint64, aos []attributedObservation) {
+func (p *Plugin) captureAttributedObservationTelemetry(ctx context.Context, out precursor, seqNr uint64, aos []attributedObservation) {
 	if len(aos) == 0 || !p.emitsTelemetry(out.LifeCycleStage) {
 		return
 	}
+	// Telemetry only: the epoch is local to this oracle, so it must never reach
+	// the replicated state or the precursor.
+	epoch, _ := ocr3_1types.EpochFromContext(ctx)
 	p.attributedObservationTelemeter.enqueue(attributedObservationRound{
 		seqNr:                           seqNr,
+		epoch:                           epoch,
 		agreedObservationTimestampNanos: out.ObservationTimestampNanoseconds,
 		aos:                             aos,
 	})
@@ -271,7 +278,7 @@ func (t *attributedObservationTelemeter) run() {
 			return
 		case r := <-t.in:
 			for _, ao := range r.aos {
-				for _, msg := range t.makeTelemetry(r.seqNr, r.agreedObservationTimestampNanos, ao) {
+				for _, msg := range t.makeTelemetry(r.seqNr, r.epoch, r.agreedObservationTimestampNanos, ao) {
 					select {
 					case t.out <- msg:
 					default:
@@ -287,11 +294,12 @@ func (t *attributedObservationTelemeter) run() {
 // most maxBytes. Stream values are packed in ascending stream id order. The
 // header is repeated in every part, the votes and decode error are set in the
 // first only. A single value larger than maxBytes gets a part of its own.
-func (t *attributedObservationTelemeter) makeTelemetry(seqNr, agreedTs uint64, ao attributedObservation) []*protocol.LLOAttributedObservationTelemetry {
+func (t *attributedObservationTelemeter) makeTelemetry(seqNr, epoch, agreedTs uint64, ao attributedObservation) []*protocol.LLOAttributedObservationTelemetry {
 	header := func() *protocol.LLOAttributedObservationTelemetry {
 		return &protocol.LLOAttributedObservationTelemetry{
 			ConfigDigest:                          t.configDigest[:],
 			SeqNr:                                 seqNr,
+			Epoch:                                 epoch,
 			DonId:                                 t.donID,
 			Observer:                              uint32(ao.observer),
 			Emitter:                               uint32(t.emitter),

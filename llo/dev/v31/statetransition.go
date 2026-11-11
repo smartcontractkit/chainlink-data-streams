@@ -283,7 +283,7 @@ func (p *Plugin) StateTransition(ctx context.Context, seqNr uint64, _ ocrtypes.A
 	p.captureInsufficientHistory(effective, prev.opts, history)
 	p.freshnessMetrics.record(freshness)
 	p.captureOutcomeTelemetry(out, seqNr, freshness)
-	p.captureAttributedObservationTelemetry(out, seqNr, tally.attributed)
+	p.captureAttributedObservationTelemetry(ctx, out, seqNr, tally.attributed)
 
 	// After telemetry, which reports every aggregate.
 	out.StreamAggregates = out.reportedAggregates(prev.opts)
