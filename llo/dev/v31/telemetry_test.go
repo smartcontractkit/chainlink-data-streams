@@ -20,6 +20,7 @@ import (
 	protocol "github.com/smartcontractkit/chainlink-data-streams/llo/protocol"
 
 	"github.com/smartcontractkit/libocr/commontypes"
+	"github.com/smartcontractkit/libocr/offchainreporting2plus/ocr3_1types"
 	ocrtypes "github.com/smartcontractkit/libocr/offchainreporting2plus/types"
 )
 
@@ -92,7 +93,7 @@ func Test_makeReportTelemetry_EffectiveStreams(t *testing.T) {
 }
 
 func Test_AttributedObservationTelemetry_StateTransition(t *testing.T) {
-	ctx := tests.Context(t)
+	ctx := ocr3_1types.ContextWithEpoch(tests.Context(t), 42)
 	p := testPlugin(t)
 	p.DonID = 7
 	tel := attachAOTelemeter(t, p)
@@ -135,16 +136,18 @@ func Test_AttributedObservationTelemetry_StateTransition(t *testing.T) {
 		out := round(2, 1000)
 		r := requireAORound(t, tel, true)
 		require.Equal(t, uint64(2), r.seqNr)
+		require.Equal(t, uint64(42), r.epoch)
 		require.Equal(t, out.ObservationTimestampNanoseconds, r.agreedObservationTimestampNanos)
 		require.Len(t, r.aos, 4)
 
 		for i, a := range r.aos {
 			require.Equal(t, commontypes.OracleID(i), a.observer)
-			msgs := tel.makeTelemetry(r.seqNr, r.agreedObservationTimestampNanos, a)
+			msgs := tel.makeTelemetry(r.seqNr, r.epoch, r.agreedObservationTimestampNanos, a)
 			require.Len(t, msgs, 1)
 			m := msgs[0]
 			require.Equal(t, p.ConfigDigest[:], m.ConfigDigest)
 			require.Equal(t, uint64(2), m.SeqNr)
+			require.Equal(t, uint64(42), m.Epoch)
 			require.Equal(t, uint32(7), m.DonId)
 			require.Equal(t, uint32(i), m.Observer)
 			require.Equal(t, 1000+uint64(i), m.OracleObservationTimestampNanoseconds)
@@ -172,7 +175,7 @@ func Test_AttributedObservationTelemetry_StateTransition(t *testing.T) {
 		r := requireAORound(t, tel, true)
 		require.Greater(t, out.ObservationTimestampNanoseconds, uint64(500+3), "median must have been held")
 		require.Equal(t, out.ObservationTimestampNanoseconds, r.agreedObservationTimestampNanos)
-		m := tel.makeTelemetry(r.seqNr, r.agreedObservationTimestampNanos, r.aos[0])[0]
+		m := tel.makeTelemetry(r.seqNr, r.epoch, r.agreedObservationTimestampNanos, r.aos[0])[0]
 		require.Equal(t, uint64(500), m.OracleObservationTimestampNanoseconds)
 		require.Equal(t, out.ObservationTimestampNanoseconds, m.AgreedObservationTimestampNanoseconds)
 	})
@@ -358,7 +361,8 @@ func Test_AttributedObservationTelemetry_Deterministic(t *testing.T) {
 		}
 		want, err := plain.StateTransition(ctx, seqNr, ocrtypes.AttributedQuery{}, aos, plainKV, testBlobs)
 		require.NoError(t, err)
-		got, err := withTel.StateTransition(ctx, seqNr, ocrtypes.AttributedQuery{}, aos, telKV, testBlobs)
+		// The epoch differs between oracles, it must not change the output.
+		got, err := withTel.StateTransition(ocr3_1types.ContextWithEpoch(ctx, seqNr), seqNr, ocrtypes.AttributedQuery{}, aos, telKV, testBlobs)
 		require.NoError(t, err)
 		require.Equal(t, want, got, "seqNr %d", seqNr)
 		require.Equal(t, plainKV.m, telKV.m, "seqNr %d", seqNr)
@@ -385,6 +389,7 @@ func Test_AttributedObservationTelemetry_Split(t *testing.T) {
 		for i, m := range msgs {
 			require.Equal(t, []byte(tel.configDigest[:]), m.ConfigDigest)
 			require.Equal(t, uint64(9), m.SeqNr)
+			require.Equal(t, uint64(11), m.Epoch)
 			require.Equal(t, uint32(7), m.DonId)
 			require.Equal(t, uint32(4), m.Observer)
 			require.Equal(t, uint32(3), m.Emitter)
@@ -407,14 +412,14 @@ func Test_AttributedObservationTelemetry_Split(t *testing.T) {
 	}
 
 	t.Run("fits in one part", func(t *testing.T) {
-		msgs := tel.makeTelemetry(9, 5678, attributedObservation{observer: 4, obs: obs})
+		msgs := tel.makeTelemetry(9, 11, 5678, attributedObservation{observer: 4, obs: obs})
 		require.Len(t, msgs, 1)
 		requireParts(t, msgs)
 	})
 
 	t.Run("split under the budget", func(t *testing.T) {
 		tel.maxBytes = 2048
-		msgs := tel.makeTelemetry(9, 5678, attributedObservation{observer: 4, obs: obs})
+		msgs := tel.makeTelemetry(9, 11, 5678, attributedObservation{observer: 4, obs: obs})
 		require.Greater(t, len(msgs), 2)
 		requireParts(t, msgs)
 		for _, m := range msgs {
@@ -437,7 +442,7 @@ func Test_AttributedObservationTelemetry_Split(t *testing.T) {
 
 	t.Run("oversized values get a part each", func(t *testing.T) {
 		tel.maxBytes = 1
-		msgs := tel.makeTelemetry(9, 5678, attributedObservation{observer: 4, obs: obs})
+		msgs := tel.makeTelemetry(9, 11, 5678, attributedObservation{observer: 4, obs: obs})
 		require.Len(t, msgs, 501, "votes part plus one part per value")
 		require.Empty(t, msgs[0].StreamValues)
 		requireParts(t, msgs)

@@ -79,4 +79,8 @@ message LLOAttributedObservationTelemetry {
 
   // observation decode error if any
   optional string decode_error = 16;
+
+  // OCR epoch in which the emitter ran StateTransition. Local to the emitter:
+  // oracles may report different epochs for the same seq_nr.
+  uint64 epoch = 17;
 }
