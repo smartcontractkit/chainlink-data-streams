@@ -153,6 +153,9 @@ const attributedObservationTelemetryQueueSize = 8
 type attributedObservation struct {
 	observer commontypes.OracleID
 	obs      Observation
+	// agreedCycleStartTimestampNanos is the agreed timestamp of the round
+	// obs.CycleStartSeqNr, zero when unknown. Set by StateTransition.
+	agreedCycleStartTimestampNanos uint64
 }
 
 type attributedObservationRound struct {
@@ -297,6 +300,8 @@ func (t *attributedObservationTelemeter) makeTelemetry(seqNr, agreedTs uint64, a
 			Emitter:                               uint32(t.emitter),
 			OracleObservationTimestampNanoseconds: ao.obs.ObservationTimestampNanoseconds,
 			AgreedObservationTimestampNanoseconds: agreedTs,
+			CycleStartSeqNr:                       ao.obs.CycleStartSeqNr,
+			AgreedCycleStartTimestampNanoseconds:  ao.agreedCycleStartTimestampNanos,
 		}
 	}
 
