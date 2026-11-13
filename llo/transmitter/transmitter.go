@@ -2,6 +2,7 @@ package transmitter
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"runtime/debug"
 	"sync"
@@ -40,6 +41,12 @@ type TransmitNotifier interface {
 type Transmitter interface {
 	llotypes.Transmitter
 	services.Service
+}
+
+// batchTransmitter is a sub transmitter that can take the reports of one
+// Merkle bundle at once, rather than one report per call.
+type batchTransmitter interface {
+	TransmitBatch(ctx context.Context, digest types.ConfigDigest, seqNr uint64, reports []ocr3types.ReportWithInfo[llotypes.ReportInfo], sigs []types.AttributedOnchainSignature) error
 }
 
 type TransmitterRetirementReportCacheWriter interface {
@@ -182,6 +189,10 @@ func (t *transmitter) Transmit(
 		return nil
 	}
 
+	if protocol.IsMerkleFamily(report.Info.ReportFormat) {
+		return t.transmitMerkleBundle(ctx, digest, seqNr, report, sigs)
+	}
+
 	g := new(errgroup.Group)
 	for _, st := range t.subTransmitters {
 		g.Go(func() error {
@@ -189,6 +200,60 @@ func (t *transmitter) Transmit(
 		})
 	}
 	return g.Wait()
+}
+
+// transmitMerkleBundle hands every report of an attested bundle to each sub
+// transmitter. libocr calls Transmit once for the whole bundle, under one
+// deadline, so a sub transmitter that takes a batch gets all of them in one
+// call. One that does not gets them one at a time, and every report is
+// attempted even when an earlier one fails.
+func (t *transmitter) transmitMerkleBundle(ctx context.Context, digest types.ConfigDigest, seqNr uint64, report ocr3types.ReportWithInfo[llotypes.ReportInfo], sigs []types.AttributedOnchainSignature) error {
+	reports, err := expandMerkleBundle(report)
+	if err != nil {
+		return err
+	}
+
+	g := new(errgroup.Group)
+	for _, st := range t.subTransmitters {
+		g.Go(func() error {
+			if bt, ok := st.(batchTransmitter); ok {
+				return bt.TransmitBatch(ctx, digest, seqNr, reports, sigs)
+			}
+			var errs error
+			for _, r := range reports {
+				errs = errors.Join(errs, st.Transmit(ctx, digest, seqNr, r, sigs))
+			}
+			return errs
+		})
+	}
+	return g.Wait()
+}
+
+// expandMerkleBundle turns an attested bundle into one report per leaf. Each
+// report carries the leaf and its proof to the root the signatures cover, so
+// sub transmitters persist and send it like any other report, under the
+// family's report format.
+func expandMerkleBundle(bundleReport ocr3types.ReportWithInfo[llotypes.ReportInfo]) ([]ocr3types.ReportWithInfo[llotypes.ReportInfo], error) {
+	bundle, err := protocol.LoadMerkleBundle(bundleReport.Report)
+	if err != nil {
+		return nil, fmt.Errorf("failed to expand %s bundle: %w", bundleReport.Info.ReportFormat, err)
+	}
+	if bundle.Family != bundleReport.Info.ReportFormat {
+		return nil, fmt.Errorf("failed to expand %s bundle: bundle is of family %s", bundleReport.Info.ReportFormat, bundle.Family)
+	}
+	merkleReports, err := bundle.Expand(bundleReport.Report)
+	if err != nil {
+		return nil, fmt.Errorf("failed to expand %s bundle: %w", bundleReport.Info.ReportFormat, err)
+	}
+	reports := make([]ocr3types.ReportWithInfo[llotypes.ReportInfo], len(merkleReports))
+	for i, merkleReport := range merkleReports {
+		encoded, err := protocol.EncodeMerkleReport(merkleReport)
+		if err != nil {
+			return nil, fmt.Errorf("failed to encode %s report: %w", bundleReport.Info.ReportFormat, err)
+		}
+		reports[i] = ocr3types.ReportWithInfo[llotypes.ReportInfo]{Report: encoded, Info: bundleReport.Info}
+	}
+	return reports, nil
 }
 
 // FromAccount returns the stringified (hex) CSA public key

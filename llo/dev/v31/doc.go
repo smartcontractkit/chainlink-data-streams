@@ -199,6 +199,41 @@
 // EffectiveStreams drops any such inline entries before appending the declared
 // ones, so it reads definitions written by either version identically.
 //
+// # Merkle batched report signing
+//
+// A channel with SigningScheme "merkle" is not signed one report at a time.
+// Reports puts the reports of all such channels into one bundle per signing
+// family (merkle.go), after the per report channels and before the staging
+// marker, split by size to fit MaxReportBytes. The keyring signs the bundle's
+// Merkle root once, and the transmitter expands the attested bundle into one
+// report per channel with its proof. See protocol/merkle.go for the tree and
+// the signed message.
+//
+// The EVM family, llotypes.ReportFormatEVMMerkle in ReportInfo, covers every
+// format in llo/reportcodec/evm. An EVMStreamlined channel needs a feed ID to
+// join. Backfill reports follow the scheme of their target channel.
+//
+// A family is not tied to a destination chain. It fixes one signing key, one
+// hash and signature scheme, and one report packer. The root is signed once
+// with keys[family], so every member format must accept that signer. The EVM
+// family hashes with keccak256, signs with SignBlob over secp256k1 for
+// ecrecover, and packs reports with ReportCodecEVMMerkle. A format on
+// another key type needs its own family, since one signature cannot cover two
+// keys. Adding a family is a family constant, a protocol.MerkleFamily mapping,
+// a keyring case and a packer. Leaves commit to their member format and the
+// signed message to its family, so the bundle, tree and proof formats do not
+// change.
+//
+// The family is a report format rather than a signing scheme field on
+// ReportInfo so that a bundle of mixed codecs has a single format to select its
+// key, and so the transmit queue and TransmitRequest recognise reports by
+// report_format without a schema or wire change.
+//
+// There is no protocol version gate. A build that predates the field drops it
+// and votes a different channel hash, so set the scheme only once every oracle
+// runs a build that knows it. v3.0 does not support the scheme and never votes
+// for a channel that sets it.
+//
 // # Stream history
 //
 // Expressions can read a window of a stream's past agreed values with

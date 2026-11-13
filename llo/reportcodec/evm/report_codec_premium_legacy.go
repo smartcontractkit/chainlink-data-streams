@@ -183,20 +183,9 @@ func (r ReportCodecPremiumLegacy) Decode(b []byte) (*v3.Report, error) {
 
 // Pack assembles the report values into a payload for verifying on-chain
 func (r ReportCodecPremiumLegacy) Pack(digest types.ConfigDigest, seqNr uint64, report ocr2types.Report, sigs []types.AttributedOnchainSignature) ([]byte, error) {
-	var rs [][32]byte
-	var ss [][32]byte
-	var vs [32]byte
-	if len(sigs) > len(vs) {
-		return nil, fmt.Errorf("too many signatures; max: %d, got: %d", len(vs), len(sigs))
-	}
-	for i, as := range sigs {
-		r, s, v, err := evmutil.SplitSignature(as.Signature) //nolint:revive // This has always worked before; no need to change it
-		if err != nil {
-			return nil, fmt.Errorf("eventTransmit(ev): error in SplitSignature: %w", err)
-		}
-		rs = append(rs, r)
-		ss = append(ss, s)
-		vs[i] = v
+	rs, ss, vs, err := splitSignatures(sigs)
+	if err != nil {
+		return nil, err
 	}
 	reportCtx, err := LegacyReportContext(digest, seqNr, r.donID)
 	if err != nil {
@@ -209,6 +198,24 @@ func (r ReportCodecPremiumLegacy) Pack(digest types.ConfigDigest, seqNr uint64, 
 		return nil, fmt.Errorf("abi.Pack failed; %w", err)
 	}
 	return payload, nil
+}
+
+// splitSignatures splits EVM signatures into the r, s and v arrays the onchain
+// verifiers take.
+func splitSignatures(sigs []types.AttributedOnchainSignature) (rs, ss [][32]byte, vs [32]byte, err error) {
+	if len(sigs) > len(vs) {
+		return nil, nil, vs, fmt.Errorf("too many signatures; max: %d, got: %d", len(vs), len(sigs))
+	}
+	for i, as := range sigs {
+		r, s, v, err := evmutil.SplitSignature(as.Signature) //nolint:revive // This has always worked before; no need to change it
+		if err != nil {
+			return nil, nil, vs, fmt.Errorf("eventTransmit(ev): error in SplitSignature: %w", err)
+		}
+		rs = append(rs, r)
+		ss = append(ss, s)
+		vs[i] = v
+	}
+	return rs, ss, vs, nil
 }
 
 // ExtractReportValues extracts the native price, link price and quote from the report
