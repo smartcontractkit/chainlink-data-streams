@@ -116,6 +116,12 @@ func (p *Plugin) StateTransition(ctx context.Context, seqNr uint64, _ ocrtypes.A
 	// The window ends with this round, so a contribution gathered this round
 	// resolves to this round's agreed timestamp.
 	agreedTimestamps := appendAgreedTimestamp(prev.recentAgreedTimestamps, out.ObservationTimestampNanoseconds)
+	for i := range tally.attributed {
+		ao := &tally.attributed[i]
+		if ao.obs.CycleStartSeqNr != 0 {
+			ao.agreedCycleStartTimestampNanos, _ = agreedTimestampAt(agreedTimestamps, seqNr, ao.obs.CycleStartSeqNr)
+		}
+	}
 
 	// Lifecycle stage & promotion.
 	promotedValidAfter := map[llotypes.ChannelID]uint64(nil)

@@ -25,9 +25,9 @@ type precursor struct {
 	ChannelDefinitions llotypes.ChannelDefinitions
 	// ChannelState is the encoded c/defs record ChannelDefinitions were decoded
 	// from. Nil encodes ChannelDefinitions instead, which yields the same bytes.
-	ChannelState []byte
-	ValidAfterNanoseconds           map[llotypes.ChannelID]uint64
-	StreamAggregates                protocol.StreamAggregates
+	ChannelState          []byte
+	ValidAfterNanoseconds map[llotypes.ChannelID]uint64
+	StreamAggregates      protocol.StreamAggregates
 	// ChannelStateSeqNr is the c/seqnr of the channel-definitions record that
 	// ChannelDefinitions came from. It lets Reports tell whether the decoded-opts
 	// cache already matches these definitions without walking every channel.

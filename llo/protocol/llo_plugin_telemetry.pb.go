@@ -350,6 +350,11 @@ type LLOAttributedObservationTelemetry struct {
 	// the oracle and don observation_timestamps
 	OracleObservationTimestampNanoseconds uint64 `protobuf:"varint,7,opt,name=oracle_observation_timestamp_nanoseconds,json=oracleObservationTimestampNanoseconds,proto3" json:"oracle_observation_timestamp_nanoseconds,omitempty"`
 	AgreedObservationTimestampNanoseconds uint64 `protobuf:"varint,8,opt,name=agreed_observation_timestamp_nanoseconds,json=agreedObservationTimestampNanoseconds,proto3" json:"agreed_observation_timestamp_nanoseconds,omitempty"`
+	// the round the observer's contribution cycle started in and that round's
+	// agreed timestamp. Zero when the observation carries no blobs, and the
+	// timestamp is also zero when that round is outside the agreed timestamp window.
+	CycleStartSeqNr                      uint64 `protobuf:"varint,13,opt,name=cycle_start_seq_nr,json=cycleStartSeqNr,proto3" json:"cycle_start_seq_nr,omitempty"`
+	AgreedCycleStartTimestampNanoseconds uint64 `protobuf:"varint,14,opt,name=agreed_cycle_start_timestamp_nanoseconds,json=agreedCycleStartTimestampNanoseconds,proto3" json:"agreed_cycle_start_timestamp_nanoseconds,omitempty"`
 	// stream id => value as observed by this oracle
 	StreamValues map[uint32]*LLOStreamValue `protobuf:"bytes,9,rep,name=stream_values,json=streamValues,proto3" json:"stream_values,omitempty" protobuf_key:"varint,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	// observation votes to update channels
@@ -440,6 +445,20 @@ func (x *LLOAttributedObservationTelemetry) GetAgreedObservationTimestampNanosec
 	return 0
 }
 
+func (x *LLOAttributedObservationTelemetry) GetCycleStartSeqNr() uint64 {
+	if x != nil {
+		return x.CycleStartSeqNr
+	}
+	return 0
+}
+
+func (x *LLOAttributedObservationTelemetry) GetAgreedCycleStartTimestampNanoseconds() uint64 {
+	if x != nil {
+		return x.AgreedCycleStartTimestampNanoseconds
+	}
+	return 0
+}
+
 func (x *LLOAttributedObservationTelemetry) GetStreamValues() map[uint32]*LLOStreamValue {
 	if x != nil {
 		return x.StreamValues
@@ -514,7 +533,7 @@ const file_llo_plugin_telemetry_proto_rawDesc = "" +
 	"\x06seq_nr\x18\t \x01(\x04R\x05seqNr\x12#\n" +
 	"\rconfig_digest\x18\n" +
 	" \x01(\fR\fconfigDigest\x12\x15\n" +
-	"\x06don_id\x18\v \x01(\rR\x05donId\"\xe8\x06\n" +
+	"\x06don_id\x18\v \x01(\rR\x05donId\"\xed\a\n" +
 	"!LLOAttributedObservationTelemetry\x12#\n" +
 	"\rconfig_digest\x18\x01 \x01(\fR\fconfigDigest\x12\x15\n" +
 	"\x06seq_nr\x18\x02 \x01(\x04R\x05seqNr\x12\x15\n" +
@@ -522,7 +541,9 @@ const file_llo_plugin_telemetry_proto_rawDesc = "" +
 	"\bobserver\x18\x04 \x01(\rR\bobserver\x12\x18\n" +
 	"\aemitter\x18\x05 \x01(\rR\aemitter\x12W\n" +
 	"(oracle_observation_timestamp_nanoseconds\x18\a \x01(\x04R%oracleObservationTimestampNanoseconds\x12W\n" +
-	"(agreed_observation_timestamp_nanoseconds\x18\b \x01(\x04R%agreedObservationTimestampNanoseconds\x12\\\n" +
+	"(agreed_observation_timestamp_nanoseconds\x18\b \x01(\x04R%agreedObservationTimestampNanoseconds\x12+\n" +
+	"\x12cycle_start_seq_nr\x18\r \x01(\x04R\x0fcycleStartSeqNr\x12V\n" +
+	"(agreed_cycle_start_timestamp_nanoseconds\x18\x0e \x01(\x04R$agreedCycleStartTimestampNanoseconds\x12\\\n" +
 	"\rstream_values\x18\t \x03(\v27.v1.LLOAttributedObservationTelemetry.StreamValuesEntryR\fstreamValues\x12,\n" +
 	"\x12remove_channel_ids\x18\v \x03(\rR\x10removeChannelIds\x12\x81\x01\n" +
 	"\x1aupdate_channel_definitions\x18\f \x03(\v2C.v1.LLOAttributedObservationTelemetry.UpdateChannelDefinitionsEntryR\x18updateChannelDefinitions\x12&\n" +

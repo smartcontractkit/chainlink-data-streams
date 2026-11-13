@@ -70,6 +70,12 @@ message LLOAttributedObservationTelemetry {
   uint64 oracle_observation_timestamp_nanoseconds = 7;
   uint64 agreed_observation_timestamp_nanoseconds = 8;
 
+  // the round the observer's contribution cycle started in and that round's
+  // agreed timestamp. Zero when the observation carries no blobs, and the
+  // timestamp is also zero when that round is outside the agreed timestamp window.
+  uint64 cycle_start_seq_nr = 13;
+  uint64 agreed_cycle_start_timestamp_nanoseconds = 14;
+
   // stream id => value as observed by this oracle
   map<uint32, LLOStreamValue> stream_values = 9;
 

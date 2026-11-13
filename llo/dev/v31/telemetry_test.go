@@ -370,6 +370,7 @@ func Test_AttributedObservationTelemetry_Split(t *testing.T) {
 
 	obs := Observation{
 		ObservationTimestampNanoseconds: 1234,
+		CycleStartSeqNr:                 8,
 		RemoveChannelIDs:                map[llotypes.ChannelID]struct{}{5: {}, 2: {}},
 		UpdateChannelDefinitions:        llotypes.ChannelDefinitions{1: {ReportFormat: llotypes.ReportFormatJSON, Streams: []llotypes.Stream{{StreamID: 1, Aggregator: llotypes.AggregatorMedian}}}},
 		StreamValues:                    protocol.StreamValues{},
@@ -407,9 +408,11 @@ func Test_AttributedObservationTelemetry_Split(t *testing.T) {
 	}
 
 	t.Run("fits in one part", func(t *testing.T) {
-		msgs := tel.makeTelemetry(9, 5678, attributedObservation{observer: 4, obs: obs})
+		msgs := tel.makeTelemetry(9, 5678, attributedObservation{observer: 4, obs: obs, agreedCycleStartTimestampNanos: 4321})
 		require.Len(t, msgs, 1)
 		requireParts(t, msgs)
+		require.EqualValues(t, 8, msgs[0].CycleStartSeqNr)
+		require.EqualValues(t, 4321, msgs[0].AgreedCycleStartTimestampNanoseconds)
 	})
 
 	t.Run("split under the budget", func(t *testing.T) {
@@ -678,3 +681,44 @@ func (c *countingReportCodec) Encode(protocol.Report, llotypes.ChannelDefinition
 }
 
 func (c *countingReportCodec) Verify(llotypes.ChannelDefinition) error { return nil }
+
+func Test_AttributedObservationTelemetry_CycleStart(t *testing.T) {
+	ctx := tests.Context(t)
+	p := testPlugin(t)
+	tel := attachAOTelemeter(t, p)
+	kv := newMemKV()
+
+	const sec = uint64(time.Second)
+	obs := func(i int, ts, cycleStart uint64) ocrtypes.AttributedObservation {
+		return ao(i, mustEncodeObs(t, Observation{
+			ObservationTimestampNanoseconds: ts,
+			StreamValues:                    protocol.StreamValues{100: protocol.ToDecimal(decimal.NewFromInt(1))},
+			CycleStartSeqNr:                 cycleStart,
+		}))
+	}
+
+	_, err := p.StateTransition(ctx, 1, ocrtypes.AttributedQuery{}, emptyRound(), kv, testBlobs)
+	require.NoError(t, err)
+	_, err = p.StateTransition(ctx, 2, ocrtypes.AttributedQuery{}, addChannelRound(t, 2*sec, 1, jsonChannel()), kv, testBlobs)
+	require.NoError(t, err)
+
+	// Emit as the oracle that emits for seqNr 3.
+	p.OracleID = commontypes.OracleID(3 % p.N)
+	_, err = p.StateTransition(ctx, 3, ocrtypes.AttributedQuery{}, []ocrtypes.AttributedObservation{
+		obs(0, 3*sec, 2), obs(1, 3*sec, 3), obs(2, 3*sec, 3), obs(3, 3*sec, 3),
+	}, kv, testBlobs)
+	require.NoError(t, err)
+
+	r := requireAORound(t, tel, true)
+	require.Len(t, r.aos, 4)
+	got := func(i int) (uint64, uint64) {
+		m := tel.makeTelemetry(r.seqNr, r.agreedObservationTimestampNanos, r.aos[i])[0]
+		return m.CycleStartSeqNr, m.AgreedCycleStartTimestampNanoseconds
+	}
+	seq, ts := got(0)
+	require.EqualValues(t, 2, seq)
+	require.EqualValues(t, 2*sec, ts, "agreed timestamp of round 2")
+	seq, ts = got(1)
+	require.EqualValues(t, 3, seq)
+	require.Equal(t, r.agreedObservationTimestampNanos, ts, "the current round resolves to its own timestamp")
+}
