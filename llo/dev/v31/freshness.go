@@ -1,7 +1,9 @@
 package llo
 
 import (
+	"cmp"
 	"math"
+	"slices"
 	"sort"
 	"strconv"
 	"time"
@@ -30,14 +32,19 @@ import (
 //     This is the bound the pump's local round gate used to enforce, now
 //     visible to every oracle.
 //   - time age: roundTs - agreedTs[cycleStartSeqNr], bounded by
-//     MaxStreamValueAgeRounds round intervals. When the cycle started before
-//     the window, the oldest window entry stands in for its timestamp, which
-//     can only understate the age. The agreed timestamp of the
+//     MaxStreamValueAgeRounds round intervals. The agreed timestamp of the
 //     cycle's round is a lower bound on when the values were gathered, since
 //     the cycle started after the previous round committed. It catches a stall:
 //     seqNr stands still while time passes, so round age alone would call
-//     values gathered before the stall one round old. It is skipped while the
-//     round interval is unknown, during the first rounds after a fresh state.
+//     values gathered before the stall one round old.
+//
+// A cycle that started before the window has no known timestamp. The oldest
+// window entry stands in for it, which can only understate the age because
+// agreed timestamps never decrease: agreedObservationTimestamp holds the
+// previous one against a regressing median. The time bound is skipped while the
+// round interval is unknown. It is also weak while the window is short, since
+// a window of two entries can estimate the interval from a stall gap alone.
+// That only happens in the first rounds after a fresh state.
 //
 // Contributions stale by rounds or by time are never aggregated: after a DON
 // wide stall every contribution is old, and admitting them would report
@@ -49,6 +56,7 @@ import (
 // cycle started before the agreed timestamp window are aggregated too, only as
 // many as it takes to reach it. That happens during the first rounds after a
 // fresh state, while the window fills.
+//
 // There is no persisted freshness state and no mode.
 //
 // The agreed timestamps come from a window the hot state carries, one entry
@@ -92,8 +100,9 @@ type freshnessStats struct {
 	// contributionsStale is how many contributions were judged stale, whether
 	// or not the fallback let them in.
 	contributionsStale int
-	// staleByRounds, staleByTime and staleBeforeWindow split contributionsStale
-	// by the bound that rejected first.
+	// staleByRounds, staleByTime and staleBeforeWindow split contributionsStale.
+	// The time bound is checked first, so a contribution past both bounds counts
+	// as stale by time.
 	staleByRounds     int
 	staleByTime       int
 	staleBeforeWindow int
@@ -171,17 +180,16 @@ func selectFreshContributions(
 	out := make(map[llotypes.StreamID][]protocol.StreamValue, len(byStream))
 
 	for sid, contributions := range byStream {
-		// keep marks the contributions this stream aggregates. spare lists the
-		// ones the fallback may add, by index: those of unknown age. Stale by
-		// rounds or time never comes back.
+		// keep marks the contributions this stream aggregates. spare lists, by
+		// index, the ones the fallback may add. These are the contributions of
+		// unknown age. Stale by rounds or time never comes back.
 		keep := make([]bool, len(contributions))
 		spare := make([]int, 0, len(contributions))
 		fresh := 0
 		for i, c := range contributions {
 			// A cycle that started before the window has no known timestamp, but
 			// the oldest entry bounds it from above, so the age is at least
-			// roundTs minus that entry. A stall is caught this way whatever the
-			// round age.
+			// roundTs minus that entry.
 			cycleTs, inWindow := agreedTimestampAt(window, seqNr, c.cycleStartSeqNr)
 			ageKnown := inWindow
 			if !inWindow && c.cycleStartSeqNr <= seqNr && len(window) > 0 {
@@ -202,20 +210,21 @@ func selectFreshContributions(
 		}
 		stale := len(contributions) - fresh
 		stats.contributionsStale += stale
-		if stale > 0 {
-			stats.streamsFiltered++
-		}
-		if missing := minContributions - fresh; missing > 0 && len(spare) > 0 {
+		missing := minContributions - fresh
+		switch {
+		case stale == 0:
+		case missing > 0 && len(spare) > 0:
 			// Freshest first. The sort is stable, so equal ages keep their input
 			// order.
-			sort.SliceStable(spare, func(x, y int) bool {
-				return contributions[spare[x]].cycleStartSeqNr > contributions[spare[y]].cycleStartSeqNr
+			slices.SortStableFunc(spare, func(x, y int) int {
+				return cmp.Compare(contributions[y].cycleStartSeqNr, contributions[x].cycleStartSeqNr)
 			})
 			for _, i := range spare[:min(missing, len(spare))] {
 				keep[i] = true
 			}
-			stats.streamsFiltered--
 			stats.streamsFallenBack++
+		default:
+			stats.streamsFiltered++
 		}
 		values := make([]protocol.StreamValue, 0, len(contributions))
 		for i, c := range contributions {

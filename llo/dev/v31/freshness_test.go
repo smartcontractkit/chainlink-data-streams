@@ -174,6 +174,15 @@ func Test_selectFreshContributions(t *testing.T) {
 		require.Equal(t, 1, stats.staleByRounds)
 	})
 
+	t.Run("no aggregate when every contribution is stale by rounds", func(t *testing.T) {
+		in := map[llotypes.StreamID][]streamContribution{1: {contribution(1, 1), contribution(2, 2), contribution(3, 3)}}
+		out, stats := selectFreshContributions(in, seqNr, roundTs, window, interval, 3)
+		require.Empty(t, out[1])
+		require.Equal(t, 3, stats.staleByRounds)
+		require.Equal(t, 1, stats.streamsFiltered)
+		require.Equal(t, 0, stats.streamsFallenBack)
+	})
+
 	t.Run("falls back to contributions of unknown age below min contributions", func(t *testing.T) {
 		short := window[len(window)-2:] // rounds 19 and 20 only
 		in := map[llotypes.StreamID][]streamContribution{1: {contribution(1, 20), contribution(9, 18), contribution(2, 20), contribution(8, 1)}}
@@ -211,9 +220,10 @@ func Test_selectFreshContributions(t *testing.T) {
 	})
 
 	t.Run("stale by rounds and by time is never re-admitted", func(t *testing.T) {
-		// A stall: this round's timestamp jumped, and every contribution comes
-		// from a cycle that started before the window, so its own timestamp is
-		// unknown. The oldest window entry still proves it is too old.
+		// This round's timestamp jumped, as in a stall, and every contribution
+		// comes from a cycle that started before the window, so its own
+		// timestamp is unknown. The oldest window entry still proves it is too
+		// old.
 		stalled := roundTs + uint64(MaxStreamValueAgeRounds)*sec + 1
 		stalledWindow := append(append([]uint64(nil), window[:len(window)-1]...), stalled)
 		in := map[llotypes.StreamID][]streamContribution{1: {contribution(1, 1), contribution(2, 1), contribution(3, 2), contribution(4, 20-MaxStreamValueAgeRounds-1)}}
