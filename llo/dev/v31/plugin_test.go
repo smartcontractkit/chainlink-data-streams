@@ -189,9 +189,9 @@ func mustEncodeObs(t *testing.T, obs Observation) []byte {
 		require.NoError(t, err)
 		return b
 	}
-	// A cycle start of 1 is valid for every round and stale after
-	// MaxStreamValueAgeRounds, where the fallback aggregates every
-	// contribution anyway. Tests of the freshness rule set it explicitly.
+	// A cycle start of 1 is fresh only until MaxStreamValueAgeRounds, after
+	// which the contribution is left out. Tests running past it, and tests of
+	// the freshness rule, set it explicitly.
 	cycleStartSeqNr := obs.CycleStartSeqNr
 	if cycleStartSeqNr == 0 {
 		cycleStartSeqNr = 1

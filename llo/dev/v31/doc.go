@@ -132,9 +132,10 @@
 // hot state carries the agreed timestamps of the last few rounds, and each
 // contribution is held to a round age and a time age derived from those
 // (freshness.go). A stream whose fresh contributions cannot reach the
-// contribution floor aggregates every contribution instead, which is the
-// behaviour without the rule, so a bound that proves too tight for a DON costs
-// freshness, never liveness. The fallback is counted (llo_freshness metrics).
+// contribution floor has no aggregate that round. Contributions past either
+// bound are never re-admitted. Only the freshest contributions of unknown age,
+// from before the timestamp window fills, are, as many as it takes to reach the
+// floor. The fallback is counted (llo_freshness metrics).
 //
 // # Parity status (vs v30)
 //
