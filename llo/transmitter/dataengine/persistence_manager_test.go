@@ -130,8 +130,8 @@ func TestPersistenceManagerPrune(t *testing.T) {
 	err = pm.Start(ctx)
 	require.NoError(t, err)
 
-	// Wait for next poll.
-	observedLogs.TakeAll()
+	// Only the first poll deletes rows, so it is the only one that logs. Do not
+	// drain the observed logs here: the poll can run before this goroutine does.
 	tests.AssertLogEventually(t, observedLogs, "Pruned transmit requests table")
 
 	result, err := pm.Load(ctx)
