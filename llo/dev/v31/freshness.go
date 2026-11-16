@@ -1,7 +1,9 @@
 package llo
 
 import (
+	"cmp"
 	"math"
+	"slices"
 	"sort"
 	"strconv"
 	"time"
@@ -34,15 +36,27 @@ import (
 //     cycle's round is a lower bound on when the values were gathered, since
 //     the cycle started after the previous round committed. It catches a stall:
 //     seqNr stands still while time passes, so round age alone would call
-//     values gathered before the stall one round old. It is skipped while the
-//     round interval is unknown, during the first rounds after a fresh state.
+//     values gathered before the stall one round old.
 //
-// A per stream fallback keeps liveness: when the fresh contributions cannot
-// reach minContributions, the ones stale by rounds are aggregated too, as
-// before this rule existed. Contributions stale by time never come back: after
-// a DON wide stall every contribution is old, and re-admitting them would
-// report pre-stall values under the post-stall timestamp. The stream has no
-// aggregate that round instead, as it had when the pump withheld the snapshot.
+// A cycle that started before the window has no known timestamp. The oldest
+// window entry stands in for it, which can only understate the age because
+// agreed timestamps never decrease: agreedObservationTimestamp holds the
+// previous one against a regressing median. The time bound is skipped while the
+// round interval is unknown. It is also weak while the window is short, since
+// a window of two entries can estimate the interval from a stall gap alone.
+// That only happens in the first rounds after a fresh state.
+//
+// Contributions stale by rounds or by time are never aggregated: after a DON
+// wide stall every contribution is old, and admitting them would report
+// pre-stall values under the post-stall timestamp. The stream has no aggregate
+// that round instead, as it had when the pump withheld the snapshot.
+//
+// A per stream fallback keeps liveness only where the age is unknown: when the
+// fresh contributions cannot reach minContributions, the freshest ones whose
+// cycle started before the agreed timestamp window are aggregated too, only as
+// many as it takes to reach it. That happens during the first rounds after a
+// fresh state, while the window fills.
+//
 // There is no persisted freshness state and no mode.
 //
 // The agreed timestamps come from a window the hot state carries, one entry
@@ -80,14 +94,15 @@ type freshnessStats struct {
 	// streamsFiltered is how many streams aggregated fresh contributions only,
 	// leaving at least one stale contribution out.
 	streamsFiltered int
-	// streamsFallenBack is how many streams re-admitted contributions stale by
-	// rounds because the fresh ones missed minContributions.
+	// streamsFallenBack is how many streams re-admitted contributions of unknown
+	// age because the fresh ones missed minContributions.
 	streamsFallenBack int
 	// contributionsStale is how many contributions were judged stale, whether
 	// or not the fallback let them in.
 	contributionsStale int
-	// staleByRounds, staleByTime and staleBeforeWindow split contributionsStale
-	// by the bound that rejected first.
+	// staleByRounds, staleByTime and staleBeforeWindow split contributionsStale.
+	// The time bound is checked first, so a contribution past both bounds counts
+	// as stale by time.
 	staleByRounds     int
 	staleByTime       int
 	staleBeforeWindow int
@@ -143,10 +158,10 @@ func roundIntervalEstimate(window []uint64, configured time.Duration) time.Durat
 // selectFreshContributions decides, per stream, which contributions this round
 // aggregates. A contribution is fresh when its round age and its time age are
 // both within bound. A roundInterval of zero disables the time bound. See the
-// package comment above. The fresh set is used when
-// it reaches minContributions, otherwise the contributions stale by rounds are
-// re-admitted. Values keep their input order, so the result does not depend on
-// how the split went.
+// package comment above. The fresh set is used when it reaches
+// minContributions, otherwise the freshest contributions of unknown age are
+// re-admitted, only as many as it takes to reach it. Values keep their input
+// order, so the result does not depend on how the split went.
 //
 // Every input is replicated: seqNr, the agreed timestamps, the configured
 // interval from the shared OCR config, and a cycle start seqNr the sender can
@@ -165,42 +180,59 @@ func selectFreshContributions(
 	out := make(map[llotypes.StreamID][]protocol.StreamValue, len(byStream))
 
 	for sid, contributions := range byStream {
-		fresh := make([]protocol.StreamValue, 0, len(contributions))
-		// fallback is every contribution the fallback may re-admit: the fresh
-		// ones and those stale by rounds only. Stale by time never comes back.
-		fallback := make([]protocol.StreamValue, 0, len(contributions))
-		stale := 0
-		for _, c := range contributions {
+		// keep marks the contributions this stream aggregates. spare lists, by
+		// index, the ones the fallback may add. These are the contributions of
+		// unknown age. Stale by rounds or time never comes back.
+		keep := make([]bool, len(contributions))
+		spare := make([]int, 0, len(contributions))
+		fresh := 0
+		for i, c := range contributions {
+			// A cycle that started before the window has no known timestamp, but
+			// the oldest entry bounds it from above, so the age is at least
+			// roundTs minus that entry.
+			cycleTs, inWindow := agreedTimestampAt(window, seqNr, c.cycleStartSeqNr)
+			ageKnown := inWindow
+			if !inWindow && c.cycleStartSeqNr <= seqNr && len(window) > 0 {
+				cycleTs, ageKnown = window[0], true
+			}
 			switch {
+			case ageKnown && maxAge > 0 && roundTs > cycleTs && roundTs-cycleTs > maxAge:
+				stats.staleByTime++
 			case c.cycleStartSeqNr > seqNr || seqNr-c.cycleStartSeqNr > MaxStreamValueAgeRounds:
 				stats.staleByRounds++
-				fallback = append(fallback, c.value)
+			case !inWindow:
+				stats.staleBeforeWindow++
+				spare = append(spare, i)
 			default:
-				cycleTs, ok := agreedTimestampAt(window, seqNr, c.cycleStartSeqNr)
-				if !ok {
-					stats.staleBeforeWindow++
-					fallback = append(fallback, c.value)
-				} else if maxAge > 0 && roundTs > cycleTs && roundTs-cycleTs > maxAge {
-					stats.staleByTime++
-				} else {
-					fresh = append(fresh, c.value)
-					fallback = append(fallback, c.value)
-					continue
-				}
+				keep[i] = true
+				fresh++
 			}
-			stale++
 		}
+		stale := len(contributions) - fresh
 		stats.contributionsStale += stale
+		missing := minContributions - fresh
 		switch {
 		case stale == 0:
-			out[sid] = fresh
-		case len(fresh) >= minContributions || len(fallback) == len(fresh):
-			stats.streamsFiltered++
-			out[sid] = fresh
-		default:
+		case missing > 0 && len(spare) > 0:
+			// Freshest first. The sort is stable, so equal ages keep their input
+			// order.
+			slices.SortStableFunc(spare, func(x, y int) int {
+				return cmp.Compare(contributions[y].cycleStartSeqNr, contributions[x].cycleStartSeqNr)
+			})
+			for _, i := range spare[:min(missing, len(spare))] {
+				keep[i] = true
+			}
 			stats.streamsFallenBack++
-			out[sid] = fallback
+		default:
+			stats.streamsFiltered++
 		}
+		values := make([]protocol.StreamValue, 0, len(contributions))
+		for i, c := range contributions {
+			if keep[i] {
+				values = append(values, c.value)
+			}
+		}
+		out[sid] = values
 	}
 	return out, stats
 }
@@ -219,7 +251,7 @@ var (
 		Namespace: "llo",
 		Subsystem: "freshness",
 		Name:      "fallback_streams_total",
-		Help:      "Streams that re-admitted contributions stale by rounds because the fresh ones could not reach min contributions.",
+		Help:      "Streams that re-admitted contributions of unknown age because the fresh ones could not reach min contributions.",
 	}, []string{"donID"})
 	freshnessRoundIntervalMetric = promauto.NewGaugeVec(prometheus.GaugeOpts{
 		Namespace: "llo",

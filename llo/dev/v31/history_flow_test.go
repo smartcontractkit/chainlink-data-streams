@@ -31,8 +31,16 @@ func historyExprChannel(expression string) llotypes.ChannelDefinition {
 // valueRound feeds 4 identical observations carrying a value for stream 100.
 func valueRound(t *testing.T, ts uint64, value int64) []ocrtypes.AttributedObservation {
 	t.Helper()
+	return valueRoundAt(t, ts, value, 0)
+}
+
+// valueRoundAt is valueRound with the round the cycle started in. Zero keeps
+// the fixture default, which is only fresh for the first few rounds.
+func valueRoundAt(t *testing.T, ts uint64, value int64, cycleStartSeqNr uint64) []ocrtypes.AttributedObservation {
+	t.Helper()
 	obs := Observation{
 		ObservationTimestampNanoseconds: ts,
+		CycleStartSeqNr:                 cycleStartSeqNr,
 		StreamValues:                    protocol.StreamValues{100: protocol.ToDecimal(decimal.NewFromInt(value))},
 	}
 	aos := make([]ocrtypes.AttributedObservation, 0, 4)
@@ -118,7 +126,7 @@ func Test_History_EvictsAtDepth(t *testing.T) {
 
 	seqNr := uint64(3)
 	for round := 1; round <= 6; round++ {
-		_, err := p.StateTransition(ctx, seqNr, ocrtypes.AttributedQuery{}, valueRound(t, uint64(round)*10_000, int64(round)), kv, testBlobs)
+		_, err := p.StateTransition(ctx, seqNr, ocrtypes.AttributedQuery{}, valueRoundAt(t, uint64(round)*10_000, int64(round), seqNr), kv, testBlobs)
 		require.NoError(t, err)
 		seqNr++
 	}

@@ -165,13 +165,46 @@ func Test_selectFreshContributions(t *testing.T) {
 		require.Equal(t, 1, stats.staleByRounds)
 	})
 
-	t.Run("falls back to contributions stale by rounds below min contributions", func(t *testing.T) {
+	t.Run("stale by rounds is never re-admitted", func(t *testing.T) {
 		in := map[llotypes.StreamID][]streamContribution{1: {contribution(1, 20), contribution(9, 1), contribution(2, 20)}}
 		out, stats := selectFreshContributions(in, seqNr, roundTs, window, interval, 3)
-		require.Equal(t, []int64{1, 9, 2}, values(out[1]), "every contribution, in input order")
+		require.Equal(t, []int64{1, 2}, values(out[1]))
+		require.Equal(t, 1, stats.streamsFiltered)
+		require.Equal(t, 0, stats.streamsFallenBack)
+		require.Equal(t, 1, stats.staleByRounds)
+	})
+
+	t.Run("no aggregate when every contribution is stale by rounds", func(t *testing.T) {
+		in := map[llotypes.StreamID][]streamContribution{1: {contribution(1, 1), contribution(2, 2), contribution(3, 3)}}
+		out, stats := selectFreshContributions(in, seqNr, roundTs, window, interval, 3)
+		require.Empty(t, out[1])
+		require.Equal(t, 3, stats.staleByRounds)
+		require.Equal(t, 1, stats.streamsFiltered)
+		require.Equal(t, 0, stats.streamsFallenBack)
+	})
+
+	t.Run("falls back to contributions of unknown age below min contributions", func(t *testing.T) {
+		short := window[len(window)-2:] // rounds 19 and 20 only
+		in := map[llotypes.StreamID][]streamContribution{1: {contribution(1, 20), contribution(9, 18), contribution(2, 20), contribution(8, 1)}}
+		out, stats := selectFreshContributions(in, seqNr, roundTs, short, interval, 3)
+		require.Equal(t, []int64{1, 9, 2}, values(out[1]), "fresh and unknown age, in input order")
 		require.Equal(t, 0, stats.streamsFiltered)
 		require.Equal(t, 1, stats.streamsFallenBack)
-		require.Equal(t, 1, stats.contributionsStale)
+		require.Equal(t, 2, stats.contributionsStale)
+		require.Equal(t, 1, stats.staleBeforeWindow)
+		require.Equal(t, 1, stats.staleByRounds)
+	})
+
+	t.Run("fallback takes the freshest of unknown age and no more", func(t *testing.T) {
+		short := window[len(window)-2:] // rounds 19 and 20 only
+		in := map[llotypes.StreamID][]streamContribution{1: {
+			contribution(1, 20), contribution(7, 16), contribution(8, 17), contribution(9, 18), contribution(6, 18),
+		}}
+		out, stats := selectFreshContributions(in, seqNr, roundTs, short, interval, 3)
+		require.Equal(t, []int64{1, 9, 6}, values(out[1]), "two missing: the freshest two, input order kept")
+		require.Equal(t, 1, stats.streamsFallenBack)
+		require.Equal(t, 0, stats.streamsFiltered)
+		require.Equal(t, 4, stats.contributionsStale)
 	})
 
 	t.Run("stale by time is never re-admitted", func(t *testing.T) {
@@ -186,6 +219,20 @@ func Test_selectFreshContributions(t *testing.T) {
 		require.Equal(t, 4, stats.staleByTime)
 	})
 
+	t.Run("stale by rounds and by time is never re-admitted", func(t *testing.T) {
+		// This round's timestamp jumped, as in a stall, and every contribution
+		// comes from a cycle that started before the window, so its own
+		// timestamp is unknown. The oldest window entry still proves it is too
+		// old.
+		stalled := roundTs + uint64(MaxStreamValueAgeRounds)*sec + 1
+		stalledWindow := append(append([]uint64(nil), window[:len(window)-1]...), stalled)
+		in := map[llotypes.StreamID][]streamContribution{1: {contribution(1, 1), contribution(2, 1), contribution(3, 2), contribution(4, 20-MaxStreamValueAgeRounds-1)}}
+		out, stats := selectFreshContributions(in, seqNr, stalled, stalledWindow, interval, 3)
+		require.Empty(t, out[1])
+		require.Equal(t, 4, stats.staleByTime)
+		require.Equal(t, 0, stats.streamsFallenBack)
+	})
+
 	t.Run("per stream", func(t *testing.T) {
 		in := map[llotypes.StreamID][]streamContribution{
 			1: {contribution(1, 20), contribution(2, 20), contribution(3, 20), contribution(9, 1)},
@@ -194,10 +241,10 @@ func Test_selectFreshContributions(t *testing.T) {
 		}
 		out, stats := selectFreshContributions(in, seqNr, roundTs, window, interval, 3)
 		require.Equal(t, []int64{1, 2, 3}, values(out[1]))
-		require.Equal(t, []int64{1, 9, 8}, values(out[2]))
+		require.Equal(t, []int64{1}, values(out[2]), "stale by rounds is never re-admitted")
 		require.Equal(t, []int64{1, 2}, values(out[3]))
-		require.Equal(t, 1, stats.streamsFiltered)
-		require.Equal(t, 1, stats.streamsFallenBack)
+		require.Equal(t, 2, stats.streamsFiltered)
+		require.Equal(t, 0, stats.streamsFallenBack)
 		require.Equal(t, 3, stats.contributionsStale)
 	})
 }
