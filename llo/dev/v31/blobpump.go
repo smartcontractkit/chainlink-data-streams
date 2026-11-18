@@ -40,10 +40,6 @@ const (
 	// MinBlobLifetimeRounds is the smallest lifetime that lets a snapshot be
 	// offered for one round.
 	MinBlobLifetimeRounds = BlobFetchMarginRounds + 1
-	// DefaultBlobObservationDurationMultiplier scales MaxDurationObservation
-	// into the pump's per-cycle budget. The pump runs off the OCR critical
-	// path, so it can afford to wait longer than a synchronous observation.
-	DefaultBlobObservationDurationMultiplier = 2
 	// MaxBlobLifetimeRounds bounds BlobLifetimeRounds. The pump broadcasts
 	// roughly one blob per round, so the unexpired-blob budget declared to
 	// libocr grows with the lifetime; this keeps that budget sane.

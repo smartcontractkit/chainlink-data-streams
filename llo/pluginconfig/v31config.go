@@ -63,7 +63,7 @@ type V31Config struct {
 	BlobLifetimeRounds uint64 `json:"blobLifetimeRounds" toml:"blobLifetimeRounds"`
 
 	// MaxDurationBlobObservation is the blob pump's per-cycle observation
-	// budget.
+	// budget. Zero uses the OCR MaxDurationObservation, as v30 does.
 	MaxDurationBlobObservation Duration `json:"maxDurationBlobObservation" toml:"maxDurationBlobObservation"`
 
 	// BlobInFlightWaitFactor divides MaxDurationObservation into how long Take

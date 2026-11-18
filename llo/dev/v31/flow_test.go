@@ -349,7 +349,7 @@ func Test_Factory_NewReportingPlugin_maxDurationObservation(t *testing.T) {
 		p, _, err := f.NewReportingPlugin(ctx, cfg, nil)
 		require.NoError(t, err)
 		pump := p.(*Plugin).pump
-		require.Equal(t, DefaultBlobObservationDurationMultiplier*time.Second, pump.observationTimeout)
+		require.Equal(t, time.Second, pump.observationTimeout)
 		require.Equal(t, time.Second/time.Duration(defaultBlobInFlightWaitFactor), pump.inFlightWait)
 		require.NoError(t, p.Close())
 	})
