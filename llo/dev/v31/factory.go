@@ -52,8 +52,9 @@ type PluginFactoryParams struct {
 	// [MinBlobLifetimeRounds, MaxBlobLifetimeRounds].
 	BlobLifetimeRounds uint64
 	// MaxDurationBlobObservation overrides the pump's per-cycle observation
-	// budget (default: DefaultBlobObservationDurationMultiplier *
-	// cfg.MaxDurationObservation).
+	// budget (default: cfg.MaxDurationObservation, the deadline v30 passes to
+	// DataSource.Observe). The data source scales its cache TTL and refresh
+	// cadence with this budget, so a larger value serves older values.
 	MaxDurationBlobObservation time.Duration
 	// BlobInFlightWaitFactor overrides defaultBlobInFlightWaitFactor if
 	// non-zero. Divides cfg.MaxDurationObservation into how long Take waits for
@@ -136,7 +137,7 @@ func (f *PluginFactory) NewReportingPlugin(ctx context.Context, cfg ocr3types.Re
 
 	blobObservationTimeout := f.MaxDurationBlobObservation
 	if blobObservationTimeout <= 0 {
-		blobObservationTimeout = DefaultBlobObservationDurationMultiplier * cfg.MaxDurationObservation
+		blobObservationTimeout = cfg.MaxDurationObservation
 	}
 
 	p := &Plugin{
