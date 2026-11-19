@@ -30,6 +30,7 @@ func Test_V31Config_Unmarshal(t *testing.T) {
 			verboseLogging = true
 			blobLifetimeRounds = 8
 			maxDurationBlobObservation = "1s"
+			maxDurationBlobBroadcast = "2s"
 			blobInFlightWaitFactor = 4
 			captureOutcomeTelemetry = true
 			captureReportTelemetry = true
@@ -43,6 +44,7 @@ func Test_V31Config_Unmarshal(t *testing.T) {
 		assert.True(t, pc.V31.VerboseLogging)
 		assert.Equal(t, uint64(8), pc.V31.BlobLifetimeRounds)
 		assert.Equal(t, time.Second, pc.V31.MaxDurationBlobObservation.Duration())
+		assert.Equal(t, 2*time.Second, pc.V31.MaxDurationBlobBroadcast.Duration())
 		assert.Equal(t, uint64(4), pc.V31.BlobInFlightWaitFactor)
 		assert.True(t, pc.V31.CaptureOutcomeTelemetry)
 		assert.True(t, pc.V31.CaptureReportTelemetry)
@@ -100,9 +102,11 @@ func Test_V31Config_Validate(t *testing.T) {
 	t.Run("rejects a negative duration", func(t *testing.T) {
 		pc := v31Base()
 		pc.V31.MaxDurationBlobObservation = Duration(-time.Second)
+		pc.V31.MaxDurationBlobBroadcast = Duration(-time.Second)
 		err := pc.Validate()
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "MaxDurationBlobObservation must not be negative")
+		assert.Contains(t, err.Error(), "MaxDurationBlobBroadcast must not be negative")
 	})
 
 	t.Run("rejects the block on OCR3.0", func(t *testing.T) {

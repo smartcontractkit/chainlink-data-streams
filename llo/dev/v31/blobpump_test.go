@@ -33,6 +33,7 @@ func testPump(t *testing.T, ds DataSource, bbf ocr3_1types.BlobBroadcastFetcher)
 		configDigest:       ocrtypes.ConfigDigest{1},
 		verboseLogging:     true,
 		observationTimeout: tests.WaitTimeout(t),
+		broadcastTimeout:   tests.WaitTimeout(t),
 		blobLifetimeRounds: DefaultBlobLifetimeRounds,
 	})
 	p.Start()
@@ -616,9 +617,10 @@ func Test_blobPump_CloseDoesNotHangOnStuckDataSource(t *testing.T) {
 		bbf:                newFakeBroadcaster(),
 		ds:                 ds,
 		observationTimeout: time.Minute,
+		broadcastTimeout:   time.Second,
 		blobLifetimeRounds: DefaultBlobLifetimeRounds,
 	})
-	require.Equal(t, closeTimeoutSlackMultiplier*time.Minute, p.closeTimeout, "closeTimeout must derive from the observation timeout")
+	require.Equal(t, closeTimeoutSlackMultiplier*time.Minute, p.closeTimeout, "closeTimeout must derive from the longer of the cycle timeouts")
 	p.closeTimeout = 100 * time.Millisecond
 	p.Start()
 
@@ -711,6 +713,56 @@ func Test_blobPump_BroadcastRetryRefreshesExpiry(t *testing.T) {
 	require.NotNil(t, snap, reason)
 	require.EqualValues(t, 2, snap.cycleStartSeqNr)
 	require.EqualValues(t, 5+DefaultBlobLifetimeRounds, snap.blobExpirationHintSeqNr)
+}
+
+// slowDataSource spends its whole deadline before returning values, as the
+// chainlink data source can on its first call.
+type slowDataSource struct{ vals protocol.StreamValues }
+
+func (s *slowDataSource) Observe(ctx context.Context, sv protocol.StreamValues, opts DSOpts) error {
+	<-ctx.Done()
+	for id := range sv {
+		sv[id] = s.vals[id]
+	}
+	return nil
+}
+
+// deadlineBroadcaster fails a broadcast whose context is already done, as the
+// libocr blob endpoint does.
+type deadlineBroadcaster struct {
+	*llotest.BlobBroadcastFetcher
+}
+
+func (d deadlineBroadcaster) BroadcastBlob(ctx context.Context, payload []byte, hint ocr3_1types.BlobExpirationHint) (ocr3_1types.BlobHandle, error) {
+	if err := ctx.Err(); err != nil {
+		return ocr3_1types.BlobHandle{}, err
+	}
+	return d.BlobBroadcastFetcher.BroadcastBlob(ctx, payload, hint)
+}
+
+// Test_blobPump_BroadcastHasItsOwnDeadline asserts a DataSource that uses its
+// whole observation timeout does not leave the broadcast with an expired
+// context.
+func Test_blobPump_BroadcastHasItsOwnDeadline(t *testing.T) {
+	ds := &slowDataSource{vals: protocol.StreamValues{100: protocol.ToDecimal(decimal.NewFromInt(7))}}
+	bc := deadlineBroadcaster{newFakeBroadcaster()}
+
+	p := newBlobPump(logger.Test(t), blobPumpParams{
+		bbf:                bc,
+		ds:                 ds,
+		observationTimeout: 20 * time.Millisecond,
+		broadcastTimeout:   tests.WaitTimeout(t),
+		blobLifetimeRounds: DefaultBlobLifetimeRounds,
+	})
+	p.Start()
+	t.Cleanup(func() { assert.True(t, p.Close(), "pump did not stop cleanly") })
+
+	p.SetInput(pumpInputFor(2))
+	_, _ = p.Take(t.Context(), 2)
+
+	require.Eventually(t, func() bool { return p.Cycles() >= 1 }, tests.WaitTimeout(t), 10*time.Millisecond)
+	snap, reason := p.Take(t.Context(), 3)
+	require.NotNil(t, snap, reason)
 }
 
 // Test_blobPump_BroadcastRetriesAreBounded asserts a transport that stays down

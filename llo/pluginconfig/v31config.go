@@ -62,9 +62,13 @@ type V31Config struct {
 	// bound staleness, the state transition does.
 	BlobLifetimeRounds uint64 `json:"blobLifetimeRounds" toml:"blobLifetimeRounds"`
 
-	// MaxDurationBlobObservation is the blob pump's per-cycle observation
-	// budget. Zero uses the OCR MaxDurationObservation, as v30 does.
+	// MaxDurationBlobObservation is the deadline the blob pump gives
+	// DataSource.Observe. Zero uses the OCR MaxDurationObservation, as v30 does.
 	MaxDurationBlobObservation Duration `json:"maxDurationBlobObservation" toml:"maxDurationBlobObservation"`
+
+	// MaxDurationBlobBroadcast is the deadline shared by every broadcast
+	// attempt of a blob pump cycle. Zero uses 5 * MaxDurationBlobObservation.
+	MaxDurationBlobBroadcast Duration `json:"maxDurationBlobBroadcast" toml:"maxDurationBlobBroadcast"`
 
 	// BlobInFlightWaitFactor divides MaxDurationObservation into how long Take
 	// waits for a cycle already in flight to park, so a larger factor waits
@@ -98,6 +102,9 @@ func (o V31Config) Validate() (merr error) {
 	}
 	if o.MaxDurationBlobObservation < 0 {
 		merr = errors.Join(merr, fmt.Errorf("llo: v31: MaxDurationBlobObservation must not be negative, got: %s", o.MaxDurationBlobObservation))
+	}
+	if o.MaxDurationBlobBroadcast < 0 {
+		merr = errors.Join(merr, fmt.Errorf("llo: v31: MaxDurationBlobBroadcast must not be negative, got: %s", o.MaxDurationBlobBroadcast))
 	}
 	return merr
 }

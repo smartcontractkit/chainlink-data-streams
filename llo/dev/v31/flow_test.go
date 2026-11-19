@@ -350,7 +350,40 @@ func Test_Factory_NewReportingPlugin_maxDurationObservation(t *testing.T) {
 		require.NoError(t, err)
 		pump := p.(*Plugin).pump
 		require.Equal(t, time.Second, pump.observationTimeout)
+		require.Equal(t, DefaultBlobBroadcastTimeoutMultiplier*time.Second, pump.broadcastTimeout)
 		require.Equal(t, time.Second/time.Duration(defaultBlobInFlightWaitFactor), pump.inFlightWait)
+		require.NoError(t, p.Close())
+	})
+
+	t.Run("derives the broadcast timeout from the blob observation override", func(t *testing.T) {
+		f := NewPluginFactory(PluginFactoryParams{
+			OnchainConfigCodec:         mockOnchainConfigCodec{},
+			Logger:                     logger.Test(t),
+			MaxDurationBlobObservation: 250 * time.Millisecond,
+		})
+		cfg := base
+		cfg.MaxDurationObservation = time.Second
+		p, _, err := f.NewReportingPlugin(ctx, cfg, nil)
+		require.NoError(t, err)
+		pump := p.(*Plugin).pump
+		require.Equal(t, 250*time.Millisecond, pump.observationTimeout)
+		require.Equal(t, DefaultBlobBroadcastTimeoutMultiplier*250*time.Millisecond, pump.broadcastTimeout)
+		require.NoError(t, p.Close())
+	})
+
+	t.Run("applies the blob broadcast override", func(t *testing.T) {
+		f := NewPluginFactory(PluginFactoryParams{
+			OnchainConfigCodec:       mockOnchainConfigCodec{},
+			Logger:                   logger.Test(t),
+			MaxDurationBlobBroadcast: 3 * time.Second,
+		})
+		cfg := base
+		cfg.MaxDurationObservation = time.Second
+		p, _, err := f.NewReportingPlugin(ctx, cfg, nil)
+		require.NoError(t, err)
+		pump := p.(*Plugin).pump
+		require.Equal(t, time.Second, pump.observationTimeout)
+		require.Equal(t, 3*time.Second, pump.broadcastTimeout)
 		require.NoError(t, p.Close())
 	})
 }

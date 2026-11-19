@@ -133,6 +133,7 @@ func attachPump(t *testing.T, p *Plugin, ds DataSource, bbf ocr3_1types.BlobBroa
 		configDigest:       p.ConfigDigest,
 		verboseLogging:     true,
 		observationTimeout: tests.WaitTimeout(t),
+		broadcastTimeout:   tests.WaitTimeout(t),
 		blobLifetimeRounds: DefaultBlobLifetimeRounds,
 	})
 	p.pump.Start()
