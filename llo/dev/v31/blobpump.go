@@ -49,8 +49,14 @@ const (
 	BlobBroadcastAttempts = 3
 	// BlobBroadcastRetryBackoff is the wait before the second broadcast attempt,
 	// doubled for each attempt after it. All attempts share the cycle's
-	// observation timeout, so this cannot extend how long a cycle runs.
+	// broadcast timeout, so this cannot extend how long a cycle runs.
 	BlobBroadcastRetryBackoff = 50 * time.Millisecond
+	// DefaultBlobBroadcastTimeoutMultiplier scales the pump's observation
+	// timeout into the default broadcast timeout. BroadcastBlob returns only
+	// once a quorum of peers has fetched, stored and signed the blob, at least
+	// two network round trips, so it gets its own deadline rather than what
+	// DataSource.Observe left of the observation timeout.
+	DefaultBlobBroadcastTimeoutMultiplier = 5
 	// MissStreakLogThreshold is how many consecutive rounds may find no usable
 	// snapshot before the pump escalates from debug to error logging. A node
 	// that never contributes stream values is a silent failure otherwise.
@@ -61,8 +67,8 @@ const (
 	BlobReapingMarginRounds = 16
 	// MinPerOracleUnexpiredBlobCount is the floor for the derived budget.
 	MinPerOracleUnexpiredBlobCount = 32
-	// closeTimeoutSlackMultiplier scales the pump's observation timeout into how
-	// long Close waits for an in-flight cycle.
+	// closeTimeoutSlackMultiplier scales the longer of the pump's observation
+	// and broadcast timeouts into how long Close waits for an in-flight cycle.
 	closeTimeoutSlackMultiplier = 5
 	// minCloseTimeout fixes the minimum time Close waits waits for an in-flight cycle.
 	minCloseTimeout = 1 * time.Second
@@ -178,12 +184,15 @@ type blobPump struct {
 
 // blobPumpParams is the pump's configuration, resolved by the factory.
 type blobPumpParams struct {
-	bbf                ocr3_1types.BlobBroadcastFetcher
-	ds                 DataSource
-	configDigest       ocrtypes.ConfigDigest
-	donID              uint32
-	verboseLogging     bool
+	bbf            ocr3_1types.BlobBroadcastFetcher
+	ds             DataSource
+	configDigest   ocrtypes.ConfigDigest
+	donID          uint32
+	verboseLogging bool
+	// observationTimeout is the deadline given to DataSource.Observe.
 	observationTimeout time.Duration
+	// broadcastTimeout bounds every broadcast attempt of a cycle together.
+	broadcastTimeout time.Duration
 	// blobLifetimeRounds is the fetchability bound. See DefaultBlobLifetimeRounds.
 	blobLifetimeRounds uint64
 	// inFlightWait bounds how long Take waits for an in-flight cycle to park.
@@ -200,7 +209,7 @@ func newBlobPump(lggr logger.Logger, params blobPumpParams) *blobPump {
 		ctx:            ctx,
 		cancel:         cancel,
 		metrics:        newBlobPumpMetrics(params.donID),
-		closeTimeout:   max(params.observationTimeout*closeTimeoutSlackMultiplier, minCloseTimeout),
+		closeTimeout:   max(max(params.observationTimeout, params.broadcastTimeout)*closeTimeoutSlackMultiplier, minCloseTimeout),
 	}
 }
 
@@ -240,7 +249,7 @@ func (p *blobPump) Close() bool {
 		return true
 	case <-time.After(p.closeTimeout):
 		p.lggr.Errorw("Blob pump cycle did not unwind after context cancellation; abandoning goroutine",
-			"closeTimeout", p.closeTimeout, "observationTimeout", p.observationTimeout)
+			"closeTimeout", p.closeTimeout, "observationTimeout", p.observationTimeout, "broadcastTimeout", p.broadcastTimeout)
 		return false
 	}
 }
@@ -521,12 +530,9 @@ func (p *blobPump) observeStreamValuesAndBroadcastBlob(in pumpInput) (*blobSnaps
 		sv[sid] = nil
 	}
 
-	ctx, cancel := context.WithTimeout(p.ctx, p.observationTimeout)
-	defer cancel()
-
 	observedAt := time.Now()
 	opts := datasource.NewDSOpts(p.verboseLogging, in.seqNr, p.configDigest, observedAt, in.lifeCycleStage)
-	if err := p.ds.Observe(ctx, sv, opts); err != nil {
+	if err := p.observe(sv, opts); err != nil {
 		return nil, fmt.Errorf("DataSource.Observe error: %w", err)
 	}
 	// Broadcast only the requested streams. Peers reject an observation over
@@ -556,7 +562,12 @@ func (p *blobPump) observeStreamValuesAndBroadcastBlob(in pumpInput) (*blobSnaps
 		return nil, fmt.Errorf("no stream values observed for %d streams", len(in.streams))
 	}
 
-	handle, expirationHintSeqNr, err := p.broadcast(ctx, payload, in.seqNr)
+	// The broadcast gets its own deadline. The data source scales its cache to
+	// the observation timeout, and may spend all of it, so sharing that budget
+	// would leave the broadcast too little time to collect a quorum.
+	broadcastCtx, cancel := context.WithTimeout(p.ctx, p.broadcastTimeout)
+	defer cancel()
+	handle, expirationHintSeqNr, err := p.broadcast(broadcastCtx, payload, in.seqNr)
 	if err != nil {
 		return nil, err
 	}
@@ -574,8 +585,15 @@ func (p *blobPump) observeStreamValuesAndBroadcastBlob(in pumpInput) (*blobSnaps
 	}, nil
 }
 
+// observe runs DataSource.Observe under the observation timeout.
+func (p *blobPump) observe(sv protocol.StreamValues, opts datasource.DSOpts) error {
+	ctx, cancel := context.WithTimeout(p.ctx, p.observationTimeout)
+	defer cancel()
+	return p.ds.Observe(ctx, sv, opts)
+}
+
 // broadcast hands the payload to the blob transport, retrying a failed
-// broadcast within the cycle's own timeout, and returns the handle together
+// broadcast within the cycle's broadcast timeout, and returns the handle together
 // with the expiration hint it was broadcast under.
 //
 // cycleStartSeqNr is the round the values were gathered for. The expiration hint is

@@ -51,11 +51,15 @@ type PluginFactoryParams struct {
 	// bound staleness, the state transition does. Must be within
 	// [MinBlobLifetimeRounds, MaxBlobLifetimeRounds].
 	BlobLifetimeRounds uint64
-	// MaxDurationBlobObservation overrides the pump's per-cycle observation
-	// budget (default: cfg.MaxDurationObservation, the deadline v30 passes to
-	// DataSource.Observe). The data source scales its cache TTL and refresh
-	// cadence with this budget, so a larger value serves older values.
+	// MaxDurationBlobObservation overrides the deadline the pump gives
+	// DataSource.Observe (default: cfg.MaxDurationObservation, the deadline v30
+	// passes to DataSource.Observe). The data source scales its cache TTL and
+	// refresh cadence with this budget, so a larger value serves older values.
 	MaxDurationBlobObservation time.Duration
+	// MaxDurationBlobBroadcast overrides the deadline shared by every broadcast
+	// attempt of a pump cycle (default: DefaultBlobBroadcastTimeoutMultiplier *
+	// the resolved MaxDurationBlobObservation).
+	MaxDurationBlobBroadcast time.Duration
 	// BlobInFlightWaitFactor overrides defaultBlobInFlightWaitFactor if
 	// non-zero. Divides cfg.MaxDurationObservation into how long Take waits for
 	// a cycle already in flight to park, so a larger factor waits less. Must
@@ -140,6 +144,11 @@ func (f *PluginFactory) NewReportingPlugin(ctx context.Context, cfg ocr3types.Re
 		blobObservationTimeout = cfg.MaxDurationObservation
 	}
 
+	blobBroadcastTimeout := f.MaxDurationBlobBroadcast
+	if blobBroadcastTimeout <= 0 {
+		blobBroadcastTimeout = DefaultBlobBroadcastTimeoutMultiplier * blobObservationTimeout
+	}
+
 	p := &Plugin{
 		freshnessMetrics:                    newFreshnessMetrics(f.DonID),
 		precursorMetrics:                    newPrecursorMetrics(f.DonID),
@@ -183,6 +192,7 @@ func (f *PluginFactory) NewReportingPlugin(ctx context.Context, cfg ocr3types.Re
 		donID:              f.DonID,
 		verboseLogging:     f.Config.VerboseLogging,
 		observationTimeout: blobObservationTimeout,
+		broadcastTimeout:   blobBroadcastTimeout,
 		inFlightWait:       cfg.MaxDurationObservation / time.Duration(blobInFlightWaitFactor),
 		blobLifetimeRounds: blobLifetimeRounds,
 	})
