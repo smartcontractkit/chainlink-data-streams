@@ -221,16 +221,19 @@ type unreportableTally struct {
 	reasons map[string]*unreportableReason
 }
 
-// unreportableReason is one reason's aggregate: how many channels hit it, a
-// bounded sample of which, and the structured fields of the first occurrence as
-// a worked example.
+// unreportableReason is one reason's aggregate: its metric label, how many
+// channels hit it, a bounded sample of which, and the structured fields of the
+// first occurrence as a worked example.
 type unreportableReason struct {
+	label    string
 	count    int
 	channels []llotypes.ChannelID
 	detail   []any
 }
 
-func (t *unreportableTally) note(reason string, channelID llotypes.ChannelID, detail ...any) {
+// note records channelID as unreportable for reason. label is the reason's
+// metric label: snake_case and from a fixed set, so it is safe as a label value.
+func (t *unreportableTally) note(label, reason string, channelID llotypes.ChannelID, detail ...any) {
 	if t == nil {
 		return
 	}
@@ -239,7 +242,7 @@ func (t *unreportableTally) note(reason string, channelID llotypes.ChannelID, de
 	}
 	r := t.reasons[reason]
 	if r == nil {
-		r = &unreportableReason{detail: detail}
+		r = &unreportableReason{label: label, detail: detail}
 		t.reasons[reason] = r
 	}
 	r.count++
@@ -277,7 +280,7 @@ func (t *unreportableTally) log(lggr logger.Logger, stage string, seqNr uint64) 
 // can.
 func formatIsEncodable(support map[llotypes.ReportFormat]int, format llotypes.ReportFormat, f int, channelID llotypes.ChannelID, tally *unreportableTally) bool {
 	if supporters := support[format]; supporters < 2*f+1 {
-		tally.note("too few oracles advertise a report codec for this format", channelID,
+		tally.note("codec_support_insufficient", "too few oracles advertise a report codec for this format", channelID,
 			"reportFormat", format, "supporters", supporters, "required", 2*f+1)
 		return false
 	}
@@ -338,7 +341,7 @@ func (o precursor) isReportable(channelID llotypes.ChannelID, minReportInterval 
 		_, _, opts, skipped, ok := selectBackfillCandidate(o.ChannelDefinitions, o.ValidAfterNanoseconds, o.ObservationTimestampNanoseconds, channelID, optsCache)
 		if !ok {
 			if skipped > 0 {
-				tally.note("no emittable backfill row", channelID, "skipped", skipped)
+				tally.note("backfill_row_unemittable", "no emittable backfill row", channelID, "skipped", skipped)
 			}
 			return false
 		}
@@ -360,7 +363,7 @@ func (o precursor) isReportable(channelID llotypes.ChannelID, minReportInterval 
 	// does not advance over a round that emitted nothing.
 	res, err := protocol.ReportTimeResolution(optsCache, cd, channelID)
 	if err != nil {
-		tally.note("channel time resolution unavailable", channelID, "err", err)
+		tally.note("time_resolution_unavailable", "channel time resolution unavailable", channelID, "err", err)
 		return false
 	}
 	// Require validAfter and the observation timestamp to fall in distinct ticks
@@ -397,7 +400,7 @@ func (o precursor) isReportable(channelID llotypes.ChannelID, minReportInterval 
 	// logs each skip at error level and counts it in reportsNotEmittedMetric.
 	streams, err := protocol.EffectiveStreams(optsCache, cd, channelID)
 	if err != nil {
-		tally.note("cannot derive effective streams", channelID, "err", err)
+		tally.note("effective_streams_underivable", "cannot derive effective streams", channelID, "err", err)
 		return false
 	}
 	// Every value the report carries must be present. Codecs do not encode a
@@ -411,7 +414,7 @@ func (o precursor) isReportable(channelID llotypes.ChannelID, minReportInterval 
 	values := o.reportValues(streams)
 	for i, v := range values {
 		if v == nil {
-			tally.note("nil stream value", channelID, "streamID", streams[i].StreamID, "aggregator", streams[i].Aggregator)
+			tally.note("nil_stream_value", "nil stream value", channelID, "streamID", streams[i].StreamID, "aggregator", streams[i].Aggregator)
 			return false
 		}
 	}
@@ -419,7 +422,7 @@ func (o precursor) isReportable(channelID llotypes.ChannelID, minReportInterval 
 	// It depends on the data, so it can come back into range. Holding the
 	// watermark over such a round lets the next report cover it.
 	if err := protocol.CheckEncodableValues(optsCache, cd, channelID, values); err != nil {
-		tally.note("stream value not encodable", channelID, "err", err)
+		tally.note("stream_value_unencodable", "stream value not encodable", channelID, "err", err)
 		return false
 	}
 	return true

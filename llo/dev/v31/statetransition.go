@@ -274,6 +274,7 @@ func (p *Plugin) StateTransition(ctx context.Context, seqNr uint64, _ ocrtypes.A
 	support := supportVotesForEffectiveFormats(countSupportByFormat(codecSupport), effective)
 	out.ReportableChannelIDs = out.reportableChannels(p.DefaultMinReportIntervalNanoseconds, p.F, support, prev.opts, unreportable)
 	unreportable.log(p.Logger, "StateTransition", seqNr)
+	unreportable.count(p.DonID)
 
 	// Flush KV mutations.
 	if err := p.flushKV(kvRW, seqNr, prev, out, pending, codecSupport, carryForward, agreedTimestamps, history); err != nil {
