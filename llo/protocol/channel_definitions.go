@@ -328,6 +328,12 @@ func analyzeChannelDefinitions(codecs map[llotypes.ReportFormat]ReportCodec, cha
 			continue
 		}
 
+		// A signing scheme this build cannot sign with stops the channel from
+		// reporting, wherever it came from.
+		if err := VerifySigningScheme(cd); err != nil {
+			base(fmt.Errorf("invalid ChannelDefinition with ID %d: %w", channelID, err), channelID)
+		}
+
 		if len(cd.Streams) == 0 {
 			base(fmt.Errorf("ChannelDefinition with ID %d has no streams", channelID), channelID)
 			continue

@@ -145,6 +145,24 @@ func TestORM(t *testing.T) {
 		require.NoError(t, err)
 		require.Len(t, result, 5)
 	})
+
+	t.Run("Insert splits rows beyond the bind parameter limit", func(t *testing.T) {
+		donID := uint32(102)
+		orm := NewORM(db, donID)
+
+		// 10 parameters per row, so this exceeds the 65535 Postgres allows in
+		// one statement.
+		const n = 7000
+		// A server URL of its own keeps the transmission hashes apart from
+		// the rows other subtests insert.
+		serverURL := "wss://mercuryserver.test/insert-batches"
+		transmissions := makeSampleTransmissions(n, serverURL)
+		require.NoError(t, orm.Insert(ctx, transmissions))
+
+		result, err := orm.Get(ctx, serverURL, n+1, 0)
+		require.NoError(t, err)
+		require.Len(t, result, n)
+	})
 }
 
 // TestORM_PruneSkipsRowsLockedByDelete checks that Prune does not wait for rows that a concurrent Delete has

@@ -54,6 +54,32 @@ func Test_VerifyChannelDefinitions(t *testing.T) {
 		require.EqualError(t, err, "ChannelDefinition with ID 1 has no streams")
 	})
 
+	t.Run("fails for channel with an unsupported signing scheme", func(t *testing.T) {
+		streams := []llotypes.Stream{{StreamID: 1, Aggregator: llotypes.AggregatorMedian}}
+		require.NoError(t, VerifyChannelDefinitions(codecs, llotypes.ChannelDefinitions{
+			1: {ReportFormat: mockReportFormat, Streams: streams},
+		}))
+
+		err := VerifyChannelDefinitions(codecs, llotypes.ChannelDefinitions{
+			1: {ReportFormat: mockReportFormat, Streams: streams, SigningScheme: llotypes.SigningSchemeMerkle},
+		})
+		require.EqualError(t, err, `invalid ChannelDefinition with ID 1: signing scheme "merkle" is not supported for report format unknown(0)`)
+
+		err = VerifyChannelDefinitions(codecs, llotypes.ChannelDefinitions{
+			1: {ReportFormat: mockReportFormat, Streams: streams, SigningScheme: "both"},
+		})
+		require.EqualError(t, err, `invalid ChannelDefinition with ID 1: unknown signing scheme "both"`)
+
+		// Baseline: a committed channel with it is attributed, not rejected
+		// as a whole.
+		ids, err := UnverifiableChannelIDs(codecs, llotypes.ChannelDefinitions{
+			1: {ReportFormat: mockReportFormat, Streams: streams, SigningScheme: "both"},
+			2: {ReportFormat: mockReportFormat, Streams: streams},
+		})
+		require.NoError(t, err)
+		require.Equal(t, map[llotypes.ChannelID]struct{}{1: {}}, ids)
+	})
+
 	t.Run("fails for channel with zero aggregator", func(t *testing.T) {
 		channelDefs := llotypes.ChannelDefinitions{
 			1: llotypes.ChannelDefinition{

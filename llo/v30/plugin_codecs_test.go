@@ -68,6 +68,8 @@ func genChannelDefinition() gopter.Gen {
 		"Tombstone":              gen.Bool(),
 		"Source":                 gen.UInt32(),
 		"DisableNilStreamValues": gen.Bool(),
+		// v30 clears SigningScheme on input and never carries it.
+		"SigningScheme": gen.Const(llotypes.SigningSchemeDefault),
 	})
 }
 

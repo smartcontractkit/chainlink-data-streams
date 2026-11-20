@@ -26,6 +26,7 @@ func Test_ReportTimeResolution_ClassifiesEveryReportFormat(t *testing.T) {
 		llotypes.ReportFormatHistoryBackfill:          {err: "encoded with the target channel's codec"},
 		llotypes.ReportFormatRetirement:               {err: "has no report codec"},
 		llotypes.ReportFormatCapabilityTrigger:        {err: "has no report codec"},
+		llotypes.ReportFormatEVMMerkle:                {err: "has no report codec"},
 	}
 	for _, rf := range llotypes.ReportFormats {
 		t.Run(rf.String(), func(t *testing.T) {

@@ -122,6 +122,10 @@ message LLOChannelDefinitionProto {
     bool tombstone = 4;
     uint32 source = 5;
     bool disableNilStreamValues = 6;
+    // signingScheme selects how the channel's reports are signed. Empty signs
+    // every report on its own. It is omitted from the wire when empty, so the
+    // encoding and channel hash of every definition without it are unchanged.
+    string signingScheme = 7;
 }
 
 message LLOStreamDefinition {
