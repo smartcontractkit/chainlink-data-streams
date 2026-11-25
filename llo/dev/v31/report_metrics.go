@@ -27,3 +27,26 @@ func (p *Plugin) reportNotEmitted(seqNr uint64, channelID llotypes.ChannelID, fo
 	p.Logger.Errorw("Reportable channel emitted no report; its interval is not covered", kv...)
 	reportsNotEmittedMetric.WithLabelValues(strconv.FormatUint(uint64(p.DonID), 10), format.String(), reason).Inc()
 }
+
+// channelsUnreportableMetric counts, per reason, the channels a state transition
+// found unreportable for a reason the unreportableTally records. Channels that
+// are retired, tombstoned, new, held back by the time gates, or a backfill with
+// nothing left to emit are their expected state and not counted. Node-local,
+// with no effect on consensus.
+var channelsUnreportableMetric = promauto.NewCounterVec(prometheus.CounterOpts{
+	Namespace: "llo",
+	Subsystem: "channels",
+	Name:      "unreportable_total",
+	Help:      "Channels a state transition found unreportable, by reason. Counted once per channel per round.",
+}, []string{"donID", "reason"})
+
+// count adds the tally to channelsUnreportableMetric.
+func (t *unreportableTally) count(donID uint32) {
+	if t == nil || len(t.reasons) == 0 {
+		return
+	}
+	don := strconv.FormatUint(uint64(donID), 10)
+	for _, r := range t.reasons {
+		channelsUnreportableMetric.WithLabelValues(don, r.label).Add(float64(r.count))
+	}
+}
