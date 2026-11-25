@@ -23,7 +23,7 @@ require (
 	github.com/smartcontractkit/chainlink-common v0.11.2-0.20260918171610-2b348aaadc86
 	github.com/smartcontractkit/chainlink-common/keystore v1.1.0
 	github.com/smartcontractkit/chainlink-evm/gethwrappers v0.0.0-20260512150409-b4068bf735e6
-	github.com/smartcontractkit/libocr v0.0.0-20260810200708-618b5bf7f342
+	github.com/smartcontractkit/libocr v0.0.0-20261124122528-7112dc75ac47
 	github.com/smartcontractkit/wsrpc v0.8.5-0.20250502134807-c57d3d995945
 	github.com/stretchr/testify v1.12.1
 	go.uber.org/zap v1.28.0
