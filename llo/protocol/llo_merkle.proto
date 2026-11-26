@@ -1,0 +1,43 @@
+syntax="proto3";
+
+package v1;
+option go_package = ".;protocol";
+
+// WARNING
+// Use extreme caution making changes in this file
+// All changes MUST be backwards compatible
+// Every oracle must build byte identical bundles, and reports are persisted
+// and verified by the Data Streams server and onchain.
+
+// LLOMerkleBundleProto is the report a signing family signs once per round.
+// Leaves are in ascending order of the reportable channel that emitted them.
+// A backfill leaf carries its target's channel ID, so leaf channel IDs are
+// neither sorted nor unique. The root is not stored: every oracle and the
+// keyring recompute it from the leaves.
+message LLOMerkleBundleProto {
+    uint32 family = 1;
+    repeated LLOMerkleLeafProto leaves = 2;
+}
+
+// LLOMerkleLeafProto is one channel report of a bundle.
+message LLOMerkleLeafProto {
+    uint32 channelID = 1;
+    // reportFormat is the channel's format, one of the family's members.
+    uint32 reportFormat = 2;
+    // report is the channel report as its codec encodes it.
+    bytes report = 3;
+}
+
+// LLOMerkleReportProto is one leaf of an attested bundle together with the
+// proof from the leaf to the bundle root. The root is not stored: the
+// verifier recomputes it from the leaf and the proof, and checks the
+// signatures over it.
+message LLOMerkleReportProto {
+    uint32 family = 1;
+    uint32 leafCount = 2;
+    uint32 leafIndex = 3;
+    LLOMerkleLeafProto leaf = 4;
+    // proof holds the sibling hashes from the leaf to the root, skipping the
+    // levels where the node is promoted without a sibling.
+    repeated bytes proof = 5;
+}

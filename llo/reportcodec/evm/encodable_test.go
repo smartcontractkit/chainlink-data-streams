@@ -163,6 +163,22 @@ func TestVerifyForAdmission(t *testing.T) {
 	}
 }
 
+func TestVerifyForAdmission_StreamlinedMerkleNeedsFeedID(t *testing.T) {
+	codec := NewReportCodecStreamlined(logger.Nop())
+	cd := llotypes.ChannelDefinition{
+		Opts:          []byte(`{"abi":[{"type":"int192"}]}`),
+		SigningScheme: llotypes.SigningSchemeMerkle,
+	}
+	require.EqualError(t, codec.VerifyForAdmission(cd), `signing scheme "merkle" requires a feed ID`)
+
+	cd.Opts = []byte(`{"feedID":` + testFeedID + `,"abi":[{"type":"int192"}]}`)
+	require.NoError(t, codec.VerifyForAdmission(cd))
+
+	cd.Opts = []byte(`{"abi":[{"type":"int192"}]}`)
+	cd.SigningScheme = llotypes.SigningSchemeDefault
+	require.NoError(t, codec.VerifyForAdmission(cd))
+}
+
 // streamlinedOpts returns opts with n uint256 elements. Without a feed ID the
 // header is 16 bytes, so 2047 elements make 65520 bytes and 2048 make 65552.
 func streamlinedOpts(n int, feedID bool) string {

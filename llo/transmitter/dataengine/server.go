@@ -95,6 +95,7 @@ type server struct {
 
 	evmPremiumLegacyPacker ReportPacker
 	evmStreamlinedPacker   ReportPacker
+	evmMerklePacker        ReportPacker
 	jsonPacker             ReportPacker
 
 	transmitSuccessCount            prometheus.Counter
@@ -136,6 +137,7 @@ func newServer(lggr logger.Logger, verboseLogging bool, cfg QueueConfig, client 
 		serverURL,
 		evm.NewReportCodecPremiumLegacy(codecLggr, pm.DonID()),
 		evm.NewReportCodecStreamlined(codecLggr),
+		evm.ReportCodecEVMMerkle{},
 		reportcodec.JSONReportCodec{},
 		promTransmitSuccessCount.WithLabelValues(donIDStr, serverURL),
 		promTransmitDuplicateCount.WithLabelValues(donIDStr, serverURL),
@@ -327,6 +329,8 @@ func (s *server) transmit(ctx context.Context, t *Transmission) (*rpc.TransmitRe
 		payload, err = s.evmPremiumLegacyPacker.Pack(t.ConfigDigest, t.SeqNr, t.Report.Report, t.Sigs)
 	case llotypes.ReportFormatEVMStreamlined:
 		payload, err = s.evmStreamlinedPacker.Pack(t.ConfigDigest, t.SeqNr, t.Report.Report, t.Sigs)
+	case llotypes.ReportFormatEVMMerkle:
+		payload, err = s.evmMerklePacker.Pack(t.ConfigDigest, t.SeqNr, t.Report.Report, t.Sigs)
 	default:
 		return nil, nil, fmt.Errorf("Transmit failed; don't know how to Pack unsupported report format: %q", t.Report.Info.ReportFormat)
 	}

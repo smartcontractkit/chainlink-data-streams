@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"slices"
 	"time"
 
 	"github.com/lib/pq"
@@ -29,6 +30,10 @@ type orm struct {
 	ds    sqlutil.DataSource
 	donID uint32
 }
+
+// insertBatchRows bounds the rows of one INSERT. Each row binds 10 parameters
+// and Postgres accepts at most 65535 in one statement.
+const insertBatchRows = 5000
 
 func NewORM(ds sqlutil.DataSource, donID uint32) ORM {
 	return &orm{ds, donID}
@@ -83,14 +88,15 @@ func (o *orm) Insert(ctx context.Context, transmissions []*Transmission) error {
 		}
 	}
 
-	_, err := o.ds.NamedExecContext(ctx, `
+	for batch := range slices.Chunk(records, insertBatchRows) {
+		_, err := o.ds.NamedExecContext(ctx, `
 	INSERT INTO llo_mercury_transmit_queue (don_id, server_url, config_digest, seq_nr, report, lifecycle_stage, report_format, signatures, signers, transmission_hash)
 		VALUES (:don_id, :server_url, :config_digest, :seq_nr, :report, :lifecycle_stage, :report_format, :signatures, :signers, :transmission_hash)
 		ON CONFLICT (transmission_hash) DO NOTHING
-	`, records)
-
-	if err != nil {
-		return fmt.Errorf("llo orm: failed to insert transmissions: %w", err)
+	`, batch)
+		if err != nil {
+			return fmt.Errorf("llo orm: failed to insert transmissions: %w", err)
+		}
 	}
 	return nil
 }

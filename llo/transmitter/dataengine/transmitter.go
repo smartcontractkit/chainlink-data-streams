@@ -124,7 +124,9 @@ type transmitter struct {
 	stopCh services.StopChan
 	wg     *sync.WaitGroup
 
-	commitCh chan *Transmission
+	// commitCh carries the transmissions of one Transmit or TransmitBatch
+	// call, for every server, per send.
+	commitCh chan []*Transmission
 }
 
 type Opts struct {
@@ -160,7 +162,7 @@ func newTransmitter(opts Opts) *transmitter {
 		opts.FromAccount,
 		make(services.StopChan),
 		&sync.WaitGroup{},
-		make(chan *Transmission, 1000*len(servers)),
+		make(chan []*Transmission, 1000*len(servers)),
 	}
 }
 
@@ -252,21 +254,38 @@ func (mt *transmitter) Transmit(
 	seqNr uint64,
 	report ocr3types.ReportWithInfo[llotypes.ReportInfo],
 	sigs []types.AttributedOnchainSignature,
+) error {
+	return mt.TransmitBatch(ctx, digest, seqNr, []ocr3types.ReportWithInfo[llotypes.ReportInfo]{report}, sigs)
+}
+
+// TransmitBatch enqueues reports that share a digest, seqNr and signatures,
+// such as the reports of one Merkle bundle, for every server in one send
+// to the commit loops. Like Transmit it returns once the batch is queued, so a
+// large batch costs one channel slot rather than one per report.
+func (mt *transmitter) TransmitBatch(
+	ctx context.Context,
+	digest types.ConfigDigest,
+	seqNr uint64,
+	reports []ocr3types.ReportWithInfo[llotypes.ReportInfo],
+	sigs []types.AttributedOnchainSignature,
 ) (err error) {
 	ok := mt.IfStarted(func() {
+		transmissions := make([]*Transmission, 0, len(reports)*len(mt.servers))
 		for serverURL := range mt.servers {
-			t := &Transmission{
-				ServerURL:    serverURL,
-				ConfigDigest: digest,
-				SeqNr:        seqNr,
-				Report:       report,
-				Sigs:         sigs,
+			for _, report := range reports {
+				transmissions = append(transmissions, &Transmission{
+					ServerURL:    serverURL,
+					ConfigDigest: digest,
+					SeqNr:        seqNr,
+					Report:       report,
+					Sigs:         sigs,
+				})
 			}
-			select {
-			case mt.commitCh <- t:
-			case <-ctx.Done():
-				err = fmt.Errorf("failed to add transmission to commit channel: %w", ctx.Err())
-			}
+		}
+		select {
+		case mt.commitCh <- transmissions:
+		case <-ctx.Done():
+			err = fmt.Errorf("failed to add transmission batch to commit channel: %w", ctx.Err())
 		}
 	})
 
@@ -376,8 +395,8 @@ func (mt *transmitter) spawnCommitLoops() {
 						transmissions = make([]*Transmission, 0, buff)
 					}
 
-				case t := <-mt.commitCh:
-					transmissions = append(transmissions, t)
+				case batch := <-mt.commitCh:
+					transmissions = append(transmissions, batch...)
 					if len(transmissions) >= buff {
 						err = mt.transmit(ctx, transmissions)
 						transmissions = make([]*Transmission, 0, buff)

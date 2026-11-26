@@ -104,7 +104,10 @@ func (rc ReportCodecEVMStreamlined) Verify(cd llotypes.ChannelDefinition) error 
 // VerifyForAdmission implements protocol.AdmissionVerifier: it rejects ABI
 // types the packed encoder cannot encode, and an ABI whose largest report
 // exceeds the uint16 length prefix Pack writes. Both fail every report of the
-// channel, the second only after it was signed.
+// channel, the second only after it was signed. It also rejects
+// SigningSchemeMerkle without a feed ID: a Merkle report goes through the
+// EVM verifier proxy, where the fee manager and the verifier read the feed ID
+// from the first 32 bytes of the report.
 //
 // This is not part of Verify because definitions committed before the check
 // existed may fail it, and rejecting those would stop every oracle from
@@ -116,6 +119,9 @@ func (rc ReportCodecEVMStreamlined) VerifyForAdmission(cd llotypes.ChannelDefini
 	}
 	if err := verifyABITypes(opts.ABI, true); err != nil {
 		return err
+	}
+	if cd.SigningScheme == llotypes.SigningSchemeMerkle && opts.FeedID == nil {
+		return fmt.Errorf("signing scheme %q requires a feed ID", cd.SigningScheme)
 	}
 	// Feed ID or report format and channel ID, then validAfter.
 	size := 4 + 4 + 8
