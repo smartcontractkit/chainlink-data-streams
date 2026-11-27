@@ -40,7 +40,10 @@ func (p *Plugin) observation(ctx context.Context, outctx ocr3types.OutcomeContex
 	if previousOutcome.LifeCycleStage == protocol.LifeCycleStageRetired {
 		p.Logger.Debugw("Node is retired, will generate empty observation", "stage", "Observation", "seqNr", outctx.SeqNr)
 	} else {
-		if badChannels, verifyErr := protocol.UnverifiableChannelIDs(p.ReportCodecs, previousOutcome.ChannelDefinitions); len(badChannels) > 0 || verifyErr != nil {
+		// Drop the facts of channels that are no longer committed. A channel
+		// still being added is recorded again by the admission check below.
+		p.ChannelAnalysisCache.Prune(previousOutcome.ChannelDefinitions)
+		if badChannels, verifyErr := protocol.UnverifiableChannelIDsWithCache(p.ReportCodecs, previousOutcome.ChannelDefinitions, p.ChannelAnalysisCache); len(badChannels) > 0 || verifyErr != nil {
 			p.Logger.Errorw("Agreed channel definitions fail baseline verification on this build", "stage", "Observation", "seqNr", outctx.SeqNr, "channelIDs", sortedChannelIDSet(badChannels), "err", verifyErr)
 		}
 
@@ -84,7 +87,7 @@ func (p *Plugin) observation(ctx context.Context, outctx ocr3types.OutcomeContex
 			// to the admission-only checks; the ones already committed are not,
 			// or a grandfathered channel would freeze channel voting entirely.
 			admitting := protocol.ChangedChannelIDs(previousOutcome.ChannelDefinitions, expectedChannelDefs)
-			if err = protocol.VerifyChannelDefinitionsForAdmission(p.ReportCodecs, expectedChannelDefs, admitting); err != nil {
+			if err = protocol.VerifyChannelDefinitionsForAdmissionWithCache(p.ReportCodecs, expectedChannelDefs, admitting, p.ChannelAnalysisCache); err != nil {
 				// If channel definitions is invalid, do not error out but instead
 				// don't vote on any new channels.
 				//

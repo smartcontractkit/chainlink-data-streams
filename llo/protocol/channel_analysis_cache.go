@@ -96,8 +96,8 @@ func (c *ChannelAnalysisCache) ReadOnly() *ChannelAnalysisCache {
 
 // Prune drops the entries of every channel channelDefs does not hold. Verifying
 // a set does not by itself mean the channels it omits are gone, so this is for
-// callers that know the committed set: on the v31 hot path, the round that
-// loads it.
+// callers that know the committed set: the v30 Observation and, on the v31 hot
+// path, the round that loads it.
 func (c *ChannelAnalysisCache) Prune(channelDefs llotypes.ChannelDefinitions) {
 	if c == nil || c.readOnly {
 		return

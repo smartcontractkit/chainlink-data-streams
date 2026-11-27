@@ -155,3 +155,69 @@ func Test_NewReportingPlugin_setsValues(t *testing.T) {
 		assert.Equal(t, uint64(12345), p.(*Plugin).DefaultMinReportIntervalNanoseconds)
 	})
 }
+
+// verifyCountingCodec counts how often a definition is verified.
+type verifyCountingCodec struct {
+	verifies int
+}
+
+func (c *verifyCountingCodec) Encode(protocol.Report, llotypes.ChannelDefinition, *protocol.OptsCache) ([]byte, error) {
+	return nil, nil
+}
+
+func (c *verifyCountingCodec) Verify(llotypes.ChannelDefinition) error {
+	c.verifies++
+	return nil
+}
+
+// ValidateObservation reads what Observation recorded in ChannelAnalysisCache,
+// and never records the definitions peers propose.
+func Test_ValidateObservation_ChannelAnalysisCache(t *testing.T) {
+	ctx := tests.Context(t)
+	def := func(streamID llotypes.StreamID) llotypes.ChannelDefinition {
+		return llotypes.ChannelDefinition{
+			ReportFormat: llotypes.ReportFormatJSON,
+			Streams:      []llotypes.Stream{{StreamID: streamID, Aggregator: llotypes.AggregatorMedian}},
+		}
+	}
+	committed := llotypes.ChannelDefinitions{1: def(1)}
+	desired := llotypes.ChannelDefinitions{1: def(1), 2: def(2)}
+
+	obsCodec, err := NewProtoObservationCodec(logger.Nop(), true)
+	require.NoError(t, err)
+	codec := &verifyCountingCodec{}
+	p := &Plugin{
+		Config:                 Config{true},
+		OutcomeCodec:           protoOutcomeCodecV1{},
+		ShouldRetireCache:      &mockShouldRetireCache{},
+		ChannelDefinitionCache: &mockChannelDefinitionCache{definitions: desired},
+		Logger:                 logger.Test(t),
+		ObservationCodec:       obsCodec,
+		DataSource:             &mockDataSource{},
+		ReportCodecs:           map[llotypes.ReportFormat]protocol.ReportCodec{llotypes.ReportFormatJSON: codec},
+		ChannelAnalysisCache:   protocol.NewChannelAnalysisCache(),
+	}
+
+	previousOutcome, err := p.OutcomeCodec.Encode(Outcome{
+		LifeCycleStage:     protocol.LifeCycleStageProduction,
+		ChannelDefinitions: committed,
+	})
+	require.NoError(t, err)
+	outctx := ocr3types.OutcomeContext{SeqNr: 2, PreviousOutcome: previousOutcome}
+
+	obs, err := p.Observation(ctx, outctx, types.Query{})
+	require.NoError(t, err)
+	require.Equal(t, 2, codec.verifies, "Observation verifies the committed and the added channel once each")
+
+	err = p.ValidateObservation(ctx, outctx, types.Query{}, types.AttributedObservation{Observation: obs})
+	require.NoError(t, err)
+	require.Equal(t, 2, codec.verifies, "the merged set is served from the cache")
+
+	peerObs, err := obsCodec.Encode(Observation{UpdateChannelDefinitions: llotypes.ChannelDefinitions{3: def(3)}})
+	require.NoError(t, err)
+	for range 2 {
+		err = p.ValidateObservation(ctx, outctx, types.Query{}, types.AttributedObservation{Observation: peerObs})
+		require.NoError(t, err)
+	}
+	require.Equal(t, 4, codec.verifies, "a peer-proposed definition is verified every time and never recorded")
+}
