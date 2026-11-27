@@ -1260,7 +1260,8 @@ func Test_ValidateObservation_DoesNotEvictChannelAnalysisCache(t *testing.T) {
 	committed := llotypes.ChannelDefinitions{1: jsonChannel()}
 	require.NoError(t, writeChannelState(kv, 1, committed))
 	// What Observation does with the committed set.
-	require.NoError(t, protocol.VerifyChannelDefinitionsWithCache(p.ReportCodecs, committed, p.ChannelAnalysisCache))
+	_, err := protocol.UnverifiableChannelIDsWithCache(p.ReportCodecs, committed, p.ChannelAnalysisCache)
+	require.NoError(t, err)
 	require.Equal(t, int64(1), codec.verifies.Load())
 
 	const updates = 6

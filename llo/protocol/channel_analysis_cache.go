@@ -166,6 +166,20 @@ func channelFactsFor(cache *ChannelAnalysisCache, codecs map[llotypes.ReportForm
 	return facts
 }
 
+// verifyErrFor returns the Verify verdict for cd, from cache when it holds that
+// exact definition. A miss runs Verify alone and records nothing, since an
+// entry must hold every fact the admission path reads.
+func verifyErrFor(cache *ChannelAnalysisCache, codecs map[llotypes.ReportFormat]ReportCodec, channelID llotypes.ChannelID, cd llotypes.ChannelDefinition) error {
+	if facts, ok := cache.get(channelID, cd); ok {
+		return facts.verifyErr
+	}
+	codec, ok := codecs[cd.ReportFormat]
+	if !ok {
+		return nil
+	}
+	return codec.Verify(cd)
+}
+
 // deriveChannelFacts decodes the channel's opts and applies every check that
 // needs nothing but this definition. The errors are returned unwrapped: the
 // caller wraps them with the channel ID, so that the same facts read the same
