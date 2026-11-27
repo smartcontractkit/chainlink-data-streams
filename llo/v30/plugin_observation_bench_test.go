@@ -69,8 +69,7 @@ func BenchmarkObservation(b *testing.B) {
 				require.NoError(b, err)
 
 				b.ReportAllocs()
-				b.ResetTimer()
-				for range b.N {
+				for b.Loop() {
 					if _, err := p.Observation(ctx, outctx, types.Query{}); err != nil {
 						b.Fatal(err)
 					}

@@ -109,8 +109,7 @@ func BenchmarkValidateObservation(b *testing.B) {
 				require.NoError(b, err)
 
 				b.ReportAllocs()
-				b.ResetTimer()
-				for range b.N {
+				for b.Loop() {
 					if err := p.ValidateObservation(ctx, outctx, types.Query{}, bc.ao); err != nil {
 						b.Fatal(err)
 					}
@@ -122,7 +121,7 @@ func BenchmarkValidateObservation(b *testing.B) {
 		// verification, which no memoization of the checks can remove.
 		b.Run(fmt.Sprintf("channels=%d/decode-previous-outcome", n), func(b *testing.B) {
 			b.ReportAllocs()
-			for range b.N {
+			for b.Loop() {
 				if _, err := (protoOutcomeCodecV1{}).Decode(previousOutcome); err != nil {
 					b.Fatal(err)
 				}
@@ -140,7 +139,7 @@ func BenchmarkChannelFacts(b *testing.B) {
 
 	b.Run("verify", func(b *testing.B) {
 		b.ReportAllocs()
-		for range b.N {
+		for b.Loop() {
 			if err := codec.Verify(cd); err != nil {
 				b.Fatal(err)
 			}
@@ -148,7 +147,7 @@ func BenchmarkChannelFacts(b *testing.B) {
 	})
 	b.Run("verify+admission+feedID", func(b *testing.B) {
 		b.ReportAllocs()
-		for range b.N {
+		for b.Loop() {
 			if err := codec.Verify(cd); err != nil {
 				b.Fatal(err)
 			}

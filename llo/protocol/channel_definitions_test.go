@@ -828,10 +828,18 @@ func Test_AnalyzeBaseline_MatchesFullAnalysis(t *testing.T) {
 	for i := range llotypes.ChannelID(MaxOutcomeChannelDefinitionsLength + 1) {
 		tooManyChannels[i] = channel(stream(1))
 	}
-	tooManyStreamIDs := make(llotypes.ChannelDefinitions)
-	for i := range llotypes.ChannelID(MaxObservationStreamValuesLength + 1) {
-		tooManyStreamIDs[i] = channel(stream(i))
+	// Within the channel limit, but with more unique stream IDs than allowed, so
+	// the stream ID count is what both analyses report.
+	const streamsPerChannel = MaxObservationStreamValuesLength/MaxOutcomeChannelDefinitionsLength + 1
+	tooManyStreamIDs := make(llotypes.ChannelDefinitions, MaxOutcomeChannelDefinitionsLength)
+	for i := range llotypes.ChannelID(MaxOutcomeChannelDefinitionsLength) {
+		cd := channel()
+		for k := range llotypes.StreamID(streamsPerChannel) {
+			cd.Streams = append(cd.Streams, stream(llotypes.StreamID(i)*streamsPerChannel+k))
+		}
+		tooManyStreamIDs[i] = cd
 	}
+	require.Greater(t, analyzeBaseline(map[llotypes.ReportFormat]ReportCodec{0: mockReportCodec{}}, tooManyStreamIDs, nil).uniqueStreamIDs, MaxObservationStreamValuesLength)
 
 	for _, tc := range []struct {
 		name   string

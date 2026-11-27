@@ -247,7 +247,7 @@ type Plugin struct {
 	// ChannelAnalysisCache memoizes the per-definition verification checks, whose
 	// cost is dominated by decoding channel opts. Verification runs over largely
 	// identical sets several times per round: the committed and the desired
-	// definitions in Observation, and the merged set of each update-carrying
+	// definitions in Observation, and the merged set of each update carrying
 	// observation in ValidateObservation, which a follower runs serially before
 	// Outcome. Only Observation records entries: ValidateObservation reads
 	// through a read-only view, so peers cannot evict them. May be nil, in which
