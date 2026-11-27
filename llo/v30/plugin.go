@@ -186,6 +186,7 @@ func (f *PluginFactory) NewReportingPlugin(ctx context.Context, cfg ocr3types.Re
 		offchainConfig.DefaultMinReportIntervalNanoseconds,
 		calculated.NewExpressionPins(),
 		protocol.NewChannelAnalysisCache(),
+		previousChannelDefinitions{},
 	}, ocr3types.ReportingPluginInfo{
 		Name: "LLO",
 		Limits: ocr3types.ReportingPluginLimits{
@@ -252,6 +253,10 @@ type Plugin struct {
 	// through a read-only view, so peers cannot evict them. May be nil, in which
 	// case nothing is memoized.
 	ChannelAnalysisCache *protocol.ChannelAnalysisCache
+
+	// previousDefinitions memoizes the channel definitions ValidateObservation
+	// decodes from the previous outcome. The zero value is ready to use.
+	previousDefinitions previousChannelDefinitions
 }
 
 // Query creates a Query that is sent from the leader to all follower nodes
@@ -328,11 +333,12 @@ func (p *Plugin) ValidateObservation(ctx context.Context, outctx ocr3types.Outco
 	// versions of those checks disagree on whether an observation is valid.
 	defsForVerify := observation.UpdateChannelDefinitions
 	if len(observation.UpdateChannelDefinitions) > 0 && outctx.SeqNr > 1 {
-		prevOutcome, prevErr := p.OutcomeCodec.Decode(outctx.PreviousOutcome)
+		prevDefs, prevErr := p.previousDefinitions.get(p.OutcomeCodec, outctx.PreviousOutcome)
 		if prevErr != nil {
 			return fmt.Errorf("failed to decode previous outcome for channel definition validation: %w", prevErr)
 		}
-		merged := maps.Clone(prevOutcome.ChannelDefinitions)
+		// prevDefs is shared across calls, so merge into a copy.
+		merged := maps.Clone(prevDefs)
 		if merged == nil {
 			merged = make(llotypes.ChannelDefinitions)
 		}

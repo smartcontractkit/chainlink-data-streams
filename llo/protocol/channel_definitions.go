@@ -19,9 +19,9 @@ func VerifyChannelDefinitions(codecs map[llotypes.ReportFormat]ReportCodec, chan
 }
 
 // VerifyChannelDefinitionsWithCache is VerifyChannelDefinitions, reading the
-// Verify verdict from cache when it holds that exact definition. It never
-// records, since the cache holds complete facts only. A nil cache reads
-// nothing.
+// Verify verdict from cache when it holds that exact definition. A miss is
+// recorded only through a cache that records (see verifyErrFor). A nil cache
+// reads nothing.
 func VerifyChannelDefinitionsWithCache(codecs map[llotypes.ReportFormat]ReportCodec, channelDefs llotypes.ChannelDefinitions, cache *ChannelAnalysisCache) error {
 	return analyzeBaseline(codecs, channelDefs, cache).err(nil)
 }
@@ -124,7 +124,9 @@ func UnverifiableChannelIDs(codecs map[llotypes.ReportFormat]ReportCodec, channe
 // UnverifiableChannelIDsWithCache is UnverifiableChannelIDs, memoizing the
 // per-definition checks in cache. A nil cache memoizes nothing.
 func UnverifiableChannelIDsWithCache(codecs map[llotypes.ReportFormat]ReportCodec, channelDefs llotypes.ChannelDefinitions, cache *ChannelAnalysisCache) (map[llotypes.ChannelID]struct{}, error) {
-	res := analyzeChannelDefinitions(codecs, channelDefs, cache)
+	// Only baseline findings are reported, so the budget and the admission-only
+	// checks are not computed.
+	res := analyzeBaseline(codecs, channelDefs, cache)
 	ids := make(map[llotypes.ChannelID]struct{}, len(res.channelErrs))
 	for channelID := range res.channelErrs {
 		ids[channelID] = struct{}{}
@@ -147,6 +149,16 @@ func UnverifiableChannelIDsWithCache(codecs map[llotypes.ReportFormat]ReportCode
 // The per-definition checks are memoized in cache. A nil cache memoizes
 // nothing.
 func InadmissibleChannelIDsWithCache(codecs map[llotypes.ReportFormat]ReportCodec, channelDefs llotypes.ChannelDefinitions, admitting map[llotypes.ChannelID]struct{}, cache *ChannelAnalysisCache) (map[llotypes.ChannelID]struct{}, error) {
+	// With nothing being admitted no channel can be implicated and no
+	// admission-only finding applies, which leaves only the whole-set baseline
+	// finding. This is the steady state of the v31 Observation.
+	if len(admitting) == 0 {
+		if res := analyzeBaseline(codecs, channelDefs, cache); res.wholeSetErr != nil {
+			return nil, res.wholeSetErr
+		}
+		return map[llotypes.ChannelID]struct{}{}, nil
+	}
+
 	res := analyzeChannelDefinitions(codecs, channelDefs, cache)
 	if res.wholeSetErr != nil {
 		return nil, res.wholeSetErr
@@ -242,14 +254,20 @@ func (r verifyResult) err(admitting map[llotypes.ChannelID]struct{}) error {
 }
 
 func verifyChannelDefinitions(codecs map[llotypes.ReportFormat]ReportCodec, channelDefs llotypes.ChannelDefinitions, admitting map[llotypes.ChannelID]struct{}, cache *ChannelAnalysisCache) error {
+	// With nothing being admitted no admission-only finding applies, so the
+	// verdict is the baseline one. This is the steady state of Observation.
+	if len(admitting) == 0 {
+		return analyzeBaseline(codecs, channelDefs, cache).err(admitting)
+	}
 	return analyzeChannelDefinitions(codecs, channelDefs, cache).err(admitting)
 }
 
 // analyzeBaseline applies only the baseline checks of analyzeChannelDefinitions
 // and reports the same baseline findings, attributed the same way. It derives
-// nothing but the Verify verdict for each channel and builds no budget, which
-// is what makes it cheaper on the ValidateObservation path, where every
-// update carrying observation verifies the whole merged set.
+// nothing but the Verify verdict for each channel and builds no budget. It
+// serves every entry point whose verdict cannot include an admission-only
+// finding: ValidateObservation, the committed set check in Observation, and
+// admission with nothing to admit.
 //
 // The two must agree on every baseline finding. A check added to the baseline
 // of one must be added to the other.

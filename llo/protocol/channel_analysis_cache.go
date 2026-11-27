@@ -167,9 +167,13 @@ func channelFactsFor(cache *ChannelAnalysisCache, codecs map[llotypes.ReportForm
 }
 
 // verifyErrFor returns the Verify verdict for cd, from cache when it holds that
-// exact definition. A miss runs Verify alone and records nothing, since an
-// entry must hold every fact the admission path reads.
+// exact definition. On a miss, a cache that records derives and records every
+// fact, since an entry must hold everything the admission path reads. A
+// read-only view or a nil cache runs Verify alone and records nothing.
 func verifyErrFor(cache *ChannelAnalysisCache, codecs map[llotypes.ReportFormat]ReportCodec, channelID llotypes.ChannelID, cd llotypes.ChannelDefinition) error {
+	if cache != nil && !cache.readOnly {
+		return channelFactsFor(cache, codecs, channelID, cd).verifyErr
+	}
 	if facts, ok := cache.get(channelID, cd); ok {
 		return facts.verifyErr
 	}
