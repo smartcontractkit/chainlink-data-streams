@@ -10,14 +10,20 @@ import (
 
 // VerifyChannelDefinitions applies the checks that any definition set must
 // satisfy, whether it is being admitted or has already been committed.
+//
+// Only the baseline checks run (see analyzeBaseline). The admission-only
+// checks and the whole-set budgets they rely on would be discarded with no
+// channel being admitted, so they are not computed.
 func VerifyChannelDefinitions(codecs map[llotypes.ReportFormat]ReportCodec, channelDefs llotypes.ChannelDefinitions) error {
-	return verifyChannelDefinitions(codecs, channelDefs, nil, nil)
+	return analyzeBaseline(codecs, channelDefs, nil).err(nil)
 }
 
-// VerifyChannelDefinitionsWithCache is VerifyChannelDefinitions, memoizing the
-// per-definition checks in cache. A nil cache memoizes nothing.
+// VerifyChannelDefinitionsWithCache is VerifyChannelDefinitions, reading the
+// Verify verdict from cache when it holds that exact definition. A miss is
+// recorded only through a cache that records (see verifyErrFor). A nil cache
+// reads nothing.
 func VerifyChannelDefinitionsWithCache(codecs map[llotypes.ReportFormat]ReportCodec, channelDefs llotypes.ChannelDefinitions, cache *ChannelAnalysisCache) error {
-	return verifyChannelDefinitions(codecs, channelDefs, nil, cache)
+	return analyzeBaseline(codecs, channelDefs, cache).err(nil)
 }
 
 // VerifyChannelDefinitionsForAdmission additionally applies the admission-only
@@ -118,7 +124,9 @@ func UnverifiableChannelIDs(codecs map[llotypes.ReportFormat]ReportCodec, channe
 // UnverifiableChannelIDsWithCache is UnverifiableChannelIDs, memoizing the
 // per-definition checks in cache. A nil cache memoizes nothing.
 func UnverifiableChannelIDsWithCache(codecs map[llotypes.ReportFormat]ReportCodec, channelDefs llotypes.ChannelDefinitions, cache *ChannelAnalysisCache) (map[llotypes.ChannelID]struct{}, error) {
-	res := analyzeChannelDefinitions(codecs, channelDefs, cache)
+	// Only baseline findings are reported, so the budget and the admission-only
+	// checks are not computed.
+	res := analyzeBaseline(codecs, channelDefs, cache)
 	ids := make(map[llotypes.ChannelID]struct{}, len(res.channelErrs))
 	for channelID := range res.channelErrs {
 		ids[channelID] = struct{}{}
@@ -141,6 +149,16 @@ func UnverifiableChannelIDsWithCache(codecs map[llotypes.ReportFormat]ReportCode
 // The per-definition checks are memoized in cache. A nil cache memoizes
 // nothing.
 func InadmissibleChannelIDsWithCache(codecs map[llotypes.ReportFormat]ReportCodec, channelDefs llotypes.ChannelDefinitions, admitting map[llotypes.ChannelID]struct{}, cache *ChannelAnalysisCache) (map[llotypes.ChannelID]struct{}, error) {
+	// With nothing being admitted no channel can be implicated and no
+	// admission-only finding applies, which leaves only the whole-set baseline
+	// finding. This is the steady state of the v31 Observation.
+	if len(admitting) == 0 {
+		if res := analyzeBaseline(codecs, channelDefs, cache); res.wholeSetErr != nil {
+			return nil, res.wholeSetErr
+		}
+		return map[llotypes.ChannelID]struct{}{}, nil
+	}
+
 	res := analyzeChannelDefinitions(codecs, channelDefs, cache)
 	if res.wholeSetErr != nil {
 		return nil, res.wholeSetErr
@@ -236,7 +254,67 @@ func (r verifyResult) err(admitting map[llotypes.ChannelID]struct{}) error {
 }
 
 func verifyChannelDefinitions(codecs map[llotypes.ReportFormat]ReportCodec, channelDefs llotypes.ChannelDefinitions, admitting map[llotypes.ChannelID]struct{}, cache *ChannelAnalysisCache) error {
+	// With nothing being admitted no admission-only finding applies, so the
+	// verdict is the baseline one. This is the steady state of Observation.
+	if len(admitting) == 0 {
+		return analyzeBaseline(codecs, channelDefs, cache).err(admitting)
+	}
 	return analyzeChannelDefinitions(codecs, channelDefs, cache).err(admitting)
+}
+
+// analyzeBaseline applies only the baseline checks of analyzeChannelDefinitions
+// and reports the same baseline findings, attributed the same way. It derives
+// nothing but the Verify verdict for each channel and builds no budget. It
+// serves every entry point whose verdict cannot include an admission-only
+// finding: ValidateObservation, the committed set check in Observation, and
+// admission with nothing to admit.
+//
+// The two must agree on every baseline finding. A check added to the baseline
+// of one must be added to the other.
+func analyzeBaseline(codecs map[llotypes.ReportFormat]ReportCodec, channelDefs llotypes.ChannelDefinitions, cache *ChannelAnalysisCache) (res verifyResult) {
+	res.channelErrs = make(map[llotypes.ChannelID]error)
+
+	if len(channelDefs) > MaxOutcomeChannelDefinitionsLength {
+		res.wholeSetErr = fmt.Errorf("too many channels, got: %d/%d", len(channelDefs), MaxOutcomeChannelDefinitionsLength)
+		return res
+	}
+
+	base := func(err error, channelID llotypes.ChannelID) {
+		res.channelErrs[channelID] = errors.Join(res.channelErrs[channelID], err)
+	}
+
+	uniqueStreamIDs := make(map[llotypes.StreamID]struct{}, len(channelDefs))
+	for channelID, cd := range channelDefs {
+		if cd.Tombstone {
+			continue
+		}
+		if len(cd.Streams) == 0 {
+			base(fmt.Errorf("ChannelDefinition with ID %d has no streams", channelID), channelID)
+			continue
+		}
+		if len(cd.Streams) > MaxStreamsPerChannel {
+			base(fmt.Errorf("ChannelDefinition with ID %d has too many streams, got: %d/%d", channelID, len(cd.Streams), MaxStreamsPerChannel), channelID)
+			continue
+		}
+		for _, strm := range cd.Streams {
+			if strm.Aggregator == 0 {
+				base(fmt.Errorf("ChannelDefinition with ID %d has stream %d with zero aggregator (this may indicate an uninitialized struct)", channelID, strm.StreamID), channelID)
+				continue
+			}
+			uniqueStreamIDs[strm.StreamID] = struct{}{}
+		}
+		if err := verifyErrFor(cache, codecs, channelID, cd); err != nil {
+			base(fmt.Errorf("invalid ChannelDefinition with ID %d: %w", channelID, err), channelID)
+		}
+		if cd.ReportFormat == llotypes.ReportFormatHistoryBackfill {
+			if err := ValidateHistoryBackfillAgainstDefinitions(cd, channelDefs, 0); err != nil {
+				base(fmt.Errorf("invalid history backfill channel %d: %w", channelID, err), channelID)
+			}
+		}
+	}
+
+	res.uniqueStreamIDs = len(uniqueStreamIDs)
+	return res
 }
 
 // analyzeChannelDefinitions applies every check to the set. The checks that

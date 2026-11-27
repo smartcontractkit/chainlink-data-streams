@@ -63,6 +63,14 @@ func cacheTestDef(opts string) llotypes.ChannelDefinition {
 	}
 }
 
+// recordFacts verifies defs through an entry point that records into cache,
+// the way Observation does. VerifyChannelDefinitionsWithCache only reads.
+func recordFacts(t *testing.T, codec *countingReportCodec, defs llotypes.ChannelDefinitions, cache *ChannelAnalysisCache) {
+	t.Helper()
+	_, err := UnverifiableChannelIDsWithCache(countingCodecs(codec), defs, cache)
+	require.NoError(t, err)
+}
+
 func Test_ChannelAnalysisCache(t *testing.T) {
 	t.Run("an unchanged definition is checked once across analyses", func(t *testing.T) {
 		codec := &countingReportCodec{}
@@ -70,8 +78,8 @@ func Test_ChannelAnalysisCache(t *testing.T) {
 		cache := NewChannelAnalysisCache()
 
 		for i := 0; i < 5; i++ {
-			require.NoError(t, VerifyChannelDefinitionsWithCache(countingCodecs(codec), defs, cache))
 			require.NoError(t, VerifyChannelDefinitionsForAdmissionWithCache(countingCodecs(codec), defs, map[llotypes.ChannelID]struct{}{1: {}}, cache))
+			require.NoError(t, VerifyChannelDefinitionsWithCache(countingCodecs(codec), defs, cache))
 		}
 
 		verifies, admissions, feedIDs := codec.calls()
@@ -84,7 +92,7 @@ func Test_ChannelAnalysisCache(t *testing.T) {
 		codec := &countingReportCodec{}
 		cache := NewChannelAnalysisCache()
 
-		require.NoError(t, VerifyChannelDefinitionsWithCache(countingCodecs(codec), llotypes.ChannelDefinitions{1: cacheTestDef(`{"a":1}`)}, cache))
+		recordFacts(t, codec, llotypes.ChannelDefinitions{1: cacheTestDef(`{"a":1}`)}, cache)
 		require.NoError(t, VerifyChannelDefinitionsWithCache(countingCodecs(codec), llotypes.ChannelDefinitions{1: cacheTestDef(`{"a":2}`)}, cache))
 
 		verifies, _, _ := codec.calls()
@@ -96,7 +104,7 @@ func Test_ChannelAnalysisCache(t *testing.T) {
 		cache := NewChannelAnalysisCache()
 
 		cd := cacheTestDef(`{"a":1}`)
-		require.NoError(t, VerifyChannelDefinitionsWithCache(countingCodecs(codec), llotypes.ChannelDefinitions{1: cd}, cache))
+		recordFacts(t, codec, llotypes.ChannelDefinitions{1: cd}, cache)
 		cd.Streams = append(cd.Streams, llotypes.Stream{StreamID: 2, Aggregator: llotypes.AggregatorMedian})
 		require.NoError(t, VerifyChannelDefinitionsWithCache(countingCodecs(codec), llotypes.ChannelDefinitions{1: cd}, cache))
 
@@ -113,8 +121,8 @@ func Test_ChannelAnalysisCache(t *testing.T) {
 		// What a round does while a channel is being changed: verify the
 		// committed set, then the one an observation advocates, repeatedly.
 		for i := 0; i < 5; i++ {
-			require.NoError(t, VerifyChannelDefinitionsWithCache(countingCodecs(codec), committed, cache))
-			require.NoError(t, VerifyChannelDefinitionsWithCache(countingCodecs(codec), proposed, cache))
+			recordFacts(t, codec, committed, cache)
+			recordFacts(t, codec, proposed, cache)
 		}
 
 		verifies, _, _ := codec.calls()
@@ -127,7 +135,7 @@ func Test_ChannelAnalysisCache(t *testing.T) {
 
 		cd := cacheTestDef(`{"a":1}`)
 		defs := llotypes.ChannelDefinitions{1: cd}
-		require.NoError(t, VerifyChannelDefinitionsWithCache(countingCodecs(codec), defs, cache))
+		recordFacts(t, codec, defs, cache)
 
 		// Mutating the definition the cache was handed must not rewrite the
 		// identity of the entry, or a different definition would read as a hit.
@@ -144,7 +152,7 @@ func Test_ChannelAnalysisCache(t *testing.T) {
 		cache := NewChannelAnalysisCache()
 		defs := llotypes.ChannelDefinitions{1: cacheTestDef(`{"a":1}`)}
 
-		require.NoError(t, VerifyChannelDefinitionsWithCache(countingCodecs(codec), defs, cache))
+		recordFacts(t, codec, defs, cache)
 		cache.Prune(llotypes.ChannelDefinitions{})
 		require.NoError(t, VerifyChannelDefinitionsWithCache(countingCodecs(codec), defs, cache))
 
@@ -158,7 +166,7 @@ func Test_ChannelAnalysisCache(t *testing.T) {
 		committed := llotypes.ChannelDefinitions{1: cacheTestDef(`{"a":1}`)}
 		proposed := llotypes.ChannelDefinitions{1: cacheTestDef(`{"a":2}`)}
 
-		require.NoError(t, VerifyChannelDefinitionsWithCache(countingCodecs(codec), committed, cache))
+		recordFacts(t, codec, committed, cache)
 		require.NoError(t, VerifyChannelDefinitionsWithCache(countingCodecs(codec), committed, cache.ReadOnly()))
 		verifies, _, _ := codec.calls()
 		require.Equal(t, int64(1), verifies)
@@ -181,8 +189,8 @@ func Test_ChannelAnalysisCache(t *testing.T) {
 		committed := llotypes.ChannelDefinitions{1: cacheTestDef(`{"a":1}`)}
 		desired := llotypes.ChannelDefinitions{1: cacheTestDef(`{"a":2}`)}
 
-		require.NoError(t, VerifyChannelDefinitionsWithCache(countingCodecs(codec), committed, cache))
-		require.NoError(t, VerifyChannelDefinitionsWithCache(countingCodecs(codec), desired, cache))
+		recordFacts(t, codec, committed, cache)
+		recordFacts(t, codec, desired, cache)
 
 		// More distinct proposals for the channel than the cache retains, as
 		// faulty peers may send in a single round.
@@ -307,6 +315,7 @@ func Test_ChannelAnalysisCache_Concurrent(t *testing.T) {
 		go func(i int) {
 			defer wg.Done()
 			for j := 0; j < 20; j++ {
+				_, _ = UnverifiableChannelIDsWithCache(codecs, committed, cache)
 				requireSameError(t, want, VerifyChannelDefinitionsWithCache(codecs, committed, cache))
 
 				updated := CloneChannelDefinitions(committed)

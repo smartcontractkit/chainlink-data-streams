@@ -792,3 +792,224 @@ func Test_UnverifiableChannelIDs(t *testing.T) {
 		require.Empty(t, ids)
 	})
 }
+
+// analyzeBaseline must report exactly the baseline findings of
+// analyzeChannelDefinitions, attributed the same way, and none of its
+// admission-only findings.
+func Test_AnalyzeBaseline_MatchesFullAnalysis(t *testing.T) {
+	stream := func(streamID llotypes.StreamID) llotypes.Stream {
+		return llotypes.Stream{StreamID: streamID, Aggregator: llotypes.AggregatorMedian}
+	}
+	channel := func(streams ...llotypes.Stream) llotypes.ChannelDefinition {
+		return llotypes.ChannelDefinition{Streams: streams}
+	}
+	tooManyStreams := llotypes.ChannelDefinition{Streams: make([]llotypes.Stream, MaxStreamsPerChannel+1)}
+	for i := range tooManyStreams.Streams {
+		tooManyStreams.Streams[i] = stream(llotypes.StreamID(i + 100_000))
+	}
+	backfill := func(target llotypes.ChannelID) llotypes.ChannelDefinition {
+		return llotypes.ChannelDefinition{
+			ReportFormat: llotypes.ReportFormatHistoryBackfill,
+			Streams:      []llotypes.Stream{stream(1)},
+			Opts:         fmt.Appendf(nil, `{"targetChannelId":%d,"observations":{"1000":{"1":"1"}}}`, target),
+		}
+	}
+	tombstone := channel(stream(9))
+	tombstone.Tombstone = true
+	oversizedOpts := channel(stream(10))
+	oversizedOpts.Opts = make([]byte, MaxChannelOptsBytes+1)
+	unknownAggregator := channel(llotypes.Stream{StreamID: 11, Aggregator: llotypes.Aggregator(250)})
+
+	rejecting := rejectingCodec{rejectStream: 2}
+	sharedFeedID := mockFeedIDCodec{feedID: [32]byte{0xab}, ok: true}
+	sharedFeedID.mockReportCodec = mockReportCodec{}
+
+	tooManyChannels := make(llotypes.ChannelDefinitions, MaxOutcomeChannelDefinitionsLength+1)
+	for i := range llotypes.ChannelID(MaxOutcomeChannelDefinitionsLength + 1) {
+		tooManyChannels[i] = channel(stream(1))
+	}
+	// Within the channel limit, but with more unique stream IDs than allowed, so
+	// the stream ID count is what both analyses report.
+	const streamsPerChannel = MaxObservationStreamValuesLength/MaxOutcomeChannelDefinitionsLength + 1
+	tooManyStreamIDs := make(llotypes.ChannelDefinitions, MaxOutcomeChannelDefinitionsLength)
+	for i := range llotypes.ChannelID(MaxOutcomeChannelDefinitionsLength) {
+		cd := channel()
+		for k := range llotypes.StreamID(streamsPerChannel) {
+			cd.Streams = append(cd.Streams, stream(llotypes.StreamID(i)*streamsPerChannel+k))
+		}
+		tooManyStreamIDs[i] = cd
+	}
+	require.Greater(t, analyzeBaseline(map[llotypes.ReportFormat]ReportCodec{0: mockReportCodec{}}, tooManyStreamIDs, nil).uniqueStreamIDs, MaxObservationStreamValuesLength)
+
+	for _, tc := range []struct {
+		name   string
+		codecs map[llotypes.ReportFormat]ReportCodec
+		defs   llotypes.ChannelDefinitions
+		// admissionOnly pins that the full analysis does find admission-only
+		// findings, which the baseline must leave out.
+		admissionOnly bool
+	}{
+		{
+			name:          "every kind of per channel finding",
+			admissionOnly: true,
+			codecs: map[llotypes.ReportFormat]ReportCodec{
+				0:                                    rejecting,
+				llotypes.ReportFormatHistoryBackfill: ReportCodecHistoryBackfill{},
+			},
+			defs: llotypes.ChannelDefinitions{
+				1:  channel(stream(1)),
+				2:  channel(stream(2)),                               // Verify rejects
+				3:  {},                                               // no streams
+				4:  channel(llotypes.Stream{StreamID: 4}, stream(2)), // zero aggregator and Verify rejects
+				5:  tooManyStreams,
+				6:  tombstone,
+				7:  oversizedOpts,     // admission-only
+				8:  unknownAggregator, // admission-only
+				20: backfill(99),      // target missing
+				21: backfill(1),
+			},
+		},
+		{
+			name:          "admission-only feed ID collision",
+			admissionOnly: true,
+			codecs:        map[llotypes.ReportFormat]ReportCodec{0: sharedFeedID},
+			defs:          llotypes.ChannelDefinitions{1: channel(stream(1)), 2: channel(stream(2))},
+		},
+		{
+			name:          "admission-only rejection",
+			admissionOnly: true,
+			codecs:        map[llotypes.ReportFormat]ReportCodec{0: mockAdmissionCodec{}},
+			defs:          llotypes.ChannelDefinitions{1: channel(stream(1))},
+		},
+		{
+			name:   "too many channels",
+			codecs: map[llotypes.ReportFormat]ReportCodec{0: mockReportCodec{}},
+			defs:   tooManyChannels,
+		},
+		{
+			name:   "too many unique stream IDs",
+			codecs: map[llotypes.ReportFormat]ReportCodec{0: mockReportCodec{}},
+			defs:   tooManyStreamIDs,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			full := analyzeChannelDefinitions(tc.codecs, tc.defs, nil)
+			baseline := analyzeBaseline(tc.codecs, tc.defs, nil)
+
+			require.Equal(t, tc.admissionOnly, len(full.admissionFindings) > 0)
+			requireSameError(t, full.err(nil), baseline.err(nil))
+			requireSameError(t, full.setErr(), baseline.setErr())
+			requireSameError(t, full.wholeSetErr, baseline.wholeSetErr)
+			require.Equal(t, full.uniqueStreamIDs, baseline.uniqueStreamIDs)
+			require.Len(t, baseline.channelErrs, len(full.channelErrs))
+			for channelID, err := range full.channelErrs {
+				requireSameError(t, err, baseline.channelErrs[channelID])
+			}
+			require.Empty(t, baseline.admissionFindings)
+		})
+	}
+}
+
+// A baseline analysis through a read-only view runs Verify alone on a miss and
+// records nothing. Through a cache that records, a miss records complete facts,
+// so the admission path and the state transition budget can read them later.
+func Test_AnalyzeBaseline_Cache(t *testing.T) {
+	defs := llotypes.ChannelDefinitions{1: cacheTestDef(`{"a":1}`), 2: cacheTestDef(`{"a":2}`)}
+
+	t.Run("a read-only view runs Verify alone and records nothing", func(t *testing.T) {
+		codec := &countingReportCodec{}
+		cache := NewChannelAnalysisCache()
+
+		require.NoError(t, VerifyChannelDefinitionsWithCache(countingCodecs(codec), defs, cache.ReadOnly()))
+		require.NoError(t, VerifyChannelDefinitionsWithCache(countingCodecs(codec), defs, cache.ReadOnly()))
+		verifies, admissions, feedIDs := codec.calls()
+		require.Equal(t, int64(4), verifies)
+		require.Zero(t, admissions)
+		require.Zero(t, feedIDs)
+	})
+
+	t.Run("a cache that records holds complete facts after a miss", func(t *testing.T) {
+		codec := &countingReportCodec{}
+		cache := NewChannelAnalysisCache()
+
+		ids, err := UnverifiableChannelIDsWithCache(countingCodecs(codec), defs, cache)
+		require.NoError(t, err)
+		require.Empty(t, ids)
+		verifies, admissions, feedIDs := codec.calls()
+		require.Equal(t, []int64{2, 2, 2}, []int64{verifies, admissions, feedIDs})
+
+		// Admission and a read-only baseline both hit.
+		require.NoError(t, VerifyChannelDefinitionsForAdmissionWithCache(countingCodecs(codec), defs, map[llotypes.ChannelID]struct{}{1: {}}, cache))
+		require.NoError(t, VerifyChannelDefinitionsWithCache(countingCodecs(codec), defs, cache.ReadOnly()))
+		verifies, admissions, feedIDs = codec.calls()
+		require.Equal(t, []int64{2, 2, 2}, []int64{verifies, admissions, feedIDs})
+	})
+
+	t.Run("a cached Verify error is served from the cache", func(t *testing.T) {
+		failing := &countingReportCodec{verifyErr: errors.New("bad opts")}
+		cache := NewChannelAnalysisCache()
+
+		ids, err := UnverifiableChannelIDsWithCache(countingCodecs(failing), defs, cache)
+		require.NoError(t, err)
+		require.Equal(t, map[llotypes.ChannelID]struct{}{1: {}, 2: {}}, ids)
+		require.EqualError(t, VerifyChannelDefinitionsWithCache(countingCodecs(failing), defs, cache.ReadOnly()),
+			"invalid ChannelDefinition with ID 1: bad opts\ninvalid ChannelDefinition with ID 2: bad opts")
+		verifies, _, _ := failing.calls()
+		require.Equal(t, int64(2), verifies)
+	})
+}
+
+// With nothing being admitted, the admission entry point gives the baseline
+// verdict and computes no admission-only finding.
+func Test_VerifyChannelDefinitionsForAdmission_NothingAdmitted(t *testing.T) {
+	codec := &countingReportCodec{admissionErr: errors.New("not admissible")}
+	defs := llotypes.ChannelDefinitions{1: cacheTestDef(`{"a":1}`)}
+
+	require.NoError(t, VerifyChannelDefinitionsForAdmission(countingCodecs(codec), defs, map[llotypes.ChannelID]struct{}{}))
+	require.NoError(t, VerifyChannelDefinitionsForAdmission(countingCodecs(codec), defs, nil))
+	_, admissions, feedIDs := codec.calls()
+	require.Zero(t, admissions)
+	require.Zero(t, feedIDs)
+
+	require.EqualError(t, VerifyChannelDefinitionsForAdmission(countingCodecs(codec), defs, map[llotypes.ChannelID]struct{}{1: {}}),
+		"invalid ChannelDefinition with ID 1: not admissible")
+}
+
+// With nothing being admitted, InadmissibleChannelIDsWithCache gives the same
+// answer as the full analysis and computes no admission-only finding.
+func Test_InadmissibleChannelIDs_NothingAdmitted(t *testing.T) {
+	stream := llotypes.Stream{StreamID: 1, Aggregator: llotypes.AggregatorMedian}
+	tooManyChannels := make(llotypes.ChannelDefinitions, MaxOutcomeChannelDefinitionsLength+1)
+	for i := range llotypes.ChannelID(MaxOutcomeChannelDefinitionsLength + 1) {
+		tooManyChannels[i] = llotypes.ChannelDefinition{Streams: []llotypes.Stream{stream}}
+	}
+
+	for _, tc := range []struct {
+		name  string
+		codec *countingReportCodec
+		defs  llotypes.ChannelDefinitions
+	}{
+		{"valid", &countingReportCodec{}, llotypes.ChannelDefinitions{1: cacheTestDef(`{"a":1}`)}},
+		{"baseline and admission failures", &countingReportCodec{verifyErr: errors.New("bad opts"), admissionErr: errors.New("not admissible")}, llotypes.ChannelDefinitions{1: cacheTestDef(`{"a":1}`), 2: {}}},
+		{"too many channels", &countingReportCodec{}, tooManyChannels},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			codecs := countingCodecs(tc.codec)
+			res := analyzeChannelDefinitions(codecs, tc.defs, nil)
+			var wantIDs map[llotypes.ChannelID]struct{}
+			if res.wholeSetErr == nil {
+				wantIDs = map[llotypes.ChannelID]struct{}{}
+			}
+			_, wantAdmissions, wantFeedIDs := tc.codec.calls()
+
+			for _, admitting := range []map[llotypes.ChannelID]struct{}{nil, {}} {
+				ids, err := InadmissibleChannelIDsWithCache(codecs, tc.defs, admitting, NewChannelAnalysisCache().ReadOnly())
+				requireSameError(t, res.wholeSetErr, err)
+				require.Equal(t, wantIDs, ids)
+			}
+			_, admissions, feedIDs := tc.codec.calls()
+			require.Equal(t, wantAdmissions, admissions, "no admission check runs")
+			require.Equal(t, wantFeedIDs, feedIDs)
+		})
+	}
+}

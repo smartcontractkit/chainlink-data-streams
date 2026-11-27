@@ -96,8 +96,8 @@ func (c *ChannelAnalysisCache) ReadOnly() *ChannelAnalysisCache {
 
 // Prune drops the entries of every channel channelDefs does not hold. Verifying
 // a set does not by itself mean the channels it omits are gone, so this is for
-// callers that know the committed set: on the v31 hot path, the round that
-// loads it.
+// callers that know the committed set: the v30 Observation and, on the v31 hot
+// path, the round that loads it.
 func (c *ChannelAnalysisCache) Prune(channelDefs llotypes.ChannelDefinitions) {
 	if c == nil || c.readOnly {
 		return
@@ -164,6 +164,24 @@ func channelFactsFor(cache *ChannelAnalysisCache, codecs map[llotypes.ReportForm
 	facts := deriveChannelFacts(codecs, channelID, cd)
 	cache.put(channelID, cd, facts)
 	return facts
+}
+
+// verifyErrFor returns the Verify verdict for cd, from cache when it holds that
+// exact definition. On a miss, a cache that records derives and records every
+// fact, since an entry must hold everything the admission path reads. A
+// read-only view or a nil cache runs Verify alone and records nothing.
+func verifyErrFor(cache *ChannelAnalysisCache, codecs map[llotypes.ReportFormat]ReportCodec, channelID llotypes.ChannelID, cd llotypes.ChannelDefinition) error {
+	if cache != nil && !cache.readOnly {
+		return channelFactsFor(cache, codecs, channelID, cd).verifyErr
+	}
+	if facts, ok := cache.get(channelID, cd); ok {
+		return facts.verifyErr
+	}
+	codec, ok := codecs[cd.ReportFormat]
+	if !ok {
+		return nil
+	}
+	return codec.Verify(cd)
 }
 
 // deriveChannelFacts decodes the channel's opts and applies every check that

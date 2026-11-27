@@ -185,6 +185,8 @@ func (f *PluginFactory) NewReportingPlugin(ctx context.Context, cfg ocr3types.Re
 		offchainConfig.ProtocolVersion,
 		offchainConfig.DefaultMinReportIntervalNanoseconds,
 		calculated.NewExpressionPins(),
+		protocol.NewChannelAnalysisCache(),
+		previousChannelDefinitions{},
 	}, ocr3types.ReportingPluginInfo{
 		Name: "LLO",
 		Limits: ocr3types.ReportingPluginLimits{
@@ -241,6 +243,20 @@ type Plugin struct {
 	// validation cannot evict their compiled programs. May be nil, in which
 	// case nothing is pinned.
 	ExpressionPins *calculated.ExpressionPins
+
+	// ChannelAnalysisCache memoizes the per-definition verification checks, whose
+	// cost is dominated by decoding channel opts. Verification runs over largely
+	// identical sets several times per round: the committed and the desired
+	// definitions in Observation, and the merged set of each update carrying
+	// observation in ValidateObservation, which a follower runs serially before
+	// Outcome. Only Observation records entries: ValidateObservation reads
+	// through a read-only view, so peers cannot evict them. May be nil, in which
+	// case nothing is memoized.
+	ChannelAnalysisCache *protocol.ChannelAnalysisCache
+
+	// previousDefinitions memoizes the channel definitions ValidateObservation
+	// decodes from the previous outcome. The zero value is ready to use.
+	previousDefinitions previousChannelDefinitions
 }
 
 // Query creates a Query that is sent from the leader to all follower nodes
@@ -317,11 +333,12 @@ func (p *Plugin) ValidateObservation(ctx context.Context, outctx ocr3types.Outco
 	// versions of those checks disagree on whether an observation is valid.
 	defsForVerify := observation.UpdateChannelDefinitions
 	if len(observation.UpdateChannelDefinitions) > 0 && outctx.SeqNr > 1 {
-		prevOutcome, prevErr := p.OutcomeCodec.Decode(outctx.PreviousOutcome)
+		prevDefs, prevErr := p.previousDefinitions.get(p.OutcomeCodec, outctx.PreviousOutcome)
 		if prevErr != nil {
 			return fmt.Errorf("failed to decode previous outcome for channel definition validation: %w", prevErr)
 		}
-		merged := maps.Clone(prevOutcome.ChannelDefinitions)
+		// prevDefs is shared across calls, so merge into a copy.
+		merged := maps.Clone(prevDefs)
 		if merged == nil {
 			merged = make(llotypes.ChannelDefinitions)
 		}
@@ -331,7 +348,7 @@ func (p *Plugin) ValidateObservation(ctx context.Context, outctx ocr3types.Outco
 		defsForVerify = merged
 	}
 
-	if err := protocol.VerifyChannelDefinitions(p.ReportCodecs, defsForVerify); err != nil {
+	if err := protocol.VerifyChannelDefinitionsWithCache(p.ReportCodecs, defsForVerify, p.ChannelAnalysisCache.ReadOnly()); err != nil {
 		return fmt.Errorf("UpdateChannelDefinitions is invalid: %w", err)
 	}
 
